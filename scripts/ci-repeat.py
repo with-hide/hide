@@ -482,14 +482,19 @@ def rust_plan(modules, lister):
     skips it, so a module whose selected tests are all ignored would list none
     and be taken for a helper. `run_ignored` says what the job passes to run
     what this plan counted: `ignored-only` when every test counted is ignored,
-    `all` when some are ignored and some are not, and empty for the ordinary
-    case.
+    and empty otherwise.
 
     An ignored test is one someone marked to run only where a thing it needs
     is prepared: `scripts/prepare-ignored-tests.sh` puts the built pane holder
     and the shells those tests name in place, and a plan whose entries ask for
-    ignored tests is a plan the job prepares that way first. The decision is
-    this one, so no module name is written into the workflow.
+    ignored tests is a plan the job prepares that way first. That preparation
+    is what a module of ignored tests alone (`engine::contract`) needs. A
+    module or a whole binary that mixes them with ordinary tests runs its
+    ordinary tests only: its ignored ones need what other lanes prepare (an
+    sshd, an agent's program, Windows OpenSSH) or are a subprocess's entry
+    point that fails run alone, so asking for them would turn an ordinary pull
+    request red. The decision is this one, so no module name is written into
+    the workflow.
     """
     plan = []
     for package, test, expression in nextest_filters(modules):
@@ -536,17 +541,15 @@ def plan_run_ignored(plan, lister=None):
 def ignored_flag(lister, package, test, expression):
     """`(run_ignored, (tests, ignored))`: the flag one plan entry needs, and what nextest lists with it.
 
-    nextest's own listing leaves an ignored test out as a mismatch, so the
-    ordinary listing never says that a module mixes ignored tests with the
-    others; the listing that asks for them all is compared with it instead,
-    and nextest's own filter decides both counts.
+    Only an entry whose every test is ignored asks for them (`rust_plan` says
+    why); one with ordinary tests runs those, as nextest's own listing counts
+    them.
     """
     ordinary = lister(package, test, expression, "")
-    if not ordinary[0]:
-        ignored_only = lister(package, test, expression, "ignored-only")
-        return ("ignored-only", ignored_only) if ignored_only[0] else ("", ordinary)
-    every = lister(package, test, expression, "all")
-    return ("all", every) if every[0] > ordinary[0] else ("", ordinary)
+    if ordinary[0]:
+        return "", ordinary
+    ignored_only = lister(package, test, expression, "ignored-only")
+    return ("ignored-only", ignored_only) if ignored_only[0] else ("", ordinary)
 
 
 def bash():
@@ -760,7 +763,7 @@ def main():
                         or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])):
                     raise ValueError(f"not a Rust plan entry: {entry!r}")
                 run_ignored = entry.get("run_ignored", "")
-                if run_ignored not in ("", "all", "ignored-only"):
+                if run_ignored not in ("", "ignored-only"):
                     raise ValueError(f"not a Rust plan entry: {entry!r}")
                 lines.append(UNIT_SEPARATOR.join((entry["package"], entry["test"], entry["filter"], run_ignored)))
             write_lines(lines)

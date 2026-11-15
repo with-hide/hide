@@ -139,7 +139,7 @@ class Detection(unittest.TestCase):
         self.assertEqual(
             asked,
             [("hide-platform", "it", "test(/^(stand_ins)::/)", ""), ("hide-platform", "it", "test(/^(stand_ins)::/)", "all"),
-             ("hide-platform", "it", "", ""), ("hide-platform", "it", "", "all")],
+             ("hide-platform", "it", "", "")],
         )
         # A helper beside a module that lists tests still runs the whole binary.
         plan = repeat.rust_plan(
@@ -364,32 +364,21 @@ class RustIgnoredAndHolder(unittest.TestCase):
               "tests": 10, "run_ignored": "ignored-only"}],
         )
 
-    def test_a_module_mixing_ignored_tests_is_found_from_nextests_own_listing(self):
-        # nextest's ordinary listing marks an ignored test a mismatch, so it
-        # reports none ignored; only the listing that asks for them all shows them.
+    def test_a_module_mixing_ignored_tests_runs_its_ordinary_tests_only(self):
+        # Its ignored tests need what other lanes prepare, or are a
+        # subprocess's entry point (opener_lifecycle::fake_program) that
+        # fails run alone, so asking for them would fail an ordinary change.
         def lister(package, test, expression, run_ignored=""):
-            return {"": (5, 0), "all": (7, 2)}[run_ignored]
+            return {"": (5, 0), "all": (7, 2), "ignored-only": (2, 2)}[run_ignored]
 
-        plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "handshake"}], lister)
-        self.assertEqual((plan[0]["run_ignored"], plan[0]["tests"]), ("all", 7))
-        decided = repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "test(/^(handshake)::/)", "tests": 5}], lister)
-        self.assertEqual(decided[0]["run_ignored"], "all")
-
-    def test_a_module_with_ignored_and_running_tests_runs_both(self):
-        def lister(package, test, expression, run_ignored=""):
-            return {"": (5, 2), "all": (7, 2)}[run_ignored]
-
-        plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "handshake"}], lister)
-        self.assertEqual(
-            plan,
-            [{"package": "hided", "test": "it", "filter": "test(/^(handshake)::/)",
-              "tests": 7, "run_ignored": "all"}],
-        )
+        plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "opener_lifecycle"}], lister)
+        self.assertEqual((plan[0]["run_ignored"], plan[0]["tests"]), ("", 5))
+        decided = repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "test(/^(opener_lifecycle)::/)", "tests": 5}], lister)
+        self.assertEqual(decided[0]["run_ignored"], "")
 
     def test_an_ordinary_module_passes_no_flag_and_builds_no_holder(self):
         def lister(package, test, expression, run_ignored=""):
-            # Asked with every ignored test too, it lists no more than without.
-            self.assertIn(run_ignored, ("", "all"))
+            self.assertEqual(run_ignored, "")
             return (8, 0)
 
         plan = repeat.rust_plan([{"package": "hide-kit", "test": "lib", "module": "process::tests"}], lister)
@@ -538,11 +527,11 @@ class Command(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), r"web/e2e/s3\.spec\.ts$")
         # A plan whose flags are decided, as the count job writes it: an
         # undecided one asks nextest on the runner, which this job has not.
-        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "all"},
+        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": ""},
                            {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fall\nhide-platform\x1flib\x1f\x1fignored-only\n")
+        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1f\nhide-platform\x1flib\x1f\x1fignored-only\n")
         units = json.dumps([{"package": "web", "files": ["web/src/a.test.ts"], "tests": 2},
                             {"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
         result, _ = self.run_script("units-lines", "--plan", units)
@@ -551,10 +540,10 @@ class Command(unittest.TestCase):
     def test_every_line_the_jobs_read_ends_with_lf_even_on_a_windows_runner(self):
         # Windows translates `\n` to `\r\n` on stdout, and the trailing `\r`
         # reached nextest as unparsed input (run 43619979993).
-        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "all"}])
+        plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fall\n")
+        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fignored-only\n")
         self.assertNotIn("\r", result.stdout)
 
     def test_the_rust_job_reads_an_empty_filterset_as_its_own_field(self):
@@ -852,7 +841,8 @@ class IgnoredPreparation(unittest.TestCase):
         # A hand run names modules and lists nothing, since the system asked
         # for may not be the count job's. The Rust job asks nextest where it
         # runs: a module with no default match and ignored matches is proved
-        # with `--run-ignored ignored-only`, and a module with a mix runs all.
+        # with `--run-ignored ignored-only`, and a module with a mix (the
+        # whole hided binary) runs its ordinary tests only.
         asked = []
 
         def lister(package, test, expression, run_ignored=""):
@@ -871,7 +861,7 @@ class IgnoredPreparation(unittest.TestCase):
 
         self.assertEqual(
             repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "", "run_ignored": ""}], mixed_lister)[0]["run_ignored"],
-            "all",
+            "",
         )
         # A plan the count job already decided is not asked again.
         decided = {"package": "hide-kit", "test": "lib", "filter": "", "run_ignored": "ignored-only"}
