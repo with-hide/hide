@@ -1229,7 +1229,6 @@ impl Runtime {
             self.ensure_terminal_pane(&pane_id);
         }
         self.sync_focused_terminal_projection();
-        self.trace_view("select_terminal_pane");
     }
     /// Typing into a remote pane makes it the terminal pane (`Event::Key`),
     /// while this machine's selection stays in `ui_state.selected_pane_id`.

@@ -741,7 +741,6 @@ test("a project without agents is an ordinary row, and a working agent leaves a 
     await startAgentIn(fixture, live, quietPane);
     await expect(quiet.locator("li[data-pane]")).toHaveCount(1, { timeout: 20_000 });
     await expect(quiet).toBeVisible();
-    throw new Error("diagnostic run: keep this attempt's logs (with-hide/hide#2575)");
   } finally {
     await daemon?.stop();
     await fixture.stop();
