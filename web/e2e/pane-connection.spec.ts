@@ -16,6 +16,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable } from "./platform-fixture";
+import { dumpOnFailure } from "./failure-dump";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
@@ -168,7 +169,18 @@ test("a Reopen the core refuses leaves the pane as it was and the popover says w
     const before = { row: await row(), screen: await drawn(page, pane) };
 
     await view.locator("[data-pane-connection]").click();
-    await page.locator(`[data-pane-reopen="${pane}"]`).click();
+    // The failure this records (with-hide/hide-private#859): on a loaded runner
+    // Playwright found the Reopen button and then the DOM took it away before
+    // the press landed. A snapshot that moves the chip's connection replaces
+    // the popover's content, and which snapshot was in hand, which chip the
+    // pane wore and what the popover held are gone once the run ends, so both
+    // sides are kept.
+    await dumpOnFailure("the Reopen button and the popover before the press", () => ({
+      sent: Object.fromEntries(sent),
+      popover: page.locator("[data-pane-connection-popover]").evaluateAll((nodes) => nodes.map((node) => ({ reason: node.getAttribute("data-pane-connection-popover"), text: (node.textContent ?? "").trim() }))),
+      chip: view.locator("[data-pane-connection]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-pane-connection"))),
+      reopen: page.locator(`[data-pane-reopen="${pane}"]`).evaluateAll((nodes) => nodes.map((node) => ({ disabled: (node as HTMLButtonElement).disabled, busy: node.getAttribute("aria-busy"), text: (node.textContent ?? "").trim() }))),
+    }), () => page.locator(`[data-pane-reopen="${pane}"]`).click());
     await expect.poll(() => sent.get("pane_reopen")).toBe(1);
     const failure = page.locator("[data-pane-reopen-failed]");
     await expect(failure).toHaveAttribute("data-pane-reopen-failed", "agent_busy", { timeout: 20_000 });

@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { closePane, showTabOf, viewPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
-import { setAgentState, spawnChild } from "./fixture-agents";
+import { agentReading, setAgentState, spawnChild } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { measure } from "./session-panel-geometry.mjs";
@@ -49,6 +49,11 @@ test("the 태스크 list opens a five-level tree, stops the indent at three and 
         viewPane(control, pane);
         await showTabOf(control, pane);
       });
+      // A spawn lists the child before its stand-in has run: the stand-in sets
+      // the terminal mode it reads in, and a key typed before that is dropped,
+      // so the row never read the state asked for here
+      // (with-hide/hide-private#822, where 17 runs of 20 on Windows timed out).
+      await agentReading(fixture, pane);
       await setAgentState(daemon, pane, "working");
       chain.push({ pane, task });
     }

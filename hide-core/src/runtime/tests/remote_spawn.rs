@@ -2383,7 +2383,12 @@ fn brief_cause(refusal: &str) -> (String, Value) {
 #[test]
 fn a_brief_a_question_held_is_typed_once_by_the_same_intent_even_after_the_agent_was_bound() {
     let spawner = spawner();
-    let _wait = AnswerWait::set(Duration::from_millis(300));
+    // Only the first call is answered on a short clock, so the refusal it
+    // must give is not waited out on the product's 60 s device budget. The
+    // call that completes the spawn waits on the engine's own answer, so it
+    // takes the product's wait: a short one expires on a loaded runner
+    // before the identity it reads arrives (with-hide/hide-private#829).
+    let wait = AnswerWait::set(Duration::from_millis(300));
     *spawner.session.lock().unwrap() = None;
     spawner.screen.store(SCREEN_ASKING, Ordering::SeqCst);
     let ask = || spawner.spawn_briefed("menu", "reply JOURNEY-1");
@@ -2413,6 +2418,7 @@ fn a_brief_a_question_held_is_typed_once_by_the_same_intent_even_after_the_agent
     assert!(!bound.spawns[0].completed, "its brief is still to be typed");
 
     spawner.screen.store(SCREEN_READY, Ordering::SeqCst);
+    drop(wait);
     let child = ask().expect("the same intent types the brief");
     assert_eq!(child["id"].as_str(), bound.spawns[0].child.as_deref());
     assert_eq!(spawner.count("prompt_agent"), 1);
@@ -2451,7 +2457,12 @@ fn intent_letters(spawner: &Spawner, intent: &str) -> Vec<ledger::Letter> {
 #[test]
 fn a_brief_confirmed_before_its_send_was_saved_completes_the_same_intent_without_typing() {
     let spawner = spawner();
-    let _wait = AnswerWait::set(Duration::from_millis(300));
+    // Only the first call is answered on a short clock, so the refusal it
+    // must give is not waited out on the product's 60 s device budget. The
+    // call that completes the spawn waits on the engine's own answer, so it
+    // takes the product's wait: a short one expires on a loaded runner
+    // before the identity it reads arrives (with-hide/hide-private#829).
+    let wait = AnswerWait::set(Duration::from_millis(300));
     *spawner.session.lock().unwrap() = None;
     spawner.screen.store(SCREEN_ASKING, Ordering::SeqCst);
     let ask = || spawner.spawn_briefed("cut", "reply JOURNEY-3");
@@ -2491,6 +2502,7 @@ fn a_brief_confirmed_before_its_send_was_saved_completes_the_same_intent_without
     assert!(!held.spawns[0].briefed && !held.spawns[0].completed);
 
     spawner.screen.store(SCREEN_READY, Ordering::SeqCst);
+    drop(wait);
     let child = ask().expect("the same intent completes the spawn");
     assert_eq!(child["id"].as_str(), held.spawns[0].child.as_deref());
     assert_eq!(spawner.count("prompt_agent"), 0, "nothing is typed again");

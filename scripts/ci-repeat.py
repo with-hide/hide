@@ -291,18 +291,30 @@ def select(entries, crate_dirs, targets=None):
 def nextest_listed(text):
     """The tests `cargo nextest list --message-format json` says the filterset runs.
 
-    A test counts when its filter matched; an ignored test does not match
-    unless the run asks for ignored tests, which this lane never does.
+    A test counts when its filter matched. A listing made without
+    `--run-ignored` names the ignored tests too and marks them, so they count
+    only when the run asks for them (`nextest_counted`, which the plan uses).
+    """
+    return nextest_counted(text)[0]
+
+
+def nextest_counted(text):
+    """`(tests, ignored)`: what a `cargo nextest list --message-format json` would run.
+
+    A test counts when its filter matched; `ignored` counts those of them
+    nextest marks ignored, which a listing without `--run-ignored` includes
+    and the run then skips.
     """
     suites = json.loads(text).get("rust-suites")
     if not isinstance(suites, dict):
         raise ValueError("the nextest list has no rust-suites")
-    return sum(
-        1
+    matched = [
+        case
         for suite in suites.values()
         for case in suite.get("testcases", {}).values()
         if case.get("filter-match", {}).get("status") == "matches"
-    )
+    ]
+    return len(matched), sum(1 for case in matched if case.get("ignored"))
 
 
 def listed_tests(text):
@@ -457,34 +469,99 @@ def nextest_filters(modules):
 def rust_plan(modules, lister):
     """What the Rust job runs, from the tests the built target lists.
 
-    `lister(package, test, filterset)` answers how many tests nextest would
-    run. A target with a selected module that lists none (a helper file lists
-    no test of its own, and what it reaches is unknown) runs whole instead,
-    whatever else was selected beside it, so N is always what runs and never
-    an estimate.
+    `lister(package, test, filterset, run_ignored)` answers `(tests, ignored)`
+    for what nextest would run with `--run-ignored run_ignored`: how many, and
+    how many of those are marked ignored. A target with a selected module that
+    lists none (a helper file lists no test of its own, and what it reaches is
+    unknown) runs whole instead, whatever else was selected beside it, so N is
+    always what runs and never an estimate.
+
+    An ignored test runs only when it is asked for, and nextest's own default
+    skips it, so a module whose selected tests are all ignored would list none
+    and be taken for a helper. `run_ignored` says what the job passes to run
+    what this plan counted: `ignored-only` when every test counted is ignored,
+    `all` when some are ignored and some are not, and empty for the ordinary
+    case.
+
+    An ignored test is one someone marked to run only where a thing it needs
+    is prepared: `scripts/prepare-ignored-tests.sh` puts the built pane holder
+    and the shells those tests name in place, and a plan whose entries ask for
+    ignored tests is a plan the job prepares that way first. The decision is
+    this one, so no module name is written into the workflow.
     """
     plan = []
     for package, test, expression in nextest_filters(modules):
         names = sorted(module["module"] for module in modules
                        if module["package"] == package and module.get("test", "it") == test)
-        if expression and any(lister(package, test, "test(/^(" + name + ")::/)") == 0 for name in names):
+        # A module is a helper when no test of its own runs, ignored or not.
+        # Asking with `--run-ignored` is what tells an all-ignored module (a
+        # test that needs the built holder) from a file that declares none.
+        if expression and any(
+            not any(lister(package, test, "test(/^(" + name + ")::/)", run_ignored)[0] for run_ignored in ("", "all"))
+            for name in names
+        ):
             expression = ""
-        plan.append({"package": package, "test": test, "filter": expression, "tests": lister(package, test, expression)})
+        tests, ignored = lister(package, test, expression, "")
+        run_ignored = ""
+        if not tests:
+            ignored_only = lister(package, test, expression, "ignored-only")
+            if ignored_only[0]:
+                run_ignored, (tests, ignored) = "ignored-only", ignored_only
+        elif ignored:
+            tests, ignored = lister(package, test, expression, "all")
+            run_ignored = "all"
+        plan.append({
+            "package": package, "test": test, "filter": expression, "tests": tests,
+            "run_ignored": run_ignored,
+        })
     return plan
 
 
-def nextest_lister(package, test, expression):
-    """The tests `cargo nextest list` says one target of the package would run.
+def plan_run_ignored(plan, lister=None):
+    """Each plan entry with the flag its tests need, asked on this runner.
 
-    `test` is `it` for the crate's `tests/it` binary, and `lib` or `bin` for
-    the library and programs, which nextest selects by its own target names.
+    A pull request's plan is counted in the `count` job, which lists on a
+    runner of every system; a hand run names modules and nothing lists them,
+    because the system asked for may not be the one the count job runs on. The
+    Rust job is on the system that runs them, so it asks nextest here, for the
+    same decision `rust_plan` takes: `ignored-only` where a listing without
+    the flag matches no test and one asking for ignored tests matches some,
+    `all` where a test it would run is marked ignored, and empty otherwise.
+    """
+    lister = lister or nextest_lister
+    decided = []
+    for entry in plan:
+        package, test, expression = entry["package"], entry["test"], entry["filter"]
+        run_ignored = entry.get("run_ignored", "")
+        if not run_ignored:
+            tests, ignored = lister(package, test, expression, "")
+            if not tests:
+                if lister(package, test, expression, "ignored-only")[0]:
+                    run_ignored = "ignored-only"
+            elif ignored:
+                run_ignored = "all"
+        decided.append({**entry, "run_ignored": run_ignored})
+    return decided
+
+
+def nextest_lister(package, test, expression, run_ignored=""):
+    """What `cargo nextest list` says one target of the package would run.
+
+    Answers `(tests, ignored)`: how many whose filter matched, and how many of
+    those are marked ignored. `test` is `it` for the crate's `tests/it` binary,
+    and `lib` or `bin` for the library and programs, which nextest selects by
+    its own target names. `run_ignored` is nextest's own `default`, `all` or
+    `ignored-only`; only the last two are passed, so the ordinary listing
+    stays the one nextest makes by itself.
     """
     command = ["bash", "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package]
     command += ["--test", "it"] if test == "it" else [f"--{test}s"] if test == "bin" else ["--lib"]
     if expression:
         command += ["-E", expression]
+    if run_ignored:
+        command += ["--run-ignored", run_ignored]
     command += ["--message-format", "json"]
-    return nextest_listed(subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout)
+    return nextest_counted(subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout)
 
 
 def resolve(event, web, rust, repeat, runner, units=""):
@@ -508,7 +585,7 @@ def resolve(event, web, rust, repeat, runner, units=""):
             raise ValueError("name at least one spec (web), one unit test file (units) or one Rust test module (rust)")
         # Not listed: the system asked for may not be the one this job runs on, so
         # a module that lists no test there fails in the Rust job, where it runs.
-        plan = [{"package": package, "test": test, "filter": expression}
+        plan = [{"package": package, "test": test, "filter": expression, "run_ignored": ""}
                 for package, test, expression in nextest_filters(modules)]
         # The unit files are listed even for a hand run: the units job runs the
         # files the count found in each package, and only Vitest can say which
@@ -640,11 +717,14 @@ def main():
             write_lines(lines)
         elif args.command == "plan-lines":
             lines = []
-            for entry in json.loads(args.plan):
+            for entry in plan_run_ignored(json.loads(args.plan)):
                 if (not PACKAGE.match(entry["package"]) or entry.get("test") not in ("it", "lib", "bin")
                         or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])):
                     raise ValueError(f"not a Rust plan entry: {entry!r}")
-                lines.append(f"{entry['package']}\t{entry['test']}\t{entry['filter']}")
+                run_ignored = entry.get("run_ignored", "")
+                if run_ignored not in ("", "all", "ignored-only"):
+                    raise ValueError(f"not a Rust plan entry: {entry!r}")
+                lines.append(f"{entry['package']}\t{entry['test']}\t{entry['filter']}\t{run_ignored}")
             write_lines(lines)
         elif args.command == "count-nextest":
             print(nextest_listed(sys.stdin.read()))

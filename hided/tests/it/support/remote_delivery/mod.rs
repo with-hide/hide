@@ -352,6 +352,11 @@ fn run_order(home: &Path, pane: &str) -> PathBuf {
 
 /// The panes of an account whose stand-in reads its terminal, as the
 /// account's machine calls them.
+///
+/// The stand-in writes the mark under a `.tmp` name and renames it into place
+/// (`SHIM`), so a listing taken while it marks a pane can name a file that is
+/// gone by the time it is read. Such an entry is the rename in progress, not
+/// a pane, and the next observation sees it under its own name.
 pub fn ready_panes(home: &Path) -> Result<Vec<String>> {
     let folder = home.join(".fixture-ready");
     if !folder.exists() {
@@ -359,7 +364,16 @@ pub fn ready_panes(home: &Path) -> Result<Vec<String>> {
     }
     let mut panes = Vec::new();
     for entry in fs::read_dir(folder)? {
-        panes.push(fs::read_to_string(entry?.path())?);
+        let path = entry?.path();
+        if path.extension() == Some(OsStr::new("tmp")) {
+            continue;
+        }
+        match fs::read_to_string(&path) {
+            Ok(pane) => panes.push(pane),
+            // Renamed away between the listing and the read.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     panes.sort();
     Ok(panes)
