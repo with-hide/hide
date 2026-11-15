@@ -171,16 +171,30 @@ impl Machine {
     }
 
     /// agy's transcript of `conversation`, opened by `parent`'s message as
-    /// agy writes a subagent's.
+    /// agy 1.5.9 writes a subagent's: after what a hook injected at its start.
     fn subagent_of(&self, conversation: &str, parent: &str) {
         let path = transcript(&self.home, conversation);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let first = json!({
+        let injected = json!({
             "step_index": 0,
+            "source": "SYSTEM_SDK",
             "type": "SYSTEM_MESSAGE",
-            "content": format!("[Message] sender={parent} subject=task\nLook at the tests."),
+            "content": "<SYSTEM_MESSAGE>\nThe following system message was injected by a SessionStart hook:\nanother tool's note\n</SYSTEM_MESSAGE>",
         });
-        std::fs::write(path, format!("{first}\n")).unwrap();
+        let message = json!({
+            "step_index": 1,
+            "source": "SYSTEM",
+            "type": "SYSTEM_MESSAGE",
+            "content": format!("<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-15T12:20:22Z sender={parent} priority=MESSAGE_PRIORITY_HIGH content=Look at the tests.\n</SYSTEM_MESSAGE>"),
+        });
+        std::fs::write(path, format!("{injected}\n{message}\n")).unwrap();
+    }
+
+    /// The subagents and counts the pane's record keeps under `session`.
+    fn record_of(&self, session: &str) -> Option<hide_agent_hooks::counters::SessionRecord> {
+        hide_agent_hooks::counters::records_in(&self.daemon.records(), PANE)
+            .into_iter()
+            .find(|record| record.session.as_deref() == Some(session))
     }
 }
 
@@ -362,6 +376,66 @@ fn a_subagent_is_given_no_guidance_and_takes_no_letter_of_the_panes() {
         assert_eq!(run.stdout, "");
     }
     assert!(machine.inbox_calls().is_empty());
+}
+
+/// agy 1.5.9 runs a subagent's start and first model call before it writes
+/// the parent's message, and names a subagent's every event with an empty
+/// `lastUserInput`. That subagent gets nothing of the pane's, never stands
+/// as the pane's session, and its next model call counts it under the pane's
+/// own conversation with the task its parent gave it.
+#[test]
+fn a_subagent_known_before_its_parent_is_counted_from_its_next_model_call() {
+    let machine = Machine::new();
+    let own = machine.run(
+        "SessionStart",
+        &json!({ "conversationId": CONVERSATION, "lastUserInput": "Fan out" }),
+        Some(PANE),
+    );
+    assert!(own.status_ok, "{}", own.diagnostics);
+    let asked = machine.inbox_calls().len();
+    let subagent = |event: &str, invocation: Option<u64>| {
+        let mut payload = json!({ "conversationId": SUBAGENT, "lastUserInput": "" });
+        if let Some(invocation) = invocation {
+            payload["invocationNum"] = json!(invocation);
+        }
+        machine.run(event, &payload, Some(PANE))
+    };
+
+    for run in [
+        subagent("SessionStart", None),
+        subagent("UserPromptSubmit", Some(0)),
+    ] {
+        assert!(run.status_ok, "{}", run.diagnostics);
+        assert_eq!(run.stdout, "");
+    }
+    assert_eq!(machine.inbox_calls().len(), asked);
+    assert!(machine.record_of(SUBAGENT).is_none());
+    assert!(
+        machine
+            .record_of(CONVERSATION)
+            .unwrap()
+            .subagents
+            .is_empty()
+    );
+
+    machine.subagent_of(SUBAGENT, CONVERSATION);
+    let next = subagent("UserPromptSubmit", Some(1));
+    assert!(next.status_ok, "{}", next.diagnostics);
+    assert_eq!(next.stdout, "");
+    let record = machine.record_of(CONVERSATION).unwrap();
+    assert_eq!(record.counters.working, 1);
+    let listed: Vec<_> = record
+        .subagents
+        .iter()
+        .map(|subagent| (subagent.id.as_str(), subagent.task.as_deref()))
+        .collect();
+    assert_eq!(listed, [(SUBAGENT, Some("Look at the tests."))]);
+    assert_eq!(machine.inbox_calls().len(), asked);
+
+    assert!(subagent("Stop", None).status_ok);
+    let record = machine.record_of(CONVERSATION).unwrap();
+    assert_eq!((record.counters.working, record.counters.done), (0, 1));
+    assert!(machine.record_of(SUBAGENT).is_none());
 }
 
 /// agy's call of `tool` with `args`, in the checkout.

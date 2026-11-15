@@ -2208,6 +2208,12 @@ pub struct SidebarAgentSnapshot {
     /// `Runtime::judge_device_pane_children`.
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub subagents: u32,
+    /// The subagents counted in `subagents` that the session names, oldest
+    /// first and at most `hide_agent_hooks::report::SUBAGENTS_REPORTED`,
+    /// which a row lists under it, dimmed and with nothing to press
+    /// (docs/UI_BEHAVIOR.md, Subagents); laid with `subagents`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagent_rows: Vec<SubagentRowSnapshot>,
     /// How many subagents still run under a finished turn the operator has
     /// not read yet, which its line ends with, as `children_left` does; 0 on
     /// any other row.
@@ -3373,6 +3379,12 @@ pub struct DescendantSignal {
     /// for a View it opened that nobody has looked at.
     pub kind: String,
 }
+
+/// One subagent a session runs, as its hook reported it: the agent's id for
+/// it, its kind and task when the agent says them, and when the hook first
+/// heard it run. The hook's own report row, so the screen lists exactly
+/// what the hook said.
+pub type SubagentRowSnapshot = hide_node_link::panes::HookSubagent;
 
 /// The in-process subagents a pane's session reports.
 ///

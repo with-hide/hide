@@ -14,7 +14,7 @@ use hide_agent_adapter::HookDialect;
 use hide_agent_hooks::runtime::AgentRuntime;
 
 /// What the hook reported about the session running in one pane.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PaneHookTokens {
     /// The hook version this session reported with. Its presence is the proof
     /// that the session is instrumented at all, which is what separates "this
@@ -25,12 +25,25 @@ pub struct PaneHookTokens {
     pub done: Option<u32>,
     /// No adapter reports a blocked subagent, so it stays unknown.
     pub blocked: Option<u32>,
+    /// The running subagents the session names, oldest first, as its hook
+    /// last listed them; part of `working`, which also counts the ones the
+    /// agent names no id for.
+    pub subagents: Vec<hide_node_link::panes::HookSubagent>,
 }
+
+/// A pane's tokens when its hook reported nothing.
+pub static NO_TOKENS: PaneHookTokens = PaneHookTokens {
+    version: None,
+    working: None,
+    done: None,
+    blocked: None,
+    subagents: Vec::new(),
+};
 
 impl PaneHookTokens {
     /// Whether this pane carries any of Hide's reports at all.
-    pub fn is_empty(self) -> bool {
-        self == Self::default()
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 }
 

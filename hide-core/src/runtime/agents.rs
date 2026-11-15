@@ -1994,9 +1994,8 @@ impl Runtime {
             let tokens = self
                 .pane_hook_tokens
                 .get(&agent.pane_id)
-                .copied()
-                .unwrap_or_default();
-            agent.subagents =
+                .unwrap_or(&crate::agent_hooks::NO_TOKENS);
+            (agent.subagents, agent.subagent_rows) =
                 crate::sidebar::running_subagents(&agent.agent_kind, tokens, &|dialect| {
                     statuses.status_of(dialect)
                 });
@@ -2086,8 +2085,7 @@ impl Runtime {
             let tokens = self
                 .pane_hook_tokens
                 .get(&pane.id)
-                .copied()
-                .unwrap_or_default();
+                .unwrap_or(&crate::agent_hooks::NO_TOKENS);
             let mut children = crate::sidebar::project_pane_children_connected(
                 &agents,
                 &pane.id,
@@ -4512,7 +4510,7 @@ fn sync_remote_pane_relations(session: &mut RemoteSessionSnapshot) -> bool {
         let children = crate::sidebar::project_pane_children(
             agents,
             &pane.id,
-            crate::agent_hooks::PaneHookTokens::default(),
+            &crate::agent_hooks::NO_TOKENS,
             &|_| None,
         );
         let lineage_path = crate::sidebar::project_lineage_path(agents, &pane.id);

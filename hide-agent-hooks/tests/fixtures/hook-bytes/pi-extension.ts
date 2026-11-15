@@ -1,4 +1,4 @@
-// hide-extension@15 sha256=5b4665b45036e57cfddf2f80c684ac4ce6da9e04d378228e393385b46365ff12
+// hide-extension@16 sha256=fb535454b1824776a283c420643a8fcd2d6525ef3d79e0671317c24bfcf1749f
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -14,7 +14,7 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "pi";
-const VERSION = 15;
+const VERSION = 16;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the opener guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
@@ -33,6 +33,7 @@ const PROMPT_TEXT_LIMIT = 32 * 1024;
 const RUNNING_LIMIT = 8;
 const SESSION_LIMIT = 512;
 const CHILD_LIMIT = 64;
+const ASKED_LIMIT = 16;
 const PENDING_LIMIT = 16;
 const PENDING_AGE_MS = 10 * 60 * 1000;
 const CUSTOM_TYPE = "hide";
@@ -126,8 +127,9 @@ function fileArgs(args) {
 const REMINDER_TAG = /<(\s*\/?\s*system-reminder)/gi;
 
 // omp's subagents run in the same process and get their own binding of this factory, sharing the module: the
-// counts live here, and the main session's binding reports them.
-const shared = { children: new Map(), publish: null, rootSession: null };
+// counts live here, and the main session's binding reports them. `asked` holds the tasks a `task` call asked for that
+// no subagent has taken yet, oldest first.
+const shared = { children: new Map(), asked: [], publish: null, rootSession: null };
 
 function helperPresent() {
   try {
@@ -295,27 +297,31 @@ function remember(set, key) {
 }
 
 /**
- * Sends the pane's subagent counts when they changed, or always when `force`. One report runs at a time and only
- * the newest waiting one follows it, so a burst of subagents costs two helper runs, not one per change.
+ * Sends the pane's subagent counts, with the running ones by id, oldest first, when they changed, or always when
+ * `force`. One report runs at a time and only the newest waiting one follows it, so a burst of subagents costs two
+ * helper runs, not one per change.
  */
 function publishCounts(state, force) {
-  let working = 0;
+  const running = [];
   let done = 0;
-  for (const child of shared.children.values()) {
-    if (child.busy) working += 1;
+  for (const [id, child] of shared.children) {
+    if (child.busy) running.push({ id, kind: child.kind, task: child.task, started_unix_ms: child.started });
     else if (child.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  running.sort((a, b) => (a.started_unix_ms ?? 0) - (b.started_unix_ms ?? 0));
+  const working = running.length;
+  // A subagent's task arrives with its first prompt, after its spawn counted it, so the key carries what each says.
+  const key = `${working}/${done}/${JSON.stringify(running.map((child) => [child.id, child.kind, child.task]))}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, running, key };
   state.counting ??= (async () => {
     try {
       while (state.nextCount) {
         const next = state.nextCount;
         state.nextCount = null;
-        const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS);
+        const answer = await helper(state, "subagents", { working: next.working, done: next.done, running: next.running }, COUNT_BUDGET_MS);
         if (answer?.reported !== true && state.published === next.key) state.published = null;
       }
     } finally {
@@ -371,12 +377,51 @@ function child(id) {
   return entry;
 }
 
-function setChild(id, busy) {
+/**
+ * Keeps each task an omp `task` call asks for: its words, how a row names it (its `description`, else its `name` in
+ * words, `find_login_file` reads `find login file`, else its words) and the agent it asked for, the task's own or the
+ * call's. No spawn names its task, and omp gives a generated id to a task the call did not name, in no fixed order.
+ */
+function noteAsked(event) {
+  const input = event?.input;
+  if (AGENT !== "omp" || event?.toolName !== "task" || !Array.isArray(input?.tasks)) return;
+  const words = (value) => (typeof value === "string" ? value.trim() : "");
+  for (const task of input.tasks) {
+    const text = words(task?.task);
+    if (!text) continue;
+    if (shared.asked.length >= ASKED_LIMIT) shared.asked.shift();
+    const label = words(task.description) || words(task.name).replace(/[_-]+/g, " ").trim() || text;
+    shared.asked.push({ text, label, kind: words(task.agent) || words(input.agent) });
+  }
+}
+
+/**
+ * A subagent's first prompt carries its task's words (omp 18.7.0: `Complete assignment thoroughly:` and the task), so
+ * the oldest ask whose words it carries is its; the helper makes its label one short line.
+ */
+function takeAsked(id, prompt) {
+  const entry = shared.children.get(id);
+  if (!entry || entry.task || typeof prompt !== "string") return;
+  const at = shared.asked.findIndex((asked) => prompt.includes(asked.text));
+  if (at < 0) return;
+  const [asked] = shared.asked.splice(at, 1);
+  entry.task = asked.label;
+  if (asked.kind && asked.kind !== "task") entry.kind ??= asked.kind;
+  void shared.publish?.(false);
+}
+
+/**
+ * A subagent runs or rests. `kind` is the agent definition a spawn named, kept unless it is omp's general `task`
+ * agent, which says nothing a row could show.
+ */
+function setChild(id, busy, kind) {
   if (typeof id !== "string" || !id) return;
   const entry = child(id);
   if (!entry) return;
   entry.busy = busy;
   entry.ran ||= busy;
+  if (busy) entry.started ??= Date.now();
+  if (typeof kind === "string" && kind && kind !== "task") entry.kind ??= kind;
   void shared.publish?.(false);
 }
 
@@ -584,6 +629,7 @@ function onSessionStart(state, ctx) {
   if (AGENT === "omp") {
     // A new session in the pane starts its counts at zero, as Claude Code's SessionStart does.
     shared.children.clear();
+    shared.asked = [];
     shared.publish = (force) => publishCounts(state, force);
     void publishCounts(state, true);
   }
@@ -637,11 +683,15 @@ export default function hide(pi) {
   // omp reports a session the operator switched to with its own event.
   on("session_switch", (_event, ctx) => onSessionStart(state, ctx));
   // Past the budget the prompt goes on unchanged, and letters it would have carried stay pending in Hide.
-  on("before_agent_start", async (event, ctx) => (await withBudget(onPrompt(state, event, ctx), PROMPT_BUDGET_MS)) ?? undefined);
+  on("before_agent_start", async (event, ctx) => {
+    if (subagent(ctx)) takeAsked(ctx.agent.id, event?.prompt);
+    return (await withBudget(onPrompt(state, event, ctx), PROMPT_BUDGET_MS)) ?? undefined;
+  });
   on("message_end", (event, ctx) => onMessageEnd(state, event, ctx));
   // Past the budget the result goes on unchanged, and the letters it would have carried stay pending in Hide.
   on("tool_result", async (event, ctx) => (await withBudget(onToolResult(state, event, ctx), LETTERS_BUDGET_MS + 200)) ?? undefined);
   on("tool_call", async (event, ctx) => {
+    noteAsked(event);
     let reason = null;
     try {
       reason = await onTool(state, event, ctx);
@@ -650,7 +700,7 @@ export default function hide(pi) {
     return reason ? { block: true, reason } : undefined;
   });
   on("agent_start", (_event, ctx) => {
-    if (subagent(ctx)) setChild(ctx.agent.id, true);
+    if (subagent(ctx)) setChild(ctx.agent.id, true, ctx.agent.name);
     else if (root(ctx)) publishTurn(state, ctx, "working");
   });
   on("agent_end", (event, ctx) => {
@@ -674,7 +724,7 @@ export default function hide(pi) {
   on("before_subagent_spawn", (event, ctx) => {
     if (!root(ctx)) return undefined;
     // The spawn's key is the subagent's id: it counts as working from dispatch.
-    setChild(event?.spawnKey, true);
+    setChild(event?.spawnKey, true, event?.agent);
     return undefined;
   });
   on("session_shutdown", (_event, ctx) => {

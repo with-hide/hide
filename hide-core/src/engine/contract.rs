@@ -1560,6 +1560,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
             },
             Said::Turn(HookTurn::Working),
             None,
+            hide_agent_hooks::counters::Told::default(),
         )
         .unwrap();
     }

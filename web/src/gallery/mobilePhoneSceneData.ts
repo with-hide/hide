@@ -21,6 +21,11 @@ function agent(pane: string, title: string, ago: number, over: Partial<PhoneAgen
 }
 
 const mini = { device_id: "mini", device_label: "Mac mini" } as const;
+
+/** Subagents an agent runs inside its own session, oldest first, as its hook names them: invented kinds and tasks, started `ago` minutes back. */
+function subagents(...named: [kind: string | undefined, task: string, ago: number][]): Pick<PhoneAgent, "subagents" | "subagent_rows"> {
+  return { subagents: named.length, subagent_rows: named.map(([kind, task, ago], at) => ({ id: `sub-${at}`, kind, task, started_unix_ms: Date.now() - ago * MINUTE })) };
+}
 const asking = (text: string): PhoneAgent["line"] => ({ text, mode: "request", tone: "warning" });
 const row = (value: PhoneAgent): GroupRow => ({ kind: "agent", ...value });
 
@@ -46,9 +51,11 @@ export function phoneGroups(): AgentGroup[] {
     ],
   });
   const holder = agent("w2", "홀더 메모리 측정", 4, {
-    mark: "waiting", wait: "children", wait_count: 2, descendants_working: 2, descendants: { working: 2, asking: 0, done: 0 },
+    mark: "waiting", wait: "children", wait_count: 2, wait_subagents: 2, descendants_working: 2, descendants: { working: 2, asking: 0, done: 0 },
     line: { text: "", mode: "waiting", tone: "subtle" },
     children: [agent("w2c1", "RSS 기록 모으기", 4), agent("w2c2", "footprint 비교 표", 5)],
+    // Waiting on its children and on two subagents of its own session (operator decision 2026-11-15).
+    ...subagents(["Explore", "홀더 시작 코드 찾기", 6], ["general-purpose", "측정 로그 모으기", 3]),
   });
   const needsYou: GroupRow[] = [
     row(parent),
@@ -57,10 +64,11 @@ export function phoneGroups(): AgentGroup[] {
     row(agent("a3", "설치 가이드 다듬기", 11, { group: "needs_you", mark: "turn", status_code: "idle", demand: "question", emphasized: true, holds_notification: true, place: "herdr-ide · main", line: asking("INSTALL.md의 순서를 바꿔도 될까요?") })),
   ];
   const working: GroupRow[] = [
-    row(agent("w1", "Slack 스레드 시행착오 점검", 2, { ...mini, place: "modakbul · main" })),
+    // Working with three subagents its session runs: Codex names each by the path it gave it, without a kind.
+    row(agent("w1", "Slack 스레드 시행착오 점검", 2, { ...mini, place: "modakbul · main", agent_kind: "codex", ...subagents([undefined, "find thread replies", 2], [undefined, "check retry logs", 2], [undefined, "summarize failures", 1]) })),
     row(holder),
     // Resting while two subagents its session started still run (operator decision 2026-11-14).
-    row(agent("w3", "Day2 강의자료 준비", 18, { place: "creator · master", mark: "waiting", wait: "subagents", wait_count: 2, line: { text: "", mode: "waiting", tone: "subtle" } })),
+    row(agent("w3", "Day2 강의자료 준비", 18, { place: "creator · master", mark: "waiting", wait: "subagents", wait_count: 2, line: { text: "", mode: "waiting", tone: "subtle" }, ...subagents(["Explore", "지난 강의 슬라이드 찾기", 9], ["Plan", "실습 순서 정리", 7]) })),
     row(agent("w4", "릴리스 노트 초안 검토", 22, { place: "herdr-ide · main" })),
     row(agent("w5", "사이트 배포 점검", 31, { place: "withhide · main" })),
   ];

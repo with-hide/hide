@@ -17,6 +17,22 @@ export type RowMark = "turn" | "look" | "going" | "waiting" | "done" | "unread" 
 /** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, its pull request's checks, or the subagents its session still runs. */
 export type AgentWait = "children" | "background" | "reply" | "checks" | "subagents";
 
+/**
+ * One subagent an agent runs inside its own session, as its hook reported it
+ * (docs/UI_BEHAVIOR.md, Subagents): what kind it is and what it was asked to
+ * do when the agent says, and when it started. It has no pane, so nothing
+ * about it opens anything.
+ */
+export type SubagentRow = {
+  id: string;
+  /** The agent's own name for its kind (`Explore`); absent when the agent names none worth showing. */
+  kind?: string;
+  /** What it was asked to do, one short line; absent when the agent does not say. */
+  task?: string;
+  /** When the hook first heard it run; absent for one it heard of before it kept the time. */
+  started_unix_ms?: number;
+};
+
 /** Why a row's second line is on screen (`RowLine::mode`); see agentRow.ts. */
 export type LineMode = "request" | "news" | "waiting" | "kept" | "quiet" | "vanished" | "checks_passed" | "checks_failed";
 
@@ -197,8 +213,10 @@ export type AgentRow = {
   background_left?: number;
   /** The descendants still working under a root whose finished turn the operator has not read, which its line ends with; absent when none. */
   children_left?: number;
-  /** How many subagents its session runs inside itself now, drawn as dots beside its title; absent when none run and when Hide cannot read the count (docs/UI_BEHAVIOR.md, Subagents). */
+  /** How many subagents its session runs inside itself now, counted on its children chip; absent when none run and when Hide cannot read the count (docs/UI_BEHAVIOR.md, Subagents). */
   subagents?: number;
+  /** The subagents counted in `subagents`, oldest first, as many as the core lists (it may list fewer than it counts); absent when none run. */
+  subagent_rows?: SubagentRow[];
   /** The subagents still running under a finished turn the operator has not read, which its line ends with; absent when none. */
   subagents_left?: number;
   /** How many things its `wait` waits on, which its line counts (`자식 2개 기다림`); absent for running checks and when it waits for nothing. */

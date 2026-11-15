@@ -12,6 +12,7 @@ import { cn } from "../lib/utils";
 import { agentLinks, type AgentLinks } from "./missionModel";
 import { useElapsed } from "../components/elapsed";
 import { StatusMark } from "../components/status-mark";
+import { SubagentLine, SubagentMark, SubagentMoreLine, subagentsOf } from "../components/subagent-row";
 import { Button } from "../components/ui/button";
 import { RowButton } from "../components/ui/row-button";
 import { agentProductName } from "../agentAdapters";
@@ -65,13 +66,20 @@ function FoldButton({ label, note, onOpen, ...rest }: { label: string; note: str
   );
 }
 
-/** An agent's row with its children under it, opened as the core chose until this phone chose otherwise (B2, B3). */
+/**
+ * An agent's row with its children under it, opened as the core chose until
+ * this phone chose otherwise (B2, B3), and after them the subagents its agent
+ * runs inside its own session, as the desktop's opened row lists them: the
+ * first five, dimmed and with nothing to press, and the rest as one line
+ * (docs/UI_BEHAVIOR.md, Subagents).
+ */
 function AgentItem({ agent }: { agent: PhoneAgent }) {
   const { t } = useInterfaceTranslation();
   const tag = keyTag(agent);
   const kids = agent.children ?? [];
   const more = agent.more_children ?? [];
-  const hasKids = kids.length + more.length > 0;
+  const subagents = subagentsOf(agent);
+  const opens = kids.length + more.length + (agent.subagents ?? 0) > 0;
   const open = usePhone((s) => s.childrenOpen[tag]) ?? agent.children_open === true;
   const foldKeyOf = foldKey.children(tag);
   const moreOpened = usePhone((s) => s.foldsOpen[foldKeyOf] === true);
@@ -81,24 +89,31 @@ function AgentItem({ agent }: { agent: PhoneAgent }) {
       <div className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined} data-phone-row={tag}>
         <AgentRow agent={agent} />
         <PhoneHumanTurn agent={agent} inset={`${LIST_INSET} pb-md`} />
-        <Descendants agent={agent} count={kids.length + more.length} open={open} onToggle={hasKids ? () => setChildrenOpen(agent, !open) : null} />
+        <Descendants agent={agent} count={kids.length + more.length} open={open} onToggle={opens ? () => setChildrenOpen(agent, !open) : null} />
       </div>
-      {hasKids && open ? (
+      {opens && open ? (
         <ul className="ml-[calc(var(--size-agent-mark)/2)] border-l border-border pl-md" data-phone-children={tag}>
           {[...kids, ...(moreOpened ? more : [])].map((child) => <AgentItem key={keyTag(child)} agent={child} />)}
           {more.length > 0 && !moreOpened ? (
             <li><FoldButton label={t("mobile.more", { count: more.length })} note={null} data-phone-fold={foldKeyOf} onOpen={() => openFold(foldKeyOf)} /></li>
           ) : null}
+          {subagents.rows.map((row) => <li key={row.id} data-phone-subagent={row.id}><SubagentLine row={row} size="body" /></li>)}
+          {subagents.more > 0 ? <li data-phone-subagent-more=""><SubagentMoreLine count={subagents.more} listed={subagents.rows.length} size="body" /></li> : null}
         </ul>
       ) : null}
     </li>
   );
 }
 
-/** A parent's pills (asking, working, finished) and `자식 N ⌄`, which opens or closes its children (B2). */
+/**
+ * A parent's pills (asking, working, finished) and `자식 N ● 서브에이전트 M ⌄`,
+ * which opens or closes its children and its subagents (B2); a part with none
+ * is left out.
+ */
 function Descendants({ agent, count, open, onToggle }: { agent: PhoneAgent; count: number; open: boolean; onToggle: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const counts = agent.descendants;
+  const subagents = agent.subagents ?? 0;
   if (!counts && !onToggle) return null;
   const pills = (
     <span className="flex min-w-0 items-center gap-md text-body text-subtle-foreground">
@@ -119,7 +134,9 @@ function Descendants({ agent, count, open, onToggle }: { agent: PhoneAgent; coun
     >
       {pills}
       <span className="flex shrink-0 items-center gap-xs text-subtle-foreground">
-        {t("mobile.children", { count })}
+        {count > 0 ? t("mobile.children", { count }) : null}
+        {/* The subagent mark sets the two counts apart; a `·` beside it would read as a second dot. */}
+        {subagents > 0 ? <><SubagentMark /><span data-phone-subagent-count={subagents}>{t("agents.subagents.section", { count: subagents })}</span></> : null}
         <Chevron aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />
       </span>
     </Button>

@@ -173,6 +173,7 @@ fn a_helpers_counter_path_is_unchanged_and_still_reads() {
         },
         Said::Nothing,
         None,
+        counters::Told::default(),
     )
     .unwrap();
     let read = counters::records_in(&records, PANE);
@@ -221,6 +222,7 @@ fn two_installations_keep_their_own_record_of_one_pane() {
             },
             Said::Nothing,
             None,
+            counters::Told::default(),
         )
         .unwrap();
     };

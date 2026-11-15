@@ -13,8 +13,9 @@ export const SESSION_INDENT_LEVELS = 3;
 
 /**
  * The root and, through every row the operator opened, its descendants in
- * display order (most urgent sibling first), with the sidebar's sibling limit
- * and the capped rails. A root that is not opened draws only itself.
+ * display order (most urgent sibling first) and then its own subagents, with
+ * the sidebar's sibling limit and the capped rails. A root that is not opened
+ * draws only itself.
  */
 export function sessionTreeLines(root: AgentRow, byPane: ReadonlyMap<string, AgentRow>, opened: ReadonlySet<string>, shownAll: ReadonlySet<string>, siblings: number): SidebarTreeLine[] {
   const rows: BoardRow[] = [];
@@ -27,7 +28,7 @@ export function sessionTreeLines(root: AgentRow, byPane: ReadonlyMap<string, Age
     if (opened.has(agent.pane_id)) for (const child of childrenOf(agent, byPane)) walk(child, depth + 1);
   };
   walk(root, 0);
-  return sidebarTreeLines(rows, shownAll, siblings, (depths) => cappedPlaces(depths, SESSION_INDENT_LEVELS));
+  return sidebarTreeLines(rows, shownAll, siblings, (depths) => cappedPlaces(depths, SESSION_INDENT_LEVELS), (row) => opened.has(row.agent.pane_id));
 }
 
 /** The path of the checkout whose tab holds `pane`, for the branch's tooltip. */

@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::report::HookTurn;
+use crate::report::{
+    HookSubagent, HookTurn, SUBAGENT_KIND_LIMIT, SUBAGENT_TASK_LIMIT, subagent_words,
+};
 use crate::runtime::{AgentRuntime, HOOK_VERSION, HookEvent};
 
 /// The most subagents one session may have running at once, and the most
@@ -28,6 +30,10 @@ use crate::runtime::{AgentRuntime, HOOK_VERSION, HookEvent};
 /// event the pane's last report failure shows, not a larger record.
 const RUNNING_LIMIT: usize = 256;
 const FINISHED_LIMIT: usize = 256;
+/// The subagents a session's main agent asked for that have not started yet
+/// ([`Told::asked`]); past it the oldest ask is dropped, since a start that
+/// never came leaves its ask behind until the turn ends.
+const ASKED_LIMIT: usize = 16;
 /// The sessions one pane's file keeps; the one heard from least recently
 /// goes first. The core's facts keep the same sessions by this constant
 /// (`hide-core`'s `agent_hooks::facts`).
@@ -54,9 +60,12 @@ pub struct PaneCounters {
 /// of the session, when the hook's input named it.
 ///
 /// `running` and `finished` are the subagents an agent names by id: a start
-/// puts an id in `running`, its stop moves it to `finished` once, and a
-/// repeated stop or the stop of an id that never started changes nothing.
-/// `working` counts the subagents of an agent whose events carry no id.
+/// puts an id in `running`, with what the event said of it and when, its stop
+/// moves it to `finished` once, and a repeated stop or the stop of an id that
+/// never started changes nothing. `working` counts the subagents of an agent
+/// whose events carry no id. `asked` are the subagents the main agent asked
+/// for that have not started yet, which a start of the same kind takes its
+/// task from ([`Told::asked`]).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct Record {
     #[serde(default)]
@@ -69,10 +78,16 @@ struct Record {
     agent: Option<String>,
     #[serde(default)]
     session: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    running: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "running_entries"
+    )]
+    running: Vec<HookSubagent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     finished: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asked: Vec<Asked>,
     /// The turn the last report said, so a tool event reports only a move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn: Option<HookTurn>,
@@ -83,6 +98,61 @@ struct Record {
     /// close a background subagent's dialog.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     waiting: Vec<String>,
+}
+
+/// A subagent the main agent asked for that has not started yet: the kind it
+/// asked for, when it named one, and the task it gave.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+struct Asked {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    task: String,
+}
+
+/// A record's running subagents, each as the id alone a helper before
+/// [`HookSubagent`] wrote or as the whole entry.
+fn running_entries<'de, D>(deserializer: D) -> Result<Vec<HookSubagent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Id(String),
+        Whole(HookSubagent),
+    }
+    Ok(Vec::<Entry>::deserialize(deserializer)?
+        .into_iter()
+        .map(|entry| match entry {
+            Entry::Id(id) => HookSubagent {
+                id,
+                ..HookSubagent::default()
+            },
+            Entry::Whole(subagent) => subagent,
+        })
+        .collect())
+}
+
+/// What an event said of its subagents beyond which one started or stopped:
+/// what the one it starts is, a subagent the main agent asks for, and the
+/// tasks it names for running ones by id. All of it is the agent's own words,
+/// made one short line before it is kept ([`subagent_words`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Told<'a> {
+    /// The kind of the subagent the event starts (Claude Code's
+    /// `agent_type`).
+    pub kind: Option<&'a str>,
+    /// The task of the subagent the event starts, when the event says it
+    /// (Antigravity's first message).
+    pub task: Option<&'a str>,
+    /// A subagent the main agent asks for and that has not started yet, its
+    /// kind and its task (Claude Code's `Agent` call, whose `description` no
+    /// `SubagentStart` carries): the next start of that kind takes the task.
+    pub asked: Option<(Option<&'a str>, &'a str)>,
+    /// Tasks the event names for subagents by id (Claude Code's
+    /// `background_tasks`, Codex's agent paths), for running ones that have
+    /// none yet.
+    pub tasks: &'a [(String, String)],
 }
 
 impl Record {
@@ -184,10 +254,11 @@ pub enum Change<'a> {
     Started(Option<&'a str>),
     /// One subagent stopped: a known id moves from working to done once.
     Stopped(Option<&'a str>),
-    /// A subagent's own tool call: it works, as [`Change::Started`] says,
-    /// and the event reports only when that moved a count. A Codex follow-up
-    /// task to a finished subagent sends no `SubagentStart`, and its tool
-    /// calls come before its `SubagentStop`.
+    /// A subagent's own tool call, or agy's own model call: it works, as
+    /// [`Change::Started`] says, and the event reports only when that moved a
+    /// count. A Codex follow-up task to a finished subagent sends no
+    /// `SubagentStart`, and its tool calls come before its `SubagentStop`;
+    /// an agy subagent is known only from its second model call.
     Working(&'a str),
     /// The turn ended with this many subagents still running, for an agent
     /// that names none by id: none for an agent whose subagents end with its
@@ -285,13 +356,19 @@ pub struct SubagentInput {
     /// The ids Claude Code's `background_tasks` lists as running subagents,
     /// when the input has that list.
     pub running: Option<Vec<String>>,
+    /// The task `background_tasks` gives each running subagent it lists
+    /// (`description`), by id.
+    pub tasks: Vec<(String, String)>,
+    /// The kind of subagent the event is about (`agent_type`).
+    pub kind: Option<String>,
     /// The turn the event is about (Codex's `turn_id`).
     pub turn: Option<String>,
     /// What started the session, for a `SessionStart` (`startup`, `resume`,
     /// `clear`, `compact`, ...).
     pub source: Option<String>,
     /// The session file the agent keeps (`transcript_path`): the main
-    /// agent's, in a subagent's event too.
+    /// agent's, in a subagent's event too, except a Codex subagent's start
+    /// and its own tool calls, which name the subagent's own (Codex 0.169.0).
     pub transcript: Option<PathBuf>,
 }
 
@@ -344,11 +421,13 @@ impl SubagentInput {
             #[serde(rename = "type")]
             kind: Option<String>,
             status: Option<String>,
+            description: Option<String>,
         }
         #[derive(Deserialize)]
         struct Input {
             session_id: Option<String>,
             agent_id: Option<String>,
+            agent_type: Option<String>,
             background_tasks: Option<Vec<Task>>,
             turn_id: Option<String>,
             transcript_path: Option<PathBuf>,
@@ -360,22 +439,28 @@ impl SubagentInput {
         else {
             return Self::default();
         };
+        let running: Option<Vec<Task>> = input.background_tasks.map(|tasks| {
+            tasks
+                .into_iter()
+                .filter(|task| {
+                    task.kind.as_deref() == Some("subagent")
+                        && task.status.as_deref() == Some("running")
+                        && task.id.as_deref().is_some_and(valid_subagent)
+                })
+                .collect()
+        });
         Self {
             session: input
                 .session_id
                 .filter(|id| crate::delivery::valid_session(id)),
             subagent: input.agent_id.filter(|id| valid_subagent(id)),
-            running: input.background_tasks.map(|tasks| {
-                tasks
-                    .into_iter()
-                    .filter(|task| {
-                        task.kind.as_deref() == Some("subagent")
-                            && task.status.as_deref() == Some("running")
-                    })
-                    .filter_map(|task| task.id)
-                    .filter(|id| valid_subagent(id))
-                    .collect()
-            }),
+            tasks: running
+                .iter()
+                .flatten()
+                .filter_map(|task| Some((task.id.clone()?, task.description.clone()?)))
+                .collect(),
+            running: running.map(|tasks| tasks.into_iter().filter_map(|task| task.id).collect()),
+            kind: input.agent_type,
             turn: input.turn_id,
             source: input.source,
             transcript: input.transcript_path,
@@ -413,6 +498,8 @@ pub struct Applied {
     pub turn: Option<HookTurn>,
     /// The session's open approvals after the change.
     pub waiting: Vec<String>,
+    /// The subagents the session runs by id after the change, oldest first.
+    pub subagents: Vec<HookSubagent>,
 }
 
 /// What one hook event says of its session's turn and the operator's open
@@ -502,6 +589,8 @@ pub struct SessionRecord {
     /// `Waiting` in a pane whose agent no longer runs was cut off (PRD
     /// engine-bundle-4-herdr-removal D-22).
     pub turn: Option<HookTurn>,
+    /// The subagents it runs by id, oldest first, as a report lists them.
+    pub subagents: Vec<HookSubagent>,
 }
 
 impl SessionRecord {
@@ -512,6 +601,7 @@ impl SessionRecord {
             session: record.session.clone(),
             counters: record.counters(),
             turn: record.turn,
+            subagents: crate::report::reported_subagents(&record.running),
         })
     }
 }
@@ -617,6 +707,10 @@ pub struct ToolCall {
     input: Option<String>,
     /// The session file the agent keeps, which records a refused call.
     pub transcript: Option<PathBuf>,
+    /// The subagent the main agent asks for with this call, its kind and
+    /// its task: Claude Code's `Agent` call (`Task` before 2.1),
+    /// `subagent_type` and `description`.
+    pub asks: Option<(Option<String>, String)>,
 }
 
 impl ToolCall {
@@ -629,11 +723,24 @@ impl ToolCall {
             transcript_path: Option<PathBuf>,
         }
         if !truncated && let Ok(input) = serde_json::from_slice::<Input>(payload) {
+            let subagent = input.agent_id.is_some_and(|id| !id.is_empty());
+            let asks = (!subagent && matches!(input.tool_name.as_deref(), Some("Agent" | "Task")))
+                .then_some(input.tool_input.as_ref())
+                .flatten()
+                .and_then(|tool| {
+                    let task = tool.get("description")?.as_str()?.to_owned();
+                    let kind = tool
+                        .get("subagent_type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                    Some((kind, task))
+                });
             return Self {
-                subagent: input.agent_id.is_some_and(|id| !id.is_empty()),
+                subagent,
                 name: input.tool_name,
                 input: input.tool_input.as_ref().map(hide_session::calls::digest),
                 transcript: input.transcript_path,
+                asks,
             };
         }
         Self {
@@ -641,6 +748,7 @@ impl ToolCall {
             name: prefix_string(payload, "tool_name").map(str::to_owned),
             input: None,
             transcript: prefix_string(payload, "transcript_path").map(PathBuf::from),
+            asks: None,
         }
     }
 
@@ -712,13 +820,23 @@ pub fn change(
     change: Change<'_>,
     who: Reporter<'_>,
 ) -> io::Result<PaneCounters> {
-    apply(home, pane_id, change, who, Said::Nothing, None).map(|applied| applied.counters)
+    apply(
+        home,
+        pane_id,
+        change,
+        who,
+        Said::Nothing,
+        None,
+        Told::default(),
+    )
+    .map(|applied| applied.counters)
 }
 
 /// Applies one [`Change`] to `who`'s record, and notes `turn` as the one its
 /// next report says, with the call (`ToolCall::key`) a waiting turn waits
 /// on. A later wait that names none, such as Claude Code's notification of
-/// the same request, keeps the call the request named.
+/// the same request, keeps the call the request named. What the event
+/// `told` of its subagents is kept on them ([`Told`]).
 ///
 /// The record is read, changed and written while the lock is held, so two
 /// events of one pane never both start from the same count. The write is not
@@ -732,6 +850,7 @@ pub fn apply(
     who: Reporter<'_>,
     said: Said<'_>,
     transcript: Option<&Path>,
+    told: Told<'_>,
 ) -> io::Result<Applied> {
     apply_in(
         &crate::route::pane_records(home)?,
@@ -740,6 +859,7 @@ pub fn apply(
         who,
         said,
         transcript,
+        told,
     )
 }
 
@@ -752,6 +872,7 @@ pub fn apply_in(
     who: Reporter<'_>,
     said: Said<'_>,
     transcript: Option<&Path>,
+    told: Told<'_>,
 ) -> io::Result<Applied> {
     let path = record_path_in(records, pane_id);
     if let Some(parent) = path.parent() {
@@ -778,10 +899,12 @@ pub fn apply_in(
             if change == Change::Reopened {
                 record.running.clear();
             }
+            record.asked.clear();
             record.turn = None;
             record.waiting.clear();
         }
-        Change::Started(Some(subagent)) | Change::Working(subagent) => record.start(subagent)?,
+        Change::Started(Some(subagent)) => record.start(subagent, told, now_unix_ms())?,
+        Change::Working(subagent) => record.start(subagent, told, now_unix_ms())?,
         Change::Started(None) => record.working = record.working.saturating_add(1),
         Change::Stopped(Some(subagent)) => record.stop(subagent),
         Change::Stopped(None) => {
@@ -805,11 +928,27 @@ pub fn apply_in(
                     record.done = record.done.saturating_sub(1);
                 }
             }
-            record.running = listed;
+            // A subagent listed again keeps what was heard of it; one heard of
+            // first here started before the hook knew it, at a time unknown.
+            let mut kept = std::mem::take(&mut record.running);
+            record.running = listed
+                .into_iter()
+                .map(|id| match kept.iter().position(|known| known.id == id) {
+                    Some(at) => kept.swap_remove(at),
+                    None => HookSubagent {
+                        id,
+                        ..HookSubagent::default()
+                    },
+                })
+                .collect();
+            // The turn ended: an ask no start took is not waiting any more.
+            record.asked.clear();
         }
-        Change::Ended { ids } => record.running.retain(|running| !ids.contains(running)),
+        Change::Ended { ids } => record.running.retain(|running| !ids.contains(&running.id)),
         Change::None => {}
     }
+    record.ask(told.asked);
+    record.name_tasks(told.tasks);
     fold_said(&mut record, said)?;
     // A refusal in the dialog sends no event: whatever event comes next
     // with the session file's path finds the refused call's result there.
@@ -822,6 +961,7 @@ pub fn apply_in(
     }
     let moved = record.turn != previous_turn || record.waiting != previous_waiting;
     let (turn, waiting) = (record.turn, record.waiting.clone());
+    let subagents = record.running.clone();
     record.version = Some(HOOK_VERSION);
     record.agent = who.agent.map(str::to_owned);
     if who.session.is_some() {
@@ -845,7 +985,18 @@ pub fn apply_in(
         moved,
         turn,
         waiting,
+        subagents,
     })
+}
+
+/// Now, in milliseconds since the Unix epoch: when a subagent the hook hears
+/// of first started, as near as the hook can tell.
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn too_many() -> io::Error {
@@ -857,25 +1008,94 @@ fn too_many() -> io::Error {
 
 impl Record {
     /// `subagent` runs: a subagent that finished and runs again is not
-    /// counted done any more.
-    fn start(&mut self, subagent: &str) -> io::Result<()> {
+    /// counted done any more. One heard of first now starts now, with the
+    /// kind and task the event `told`, or else the task of the oldest ask of
+    /// its kind; one already running keeps its start and fills in only what
+    /// it lacked.
+    fn start(&mut self, subagent: &str, told: Told<'_>, now: u64) -> io::Result<()> {
         if let Some(at) = self.finished.iter().position(|id| id == subagent) {
             self.finished.remove(at);
             self.done = self.done.saturating_sub(1);
         }
-        if !self.running.iter().any(|id| id == subagent) {
-            if self.running.len() >= RUNNING_LIMIT {
-                return Err(too_many());
+        let at = match self.running.iter().position(|known| known.id == subagent) {
+            Some(at) => at,
+            None => {
+                if self.running.len() >= RUNNING_LIMIT {
+                    return Err(too_many());
+                }
+                self.running.push(HookSubagent {
+                    id: subagent.to_owned(),
+                    started_unix_ms: Some(now),
+                    ..HookSubagent::default()
+                });
+                self.running.len() - 1
             }
-            self.running.push(subagent.to_owned());
+        };
+        let kind = told
+            .kind
+            .and_then(|kind| subagent_words(kind, SUBAGENT_KIND_LIMIT));
+        let task = told
+            .task
+            .and_then(|task| subagent_words(task, SUBAGENT_TASK_LIMIT))
+            .or_else(|| {
+                let fresh = self.running[at].task.is_none();
+                fresh.then(|| self.take_ask(kind.as_deref())).flatten()
+            });
+        let entry = &mut self.running[at];
+        if entry.kind.is_none() {
+            entry.kind = kind;
+        }
+        if entry.task.is_none() {
+            entry.task = task;
         }
         Ok(())
+    }
+
+    /// Keeps a subagent the main agent asked for, until a start takes it or
+    /// the turn ends; past [`ASKED_LIMIT`] the oldest ask goes.
+    fn ask(&mut self, asked: Option<(Option<&str>, &str)>) {
+        let Some((kind, task)) = asked else { return };
+        let Some(task) = subagent_words(task, SUBAGENT_TASK_LIMIT) else {
+            return;
+        };
+        if self.asked.len() >= ASKED_LIMIT {
+            self.asked.remove(0);
+        }
+        self.asked.push(Asked {
+            kind: kind.and_then(|kind| subagent_words(kind, SUBAGENT_KIND_LIMIT)),
+            task,
+        });
+    }
+
+    /// The task of the oldest ask of `kind`, or of the oldest ask that named
+    /// no kind, taken off the asks; asks start in the order they were made.
+    fn take_ask(&mut self, kind: Option<&str>) -> Option<String> {
+        let at = self
+            .asked
+            .iter()
+            .position(|asked| asked.kind.is_some() && asked.kind.as_deref() == kind)
+            .or_else(|| self.asked.iter().position(|asked| asked.kind.is_none()))?;
+        Some(self.asked.remove(at).task)
+    }
+
+    /// Gives the running subagents `tasks` names the task it gives them,
+    /// where they have none yet.
+    fn name_tasks(&mut self, tasks: &[(String, String)]) {
+        for (id, task) in tasks {
+            if let Some(entry) = self
+                .running
+                .iter_mut()
+                .find(|entry| &entry.id == id && entry.task.is_none())
+            {
+                entry.task = subagent_words(task, SUBAGENT_TASK_LIMIT);
+            }
+        }
     }
 
     /// `subagent` finished: a running one moves to done once, and a repeated
     /// stop or one of a subagent that never started changes nothing.
     fn stop(&mut self, subagent: &str) {
-        if let Some(at) = self.running.iter().position(|id| id == subagent) {
+        if let Some(at) = self.running.iter().position(|known| known.id == subagent) {
             self.running.remove(at);
             self.remember_finished(subagent);
             self.done = self.done.saturating_add(1);
@@ -893,15 +1113,17 @@ impl Record {
 }
 
 /// Replaces `who`'s counts with ones its agent keeps itself: OpenCode's
-/// plugin follows its child sessions and sends the totals, not events. It
-/// holds the same lock as [`change`], so a total and an event never
-/// interleave.
+/// plugin follows its child sessions and sends the totals, not events, with
+/// the running subagents it names, which are part of `working`. It holds the
+/// same lock as [`change`], so a total and an event never interleave. The
+/// subagents kept, each made one short line, are returned for the report.
 pub fn store(
     home: &Path,
     pane_id: &str,
     counters: PaneCounters,
+    named: &[HookSubagent],
     who: Reporter<'_>,
-) -> io::Result<()> {
+) -> io::Result<Vec<HookSubagent>> {
     let path = record_path(home, pane_id)?;
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
@@ -913,13 +1135,39 @@ pub fn store(
         .iter()
         .rposition(|record| record.is(who))
         .and_then(|at| file.sessions.remove(at).turn);
+    let mut running: Vec<HookSubagent> = Vec::new();
+    for subagent in named.iter().filter(|subagent| valid_subagent(&subagent.id)) {
+        if running.len() >= RUNNING_LIMIT {
+            return Err(too_many());
+        }
+        if !running.iter().any(|known| known.id == subagent.id) {
+            running.push(HookSubagent {
+                id: subagent.id.clone(),
+                kind: subagent
+                    .kind
+                    .as_deref()
+                    .and_then(|kind| subagent_words(kind, SUBAGENT_KIND_LIMIT)),
+                task: subagent
+                    .task
+                    .as_deref()
+                    .and_then(|task| subagent_words(task, SUBAGENT_TASK_LIMIT)),
+                started_unix_ms: subagent.started_unix_ms,
+            });
+        }
+    }
+    // `working` counts every running subagent; the record counts the named
+    // ones by their entries.
+    let anonymous = counters
+        .working
+        .saturating_sub(u32::try_from(running.len()).unwrap_or(u32::MAX));
     file.sessions.push(Record {
-        working: counters.working,
+        working: anonymous,
         done: counters.done,
         version: Some(HOOK_VERSION),
         agent: who.agent.map(str::to_owned),
         session: who.session.map(str::to_owned),
         turn,
+        running: running.clone(),
         ..Record::default()
     });
     if file.sessions.len() > SESSIONS_PER_PANE {
@@ -927,7 +1175,7 @@ pub fn store(
     }
     write_file(&path, &file)?;
     drop(held);
-    Ok(())
+    Ok(running)
 }
 
 /// The file as it is, or an empty one when it is missing or cannot be read:
@@ -1053,11 +1301,21 @@ mod tests {
             name: Some(name.to_owned()),
             input: Some(input.to_owned()),
             transcript: None,
+            asks: None,
         }
     }
 
     fn said(root: &Path, said: Said<'_>) -> Applied {
-        apply(root, "w1:p1", Change::None, WHO, said, None).unwrap()
+        apply(
+            root,
+            "w1:p1",
+            Change::None,
+            WHO,
+            said,
+            None,
+            Told::default(),
+        )
+        .unwrap()
     }
 
     /// A request opens its call's approval and a call's end closes it,
@@ -1142,7 +1400,8 @@ mod tests {
                 Change::None,
                 WHO,
                 Said::Asks("Bash:ffff"),
-                None
+                None,
+                Told::default()
             )
             .is_err()
         );
@@ -1182,6 +1441,7 @@ mod tests {
                 call: &next,
             },
             next.transcript.as_deref(),
+            Told::default(),
         )
         .unwrap();
         assert!(applied.moved);
@@ -1514,6 +1774,7 @@ mod tests {
             WHO,
             Said::Turn(HookTurn::Working),
             None,
+            Told::default(),
         )
         .unwrap();
         assert_eq!(first.previous_turn, None);
@@ -1524,6 +1785,7 @@ mod tests {
             WHO,
             Said::Turn(HookTurn::Done),
             None,
+            Told::default(),
         )
         .unwrap();
         assert_eq!(again.previous_turn, Some(HookTurn::Working));
@@ -1534,9 +1796,19 @@ mod tests {
             WHO,
             Said::Nothing,
             None,
+            Told::default(),
         )
         .unwrap();
-        let after = apply(&root, pane, Change::None, WHO, Said::Nothing, None).unwrap();
+        let after = apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Said::Nothing,
+            None,
+            Told::default(),
+        )
+        .unwrap();
         assert_eq!(after.previous_turn, None);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1713,6 +1985,199 @@ mod tests {
         found.sort();
         assert_eq!(found, [("h1:p2".to_owned(), 2), ("w1:p1".to_owned(), 1)]);
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn told<'a>(kind: Option<&'a str>, tasks: &'a [(String, String)]) -> Told<'a> {
+        Told {
+            kind,
+            tasks,
+            ..Told::default()
+        }
+    }
+
+    fn subagent(
+        id: &str,
+        kind: Option<&str>,
+        task: Option<&str>,
+    ) -> (String, Option<String>, Option<String>) {
+        (
+            id.to_owned(),
+            kind.map(str::to_owned),
+            task.map(str::to_owned),
+        )
+    }
+
+    fn named(subagents: &[HookSubagent]) -> Vec<(String, Option<String>, Option<String>)> {
+        subagents
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.kind.clone(), entry.task.clone()))
+            .collect()
+    }
+
+    /// Claude Code's `SubagentStart` names a kind and no task: a start takes
+    /// the task of the oldest ask of its kind that its main agent's `Agent`
+    /// call made, a start no ask fits waits for `background_tasks` to name
+    /// one, and a turn's list keeps what was heard of each.
+    #[test]
+    fn a_subagent_keeps_its_kind_and_the_task_its_ask_or_its_list_names() {
+        let root = home("told");
+        let pane = "w7B:pM";
+        let apply_told = |change: Change<'_>, told: Told<'_>| {
+            apply(&root, pane, change, WHO, Said::Nothing, None, told).unwrap()
+        };
+        for (kind, task) in [
+            ("Explore", "find the login code\nand more"),
+            ("Plan", "plan the fix"),
+        ] {
+            apply_told(
+                Change::None,
+                Told {
+                    asked: Some((Some(kind), task)),
+                    ..Told::default()
+                },
+            );
+        }
+        let planned = apply_told(Change::Started(Some("a1")), told(Some("Plan"), &[]));
+        assert_eq!(
+            named(&planned.subagents),
+            [subagent("a1", Some("Plan"), Some("plan the fix"))]
+        );
+        assert!(planned.subagents[0].started_unix_ms.is_some());
+        let explored = apply_told(Change::Started(Some("a2")), told(Some("Explore"), &[]));
+        assert_eq!(
+            named(&explored.subagents)[1],
+            subagent("a2", Some("Explore"), Some("find the login code")),
+            "the first line of the task, and the asks are taken in order"
+        );
+        let unasked = apply_told(Change::Started(Some("a3")), told(Some("Explore"), &[]));
+        assert_eq!(
+            named(&unasked.subagents)[2],
+            subagent("a3", Some("Explore"), None)
+        );
+        let tasks = vec![
+            ("a3".to_owned(), "collect the logs".to_owned()),
+            ("a1".to_owned(), "a task it already has".to_owned()),
+        ];
+        let running = ids(&["a1", "a3"]);
+        let listed = apply_told(Change::Listed { running: &running }, told(None, &tasks));
+        assert_eq!(
+            named(&listed.subagents),
+            [
+                subagent("a1", Some("Plan"), Some("plan the fix")),
+                subagent("a3", Some("Explore"), Some("collect the logs")),
+            ]
+        );
+        assert_eq!(
+            listed.subagents[0].started_unix_ms,
+            planned.subagents[0].started_unix_ms
+        );
+        assert_eq!(
+            records(&root, pane)[0].subagents,
+            listed.subagents,
+            "a reader outside the hook sees the same subagents"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A record a helper before the subagent entries wrote lists bare ids,
+    /// which still read as running subagents.
+    #[test]
+    fn a_record_of_bare_running_ids_still_reads() {
+        let root = home("bare-ids");
+        let path = record_path(&root, "w7B:pM").unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"sessions":[{{"working":1,"done":2,"version":{HOOK_VERSION},"agent":"claude-code","session":"session-a","running":["a1","a2"]}}]}}"#
+            ),
+        )
+        .unwrap();
+        let record = &records(&root, "w7B:pM")[0];
+        assert_eq!(
+            record.counters,
+            PaneCounters {
+                working: 3,
+                done: 2
+            }
+        );
+        assert_eq!(
+            named(&record.subagents),
+            [subagent("a1", None, None), subagent("a2", None, None)]
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// An agent that keeps its own totals names some of its running
+    /// subagents: those are kept as entries, in one short line each, and the
+    /// rest stay a count.
+    #[test]
+    fn stored_totals_keep_the_named_subagents_and_count_the_rest() {
+        let root = home("store-named");
+        let pane = "w7B:pM";
+        let opencode = Reporter {
+            agent: Some("opencode"),
+            session: Some("ses_a"),
+        };
+        let given = [
+            HookSubagent {
+                id: "ses_b".to_owned(),
+                kind: Some("explore".to_owned()),
+                task: Some("read the router\nsecond line".to_owned()),
+                started_unix_ms: Some(7),
+            },
+            HookSubagent::default(),
+        ];
+        let kept = store(
+            &root,
+            pane,
+            PaneCounters {
+                working: 3,
+                done: 1,
+            },
+            &given,
+            opencode,
+        )
+        .unwrap();
+        assert_eq!(
+            named(&kept),
+            [subagent("ses_b", Some("explore"), Some("read the router"))]
+        );
+        assert_eq!(kept[0].started_unix_ms, Some(7));
+        let record = &records(&root, pane)[0];
+        assert_eq!(
+            record.counters,
+            PaneCounters {
+                working: 3,
+                done: 1
+            }
+        );
+        assert_eq!(record.subagents, kept);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The main agent's `Agent` call asks for a subagent, and a turn's end
+    /// names each running one's task; a subagent's own `Agent` call asks for
+    /// none of the main agent's.
+    #[test]
+    fn the_input_names_the_asked_subagent_and_the_running_ones_tasks() {
+        let call = ToolCall::read(
+            br#"{"session_id":"s1","tool_name":"Agent","tool_input":{"description":"Find the login code","subagent_type":"Explore","prompt":"..."}}"#,
+            false,
+        );
+        assert_eq!(
+            call.asks,
+            Some((Some("Explore".to_owned()), "Find the login code".to_owned()))
+        );
+        let nested = ToolCall::read(
+            br#"{"session_id":"s1","agent_id":"a1","tool_name":"Agent","tool_input":{"description":"x"}}"#,
+            false,
+        );
+        assert_eq!(nested.asks, None);
+        let stop = SubagentInput::read(CLAUDE_STOP, false);
+        assert_eq!(stop.tasks, [("a4d1fa".to_owned(), "A".to_owned())]);
+        let sub = SubagentInput::read(CLAUDE_SUBAGENT_STOP, false);
+        assert_eq!(sub.kind.as_deref(), Some("general-purpose"));
     }
 
     #[test]

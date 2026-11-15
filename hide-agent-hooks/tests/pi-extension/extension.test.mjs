@@ -256,7 +256,7 @@ test("a new session's first prompt carries the guidance and the letters in one h
   // `lost` counts calls an earlier budget gave up on; a loaded machine may add it. Letters know the session by its
   // file, as Herdr did; Memory by the host's own id, which its session reader keys a receipt by.
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 15 });
+  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 16 });
   assert.equal(call.env.HIDE_PANE_ID, "w1:p1");
 
   // Once the host wrote it, the session's guidance is given.
@@ -598,7 +598,7 @@ test("a shell call that hands a result to the system opener is refused with the 
   assert.deepEqual(await host.emit("tool_call", launch, context("tool_call.bash")), { block: true, reason: "Use hide file open" });
   const [call] = await until("tool");
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { tool: "bash", command: "open out/index.html", cwd: "/checkouts/fixture", version: 15 });
+  assert.deepEqual(input, { tool: "bash", command: "open out/index.html", cwd: "/checkouts/fixture", version: 16 });
 
   // Another opener, Windows's, asks the helper too.
   const opener = { ...sample("tool_call.bash").event, input: { command: "Start-Process report.pdf" } };
@@ -623,7 +623,7 @@ test("while a project has a protection on, file and shell calls ask the helper w
     const shell = { ...sample("tool_call.bash").event, input: { command: "cat .env" } };
     assert.deepEqual(await host.emit("tool_call", shell, context("tool_call.bash")), { block: true, reason: "Not run: Guard files is on" });
     const sent = (await until("tool", 2)).map(({ input: { lost: _lost, ...input } }) => input);
-    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 15 });
+    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 16 });
     assert.equal(sent[1].command, "cat .env");
 
     // Every protection off again: no file or shell call starts the helper (B27).
@@ -671,15 +671,24 @@ if (AGENT === "omp") {
     const counts = () => calls().filter((call) => call.operation === "subagents").map((call) => `${call.input.working}/${call.input.done}`);
     await until("subagents", 1, (input) => input.working === 0 && input.done === 0);
 
+    // The main agent's `task` call asks for the subagent; its spawn names neither its task nor the call's agent.
+    await host.emit("tool_call", sample("tool_call.task").event, context("tool_call.task"));
     await host.emit("before_subagent_spawn", sample("before_subagent_spawn").event, context("before_subagent_spawn"));
-    await until("subagents", 1, (input) => input.working === 1);
+    const [spawned] = await until("subagents", 1, (input) => input.working === 1);
+    // The spawn key names it; omp's general `task` agent is no kind a row could show.
+    const [running] = spawned.input.running;
+    assert.equal(typeof running.started_unix_ms, "number");
+    assert.deepEqual([running.id, running.kind, running.task], ["MassMoth", undefined, undefined]);
 
     const binding = host.session();
     const sub = context("sub.session_start");
     await binding.emit("session_start", sample("sub.session_start").event, sub);
     await binding.emit("agent_start", sample("sub.agent_start").event, sub);
     answer({ prompt: { context: "LETTER", letters: ["letter-1"] }, subagents: { reported: true } });
-    assert.equal(await prompt(binding, "Say ok.", context("sub.before_agent_start")), undefined, "a subagent's prompt carries no letters");
+    assert.equal(await binding.emit("before_agent_start", sample("sub.before_agent_start").event, context("sub.before_agent_start")), undefined, "a subagent's prompt carries no letters");
+    // Its first prompt carries the asked task's words: the subagent takes that ask's description and agent.
+    const [named] = await until("subagents", 1, (input) => input.running?.[0]?.task !== undefined);
+    assert.deepEqual([named.input.running[0].id, named.input.running[0].kind, named.input.running[0].task], ["MassMoth", "explore", "look"]);
     await binding.emit("agent_end", sample("sub.agent_end").event, sub);
     await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
     assert.equal(calls().filter((call) => call.operation === "prompt").length, 0);

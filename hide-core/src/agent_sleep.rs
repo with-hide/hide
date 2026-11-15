@@ -903,6 +903,7 @@ mod tests {
             background_left: 0,
             children_left: 0,
             subagents: 0,
+            subagent_rows: Vec::new(),
             subagents_left: 0,
             wait_count: 0,
             wait_subagents: 0,

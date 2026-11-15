@@ -27,6 +27,7 @@ import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } fr
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
 import { useMissionTurnCount } from "./MissionScreen";
 import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
+import { SubagentTreeRow } from "./components/subagent-row";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
 import { groupFoldKey, useGroupFolds, useGroupName } from "./groupTabs";
@@ -1666,7 +1667,8 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
   const { t } = useInterfaceTranslation();
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
   const siblings = useShellStore((s) => siblingsShown(s.rest));
-  const lines = useMemo(() => sidebarTreeLines(agentRows, shownAll, siblings), [agentRows, shownAll, siblings]);
+  // A root or child the operator opened lists its own subagents after its children (docs/UI_BEHAVIOR.md, Subagents).
+  const lines = useMemo(() => sidebarTreeLines(agentRows, shownAll, siblings, undefined, (row) => row.depth < 2 && !row.agent.lineage_collapsed), [agentRows, shownAll, siblings]);
   // Which devices are reachable now, as one value, so a reconnect redraws the rows that name one.
   const reachable = useShellStore((s) => [localDeviceId(s.rest), ...(s.rest?.status?.remote ?? []).filter((row) => row.state === "connected").map((row) => row.target_id)].join("\n"));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
@@ -1684,9 +1686,14 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
             </li>
           );
         }
+        if (line.kind === "subagent" || line.kind === "subagents-more") {
+          return <SubagentTreeRow key={`${line.kind}:${line.parent}:${line.kind === "subagent" ? line.subagent.id : ""}`} line={line} style={{ paddingLeft: inset }}><FoldLane /></SubagentTreeRow>;
+        }
         const { agent, depth } = line.row;
         const parent = depth > 0 ? context.agents.find((row) => row.pane_id === agent.lineage_parent_pane_id) : undefined;
         const hasChildren = context.childrenOf(agent).length > 0;
+        // A row opens on its own subagents too, which it lists after its children.
+        const opens = hasChildren || (agent.subagents ?? 0) > 0;
         const parentDevice = parent?.device_id ?? deviceId;
         const remote = depth > 0 && agent.device_id !== undefined && agent.device_id !== parentDevice
           ? { label: machineName(devices, agent.device_id, t), reachable: reachable.split("\n").includes(agent.device_id) }
@@ -1694,7 +1701,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
         const tree: SidebarTreeSlot = {
           place: line.place,
           fold,
-          open: hasChildren ? depth < 2 && !agent.lineage_collapsed : null,
+          open: opens ? depth < 2 && !agent.lineage_collapsed : null,
           onToggle: () => context.actions.toggleAgentTree(agent.pane_id),
           popover: hasChildren && depth >= 2 ? {
             agents: context.agents,

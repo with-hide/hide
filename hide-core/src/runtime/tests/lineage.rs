@@ -802,9 +802,10 @@ fn a_pane_with_children_lists_them_and_names_the_one_that_speaks_for_them() {
         working: Some(2),
         done: Some(4),
         blocked: None,
+        subagents: Vec::new(),
     };
     let children =
-        crate::sidebar::project_pane_children(&rows, "parent", tokens, &installed).unwrap();
+        crate::sidebar::project_pane_children(&rows, "parent", &tokens, &installed).unwrap();
 
     assert!(children.instrumented);
     assert_eq!(children.uninstrumented_reason, None);
@@ -855,9 +856,10 @@ fn an_instrumented_pane_with_no_children_is_a_different_answer_from_one_hide_can
         working: Some(0),
         done: Some(0),
         blocked: None,
+        subagents: Vec::new(),
     };
     let alone =
-        crate::sidebar::project_pane_children(&rows, "child", reported, &installed).unwrap();
+        crate::sidebar::project_pane_children(&rows, "child", &reported, &installed).unwrap();
     assert!(alone.instrumented);
     assert!(alone.chips.is_empty());
     assert!(alone.subagents.is_silent());
@@ -867,7 +869,7 @@ fn an_instrumented_pane_with_no_children_is_a_different_answer_from_one_hide_can
     let silent = crate::sidebar::project_pane_children(
         &rows,
         "child",
-        crate::agent_hooks::PaneHookTokens::default(),
+        &crate::agent_hooks::PaneHookTokens::default(),
         &installed,
     )
     .unwrap();
@@ -889,7 +891,7 @@ fn an_instrumented_pane_with_no_children_is_a_different_answer_from_one_hide_can
     let uninstrumented_parent = crate::sidebar::project_pane_children(
         &rows,
         "parent",
-        crate::agent_hooks::PaneHookTokens::default(),
+        &crate::agent_hooks::PaneHookTokens::default(),
         &installed,
     )
     .unwrap();
@@ -908,7 +910,7 @@ fn a_pane_with_no_agent_gets_neither_chips_nor_a_mark() {
         crate::sidebar::project_pane_children(
             &rows,
             "a-plain-shell",
-            crate::agent_hooks::PaneHookTokens::default(),
+            &crate::agent_hooks::PaneHookTokens::default(),
             &installed,
         )
         .is_none()
@@ -921,7 +923,7 @@ fn an_agent_hide_has_no_adapter_for_says_so_instead_of_guessing_a_runtime() {
     let children = crate::sidebar::project_pane_children(
         &rows,
         "parent",
-        crate::agent_hooks::PaneHookTokens::default(),
+        &crate::agent_hooks::PaneHookTokens::default(),
         &hook_status_of(None),
     )
     .unwrap();
@@ -1919,14 +1921,15 @@ fn a_pane_whose_session_ended_draws_no_counts_even_though_its_tokens_remain() {
         working: Some(3),
         done: Some(9),
         blocked: None,
+        subagents: Vec::new(),
     };
     assert!(
-        crate::sidebar::project_pane_children(&rows, "no-such-agent", leftover, &installed)
+        crate::sidebar::project_pane_children(&rows, "no-such-agent", &leftover, &installed)
             .is_none(),
         "the counts belong to a session, and there is no session in that pane"
     );
     // The same tokens on a pane that does have a session still read.
-    let live = crate::sidebar::project_pane_children(&rows, "parent", leftover, &installed)
+    let live = crate::sidebar::project_pane_children(&rows, "parent", &leftover, &installed)
         .expect("a pane with an agent projects");
     assert_eq!(live.subagents.done, Some(9));
 }

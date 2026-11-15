@@ -477,6 +477,15 @@ test("native questions run without asking Hide's tool guard", async () => {
   assert.deepEqual(calls().filter((call) => call.operation === "tool"), []);
 });
 
+/** A `subagents` report with its running children's start times checked and left out, since they are the clock's. */
+function counted(input) {
+  for (const child of input.running) assert.equal(typeof child.started_unix_ms, "number");
+  return { ...input, running: input.running.map(({ started_unix_ms: _, ...child }) => child) };
+}
+
+/** A running child as the report names it: the task and the agent its recorded title gives. */
+const explore = (id) => ({ id, kind: "explore", task: "Explore the parser" });
+
 test("child sessions move the pane's subagent counts, and a background child stays counted after the turn", async () => {
   answer({ start: { context: "" }, prompt: { context: "", letters: [] }, subagents: { reported: true } });
   const running = {};
@@ -491,7 +500,8 @@ test("child sessions move the pane's subagent counts, and a background child sta
   running.ses_child = { type: "busy" };
   await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_root", status: { type: "idle" } } } });
   await sleep(200);
-  assert.deepEqual(calls().filter((c) => c.operation === "subagents").at(-1).input, { session_id: "ses_root", working: 1, done: 0 });
+  // The child is named with its task and its agent, from the title OpenCode gave its session.
+  assert.deepEqual(counted(calls().filter((c) => c.operation === "subagents").at(-1).input), { session_id: "ses_root", working: 1, done: 0, running: [explore("ses_child")] });
 
   await hooks.event({ event: sample("session.status.idle") });
   await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
@@ -550,14 +560,19 @@ test("past its session limit the plugin forgets finished children, keeps a runni
   // The turn ends: the event settles once its report is sent, so the last report is the state now.
   await hooks.event({ event: { type: "session.status", properties: { sessionID: "ses_root", status: { type: "idle" } } } });
   const reports = calls().filter((call) => call.operation === "subagents");
-  assert.deepEqual(reports.at(-1).input, { session_id: "ses_root", working: 1, done: 510 });
+  assert.deepEqual(counted(reports.at(-1).input), { session_id: "ses_root", working: 1, done: 510, running: [explore("ses_long")] });
   // A burst of changes costs a few reports, not one per change.
   assert.ok(reports.length < 50, `${reports.length} reports`);
 
   // A subagent started now is still counted.
   await hooks.event({ event: child("ses_new") });
   await hooks.event({ event: status("ses_new", "busy") });
-  assert.deepEqual(calls().filter((call) => call.operation === "subagents").at(-1).input, { session_id: "ses_root", working: 2, done: 509 });
+  assert.deepEqual(counted(calls().filter((call) => call.operation === "subagents").at(-1).input), {
+    session_id: "ses_root",
+    working: 2,
+    done: 509,
+    running: [explore("ses_long"), explore("ses_new")],
+  });
 
   // The root's guidance was given once; its next prompt is not its first.
   const next = await prompt(hooks);

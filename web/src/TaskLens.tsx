@@ -11,6 +11,7 @@ import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { AskLine, askParts, DecisionViewsCount, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { SubagentTreeRow } from "./components/subagent-row";
 import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
@@ -449,11 +450,14 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
 /** A task's row and, through every opened row, its descendants (B10). */
 function TaskTree({ entry, lines, byPane, opened, selected, number, showProject, disabled, actions, onShowAll }: { entry: TaskEntry; lines: SidebarTreeLine[]; byPane: ReadonlyMap<string, AgentRow>; opened: ReadonlySet<string>; selected: string | null; number: number | null; showProject: boolean; disabled: boolean; actions: Actions; onShowAll: (parent: string) => void }) {
   const { agent } = entry;
-  const openOf = (of: AgentRow) => (childrenOf(of, byPane).length > 0 ? opened.has(of.pane_id) : null);
+  // A row with children or subagents of its own opens to show them.
+  const openOf = (of: AgentRow) => (childrenOf(of, byPane).length > 0 || (of.subagents ?? 0) > 0 ? opened.has(of.pane_id) : null);
   return <>
     <TaskRow entry={entry} open={openOf(agent)} selected={selected === agent.pane_id} number={number} showProject={showProject} disabled={disabled} actions={actions} />
     {lines.slice(1).map((line) => {
       if (line.kind === "more") return <TreeMoreRow key={`more:${line.parent}`} line={line} onShowAll={onShowAll} />;
+      if (line.kind === "subagent") return <SubagentTreeRow key={`subagent:${line.parent}:${line.subagent.id}`} line={line} />;
+      if (line.kind === "subagents-more") return <SubagentTreeRow key={`subagents-more:${line.parent}`} line={line} />;
       const child = line.row.agent;
       const parent = (child.lineage_parent_pane_id ? byPane.get(child.lineage_parent_pane_id) : undefined) ?? agent;
       return <ChildRow key={child.pane_id} parent={parent} child={child} depth={line.row.depth} place={line.place} open={openOf(child)} selected={selected === child.pane_id} disabled={disabled} actions={actions} workspace={entry.project?.id ?? null} />;

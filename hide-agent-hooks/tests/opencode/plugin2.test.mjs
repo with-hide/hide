@@ -200,9 +200,9 @@ class OpenCode {
   }
 
   /** A session OpenCode created in `directory`, announced to every client. */
-  create(sessionID, parentID, directory = PROJECT) {
+  create(sessionID, parentID, directory = PROJECT, named = {}) {
     this.sessions.set(sessionID, { id: sessionID, parentID, location: { directory } });
-    this.publish("session.created", { sessionID, parentID, location: { directory } });
+    this.publish("session.created", { sessionID, parentID, location: { directory }, ...named });
   }
 
   publish(type, data) {
@@ -543,10 +543,14 @@ test("a subagent's run moves the counts of the pane showing its root, and the ro
   await attached(view, "ses_a");
   host.terminal("w1:p2", { type: "session", sessionID: "ses_other" });
 
-  host.create("ses_child", "ses_a");
+  host.create("ses_child", "ses_a", PROJECT, { title: "Explore the parser (@explore subagent)", agent: "explore" });
   host.running.add("ses_child");
   host.publish("session.execution.started", { sessionID: "ses_child" });
-  await until("subagents", 1, (input) => input.working === 1);
+  const [started] = await until("subagents", 1, (input) => input.working === 1);
+  // The running child is named with its task and its agent.
+  const [child] = started.input.running;
+  assert.equal(typeof child.started_unix_ms, "number");
+  assert.deepEqual({ ...child, started_unix_ms: undefined }, { id: "ses_child", kind: "explore", task: "Explore the parser", started_unix_ms: undefined });
   host.running.delete("ses_child");
   host.publish("session.execution.succeeded", { sessionID: "ses_child" });
   await until("subagents", 1, (input) => input.working === 0 && input.done === 1);

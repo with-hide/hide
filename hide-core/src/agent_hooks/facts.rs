@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use hide_node_link::panes::{HookCounts, HookStatusReport, HookTurn};
+use hide_node_link::panes::{HookCounts, HookStatusReport, HookSubagent, HookTurn};
 use serde::{Deserialize, Serialize};
 
 use super::PaneHookTokens;
@@ -56,6 +56,10 @@ struct SessionFact {
     version: u32,
     session: Option<String>,
     counts: Option<HookCounts>,
+    /// The running subagents the session names, as its hook last listed them
+    /// with `counts`; kept with them, so a restart lists what it counts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    subagents: Vec<HookSubagent>,
     #[serde(skip)]
     turn: Option<HookTurn>,
     /// The engine state the agent was in when `turn` was first laid on it:
@@ -330,6 +334,7 @@ impl HookFacts {
                 version: report.version,
                 session: None,
                 counts: None,
+                subagents: Vec::new(),
                 turn: None,
                 turn_seq: None,
                 waiting: Vec::new(),
@@ -347,6 +352,8 @@ impl HookFacts {
         }
         if report.counts.is_some() {
             fact.counts = report.counts;
+            // A helper before the list sends counts alone, naming none.
+            fact.subagents = report.subagents.clone().unwrap_or_default();
         }
         if let Some(start) = start {
             fact.account.clone_from(&report.account);
@@ -494,6 +501,9 @@ impl HookFacts {
                     working: fact.counts.map(|counts| counts.working),
                     done: fact.counts.map(|counts| counts.done),
                     blocked: None,
+                    subagents: fact
+                        .counts
+                        .map_or_else(Vec::new, |_| fact.subagents.clone()),
                 },
             );
         }
@@ -655,6 +665,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
                     working: record.counters.working,
                     done: record.counters.done,
                 }),
+            subagents: record.subagents,
             runtime: record.agent,
             version: record.version,
             session: record.session,
@@ -686,6 +697,7 @@ fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
                     left.version,
                     &left.session,
                     left.counts,
+                    &left.subagents,
                     &left.account,
                     left.account_start,
                 ) != (
@@ -693,6 +705,7 @@ fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
                     right.version,
                     &right.session,
                     right.counts,
+                    &right.subagents,
                     &right.account,
                     right.account_start,
                 )
@@ -719,6 +732,7 @@ mod tests {
             session: session.map(str::to_owned),
             turn,
             counts: None,
+            subagents: None,
             session_start: false,
             waiting: None,
             account: None,
@@ -892,6 +906,59 @@ mod tests {
             file: None,
         };
         assert_eq!(older.reported_accounts().count(), 0);
+    }
+
+    /// A session's report names its running subagents with its counts: the
+    /// pane's tokens carry them, a restart keeps them, a report of the turn
+    /// alone leaves them, and counts from a helper that names none clear them.
+    #[test]
+    fn the_named_subagents_go_with_the_counts_through_a_restart() {
+        let explore = HookSubagent {
+            id: "a1".to_owned(),
+            kind: Some("Explore".to_owned()),
+            task: Some("find the login code".to_owned()),
+            started_unix_ms: Some(5),
+        };
+        let counted = |subagents: Option<Vec<HookSubagent>>| {
+            let mut counted = report(Some("s-1"), Some(HookTurn::Working));
+            counted.counts = Some(HookCounts {
+                working: 2,
+                done: 0,
+            });
+            counted.subagents = subagents;
+            counted
+        };
+        let laid = |facts: &mut HookFacts| {
+            let mut laid = payload("s-1");
+            lay(facts, &mut laid).remove("w1:p1").unwrap().subagents
+        };
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &counted(Some(vec![explore.clone()])), 0)
+            .unwrap();
+        assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
+        let stored: Stored = serde_json::from_slice(&encode(&facts.panes).unwrap()).unwrap();
+        let mut facts = HookFacts {
+            panes: stored.panes,
+            account_start: 0,
+            file: None,
+        };
+        assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)), 1)
+            .unwrap();
+        assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
+        let mut renamed = explore.clone();
+        renamed.task = Some("read the router".to_owned());
+        assert!(
+            facts
+                .record("w1:p1", &counted(Some(vec![renamed])), 2)
+                .unwrap()
+                .changed,
+            "a subagent's new words are a change to save"
+        );
+        facts.record("w1:p1", &counted(None), 3).unwrap();
+        assert!(laid(&mut facts).is_empty());
     }
 
     #[test]

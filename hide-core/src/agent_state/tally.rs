@@ -435,6 +435,19 @@ pub mod phone {
         /// has not read, which its line ends with; 0 otherwise.
         #[serde(skip_serializing_if = "is_zero")]
         pub subagents_left: u64,
+        /// How many subagents its agent runs inside its own session
+        /// (`SidebarAgentSnapshot::subagents`), which its children toggle
+        /// counts beside its children; 0 for none and for a count Hide cannot
+        /// read, so a phone that predates it reads nothing new.
+        #[serde(skip_serializing_if = "is_zero")]
+        pub subagents: u64,
+        /// The first `SIBLINGS_SHOWN` of them, oldest first, with what its
+        /// agent named of each (`SidebarAgentSnapshot::subagent_rows`): the
+        /// phone lists them after its children and counts the rest in one
+        /// line, as the desktop's opened row does (docs/UI_BEHAVIOR.md,
+        /// Subagents).
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub subagent_rows: Vec<crate::model::SubagentRowSnapshot>,
         /// How many things its `wait` waits on, which its line counts; 0 for
         /// running checks and on a row that waits for nothing.
         #[serde(skip_serializing_if = "is_zero")]
@@ -1067,6 +1080,16 @@ pub mod phone {
                     .get("subagents_left")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
+                subagents: agent.get("subagents").and_then(Value::as_u64).unwrap_or(0),
+                subagent_rows: agent
+                    .get("subagent_rows")
+                    .and_then(|rows| {
+                        Vec::<crate::model::SubagentRowSnapshot>::deserialize(rows).ok()
+                    })
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take(super::lineage::SIBLINGS_SHOWN)
+                    .collect(),
                 wait_count: agent.get("wait_count").and_then(Value::as_u64).unwrap_or(0),
                 wait_subagents: agent
                     .get("wait_subagents")

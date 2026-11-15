@@ -4620,6 +4620,7 @@ mod tests {
             },
             Said::Turn(turn),
             None,
+            hide_agent_hooks::counters::Told::default(),
         )
         .unwrap();
     }
@@ -4643,6 +4644,7 @@ mod tests {
             },
             Said::Turn(turn),
             None,
+            hide_agent_hooks::counters::Told::default(),
         )
         .unwrap();
     }
@@ -6146,6 +6148,7 @@ mod tests {
                 session: Some("s-1".to_owned()),
                 turn: Some(HookTurn::Working),
                 counts: None,
+                subagents: None,
                 session_start: false,
                 waiting: None,
                 account: None,
@@ -6247,6 +6250,7 @@ mod tests {
                 },
                 Said::Turn(HookTurn::Working),
                 None,
+                hide_agent_hooks::counters::Told::default(),
             )
             .unwrap();
         }
@@ -6957,6 +6961,7 @@ mod tests {
                 },
                 Said::Turn(turn),
                 None,
+                hide_agent_hooks::counters::Told::default(),
             )
             .unwrap();
         }
