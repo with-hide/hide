@@ -11,7 +11,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { clientI18n } from "./i18n/translator";
 import { sidebarNumbers } from "./numbering";
 import { Sidebar } from "./sidebar";
-import type { AgentRow, Checkout, Device, SidebarLens, SnapshotRest, TaskView, Workspace } from "./snapshot";
+import type { AgentRow, Checkout, Device, SidebarLens, SidebarProject, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -41,6 +41,9 @@ const AGENTS = [
   agent("tool-child", { tool: TOOL, delegated: true, lineage_parent_pane_id: "tool-root" } as Partial<AgentRow>),
   agent("theirs"),
 ];
+
+/** In the wide fixture the tool also works in `beta`, where its session waits on the tool's answer. */
+const TOOL_TWO = agent("tool-two", { tool: TOOL, mark: "turn", group: "needs_you", demand: "question", status_code: "question" } as Partial<AgentRow>);
 
 const tree = (rows: [string, number][]): AgentTreeScope => {
   const refs = rows.map(([pane_id, depth]) => ({ pane_id, occurrence: 0, depth }));
@@ -82,13 +85,16 @@ function project(id: string, checkouts: Checkout[], prs: PrBoard["rows"] = [], p
  * session, with the child it delegated, in a worktree; `beta` holds an operator agent only. The core leaves
  * the tool's rows out of the operator's trees and publishes them in the tool's cell.
  */
-function snapshot(lens: SidebarLens, view: TaskView = "status"): SnapshotRest {
+function snapshot(lens: SidebarLens, view: TaskView = "status", chosen: SidebarProject | null = null, wide = false): SnapshotRest {
   const alpha = project("alpha", [
     checkout("alpha-main", "alpha", ["mine"], [["mine", 0]], true),
     withNamedTab(checkout("alpha-tool", "alpha", ["tool-root", "tool-child"], [], false)),
   ], [prRow(7, "alpha-tool"), prRow(8, "alpha-main")], [pull(7, "alpha-tool"), pull(8, "alpha-main")]);
-  const beta = project("beta", [checkout("beta-main", "beta", ["theirs"], [["theirs", 0]], true)]);
-  const listed = AGENTS.map((row, index) => ({ pane_id: row.pane_id, device_id: "local", device_label: null, remote: false, index }));
+  const beta = wide
+    ? project("beta", [checkout("beta-main", "beta", ["theirs"], [["theirs", 0]], true), checkout("beta-tool", "beta", ["tool-two"], [], false)], [prRow(9, "beta-tool")], [pull(9, "beta-tool")])
+    : project("beta", [checkout("beta-main", "beta", ["theirs"], [["theirs", 0]], true)]);
+  const agents = wide ? [...AGENTS, TOOL_TWO] : AGENTS;
+  const listed = agents.map((row, index) => ({ pane_id: row.pane_id, device_id: "local", device_label: null, remote: false, index }));
   const device: AgentScope = {
     ...emptyScope(),
     listed,
@@ -104,18 +110,25 @@ function snapshot(lens: SidebarLens, view: TaskView = "status"): SnapshotRest {
       checkouts: [{ project_id: "alpha", checkout_id: "alpha-tool", sidebar_tree: tree([["tool-root", 0], ["tool-child", 1]]), marks: { turn: 0, going: 2, done: 0, unread: 0 } }],
     }],
   };
+  if (wide) {
+    const own = cell.devices[0]!;
+    own.tasks = { cards: [...own.tasks.cards, { root: "tool-two", state: "needs_you", members: ["tool-two"], checkouts: ["beta-tool"], recency: "" }], needs_you: 1, recency: "" };
+    own.members = [...own.members, { pane_id: "tool-two", project_id: "beta", checkout_id: "beta-tool" }];
+    own.checkouts = [...own.checkouts!, { project_id: "beta", checkout_id: "beta-tool", sidebar_tree: tree([["tool-two", 0]]), marks: { turn: 1, going: 0, done: 0, unread: 0 } }];
+  }
   const local: Device = { id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, agent_scope: device };
   return {
     navigator: {
-      siblings_shown: 5, devices: [local], focused_device_id: "local", workspaces: [alpha, beta], agents: AGENTS, agent_scope: { ...emptyScope(), listed }, tools: [cell],
+      siblings_shown: 5, devices: [local], focused_device_id: "local", workspaces: [alpha, beta], agents, agent_scope: { ...emptyScope(), listed }, tools: [cell],
       // The operator's conversation put to sleep in the same worktree.
       sleeping_sessions: [{ sleep_id: "sleep-1", node_id: "local", checkout_path: "/fixture/alpha-tool", kind: "claude", identity_label: "잠든 대화", group: "seen", phase: "sleeping", since_unix_ms: 1, reason: null, wake_available: true, checking: false }],
     },
-    ui_state: { sidebar_lens: lens, task_view: view, left_sidebar_visible: true, sessions_expanded_agent_pane_ids: [] },
+    ui_state: { sidebar_lens: lens, task_view: view, left_sidebar_visible: true, sessions_expanded_agent_pane_ids: [], sidebar_project: chosen },
   } as unknown as SnapshotRest;
 }
 
 let cleanup: (() => Promise<void>) | null = null;
+let sent: { kind: string; payload: unknown }[] = [];
 afterEach(async () => {
   await cleanup?.();
   cleanup = null;
@@ -129,9 +142,10 @@ async function render(rest: SnapshotRest, tool: string | null) {
   await clientI18n.changeLanguage("ko");
   const shell = useShellStore.getState();
   const ui = useUiStore.getState();
-  useShellStore.setState({ rest, agents: AGENTS, connection: "live", focusedPaneId: null });
+  useShellStore.setState({ rest, agents: rest.navigator?.agents ?? AGENTS, connection: "live", focusedPaneId: null });
   useUiStore.setState({ screen: { kind: "main" }, overviewOpen: false, toolCell: tool });
-  const actions = createActions(() => true);
+  sent = [];
+  const actions = createActions((event) => { sent.push(event as { kind: string; payload: unknown }); return true; });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -188,7 +202,73 @@ it("groups a tool's tasks by project in the 프로젝트 view of its 태스크 l
   expect(container.querySelector("[data-task-view]")?.getAttribute("data-task-view")).toBe("project");
   expect(all(container, "[data-task-group]", "data-task-group")).toEqual(["alpha"]);
   expect(all(container, "[data-task-row]", "data-task-row")).toEqual(["tool-root"]);
-  expect(container.querySelector("[data-sidebar-project]")).toBeNull();
+});
+
+/** Unmounts the cell drawn last, so the test can draw another. */
+async function unmount() {
+  await cleanup?.();
+  cleanup = null;
+}
+
+const chip = (container: HTMLElement) => container.querySelector("[data-sidebar-project]")?.getAttribute("data-sidebar-project");
+const taskRows = (container: HTMLElement) => all(container, "[data-task-row]", "data-task-row");
+const prRows = (container: HTMLElement) => all(container, "[data-pr-row]", "data-pr-row");
+
+it("lists in a tool's project chip the projects the tool works in, counted from its own work, its turn muted", async () => {
+  const container = await render(snapshot("tasks", "status", null, true), TOOL.connection);
+  expect(chip(container)).toBe("");
+  const trigger = container.querySelector<HTMLElement>("[data-sidebar-project-trigger]")!;
+  expect(trigger.textContent).toBe("모든 프로젝트");
+  await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  const menu = document.body.querySelector("[data-sidebar-project-menu]")!;
+  // `alpha` and `beta` are the tool's; the operator's own work in them is not counted.
+  expect(all(menu as HTMLElement, "[data-sidebar-project-option]", "data-sidebar-project-option")).toEqual(["", "alpha", "beta"]);
+  const option = (id: string) => menu.querySelector(`[data-sidebar-project-option="${id}"]`)!;
+  expect(option("alpha").textContent).toBe("alpha2");
+  expect(option("beta").textContent).toBe("beta도구가 답할 차례 12");
+  const turn = option("beta").querySelector("[data-sidebar-project-turn]")!;
+  expect(turn.getAttribute("data-sidebar-project-turn")).toBe("tool");
+  expect(turn.className).not.toContain("warning");
+  await act(async () => { (option("beta") as HTMLElement).click(); });
+  expect(sent.filter((event) => event.kind === "sidebar_project_set").map((event) => event.payload)).toEqual([{ project: { device_id: "local", workspace_id: "beta" } }]);
+});
+
+it("narrows a tool's 태스크 and PR lists to the stored project, the tool's turn elsewhere a muted +N", async () => {
+  const alpha = { device_id: "local", workspace_id: "alpha" };
+  const whole = await render(snapshot("tasks", "status", null, true), TOOL.connection);
+  expect(taskRows(whole).sort()).toEqual(["tool-root", "tool-two"]);
+  await unmount();
+  const tasks = await render(snapshot("tasks", "status", alpha, true), TOOL.connection);
+  expect(chip(tasks)).toBe("alpha");
+  expect(taskRows(tasks)).toEqual(["tool-root"]);
+  const elsewhere = tasks.querySelector("[data-sidebar-project-elsewhere]")!;
+  expect(elsewhere.textContent).toBe("+1");
+  expect(elsewhere.getAttribute("data-tone")).toBe("muted");
+  expect(elsewhere.className).not.toContain("warning");
+  await unmount();
+  const prs = await render(snapshot("prs", "status", alpha, true), TOOL.connection);
+  expect(chip(prs)).toBe("alpha");
+  expect(prRows(prs)).toEqual(["7"]);
+  await unmount();
+  const everyPr = await render(snapshot("prs", "status", null, true), TOOL.connection);
+  expect(prRows(everyPr).sort()).toEqual(["7", "9"]);
+});
+
+it("leaves a tool's lists whole while the stored project is the operator's alone, and still narrows the operator's", async () => {
+  const beta = { device_id: "local", workspace_id: "beta" };
+  const tool = await render(snapshot("tasks", "status", beta), TOOL.connection);
+  expect(chip(tool)).toBe("");
+  expect(tool.querySelector("[data-sidebar-project-trigger]")?.textContent).toBe("모든 프로젝트");
+  expect(taskRows(tool)).toEqual(["tool-root"]);
+  await unmount();
+  const toolPrs = await render(snapshot("prs", "status", beta), TOOL.connection);
+  expect(chip(toolPrs)).toBe("");
+  expect(prRows(toolPrs)).toEqual(["7"]);
+  await unmount();
+  const operator = await render(snapshot("tasks", "status", beta), null);
+  expect(chip(operator)).toBe("beta");
+  // The operator's 내 차례 in `alpha` stays in sight in the warning colour.
+  expect(operator.querySelector("[data-sidebar-project-elsewhere]")?.getAttribute("data-tone")).toBe("warning");
 });
 
 it("lists in a tool's PR tab only the pull requests of the checkouts its sessions work in", async () => {
@@ -202,9 +282,14 @@ it("lists in a tool's PR tab only the pull requests of the checkouts its session
   expect(all(operator, "[data-pr-row]", "data-pr-row").sort()).toEqual(["7", "8"]);
 });
 
-it("numbers with ⌥n the list a tool's cell shows: its sessions' roots in 프로젝트, its tasks in 태스크", () => {
-  const numbered = (lens: SidebarLens, toolCell: string | null) => [...sidebarNumbers({ rest: snapshot(lens), agents: AGENTS }, { raisedOpen: [], taskFoldsOpen: [], toolCell }).values()];
+it("numbers with ⌥n the list a tool's cell shows: its sessions' roots in 프로젝트, its tasks in 태스크, as the chip narrows them", () => {
+  const numbered = (lens: SidebarLens, toolCell: string | null, chosen: SidebarProject | null = null, wide = false) => {
+    const rest = snapshot(lens, "status", chosen, wide);
+    return [...sidebarNumbers({ rest, agents: rest.navigator!.agents! }, { raisedOpen: [], taskFoldsOpen: [], toolCell }).values()];
+  };
   expect(numbered("projects", TOOL.connection)).toEqual(["tool-root"]);
   expect(numbered("tasks", TOOL.connection)).toEqual(["tool-root"]);
   expect(numbered("projects", null)).toEqual(["mine", "theirs"]);
+  expect(numbered("tasks", TOOL.connection, null, true)).toEqual(["tool-two", "tool-root"]);
+  expect(numbered("tasks", TOOL.connection, { device_id: "local", workspace_id: "alpha" }, true)).toEqual(["tool-root"]);
 });

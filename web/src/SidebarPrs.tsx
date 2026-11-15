@@ -8,10 +8,10 @@ import { boardProjects } from "./navigation";
 import { PrList } from "./PrList";
 import { prListModel, readingWarning } from "./prWork";
 import { useRequestViewDemand } from "./requestViewDemand";
-import { SidebarProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
+import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
 import { useShellStore } from "./store";
 import type { ToolCell } from "./agentScope";
-import { toolSidebarProjects } from "./toolCells";
+import { toolProjectChoice, toolSidebarProjects } from "./toolCells";
 import { ToolCellEmpty } from "./TaskLens";
 
 // The sidebar's PR list (PRD lane-two-columns D-20, B41; PRD
@@ -19,8 +19,8 @@ import { ToolCellEmpty } from "./TaskLens";
 // the core's groups, rows, order and folds, narrowed to one project by the
 // project chip the 태스크 list shares. A row opens its card in the lane's 보기 slot.
 // In a tool's cell it lists the pull requests of the checkouts the tool's
-// sessions work in, on every device it reached, with no project chip, whose
-// stored project is the operator's (operator decision 2026-11-15).
+// sessions work in, on every device it reached, narrowed by the same chip
+// read for the tool (`ToolProjectFilter`; operator decision 2026-11-15).
 
 export function SidebarPrs({ actions, tool = null }: { actions: Actions; tool?: ToolCell | null }) {
   const { t } = useInterfaceTranslation();
@@ -29,8 +29,10 @@ export function SidebarPrs({ actions, tool = null }: { actions: Actions; tool?: 
   const live = useShellStore((state) => state.connection === "live");
   const deviceId = frontDeviceId(rest);
   const stored = useSidebarProject(deviceId);
-  const filter = tool ? null : stored;
-  const projects = useMemo(() => (tool ? toolSidebarProjects(boardProjects(rest, agents), tool) : boardProjects(rest, agents, deviceId).filter((item) => !filter || item.workspace.id === filter.workspace_id)), [rest, agents, deviceId, filter, tool]);
+  const filter = tool ? toolProjectChoice(rest, tool) : stored;
+  // A tool's projects, whole, decide its empty cell; the chip only narrows what is listed.
+  const held = useMemo(() => (tool ? toolSidebarProjects(boardProjects(rest, agents), tool) : null), [rest, agents, tool]);
+  const projects = useMemo(() => (held ?? boardProjects(rest, agents, deviceId)).filter((item) => !filter || (item.workspace.id === filter.workspace_id && item.workspace.device_id === filter.device_id)), [held, rest, agents, deviceId, filter]);
   const model = useMemo(() => prListModel(projects, null, Date.now()), [projects]);
   // The board's GitHub reads follow what is on screen.
   useRequestViewDemand(actions, live);
@@ -41,7 +43,7 @@ export function SidebarPrs({ actions, tool = null }: { actions: Actions; tool?: 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-prs="true" data-tool-cell={tool?.connection}>
       <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground" data-prs-header="true">
-        {tool ? null : <SidebarProjectFilter deviceId={deviceId} actions={actions} />}
+        {tool ? <ToolProjectFilter tool={tool} chosen={filter} actions={actions} /> : <SidebarProjectFilter deviceId={deviceId} actions={actions} />}
         <span className="shrink-0" data-prs-total={reading ? undefined : open}>{reading ? t("projectTool.sidebar.prsLoading") : t("projectTool.sidebar.prsCount", { count: open })}</span>
         {staleText ? (
           <Hint label={staleText}>
@@ -49,7 +51,7 @@ export function SidebarPrs({ actions, tool = null }: { actions: Actions; tool?: 
           </Hint>
         ) : null}
       </div>
-      {tool && projects.length === 0
+      {held?.length === 0
         ? <ToolCellEmpty />
         : model.projects === 0 && model.reading.state !== "blocked"
         ? <p className="px-md py-sm text-caption text-muted-foreground" data-prs-view="no-remote">{t("prs.noRemote")}</p>

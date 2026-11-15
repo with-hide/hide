@@ -7,7 +7,7 @@ import type { PrBoard, ToolCell } from "./agentScope";
 import { localDeviceId } from "./devices";
 import type { BoardProject } from "./projectBoard";
 import { missionAsks } from "./missions";
-import { catalogWorkspaces, type AgentRow, type Checkout, type CheckoutAgentSummary, type Mission, type SnapshotRest, type TaskView } from "./snapshot";
+import { catalogWorkspaces, type AgentRow, type Checkout, type CheckoutAgentSummary, type Mission, type SidebarProject, type SnapshotRest, type TaskView } from "./snapshot";
 import { taskList, type TaskList } from "./taskList";
 import { boardProjects } from "./navigation";
 import { useShellStore } from "./store";
@@ -50,15 +50,39 @@ export function useFrontTool(): ToolCell | null {
  * (B40, B45; operator decision 2026-11-15): this machine's cards as the
  * list's own and every other device's named on its rows by `name`, with the
  * tool's missions that are their own ask among its first group's rows, or
- * under their project. The sidebar draws it and ⌥n numbers it, so both read
- * this one list.
+ * under their project. With `project`, only that project's tasks and
+ * missions, as the project chip narrows it. The sidebar draws it and ⌥n
+ * numbers it, so both read this one list.
  */
-export function toolTaskList(rest: SnapshotRest | null, cell: ToolCell, rows: ReadonlyMap<string, AgentRow>, name: (deviceId: string) => string, view: TaskView): TaskList {
+export function toolTaskList(rest: SnapshotRest | null, cell: ToolCell, rows: ReadonlyMap<string, AgentRow>, name: (deviceId: string) => string, view: TaskView, project: SidebarProject | null = null): TaskList {
   const local = localDeviceId(rest);
-  const own = cell.devices.find((device) => device.device_id === local)?.tasks ?? null;
-  const away = cell.devices.filter((device) => device.device_id !== local).flatMap((device) => device.tasks.cards.map((card) => ({ card, device: name(device.device_id), deviceId: device.device_id })));
+  const devices = project
+    ? cell.devices.filter((device) => device.device_id === project.device_id).map((device) => ({ ...device, tasks: toolTasksIn(device, project.workspace_id) }))
+    : cell.devices;
+  const own = devices.find((device) => device.device_id === local)?.tasks ?? null;
+  const away = devices.filter((device) => device.device_id !== local).flatMap((device) => device.tasks.cards.map((card) => ({ card, device: name(device.device_id), deviceId: device.device_id })));
   const missions = rest?.missions?.failed ? [] : (rest?.missions?.items ?? []);
-  return taskList(own, local, rows, catalogWorkspaces(rest), view, [], missionAsks(missions, cell.mission_asks ?? []), away);
+  const asks = missionAsks(missions, cell.mission_asks ?? []);
+  return taskList(own, local, rows, catalogWorkspaces(rest), view, [], project ? asks.filter((ask) => ask.mission.workspace_id === project.workspace_id) : asks, away);
+}
+
+/**
+ * The project the tool's cell narrows its 태스크 and PR lists to: the stored
+ * one (`ui_state.sidebar_project`, the operator's chip and the tool's share
+ * it) while the tool works in it, else none, so a project chosen on the
+ * operator's side never empties the tool's cell.
+ */
+export function toolProjectChoice(rest: SnapshotRest | null, cell: ToolCell): SidebarProject | null {
+  const stored = rest?.ui_state?.sidebar_project ?? null;
+  if (!stored) return null;
+  return cell.devices.some((device) => device.device_id === stored.device_id && device.members.some((member) => member.project_id === stored.workspace_id)) ? stored : null;
+}
+
+/** The tool's tasks of one device in one project: those whose root works there, as a member of the tool's says. */
+function toolTasksIn(device: ToolCell["devices"][number], projectId: string): ToolCell["devices"][number]["tasks"] {
+  const roots = new Set(device.members.filter((member) => member.project_id === projectId).map((member) => member.pane_id));
+  const cards = device.tasks.cards.filter((card) => roots.has(card.root));
+  return { cards, needs_you: cards.filter((card) => card.state === "needs_you").length, recency: device.tasks.recency };
 }
 
 /** Whether `mission` is the work of the tool of `connection` now: its Conductor is the tool's and the tool keeps it (D-36). */
@@ -79,10 +103,7 @@ export function toolProjects(projects: readonly BoardProject[], cell: ToolCell):
     const device = cell.devices.find((row) => row.device_id === workspace.device_id);
     const members = device?.members.filter((member) => member.project_id === workspace.id) ?? [];
     if (!device || members.length === 0) return [];
-    const roots = new Set(members.map((member) => member.pane_id));
-    const cards = device.tasks.cards.filter((card) => roots.has(card.root));
-    const tasks = { cards, needs_you: cards.filter((card) => card.state === "needs_you").length, recency: device.tasks.recency };
-    return [{ ...project, workspace: { ...workspace, agent_scope: { ...workspace.agent_scope, members, tasks } } }];
+    return [{ ...project, workspace: { ...workspace, agent_scope: { ...workspace.agent_scope, members, tasks: toolTasksIn(device, workspace.id) } } }];
   });
 }
 

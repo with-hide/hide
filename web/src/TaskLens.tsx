@@ -27,7 +27,7 @@ import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { PartsMark } from "./components/pr-mark";
 import { archivedProject, archivedRows, archiveOffer } from "./archive";
-import { SidebarProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
+import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
@@ -49,7 +49,7 @@ import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskLis
 import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
 import type { TaskState, ToolCell } from "./agentScope";
-import { toolTaskList } from "./toolCells";
+import { toolProjectChoice, toolTaskList } from "./toolCells";
 
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
@@ -148,10 +148,10 @@ export function TaskLens({ actions }: { actions: Actions }) {
  * operator decision 2026-11-15): the work the tool keeps, by state or by
  * project under the same `상태 | 프로젝트` switch and stored choice as the
  * operator's list, the state view's first group what waits on the tool's
- * answer, then 작업 중 and 끝남. It has no project chip, whose stored project
- * is the operator's; the project view covers the same need. A task on
- * another device names it on its row; a cell with no work says so. The
- * operator answers in a row's pane from here as anywhere (B43).
+ * answer, then 작업 중 and 끝남. The project chip narrows it on the same
+ * stored choice, read for the tool (`ToolProjectFilter`). A task on another
+ * device names it on its row; a cell with no work says so. The operator
+ * answers in a row's pane from here as anywhere (B43).
  */
 export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -163,12 +163,14 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
   const focusedPane = useShellStore((s) => s.focusedPaneId);
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
-  const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t), view), [rest, tool, byPane, t, view]);
+  const chosen = toolProjectChoice(rest, tool);
+  const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t), view, chosen), [rest, tool, byPane, t, view, chosen]);
   // A project group holds its own resting and cleanup rows; the state view holds them under every group.
   const count = list.groups.reduce((sum, group) => sum + rowCount(group.bands) + group.resting.length + group.cleanup.length, 0) + list.resting.length + list.cleanup.length;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view} data-tool-cell={tool.connection}>
       <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
+        <ToolProjectFilter tool={tool} chosen={chosen} actions={actions} />
         <span className="min-w-0 flex-1 truncate" data-task-count={count}>{t("taskLens.count", { count })}</span>
         <ViewSwitch view={view} actions={actions} />
       </div>
@@ -176,7 +178,7 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
         <ToolCellEmpty />
       ) : (
         <InToolCell.Provider value={true}>
-          <TaskGroups list={list} view={view} showProject={view === "status"} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
+          <TaskGroups list={list} view={view} showProject={view === "status" && !chosen} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
         </InToolCell.Provider>
       )}
     </div>

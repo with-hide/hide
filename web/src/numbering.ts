@@ -22,7 +22,7 @@ import type { AgentLayout } from "./agentLayout";
 import { DIGITS, type Digit } from "./shortcuts";
 import { catalogWorkspaces, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
-import { frontTool, toolSidebarProjects, toolTaskList } from "./toolCells";
+import { frontTool, toolProjectChoice, toolSidebarProjects, toolTaskList } from "./toolCells";
 import { boardProjects } from "./navigation";
 import type { ToolCell } from "./agentScope";
 
@@ -155,7 +155,7 @@ export function sidebarNumbers(state: { rest: SnapshotRest | null; agents: Agent
   const tool = frontTool(state.rest, folds.toolCell ?? null);
   if (tool && numberedList(state.rest) === "tasks") {
     const view = state.rest?.ui_state?.task_view ?? "status";
-    const list = toolTaskList(state.rest, tool, agentsByPane(everyPaneAgent(state.agents, state.rest?.status?.remote)), (id) => id, view);
+    const list = toolTaskList(state.rest, tool, agentsByPane(everyPaneAgent(state.agents, state.rest?.status?.remote)), (id) => id, view, toolProjectChoice(state.rest, tool));
     return numberedPanes(drawnTasks(taskSections(list, view, new Set(folds.taskFoldsOpen))).map(({ agent }) => agent.pane_id));
   }
   return numberedList(state.rest) === "tasks" ? numberedPanes(taskListOrder(state, folds.taskFoldsOpen)) : numberedAgents(agentListOrder(state, folds.raisedOpen, undefined, tool));
