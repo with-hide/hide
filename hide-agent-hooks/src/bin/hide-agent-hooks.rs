@@ -20,10 +20,12 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use hide_agent_adapter::HookDialect;
-use hide_agent_hooks::counters::{self, Change, Reporter, Said, SubagentInput};
+use hide_agent_hooks::counters::{self, Change, Reporter, Said, SubagentInput, Told};
 use hide_agent_hooks::diagnosis::Diagnosis;
 use hide_agent_hooks::guidance::{self, GuidanceAgent};
-use hide_agent_hooks::report::{self, HookCounts, HookRefusal, HookStatusReport, HookTurn};
+use hide_agent_hooks::report::{
+    self, HookCounts, HookRefusal, HookStatusReport, HookSubagent, HookTurn,
+};
 use hide_agent_hooks::runtime::{AgentRuntime, HookEvent, hook_stdout};
 use hide_agent_hooks::{antigravity, basic};
 use hide_platform::process::{OwnedChild, OwnerWatch};
@@ -495,13 +497,16 @@ fn antigravity_event(event: HookEvent, started: Instant) {
     };
     let counted = hide_agent_adapter::adapter(runtime)
         .is_some_and(|adapter| adapter.subagent_counts.is_some());
-    let report = |change, who, turn: Option<HookTurn>| {
+    let report = |change, who, turn: Option<HookTurn>, told: Told<'_>| {
         report_pane(
             &home,
             event,
             change,
             who,
-            Heard::said(turn.map_or(Said::Nothing, Said::Turn)),
+            Heard {
+                told,
+                ..Heard::said(turn.map_or(Said::Nothing, Said::Turn))
+            },
             counted,
             Instant::now() + report::REPORT_TIMEOUT,
         )
@@ -510,13 +515,27 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         // A subagent gets nothing of the pane's: no guidance, no Memory and
         // no letter, which are the pane's own session's. Its start and end,
         // a nested subagent's too, are counted under the pane's own
-        // conversation, the session recorded for the pane.
+        // conversation, the session recorded for the pane, with the task its
+        // parent's message gave it.
         (HookEvent::SessionStart, Some(parent)) => {
-            report(Change::Started(Some(&conversation)), reporter(parent), None)
+            let task = antigravity::subagent_task(&home, &conversation);
+            let told = Told {
+                task: task.as_deref(),
+                ..Told::default()
+            };
+            report(
+                Change::Started(Some(&conversation)),
+                reporter(parent),
+                None,
+                told,
+            )
         }
-        (HookEvent::Stop, Some(parent)) => {
-            report(Change::Stopped(Some(&conversation)), reporter(parent), None)
-        }
+        (HookEvent::Stop, Some(parent)) => report(
+            Change::Stopped(Some(&conversation)),
+            reporter(parent),
+            None,
+            Told::default(),
+        ),
         (_, Some(_)) => {}
         (HookEvent::SessionStart, None) => {
             let memory_deadline = started + hide_agent_hooks::memory::MEMORY_BUDGET;
@@ -549,7 +568,12 @@ fn antigravity_event(event: HookEvent, started: Instant) {
             if let Some(answer) = antigravity::inject(&context) {
                 print_line(&answer);
             }
-            report(Change::SessionStarted, reporter(&conversation), None);
+            report(
+                Change::SessionStarted,
+                reporter(&conversation),
+                None,
+                Told::default(),
+            );
         }
         // Every model call of a turn runs `PreInvocation`; the prompt's
         // first is the prompt hook, and a later one is the gap after a tool,
@@ -567,10 +591,16 @@ fn antigravity_event(event: HookEvent, started: Instant) {
                 Change::None,
                 reporter(&conversation),
                 Some(HookTurn::Working),
+                Told::default(),
             );
         }
         (HookEvent::Stop, None) => {
-            report(Change::None, reporter(&conversation), Some(HookTurn::Done));
+            report(
+                Change::None,
+                reporter(&conversation),
+                Some(HookTurn::Done),
+                Told::default(),
+            );
         }
         (
             HookEvent::PreToolUse
@@ -1228,6 +1258,34 @@ fn run_hook(arguments: &[String], started: Instant) {
         .then_some(payload.as_ref())
         .flatten()
         .and_then(|(bytes, truncated)| HookRefusal::read(bytes, *truncated));
+    // What the event says of a subagent beyond its id: Claude Code names
+    // each one's kind (`agent_type`; Codex's is always `default`) and, at a
+    // turn's end, the task of each still running; Codex opens the subagent's
+    // own session file with its task's name and its role.
+    let codex = match (
+        runtime,
+        event,
+        input.subagent.as_deref(),
+        input.transcript.as_deref(),
+    ) {
+        (Some(AgentRuntime::Codex), HookEvent::SubagentStart, Some(_), Some(transcript))
+            if counted =>
+        {
+            codex_subagent(transcript)
+        }
+        _ => hide_session::calls::CodexSubagent::default(),
+    };
+    let claude = runtime == Some(AgentRuntime::ClaudeCode);
+    let told = Told {
+        kind: if claude {
+            input.kind.as_deref()
+        } else {
+            codex.kind.as_deref()
+        },
+        task: codex.task.as_deref(),
+        asked: None,
+        tasks: if claude { &input.tasks } else { &[] },
+    };
     report_pane(
         &home,
         event,
@@ -1238,6 +1296,7 @@ fn run_hook(arguments: &[String], started: Instant) {
             transcript: transcript.as_deref(),
             refused: refused.as_ref(),
             unread: unread.as_deref(),
+            told,
         },
         counted,
         runtime.map_or(Instant::now() + report::REPORT_TIMEOUT, |runtime| {
@@ -1256,6 +1315,8 @@ struct Heard<'a> {
     transcript: Option<&'a std::path::Path>,
     refused: Option<&'a HookRefusal>,
     unread: Option<&'a str>,
+    /// What the event said of its subagents beyond the counts.
+    told: Told<'a>,
 }
 
 impl<'a> Heard<'a> {
@@ -1265,6 +1326,7 @@ impl<'a> Heard<'a> {
             transcript: None,
             refused: None,
             unread: None,
+            told: Told::default(),
         }
     }
 }
@@ -1294,6 +1356,7 @@ fn report_pane(
         transcript,
         refused,
         unread,
+        told,
     }: Heard<'_>,
     counted: bool,
     deadline: Instant,
@@ -1309,8 +1372,8 @@ fn report_pane(
     // input, so it is reported whether or not the record was kept
     // (engineering rules 4 and 10). What the record alone says, the counts
     // and the turn, is left out of that report rather than guessed at.
-    let kept = counters::apply(home, &pane_id, change, who, said, transcript);
-    let (turn, counts, waiting) = match &kept {
+    let kept = counters::apply(home, &pane_id, change, who, said, transcript, told);
+    let (turn, counts, subagents, waiting) = match &kept {
         Ok(applied) => {
             // An event that says something of the turn reports it each time,
             // and a tool event only when it moved the turn or an approval;
@@ -1337,6 +1400,7 @@ fn report_pane(
                     working: applied.counters.working,
                     done: applied.counters.done,
                 }),
+                counted.then(|| reported_subagents(&applied.subagents)),
                 speaks.then(|| applied.waiting.clone()),
             )
         }
@@ -1352,7 +1416,7 @@ fn report_pane(
                 report::record_and_say(home, &pane_id, agent, event.name(), &failed);
                 return;
             }
-            (None, None, None)
+            (None, None, None, None)
         }
     };
     let reported = report::report(
@@ -1362,6 +1426,7 @@ fn report_pane(
             session: who.session.map(str::to_owned),
             turn,
             counts,
+            subagents,
             session_start: starts,
             waiting,
             account: starts
@@ -1391,6 +1456,42 @@ fn report_pane(
     // standard error, so the hook never fails silently.
     let outcome = report::outcome(record_error, reported);
     report::record_and_say(home, &pane_id, agent, event.name(), &outcome);
+}
+
+/// The running subagents a report lists: the oldest
+/// [`report::SUBAGENTS_REPORTED`], since the screens list them oldest first
+/// and say how many more run.
+fn reported_subagents(running: &[HookSubagent]) -> Vec<HookSubagent> {
+    running
+        .iter()
+        .take(report::SUBAGENTS_REPORTED)
+        .cloned()
+        .collect()
+}
+
+/// How long a Codex subagent's start waits for its own session file to hold
+/// its first whole record, which Codex writes as it starts the thread.
+const CODEX_FILE_WAIT: Duration = Duration::from_millis(300);
+
+/// What Codex's subagent is, from its own session file
+/// (`hide_session::calls::codex_subagent_of`), waiting up to
+/// [`CODEX_FILE_WAIT`] for its first record; nothing when the file never
+/// says it or cannot be read.
+// A production wait, not test code: Codex gives the hook no event for the
+// record it is about to write, and the deadline bounds the wait.
+#[allow(clippy::disallowed_methods)]
+fn codex_subagent(transcript: &std::path::Path) -> hide_session::calls::CodexSubagent {
+    let deadline = Instant::now() + CODEX_FILE_WAIT;
+    loop {
+        let read = hide_session::calls::codex_subagent_of(transcript);
+        match read {
+            Ok(Some(subagent)) => return subagent,
+            Ok(None) | Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => return hide_session::calls::CodexSubagent::default(),
+        }
+    }
 }
 
 /// Reports a Claude Code or Codex event under the session its input names,
@@ -1461,6 +1562,20 @@ fn report_recorded_turn(arguments: &[String], payload: Option<&(Vec<u8>, bool)>,
             transcript: call.transcript.as_deref(),
             refused: None,
             unread: None,
+            // Claude Code's `SubagentStart` names no task; the main agent's
+            // `Agent` call before it does, which the start of its kind takes.
+            told: Told {
+                asked: call
+                    .asks
+                    .as_ref()
+                    .filter(|_| {
+                        counted
+                            && runtime == AgentRuntime::ClaudeCode
+                            && event == HookEvent::PreToolUse
+                    })
+                    .map(|(kind, task)| (kind.as_deref(), task.as_str())),
+                ..Told::default()
+            },
         },
         counted,
         report::deadline(started, runtime, event),

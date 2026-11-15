@@ -273,27 +273,30 @@ function remember(set, key) {
 }
 
 /**
- * Sends the pane's subagent counts when they changed, or always when `force`. One report runs at a time and only
- * the newest waiting one follows it, so a burst of subagents costs two helper runs, not one per change.
+ * Sends the pane's subagent counts, with the running ones by id, oldest first, when they changed, or always when
+ * `force`. One report runs at a time and only the newest waiting one follows it, so a burst of subagents costs two
+ * helper runs, not one per change.
  */
 function publishCounts(state, force) {
-  let working = 0;
+  const running = [];
   let done = 0;
-  for (const child of shared.children.values()) {
-    if (child.busy) working += 1;
+  for (const [id, child] of shared.children) {
+    if (child.busy) running.push({ id, kind: child.kind, started_unix_ms: child.started });
     else if (child.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  running.sort((a, b) => (a.started_unix_ms ?? 0) - (b.started_unix_ms ?? 0));
+  const working = running.length;
+  const key = `${working}/${done}/${running.map((child) => child.id).join(",")}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, running, key };
   state.counting ??= (async () => {
     try {
       while (state.nextCount) {
         const next = state.nextCount;
         state.nextCount = null;
-        const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS);
+        const answer = await helper(state, "subagents", { working: next.working, done: next.done, running: next.running }, COUNT_BUDGET_MS);
         if (answer?.reported !== true && state.published === next.key) state.published = null;
       }
     } finally {
@@ -349,12 +352,18 @@ function child(id) {
   return entry;
 }
 
-function setChild(id, busy) {
+/**
+ * A subagent runs or rests. `kind` is the agent definition a spawn named, kept unless it is omp's general `task`
+ * agent, which says nothing a row could show.
+ */
+function setChild(id, busy, kind) {
   if (typeof id !== "string" || !id) return;
   const entry = child(id);
   if (!entry) return;
   entry.busy = busy;
   entry.ran ||= busy;
+  if (busy) entry.started ??= Date.now();
+  if (typeof kind === "string" && kind && kind !== "task") entry.kind ??= kind;
   void shared.publish?.(false);
 }
 
@@ -628,7 +637,7 @@ export default function hide(pi) {
     return reason ? { block: true, reason } : undefined;
   });
   on("agent_start", (_event, ctx) => {
-    if (subagent(ctx)) setChild(ctx.agent.id, true);
+    if (subagent(ctx)) setChild(ctx.agent.id, true, ctx.agent.name);
     else if (root(ctx)) publishTurn(state, ctx, "working");
   });
   on("agent_end", (event, ctx) => {
@@ -652,7 +661,7 @@ export default function hide(pi) {
   on("before_subagent_spawn", (event, ctx) => {
     if (!root(ctx)) return undefined;
     // The spawn's key is the subagent's id: it counts as working from dispatch.
-    setChild(event?.spawnKey, true);
+    setChild(event?.spawnKey, true, event?.agent);
     return undefined;
   });
   on("session_shutdown", (_event, ctx) => {

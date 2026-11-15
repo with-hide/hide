@@ -100,6 +100,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
   const agents = usePaneAgents();
   const { children, devices } = usePaneChildren(paneId, agents);
+  const self = agentsByPane(agents).get(paneId);
   const childConnection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
   const mode = usePaneTurnRowMode();
   const off = mode === "off";
@@ -129,15 +130,16 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // Before any early return: a hook runs on every render.
   // A raised ask names the device its pane is on; any other band's pane is looked up in the rows.
   const unreachable = useUnreachable(band?.raised ? { device: band.raised.open_device_id ?? null } : band?.action ? { pane: band.action.pane_id } : null);
-  const humanTurn = band ? bandHumanTurn(band, agentsByPane(agents).get(paneId)) : null;
+  const humanTurn = band ? bandHumanTurn(band, self) : null;
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
-  if (off || (!band && !children && !ownProgress && !request && !finished && !waiting)) return workingLine;
+  const below = self && (children || self.subagents) ? self : null;
+  if (off || (!band && !below && !ownProgress && !request && !finished && !waiting)) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
   const progress = relationState(tracked, outcome, t);
   const navigation = progress?.phase === "failed" ? progress.message : progress?.phase === "pending" ? t("panes.relation.opening", { name: tracked!.label }) : null;
-  const tree = children ? <PaneTreeButton paneId={paneId} children={children} agents={agents} actions={actions} connection={childConnection} /> : null;
+  const tree = below ? <PaneTreeButton paneId={paneId} parent={below} children={children} agents={agents} actions={actions} connection={childConnection} /> : null;
   const answer = <>
-    {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
+    {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={tree !== null} /> : <>
       {finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
       {waiting ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={waitingOnChildren ? paneId : undefined} data-pane-subagents-wait={waitingOnChildren ? undefined : paneId}>{waiting}</span> : null}
       {ownProgress ? <Hint label={ownProgress}><span className={cn("min-w-0 flex-1 truncate", missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={missionLine ? (missionLine.decision ? "decision" : "running") : undefined}>{ownProgress}</span></Hint> : null}
@@ -222,9 +224,10 @@ export function PaneHeadChildren({ paneId, actions }: { paneId: string; actions:
   const mode = usePaneTurnRowMode();
   const agents = usePaneAgents();
   const { children, devices } = usePaneChildren(paneId, agents);
-  if (mode !== "off" || !children) return null;
-  const connection = children.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
-  return <PaneTreeButton paneId={paneId} children={children} agents={agents} actions={actions} connection={connection} />;
+  const self = agentsByPane(agents).get(paneId);
+  if (mode !== "off" || !self || (!children && !self.subagents)) return null;
+  const connection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
+  return <PaneTreeButton paneId={paneId} parent={self} children={children} agents={agents} actions={actions} connection={connection} />;
 }
 
 /**
@@ -291,26 +294,6 @@ export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions:
       {t("openAsks.count", { count })}
     </Button>
   )} />;
-}
-
-/**
- * The subagents the pane's agent runs inside its own session, as a light chip
- * on its head, `서브 3`, whose hover says them (docs/UI_BEHAVIOR.md,
- * Subagents). Nothing to press: a subagent has no pane to open. Smaller and
- * lighter than the child button, and absent for none and for a count Hide
- * cannot read.
- */
-export function PaneSubagentChip({ paneId }: { paneId: string }) {
-  const { t } = useInterfaceTranslation();
-  const count = useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === paneId)?.subagents ?? 0);
-  if (count === 0) return null;
-  const words = t("agents.subagents.working", { count });
-  return <Hint label={words}>
-    <span role="img" aria-label={words} data-pane-subagents={count} className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs bg-secondary px-xs text-micro whitespace-nowrap text-agent-working tabular-nums">
-      <span aria-hidden="true" className="size-(--size-subagent-dot) shrink-0 rounded-full bg-agent-working opacity-(--opacity-secondary)" />
-      <span aria-hidden="true">{t("agents.subagents.chip", { count })}</span>
-    </span>
-  </Hint>;
 }
 
 /** The pane's own ask's verb, as the row's ask starts with it; a stop is work left, `일 남음`, as the row's line says. */
@@ -456,33 +439,47 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
 const CHILD_MARKS = 1;
 
 /**
- * The children button, at the row's left edge or, while off, on the head. Its face holds the tree, the
- * first direct child's status mark in tree order and how many direct
- * children there are, and the chevron; its hint and name spell out every
- * state count. A child of unknown state draws no mark, and with a device
- * away the face keeps the last total, since no mark can claim current work.
+ * The children button, at the row's left edge or, while off, on the head: the
+ * one chip for everything working under the pane's agent (docs/UI_BEHAVIOR.md,
+ * Subagents). Its face holds the tree, the first direct child's status mark in
+ * tree order and how many direct children there are, then, after a dot, the
+ * subagent mark and how many subagents the agent runs inside its session, and
+ * the chevron; its hint and name spell out every state count. A child of
+ * unknown state draws no mark, and with a device away the face keeps the last
+ * total, since no mark can claim current work. Only a child that asks colours
+ * its border: a subagent has nothing to ask the operator.
  */
-function PaneTreeButton({ paneId, children, agents, actions, connection }: { paneId: string; children: PaneChildren; agents: AgentRow[]; actions: Actions; connection: string | null }) {
+function PaneTreeButton({ paneId, parent, children, agents, actions, connection }: { paneId: string; parent: AgentRow; children: PaneChildren | null; agents: AgentRow[]; actions: Actions; connection: string | null }) {
   const { t } = useInterfaceTranslation();
-  const count = children.children.length;
-  const label = [t("agentSessions.tree.children", { count }), ...(connection ? [connection] : children.parts.map((part) => t(part.label, { count: part.count })))].join(" · ");
+  const count = children?.children.length ?? 0;
+  const subagents = parent.subagents ?? 0;
+  const label = [
+    count > 0 ? t("agentSessions.tree.children", { count }) : null,
+    ...(connection ? [connection] : (children?.parts ?? []).map((part) => t(part.label, { count: part.count }))),
+    subagents > 0 ? t("agents.subagents.working", { count: subagents }) : null,
+  ].filter(Boolean).join(" · ");
   // A device that is away keeps its raised count off the button, while the
   // tree still opens on the raised branches that remain reachable.
-  const raised = connection ? 0 : children.raised;
-  const marked = connection ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
+  const raised = connection ? 0 : children?.raised ?? 0;
+  const marked = connection || !children ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
   return <AgentTreePopover
-    parent={children.parent}
+    parent={children?.parent ?? parent}
     actions={actions}
     agents={agents}
-    raised={children.raised > 0}
+    raised={(children?.raised ?? 0) > 0}
     onOpenChild={(id, name) => actions.followRelation(paneId, id, name)}
     onTask={() => actions.revealTask(paneId)}
     returnFocus={() => document.querySelector<HTMLButtonElement>(`[data-pane-tree="${paneId}"]`)?.focus()}
     triggerLabel={label}
-    trigger={<button type="button" aria-label={label} data-pane-tree={paneId} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
+    trigger={<button type="button" aria-label={label} data-pane-tree={paneId} data-pane-tree-subagents={subagents || undefined} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
       <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
       {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
-      {count > 1 || marked.length === 0 ? <span aria-hidden="true" className="font-mono" data-pane-tree-count="">{count}</span> : null}
+      {count > 0 && (count > 1 || marked.length === 0) ? <span aria-hidden="true" className="font-mono" data-pane-tree-count="">{count}</span> : null}
+      {count > 0 && subagents > 0 ? <span aria-hidden="true" className="text-muted-foreground">·</span> : null}
+      {subagents > 0 ? <>
+        <span aria-hidden="true" className="size-(--size-subagent-dot) shrink-0 rounded-full bg-agent-working opacity-(--opacity-secondary)" />
+        <span aria-hidden="true" className="font-mono" data-pane-tree-subagent-count="">{subagents}</span>
+      </> : null}
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     </button>}
   />;

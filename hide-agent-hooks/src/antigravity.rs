@@ -163,6 +163,20 @@ fn parent_of(home: &Path, conversation: &str, deadline: Instant) -> Option<Strin
     }
 }
 
+/// What the parent asked subagent `conversation` to do: the `content=` of the
+/// `[Message]` that opens its transcript, as its first line was written when
+/// its start looked for the parent; none for a conversation of its own.
+pub fn subagent_task(home: &Path, conversation: &str) -> Option<String> {
+    let line = first_line(&transcript(home, conversation))?;
+    sender(&line)?;
+    let step: Value = serde_json::from_str(&line).ok()?;
+    let content = step.get("content").and_then(Value::as_str)?;
+    let message = &content[content.find("[Message]")?..];
+    let task = &message[message.find(" content=")? + " content=".len()..];
+    let task = task.split("</SYSTEM_MESSAGE>").next().unwrap_or(task);
+    crate::report::subagent_words(task, crate::report::SUBAGENT_TASK_LIMIT)
+}
+
 /// The transcript's first complete line, when there is one.
 fn first_line(path: &Path) -> Option<String> {
     hide_session::read_first_record(path, FIRST_LINE_LIMIT as u64)
@@ -310,6 +324,13 @@ mod tests {
             Some(PARENT)
         );
         assert_eq!(root_of(home.path(), PARENT, now), None);
+        // What the parent asked is the message's words; the parent's own
+        // conversation was asked nothing.
+        assert_eq!(
+            subagent_task(home.path(), CHILD).as_deref(),
+            Some("Run it.")
+        );
+        assert_eq!(subagent_task(home.path(), PARENT), None);
         // No transcript before the deadline: a conversation of its own.
         let missing = "00000000-0000-4000-8000-000000000000";
         let waited = Instant::now();

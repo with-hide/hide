@@ -379,19 +379,22 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
     };
+    let explore = json!({"id": "ses_child", "kind": "explore", "task": "Explore the parser",
+        "started_unix_ms": 1_791_374_410_000_u64});
     let answer = machine.run(
         "subagents",
-        &json!({"session_id": "ses_root", "working": 2, "done": 1}),
+        &json!({"session_id": "ses_root", "working": 2, "done": 1, "running": [explore.clone()]}),
         true,
     );
     assert_eq!(answer, json!({"reported": true}));
+    // The subagent the plugin names is kept as an entry, the other as a count.
     let stored: Value =
         serde_json::from_slice(&std::fs::read(machine.records().join("panes/w1_p1.json")).unwrap())
             .unwrap();
     assert_eq!(
         stored,
-        json!({"sessions": [{"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,
-            "agent": "opencode", "session": "ses_root"}]})
+        json!({"sessions": [{"working": 1, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,
+            "agent": "opencode", "session": "ses_root", "running": [explore.clone()]}]})
     );
     let answer = machine.run(
         "turn",
@@ -403,10 +406,11 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         reports(),
         [
             json!({"runtime": "opencode", "version": hide_agent_hooks::HOOK_VERSION,
-                "session": "ses_root", "counts": {"working": 2, "done": 1}, "session_start": false}),
+                "session": "ses_root", "counts": {"working": 2, "done": 1},
+                "subagents": [explore.clone()], "session_start": false}),
             json!({"runtime": "opencode", "version": hide_agent_hooks::HOOK_VERSION,
                 "session": "ses_root", "turn": "waiting", "counts": {"working": 2, "done": 1},
-                "session_start": false}),
+                "subagents": [explore.clone()], "session_start": false}),
         ]
     );
 

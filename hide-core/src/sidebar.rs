@@ -457,7 +457,7 @@ pub fn agent_chip(agent: &SidebarAgentSnapshot) -> crate::model::AgentChipSnapsh
 pub fn project_pane_children(
     agents: &[SidebarAgentSnapshot],
     pane_id: &str,
-    tokens: crate::agent_hooks::PaneHookTokens,
+    tokens: &crate::agent_hooks::PaneHookTokens,
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
 ) -> Option<crate::model::PaneChildrenSnapshot> {
     let agent = agents.iter().find(|agent| agent.pane_id == pane_id)?;
@@ -505,21 +505,31 @@ pub fn project_pane_children(
 /// read (an agent that declares none, a hook that is not in, a session older
 /// than it), which no screen tells apart from none (docs/UI_BEHAVIOR.md,
 /// Subagents).
+///
+/// With the count come the subagents the session names, oldest first and no
+/// more than it counts: the ones a row lists under its title, each with what
+/// the agent said of it; one it counts but names no id for is in the count
+/// alone.
 pub fn running_subagents(
     agent_kind: &str,
-    tokens: crate::agent_hooks::PaneHookTokens,
+    tokens: &crate::agent_hooks::PaneHookTokens,
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
-) -> u32 {
-    pane_instrumentation(agent_kind, tokens, status_of)
+) -> (u32, Vec<crate::model::SubagentRowSnapshot>) {
+    let count = pane_instrumentation(agent_kind, tokens, status_of)
         .working
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let named = usize::try_from(count).unwrap_or(usize::MAX);
+    (
+        count,
+        tokens.subagents.iter().take(named).cloned().collect(),
+    )
 }
 
 /// The one reading of a pane's hook counts against its agent's dialect and
 /// hook status, which the pane head and the agent's row both ask.
 fn pane_instrumentation(
     agent_kind: &str,
-    tokens: crate::agent_hooks::PaneHookTokens,
+    tokens: &crate::agent_hooks::PaneHookTokens,
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
 ) -> hide_agent_hooks::diagnosis::PaneInstrumentation {
     let dialect = hide_agent_adapter::adapter(agent_kind).and_then(|row| row.subagent_counts);
@@ -558,7 +568,7 @@ pub struct PaneUpdates<'a> {
 pub fn project_pane_children_connected(
     agents: &[SidebarAgentSnapshot],
     pane_id: &str,
-    tokens: crate::agent_hooks::PaneHookTokens,
+    tokens: &crate::agent_hooks::PaneHookTokens,
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
     codex_daemon_on: bool,
     updates: &PaneUpdates<'_>,
@@ -947,6 +957,7 @@ pub(crate) fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSn
         background_left: 0,
         children_left: 0,
         subagents: 0,
+        subagent_rows: Vec::new(),
         subagents_left: 0,
         wait_count: 0,
         wait_subagents: 0,

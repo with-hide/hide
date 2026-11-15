@@ -7,7 +7,11 @@ import { sidebarTreeLines, siblingsShown } from "./sidebarTree";
 const SIBLINGS = 5;
 const row = (pane_id: string, depth: number): BoardRow => ({ agent: { pane_id } as AgentRow, depth });
 const drawn = (lines: ReturnType<typeof sidebarTreeLines>) =>
-  lines.map((line) => (line.kind === "agent" ? `${line.row.agent.pane_id}@${line.row.depth}` : `+${line.count}@${line.depth}`));
+  lines.map((line) =>
+    line.kind === "agent" ? `${line.row.agent.pane_id}@${line.row.depth}`
+    : line.kind === "subagent" ? `~${line.subagent.id}@${line.depth}`
+    : line.kind === "subagents-more" ? `~+${line.count}@${line.depth}`
+    : `+${line.count}@${line.depth}`);
 
 describe("sidebarTreeLines", () => {
   it("keeps five children of a parent and folds the rest with their subtrees behind one line", () => {

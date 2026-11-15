@@ -6,7 +6,7 @@
 //! connection to the core.
 
 pub use hide_agent_hooks::report::{
-    HookCounts, HookRefusal, HookStatusReport, HookTurn, RefusalKind,
+    HookCounts, HookRefusal, HookStatusReport, HookSubagent, HookTurn, RefusalKind,
 };
 use serde::{Deserialize, Serialize};
 

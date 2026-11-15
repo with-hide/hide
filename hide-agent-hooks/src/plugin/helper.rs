@@ -59,6 +59,10 @@ struct Input {
     args: Option<Value>,
     working: u32,
     done: u32,
+    /// The running subagents the script names, part of `working`: each one's
+    /// id, the kind and task its agent gave it and when it started (the
+    /// `subagents` operation).
+    running: Vec<report::HookSubagent>,
     /// The turn the script saw the session's own events start, end or wait
     /// in (the `turn` operation).
     turn: Option<report::HookTurn>,
@@ -430,7 +434,7 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
     // A refused record write does not keep the session's identity from the
     // core: the counts it carried are left out instead (engineering rules 4
     // and 10).
-    let stored = counters::store(home, &pane, counts, who);
+    let stored = counters::store(home, &pane, counts, &input.running, who);
     let outcome = report::report(
         &report::HookStatusReport {
             runtime: agent.runtime().to_owned(),
@@ -440,6 +444,13 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
             counts: stored.is_ok().then_some(report::HookCounts {
                 working: counts.working,
                 done: counts.done,
+            }),
+            subagents: stored.as_ref().ok().map(|running| {
+                running
+                    .iter()
+                    .take(report::SUBAGENTS_REPORTED)
+                    .cloned()
+                    .collect()
             }),
             session_start: false,
             waiting: None,
@@ -478,6 +489,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
         who,
         counters::Said::Turn(turn),
         None,
+        counters::Told::default(),
     );
     let reported = report::report(
         &report::HookStatusReport {
@@ -489,6 +501,16 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
                 counted.then_some(report::HookCounts {
                     working: applied.counters.working,
                     done: applied.counters.done,
+                })
+            }),
+            subagents: kept.as_ref().ok().and_then(|applied| {
+                counted.then(|| {
+                    applied
+                        .subagents
+                        .iter()
+                        .take(report::SUBAGENTS_REPORTED)
+                        .cloned()
+                        .collect()
                 })
             }),
             session_start: false,
@@ -531,6 +553,7 @@ fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> 
         who,
         counters::Said::Nothing,
         None,
+        counters::Told::default(),
     );
     let reported = report::report(
         &report::HookStatusReport {
@@ -539,6 +562,7 @@ fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> 
             session: who.session.map(str::to_owned),
             turn: None,
             counts: None,
+            subagents: None,
             session_start: true,
             waiting: None,
             // The plugin's helper runs in the agent's own environment.

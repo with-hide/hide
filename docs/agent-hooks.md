@@ -336,6 +336,23 @@ A `SessionStart` from `startup` or `resume` is a new Codex process, which runs n
 Two Codex cases have no signal, so the count stays as the hooks left it, and Hide waits on no timer for them: a subagent that a subagent of its own stopped (its stop is in that subagent's file, which the helper does not read) stays working until the session starts again; and a stop written more than 256 KiB before the main turn's end is not read.
 The runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists.
 
+#### What the hook keeps of each subagent
+
+Each running id in the record carries what the agent said of that subagent, so the screens can list it under its agent (docs/UI_BEHAVIOR.md, Subagents): its kind and its task as the agent words them, each made one short line (its first non-empty line without control characters, cut to 64 and 120 characters), and when the hook first heard it run (`HookSubagent`, `hide-agent-hooks/src/report.rs`).
+A subagent heard of first in a turn end's list started before the hook knew it, so its start is left out rather than guessed; one that stops and runs again keeps its first start and fills in only what it lacked.
+A report sends, with the counts, the oldest 16 running ones (`report::SUBAGENTS_REPORTED`); the counts still count them all, and a running id written by a helper before the entries reads as the id alone.
+No start event carries all three facts for any agent, so each one's words come from where its agent puts them (Claude Code 2.1.325 and Codex 0.169.0 measured with their hooks on real subagent runs, OpenCode 2.0.29 read from its own code, OpenCode 1.18, omp 18.7.0 and agy 1.4.0 from Hide's recorded fixtures):
+
+- Claude Code names the kind at `SubagentStart` (`agent_type`) and no task; the main agent's `Agent` call (`Task` before 2.1) names both (`subagent_type`, `description`) at its `PreToolUse`, which comes first, so the record keeps each such call as an ask, at most 16 and gone at the turn's end, and a start takes the task of the oldest ask of its kind, or of the oldest that named none.
+  A turn end's `background_tasks` gives each still-running one its `description` too, for one the asks missed.
+  The `agent-<id>.meta.json` beside the session file names the task as well, but Claude Code writes it when the subagent finishes, too late to read.
+- Codex names `agent_type`, which is `default` for every subagent, so the kind is the role the main agent asked for, when it named one; the task message is stored encrypted, so the task is the name the main agent gave it, the last part of its `agent_path` (`/root/find_login_code` reads `find login code`). Both are read from the `session_meta` record that opens the subagent's own session file, the one its `SubagentStart` names in `transcript_path` (`hide_session::calls::codex_subagent_of`), waiting up to 300 ms for that record; a `SubagentStart` that names the main agent's file names neither.
+  The older subagent tools write no such item, so their subagents have no task.
+- Grok's events name no subagent id, so its subagents are counted and not listed.
+- OpenCode's plugin titles a subagent's child session `<task> (@<agent> subagent)`, and OpenCode 2 also names the agent: the plugin reads both at `session.created` and sends the running children with their counts (`subagents` operation, `running`), oldest first, and the helper keeps them as the record's running ids.
+- omp's `before_subagent_spawn` names the agent definition (`agent`) and no task; the extension keeps the definition unless it is the general `task` agent, which says nothing a row could show.
+- Antigravity names neither; a subagent's transcript opens with its parent's `[Message]`, whose `content=` is the task, read from the same first line the start reads for the parent (`antigravity::subagent_task`).
+
 ### The Hide global instruction
 
 A session start also carries the Hide global instruction (PRD memory-self-improve D-23, D-29, D-31): `global-instruction.md` in the core's state folder (`hide_kit::layout::global_instruction`), Hide's own file of instructions the operator approved for every Project and every agent, never one of an agent's own global files.

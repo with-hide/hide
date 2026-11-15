@@ -7,7 +7,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import type { TaskState } from "../agentScope";
 import { PaneView } from "../PaneView";
 import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup, SessionPull } from "../snapshot";
-import type { RowMark, StatusTone, RequestVerb } from "../snapshot";
+import type { RowMark, StatusTone, RequestVerb, SubagentRow } from "../snapshot";
 import { useShellStore } from "../store";
 import { TurnCardCases } from "./TurnCardCases";
 import { listedPull, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
@@ -107,6 +107,15 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
 ];
 /** Each subagent case's running subagents. */
 const SUBAGENT_CASES: Record<string, number> = { "sub-working": 3, "sub-waiting": 2, "sub-both": 2 };
+/** The first `count` of the subagents a gallery session runs, oldest first as Claude Code's hook names them: invented kinds and tasks, started minutes ago. */
+function subagentRows(count: number | undefined, now: number): SubagentRow[] | undefined {
+  if (!count) return undefined;
+  return [
+    { id: "sa-1", kind: "Explore", task: "로그인 처리 코드 찾기", started_unix_ms: now - 4 * 60_000 },
+    { id: "sa-2", kind: "Plan", task: "고칠 방법 정리", started_unix_ms: now - 2 * 60_000 },
+    { id: "sa-3", kind: "general-purpose", task: "실패 로그 모으기", started_unix_ms: now - 60_000 },
+  ].slice(0, count);
+}
 const CHILD_CASES = ["child-wide", "child-narrow"];
 /** state=widths: a wide head, then one width inside each fold of the pane head (`--size-pane-head-narrow` and `--size-pane-head-tight`). */
 const HEAD_WIDTHS = [640, 420, 340, 280, 200, 140];
@@ -136,6 +145,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         identity_label: content === "long" ? `${example.title} - 긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업` : example.title,
         // Subagents its session runs: the working root with children three; the root waiting on two children two more, its line counting both; the finished turn one still running (operator decision 2026-11-14).
         subagents: index === 5 ? 3 : index === 11 ? 2 : index === 3 ? 1 : undefined,
+        subagent_rows: subagentRows(index === 5 ? 3 : index === 11 ? 2 : index === 3 ? 1 : undefined, Date.now()),
         subagents_left: index === 3 ? 1 : undefined,
         wait_count: example.wait === "children" ? 2 : undefined,
         wait_subagents: index === 11 ? 2 : undefined,
@@ -180,8 +190,9 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     base.rest.navigator!.workspaces = [project];
     base.rest.navigator!.focused_checkout_id = checkout.id;
     base.rest.navigator!.focused_workspace_id = project.id;
-    // The panel's tree opens on the row with children, so a child's columns are compared with its root's.
-    base.rest.ui_state = { ...base.rest.ui_state!, sessions_expanded_agent_pane_ids: ["s5"] };
+    // The panel's tree opens on the row with children, so a child's columns are compared with its root's, and on the
+    // root that waits on children and subagents, so its subagent lines follow its children.
+    base.rest.ui_state = { ...base.rest.ui_state!, sessions_expanded_agent_pane_ids: ["s5", "s11"] };
     // A has a different-checkout child, a same-checkout child, and a folded
     // grandchild with a PR. The parent's count includes all three.
     const children = base.agents.filter((row) => ["a1c1", "a1c2", "a1g1"].includes(row.pane_id)).map((child, index): AgentRow => {
@@ -230,7 +241,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       const id = `pane-narrow-child-${index}`;
       return { ...childExamples[0]!, id, pane_id: id, identity_label: `자식 ${index + 1}`, lineage_parent_pane_id: "narrow", lineage_path_pane_ids: ["narrow", id], lineage_child_pane_ids: [], state: { ...childExamples[0]!.state, tree_rank: index + 1 } };
     });
-    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id, subagents: SUBAGENT_CASES[id],
+    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id, subagents: SUBAGENT_CASES[id], subagent_rows: subagentRows(SUBAGENT_CASES[id], Date.now()),
       identity_label: PANE_HEADER_CASES.some(([caseId]) => caseId === id) ? "Group tab 기능 설계" : seed.identity_label,
       device_id: id === "device" ? "mini" : seed.device_id,
       lineage_path_pane_ids: [id],

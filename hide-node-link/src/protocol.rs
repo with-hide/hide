@@ -424,7 +424,10 @@ use crate::error::HostError;
 /// the core's agent sleep reads for that machine's agents; a helper on 96
 /// does not know the call, so it is refused at Hello and upgraded with its
 /// core.
-pub const PROTOCOL_VERSION: u32 = 97;
+/// 98: a hook's report lists the subagents its session runs, each one's kind,
+/// task and start (`panes::HookStatusReport::subagents`), which a core on 97
+/// refuses as a field it does not know, so a helper upgrades with its core.
+pub const PROTOCOL_VERSION: u32 = 98;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`

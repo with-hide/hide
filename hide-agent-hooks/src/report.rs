@@ -52,6 +52,12 @@ pub struct HookStatusReport {
     /// whose counts are not known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counts: Option<HookCounts>,
+    /// The subagents the session runs now that its agent names, oldest
+    /// first, at most [`SUBAGENTS_REPORTED`]: what each is and since when, as
+    /// the hook heard it. Sent with `counts`, which also counts the ones the
+    /// agent names no id for; absent with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagents: Option<Vec<HookSubagent>>,
     /// The event a session start is: a new session's report clears the
     /// turn the pane's earlier session left.
     #[serde(default)]
@@ -157,6 +163,46 @@ pub enum HookTurn {
 pub struct HookCounts {
     pub working: u32,
     pub done: u32,
+}
+
+/// The most running subagents one report lists: the screens list a session's
+/// subagents under its row, and a session running more says how many more.
+pub const SUBAGENTS_REPORTED: usize = 16;
+
+/// The longest kind a report carries, in characters.
+pub const SUBAGENT_KIND_LIMIT: usize = 64;
+
+/// The longest task a report carries, in characters: one short line, never
+/// the prompt the agent gave its subagent.
+pub const SUBAGENT_TASK_LIMIT: usize = 120;
+
+/// One subagent a session runs, as its hook heard of it: the agent's id for
+/// it, the agent's name for its kind and the task it was given when the agent
+/// says them, and when the hook first heard it run.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookSubagent {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_unix_ms: Option<u64>,
+}
+
+/// `text` as one line a row can show: its first non-empty line, trimmed,
+/// without control characters, cut to `limit` characters; `None` when
+/// nothing is left.
+pub fn subagent_words(text: &str, limit: usize) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let words: String = line
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(limit)
+        .collect();
+    let words = words.trim();
+    (!words.is_empty()).then(|| words.to_owned())
 }
 /// Sends `report` for the pane, until `deadline`. A refusal or a failure to
 /// ask comes back as the cause it is recorded under
@@ -474,6 +520,7 @@ mod tests {
                 working: 2,
                 done: 5,
             }),
+            subagents: None,
             session_start: false,
             waiting: None,
             account: None,

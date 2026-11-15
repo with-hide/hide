@@ -916,14 +916,20 @@ Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`;
 
 ### Subagents
 
-An agent's own subagents, the ones it runs inside its session, are drawn on the work map and in the pane head, and every list says when an agent rests on them, so a pane running six of them never looks like one working alone and a resting agent whose subagents still run never looks idle (operator decision 2026-11-14, reversing issue #810).
-A subagent has no pane and no row of its own, so it is not a delegated child: nothing about it opens anything, and its marks stay smaller and lighter than the child chip (`1/5`) and a child's circle.
+An agent's own subagents, the ones it runs inside its session, are drawn where its children are, on the work map, and every list says when an agent rests on them, so a pane running six of them never looks like one working alone and a resting agent whose subagents still run never looks idle (operator decisions 2026-11-14, reversing issue #810, and 2026-11-15).
+A subagent has no pane and no row of its own, so it is not a delegated child: nothing about it opens anything, and its mark, a small working-blue dot (`SubagentMark`, `--size-subagent-dot`, the dot the work map circles a session with), stays smaller and lighter than a child's status mark and is never the dashed ring of an agent that rests and waits.
 
-- A row, wherever the sidebar row is drawn (the project tree, the 태스크 list and its children, the child popover) and on the phone, draws no mark for them: a working row with subagents looks exactly like one without (operator decision 2026-11-14, after a title mark read as an ellipsis, a "more" menu or the unread dot).
-  They reach a row only through its line, when it rests on them or a finished turn left them running, below.
+- The pane's children chip, at the left of its second row, or on its head while the turn row is off: one chip for everything working under the agent, the children part as before (the tree, the first child's mark and the count), then after `·` the subagent mark and how many subagents run, `≡ ● 2 · • 3 ⌄`; a pane with subagents and no children shows the chip with the subagent part alone, `≡ • 3 ⌄`.
+  Its hint and name add `서브에이전트 N개 작업 중` to the children's counts, and only a child's ask colours its border, since a subagent asks the operator nothing (`PaneTreeButton`, `web/src/PaneHeaderBand.tsx`).
+  The pane head has no subagent chip of its own (operator decision 2026-11-15: one chip, not two).
+- The chip's popover, the child tree: after the children, a `서브에이전트 N` group lists the subagents the agent names, oldest first, each as one dimmed line, its mark, its kind, its task and how long it has run (`SubagentLine`, `web/src/components/subagent-row.tsx`); a kind or task the agent does not say is left out, and a line with neither reads `서브에이전트` and the time.
+  The lines are disabled options: the keyboard passes over them and a press does nothing.
+  Past the ones listed, one line says `외 N개`; an agent whose events name no subagent by id (Grok) lists none and says `서브에이전트 N개 작업 중` in that one line.
+- A sidebar row (the project tree, the 태스크 list) draws no mark on itself for them: a working row with subagents looks like one without (operator decision 2026-11-14, after a title mark read as an ellipsis, a "more" menu or the unread dot).
+  A row with subagents has a parent's chevron, and opened, lists them after its children on the same rails as the same dimmed lines with nothing to press and no hover, as many as a parent shows children (`navigator.siblings_shown`), then `외 N개`; folded, as rows are until opened, it draws none (`sidebarTreeLines`, `web/src/sidebarTree.ts`).
+  They also reach a row through its line, when it rests on them or a finished turn left them running, below.
 - The Overview work map: one small blue dot per running subagent, eight at most, slowly circling just outside the session's circle, which itself stays as it is (`SubagentOrbit`, `web/src/overviewGraphNodes.tsx`); a reduced-motion setting holds them still.
-- The pane head: a light chip, `서브 N`, after the title's marks, whose hover says `서브에이전트 N개 작업 중`; it has nothing to press (`PaneSubagentChip`, `web/src/PaneHeaderBand.tsx`).
-- The phone: the same lines as the desktop rows.
+- The phone: the same lines as the desktop rows; it lists no subagents under a row yet.
 - Nothing is drawn for none, nor for a count Hide cannot read: an agent that declares none, a hook that is not in or switched off, a session older than the hook (the reasons the core keeps in `PaneChildren.instrumented`), each exactly as none.
   The done count is drawn nowhere.
 
@@ -938,7 +944,17 @@ docs/agent-hooks.md owns the hook.
 Each count is separately knowable, and a count the core cannot read is `None`, never zero, in the core's facts; the screens above draw it exactly as none.
 Claude Code, Codex, Grok, OpenCode, omp and Antigravity report a count, and Pi (it runs no subagents) and Cursor declare none; the declaration is `subagent_counts` in `hide-agent-adapter/src/declarations.rs`, and no agent reports a blocked subagent.
 Codex's count follows its subagents past the main turn's end, as Claude Code's does: a subagent still running when the main agent's turn ends stays working until its own end, one the main agent stops itself leaves without being counted done, and a quit and resume of the session counts none of the subagents the quit cut off (docs/agent-hooks.md, Which subagents run).
-Which kind each subagent is and how long it has run are not drawn yet: the hook keeps only their ids, so the pane head's hover gives the count alone for every agent.
+With the count, the hook lists the running subagents its agent names by id, oldest first and at most 16 (`HookSubagent`, `report::SUBAGENTS_REPORTED`): the agent's own words for each one's kind and task, made one short line (64 and 120 characters), and when the hook first heard it run; the core keeps them with the count (`agent_hooks::facts`) and lays them on the row as `SidebarAgentSnapshot.subagent_rows`, never more than it counts.
+Each agent says what it says, and a line shows only that (docs/agent-hooks.md, What the hook keeps of each subagent):
+
+| Agent | Kind | Task |
+| --- | --- | --- |
+| Claude Code | `agent_type` (`Explore`, `general-purpose`) | the `description` of the main agent's `Agent` call that started it |
+| Codex | none: every one is `default` | the name the main agent gave the task (`docs fidelity`) |
+| Grok | its events name no subagent by id, so none is listed, only counted | |
+| OpenCode | the child session's agent (`explore`) | the child session's title |
+| omp | the agent definition the spawn named, unless the general `task` | none |
+| Antigravity | none | the message its parent opened it with |
 Settings > Agents lists no subagent count either: the kit's feature table has no `subagents` entry.
 
 ### Closing an agent that spawned others

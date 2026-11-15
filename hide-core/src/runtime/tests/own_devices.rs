@@ -234,6 +234,7 @@ fn a_hooks_session_on_a_device_goes_to_that_devices_own_engine() {
         session: session.map(str::to_owned),
         turn: None,
         counts: None,
+        subagents: None,
         session_start: true,
         waiting: None,
         account: None,

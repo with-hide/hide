@@ -23,6 +23,7 @@ import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
 import { Elapsed } from "./elapsed";
 import { StatusMark } from "./status-mark";
+import { SubagentLine, SubagentMoreLine, subagentsOf } from "./subagent-row";
 import { Command, CommandGroup, CommandItem, CommandList, CommandSeparator } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Hint } from "./ui/tooltip";
@@ -106,7 +107,11 @@ export function AgentTreePopover({
   const list = useRef<HTMLDivElement>(null);
   const afterClose = useRef<(() => void) | null>(null);
   const directs = childrenOf(root, byPane);
-  const empty = directs.length === 0;
+  // The agent's own subagents follow its children, as lines with nothing to
+  // press (docs/UI_BEHAVIOR.md, Subagents).
+  const subagents = root.subagents ?? 0;
+  const { rows: subagentRows, more: subagentsMore } = subagentsOf(root);
+  const empty = directs.length === 0 && subagents === 0;
 
   useEffect(() => {
     if (!open) return;
@@ -211,10 +216,18 @@ export function AgentTreePopover({
           <div className="flex items-center gap-sm border-b border-border px-md py-sm">
             <AgentMark kind={root.agent_kind} />
             <AgentRecordTitle agent={root} className="text-body font-medium text-foreground" />
-            <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agentSessions.tree.children", { count: directs.length })}>
-              <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-              <span aria-hidden="true" className="font-mono text-caption">{directs.length}</span>
-            </span>
+            {directs.length > 0 ? (
+              <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agentSessions.tree.children", { count: directs.length })}>
+                <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+                <span aria-hidden="true" className="font-mono text-caption">{directs.length}</span>
+              </span>
+            ) : null}
+            {subagents > 0 ? (
+              <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agents.subagents.working", { count: subagents })}>
+                <span aria-hidden="true" className="size-(--size-subagent-dot) rounded-full bg-agent-working opacity-(--opacity-secondary)" />
+                <span aria-hidden="true" className="font-mono text-caption">{subagents}</span>
+              </span>
+            ) : null}
           </div>
           <CommandList>
             <CommandGroup>
@@ -253,6 +266,21 @@ export function AgentTreePopover({
                 ),
               )}
             </CommandGroup>
+            {subagents > 0 ? (
+              // Options the keyboard passes over and a press does nothing on: a subagent has no pane to open.
+              <CommandGroup heading={t("agents.subagents.section", { count: subagents })} data-agent-tree-subagents={subagents}>
+                {subagentRows.map((row) => (
+                  <CommandItem key={`subagent:${row.id}`} value={`subagent:${row.id}`} disabled className="py-none">
+                    <SubagentLine row={row} className="min-w-0 flex-1" />
+                  </CommandItem>
+                ))}
+                {subagentsMore > 0 ? (
+                  <CommandItem value="subagent:more" disabled className="py-none">
+                    <SubagentMoreLine count={subagentsMore} listed={subagentRows.length} className="min-w-0 flex-1" />
+                  </CommandItem>
+                ) : null}
+              </CommandGroup>
+            ) : null}
             {onTask ? (
               <>
                 <CommandSeparator />

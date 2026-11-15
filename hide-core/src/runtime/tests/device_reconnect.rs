@@ -96,6 +96,7 @@ fn hook(runtime: &mut Runtime, turn: HookTurn) {
                 session: Some(SESSION.to_owned()),
                 turn: Some(turn),
                 counts: None,
+                subagents: None,
                 session_start: false,
                 waiting: None,
                 account: None,

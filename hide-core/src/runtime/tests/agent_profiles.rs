@@ -710,6 +710,7 @@ fn a_finished_wrapper_start_frees_the_profile_it_did_not_run_in() {
                 session: Some("wrapper-session".into()),
                 turn: None,
                 counts: None,
+                subagents: None,
                 session_start: true,
                 waiting: None,
                 account: Some(vec![(

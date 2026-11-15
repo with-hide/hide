@@ -95,6 +95,7 @@ fn synced(witnesses: &Witnesses) -> (Runtime, crate::delivery::Actor) {
             session: Some(NATIVE.to_owned()),
             turn: Some(turn),
             counts: None,
+            subagents: None,
             session_start: false,
             waiting: None,
             account: None,

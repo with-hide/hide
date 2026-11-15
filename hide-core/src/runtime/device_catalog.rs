@@ -225,7 +225,9 @@ impl Runtime {
             pane.children = crate::sidebar::project_pane_children_connected(
                 agents,
                 &pane.id,
-                tokens.get(&pane.id).copied().unwrap_or_default(),
+                tokens
+                    .get(&pane.id)
+                    .unwrap_or(&crate::agent_hooks::NO_TOKENS),
                 &status_of,
                 kit.shares_codex_server(),
                 &updates,
@@ -234,9 +236,11 @@ impl Runtime {
         // The subagents each of its sessions runs, from the same tokens and
         // kit, before the lineage that waits on them.
         for agent in &mut session.agents {
-            agent.subagents = crate::sidebar::running_subagents(
+            (agent.subagents, agent.subagent_rows) = crate::sidebar::running_subagents(
                 &agent.agent_kind,
-                tokens.get(&agent.pane_id).copied().unwrap_or_default(),
+                tokens
+                    .get(&agent.pane_id)
+                    .unwrap_or(&crate::agent_hooks::NO_TOKENS),
                 &status_of,
             );
         }

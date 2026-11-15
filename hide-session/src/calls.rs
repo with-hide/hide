@@ -188,6 +188,53 @@ pub fn codex_subagents_stopped_in_turn(
         .collect())
 }
 
+/// What a Codex subagent is, as the first record of its own session file
+/// says it: the `session_meta` Codex writes as it starts the subagent's
+/// thread, the file its `SubagentStart` names (`transcript_path`; Codex
+/// 0.169.0, measured). Its task is the name the main agent gave it, the last
+/// part of its `agent_path` (`/root/find_login_code` reads `find login
+/// code`), since the message itself is stored encrypted; its kind is the
+/// role the main agent asked for (`agent_role`), when it named one. A file
+/// whose first record is not a subagent's names neither, and the older
+/// subagent tools give no path.
+///
+/// The first record carries the agent's instructions and is read up to
+/// [`TRANSCRIPT_TAIL_BYTES`]. `None` while the file has no complete first
+/// record yet; a file that cannot be read is an error.
+pub fn codex_subagent_of(transcript: &Path) -> crate::Result<Option<CodexSubagent>> {
+    let Some(line) = crate::read_first_record(transcript, TRANSCRIPT_TAIL_BYTES)? else {
+        return Ok(None);
+    };
+    let record = serde_json::from_str::<Value>(&line).unwrap_or(Value::Null);
+    let meta = &record["payload"];
+    if record["type"] != "session_meta" || meta["thread_source"] != "subagent" {
+        return Ok(Some(CodexSubagent::default()));
+    }
+    let words = |text: &str| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
+    let task = meta["agent_path"].as_str().and_then(|path| {
+        words(
+            &path
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .replace(['_', '-'], " "),
+        )
+    });
+    let kind = meta["agent_role"]
+        .as_str()
+        .and_then(words)
+        .filter(|role| role != "default");
+    Ok(Some(CodexSubagent { kind, task }))
+}
+
+/// What [`codex_subagent_of`] read: the subagent's role and its task, each
+/// when its session file names it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CodexSubagent {
+    pub kind: Option<String>,
+    pub task: Option<String>,
+}
+
 /// What one Codex session record says of subagents: each id it names, and
 /// whether it says the main agent stopped it.
 fn subagent_words(record: &Value) -> Vec<(&str, bool)> {
@@ -329,6 +376,44 @@ mod tests {
                 "content": [{"type": "input_text", "text": "SubAgentActivity interrupted b"}]}}),
         ]);
         assert_eq!(codex_subagents_stopped_in_turn(&path, "t1").unwrap(), ["c"]);
+    }
+
+    /// Codex 0.169.0 opens a subagent's own session file with what it is:
+    /// its path, whose last part is the task, and its role, when it has one.
+    #[test]
+    fn a_codex_subagent_is_what_its_own_session_file_opens_with() {
+        let meta = |payload: Value| json!({"type": "session_meta", "payload": payload});
+        let (_folder, path) = codex_file(&[meta(json!({
+            "id": "a", "thread_source": "subagent", "agent_path": "/root/find_the-login_code",
+            "agent_role": null, "base_instructions": {"text": "long"}}))]);
+        assert_eq!(
+            codex_subagent_of(&path).unwrap(),
+            Some(CodexSubagent {
+                kind: None,
+                task: Some("find the login code".to_owned())
+            })
+        );
+        let (_folder, role) = codex_file(&[meta(json!({
+            "id": "b", "thread_source": "subagent", "agent_path": "/root/", "agent_role": "explorer"}))]);
+        assert_eq!(
+            codex_subagent_of(&role).unwrap(),
+            Some(CodexSubagent {
+                kind: Some("explorer".to_owned()),
+                task: None
+            })
+        );
+        // The main agent's own file names no subagent; a file with no whole
+        // first record yet is not read; a missing file is an error.
+        let (_folder, main) = codex_file(&[meta(json!({"id": "m", "agent_path": "/root"}))]);
+        assert_eq!(
+            codex_subagent_of(&main).unwrap(),
+            Some(CodexSubagent::default())
+        );
+        let (folder, _) = codex_file(&[]);
+        let partial = folder.path().join("partial.jsonl");
+        std::fs::write(&partial, r#"{"type":"session_meta","payload":{"#).unwrap();
+        assert_eq!(codex_subagent_of(&partial).unwrap(), None);
+        assert!(codex_subagent_of(&folder.path().join("gone.jsonl")).is_err());
     }
 
     /// The older tools record only the main agent's calls: a close is a

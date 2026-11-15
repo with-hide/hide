@@ -53,6 +53,7 @@ fn started(runtime: &mut Runtime, pane: &str, session: &str, folder: Option<&str
         session: Some(session.to_owned()),
         turn: None,
         counts: None,
+        subagents: None,
         session_start: true,
         waiting: None,
         account: Some(
@@ -328,6 +329,7 @@ fn a_wrapper_warning_follows_the_profiles_last_start() {
             session: Some("s-2".to_owned()),
             turn: None,
             counts: None,
+            subagents: None,
             session_start: false,
             waiting: None,
             account: None,
