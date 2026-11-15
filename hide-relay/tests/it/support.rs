@@ -894,6 +894,36 @@ pub async fn exchange(
     receiver_noise: &mut Session,
     plaintext: &[u8],
 ) {
+    exchange_beside_departures(
+        sender,
+        receiver,
+        sender_noise,
+        receiver_noise,
+        &[],
+        plaintext,
+    )
+    .await;
+}
+
+/// `exchange` for a device whose stream may still carry `peer_left` for a
+/// connection the test already saw leave.
+/// A connection number is never reused, so a frame the device sends for one
+/// that has just been retired is answered with `peer_left` again rather than
+/// delivered (`docs/RELAY_PROTOCOL.md`, Server budgets and refusals: a retired
+/// ID may produce `peer_left` again, and a client treats a repeat as
+/// idempotent, as the device's own link does in `hided/src/mobile/relay.rs`).
+/// A pong comes from the socket's own flush and is not ordered behind that
+/// notification, so a test that paced its sending on pongs cannot know how
+/// many repeats are still queued; one `peer_left` for a connection the test
+/// did not retire still fails.
+pub async fn exchange_beside_departures(
+    sender: &mut Socket,
+    receiver: &mut Socket,
+    sender_noise: &mut Session,
+    receiver_noise: &mut Session,
+    retired: &[u32],
+    plaintext: &[u8],
+) {
     let frames = sender_noise.send_message(plaintext).unwrap();
     let mut output = None;
     for frame in frames {
@@ -901,9 +931,30 @@ pub async fn exchange(
             .send(Message::Binary(frame.clone().into()))
             .await
             .unwrap();
-        let forwarded = binary(receiver).await;
+        let forwarded = binary_beside_departures(receiver, retired).await;
         assert_eq!(forwarded, frame, "relay changed ciphertext");
         output = receiver_noise.recv_message(&forwarded, 0).unwrap();
     }
     assert_eq!(output.unwrap(), plaintext);
+}
+
+/// The next forwarded frame, beside the `peer_left` repeats the protocol
+/// allows for one of `retired`.
+pub async fn binary_beside_departures(socket: &mut Socket, retired: &[u32]) -> Vec<u8> {
+    loop {
+        match next(socket).await {
+            Message::Binary(bytes) => return bytes.to_vec(),
+            Message::Text(text) => {
+                let message = ServerMessage::decode(&text).unwrap();
+                let ServerMessage::PeerLeft { connection } = message else {
+                    panic!("expected a departure or a frame, got {message:?}")
+                };
+                assert!(
+                    retired.contains(&connection),
+                    "peer_left for connection {connection}, which this test did not retire"
+                );
+            }
+            message => panic!("expected a departure or a frame, got {message:?}"),
+        }
+    }
 }

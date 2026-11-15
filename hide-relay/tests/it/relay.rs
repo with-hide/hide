@@ -674,8 +674,10 @@ async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone
             .unwrap()
             .remove(0);
         device.send(Message::Binary(frame.into())).await.unwrap();
-        // The pong acknowledges that the server read this input, and drains
-        // device lifecycle metadata while the slow phone never reads at all.
+        // The pong fences the server's read of this frame, so the loop cannot
+        // outrun this phone's input while the slow phone never reads at all.
+        // It fences nothing else: the socket writes the pong from its input
+        // branch, while `peer_left` is queued for the output branch beside it.
         device.send(Message::Ping(vec![1].into())).await.unwrap();
         loop {
             match next(&mut device).await {
@@ -701,19 +703,27 @@ async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone
         "bounded traffic must retire a non-reading destination"
     );
     fixture.cap("outbound_queue");
-    exchange(
+    // The departure is queued in the device's control FIFO, which a pong does
+    // not fence: the socket flushes its pong from the input branch, so more
+    // copies of this phone's departure can still be queued behind it. The
+    // survivors' frames are read beside them, and a departure for any other
+    // connection still fails.
+    let retired = [slow_id];
+    exchange_beside_departures(
         &mut good,
         &mut device,
         &mut good_noise,
         &mut good_device,
+        &retired,
         b"other phone still sends",
     )
     .await;
-    exchange(
+    exchange_beside_departures(
         &mut device,
         &mut good,
         &mut good_device,
         &mut good_noise,
+        &[],
         b"device still sends",
     )
     .await;
