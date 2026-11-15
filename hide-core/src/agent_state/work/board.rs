@@ -401,12 +401,23 @@ fn waiting_review(pr: &PullRequestSnapshot) -> Reason {
 }
 
 /// The checkouts a pull request is the work of (D-19): the one on its branch,
-/// the ones its recorded sessions ran in, and the ones its live agents sit in.
+/// the ones its recorded sessions ran in, and the ones its live agents (the
+/// project's agents whose session it recorded) sit in.
 fn checkout_ids(
     workspace: &WorkspaceSnapshot,
     pr: &PullRequestSnapshot,
     agents: &[&SidebarAgentSnapshot],
 ) -> Vec<String> {
+    let own: Vec<&str> = agents
+        .iter()
+        .filter(|agent| {
+            agent
+                .session_id
+                .as_ref()
+                .is_some_and(|id| pr.work.sessions.contains(id))
+        })
+        .map(|agent| agent.pane_id.as_str())
+        .collect();
     workspace
         .checkouts
         .iter()
@@ -417,7 +428,7 @@ fn checkout_ids(
                     .tabs
                     .iter()
                     .flat_map(|tab| &tab.panes)
-                    .any(|pane| agents.iter().any(|agent| agent.pane_id == pane.id))
+                    .any(|pane| own.contains(&pane.id.as_str()))
         })
         .map(|checkout| checkout.id.clone())
         .collect()
@@ -839,6 +850,40 @@ mod tests {
         let board = board(vec![pr1], &[finished, elsewhere]);
         assert_eq!(row(&board, 1).group, "needs_you");
         assert!(row(&board, 1).agents.is_empty());
+    }
+
+    #[test]
+    fn a_pull_request_names_the_checkouts_its_own_agents_sit_in_and_no_other() {
+        let mut worked = pr(1);
+        worked.work.sessions = vec!["s1".into()];
+        let untouched = pr(2);
+        let agents = [
+            agent("p1", "s1", true, false, NOW),
+            agent("p2", "s2", true, false, NOW),
+        ];
+        let mut workspace = crate::workspace::inspect_temporary(
+            "/fixture/app",
+            "device",
+            &crate::workspace::PathIndex::default(),
+        );
+        workspace.pull_requests = vec![worked, untouched];
+        workspace.checkouts = [("first", "p1"), ("second", "p2")]
+            .into_iter()
+            .map(|(id, pane)| crate::model::CheckoutSnapshot {
+                id: id.into(),
+                path: format!("/fixture/{id}"),
+                tabs: vec![crate::runtime::tests::tab(
+                    "/fixture/app",
+                    id,
+                    Some(crate::runtime::tests::pane(pane, "/fixture")),
+                )],
+                ..Default::default()
+            })
+            .collect();
+        let agents: Vec<&SidebarAgentSnapshot> = agents.iter().collect();
+        let board = project(&workspace, &agents, &HashMap::new(), NOW);
+        assert_eq!(row(&board, 1).checkout_ids, vec!["first".to_owned()]);
+        assert!(row(&board, 2).checkout_ids.is_empty());
     }
 
     #[test]

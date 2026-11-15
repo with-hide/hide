@@ -3,7 +3,7 @@ import { deviceScope } from "./agentScope";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "./i18n/client";
 import { BriefcaseBusinessIcon, ChevronDownIcon, ChevronRightIcon, CornerUpLeftIcon, EllipsisIcon, FolderGit2Icon, FolderIcon, Loader2Icon, PanelsTopLeftIcon, PinIcon, PlusIcon, RefreshCwIcon, ServerIcon, SettingsIcon } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { drawnInTree, hideAiCheckoutOf, originLine } from "./hideAiOrigin";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -71,8 +71,11 @@ import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
-import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
-import { toolCells, useFrontTool } from "./toolCells";
+import { SidebarLensSwitch, TaskLens, ToolCellEmpty, ToolTaskLens } from "./TaskLens";
+import { toolCells, useFrontTool, useToolSidebarProjects } from "./toolCells";
+import type { ToolCell } from "./agentScope";
+import { InToolCell } from "./components/tool-mark";
+import { DeviceChip } from "./components/device-chip";
 import { DeskSidebarEntry } from "./DeskScreen";
 import { SidebarPrs } from "./SidebarPrs";
 
@@ -96,7 +99,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const rail = useShellStore((s) => railShown(s.rest));
   const body = useShellStore((s) => sidebarBody(s.rest));
   const lens = useShellStore((s) => s.rest?.ui_state?.sidebar_lens ?? "projects");
-  // A tool's cell in front lists the tool's work alone, with no lens of its own (PRD hide-external-control B40).
+  // A tool's cell in front lists the tool's work alone, under the same switch and stored lens (operator decision 2026-11-15).
   const tool = useFrontTool();
   // The switch has no chord of its own until the operator binds one (issue 170).
   const overviewChord = useShellStore((s) => commandLabel("overview", s.rest?.ui_state));
@@ -136,7 +139,10 @@ export function Sidebar({ actions }: { actions: Actions }) {
   // a device that is not connected shows its name and the way to reconnect, and no stale tree (quick device-rail-badges B3).
   // Under the head, the 프로젝트 | 태스크 | PR switch picks the list (PRD sidebar-task-lens B1, D-10;
   // lane-two-columns B41). The 태스크 list keeps an unresponsive device's last rows, dimmed, under its reason (B20).
-  const list = tool ? <ToolTaskLens tool={tool} actions={actions} /> : lens === "tasks" ? <TaskLens actions={actions} /> : lens === "prs" ? <SidebarPrs actions={actions} /> : body === "disconnected" ? <DisconnectedDevice actions={actions} /> : <ProjectList actions={actions} />;
+  // A tool's cell has the same three lists, each of the tool's work alone (operator decision 2026-11-15).
+  const list = tool
+    ? lens === "tasks" ? <ToolTaskLens tool={tool} actions={actions} /> : lens === "prs" ? <SidebarPrs actions={actions} tool={tool} /> : <ProjectList actions={actions} tool={tool} />
+    : lens === "tasks" ? <TaskLens actions={actions} /> : lens === "prs" ? <SidebarPrs actions={actions} /> : body === "disconnected" ? <DisconnectedDevice actions={actions} /> : <ProjectList actions={actions} />;
 
   return (
     // The width is a CSS variable, set here and on the shell for the top row
@@ -168,7 +174,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           {status ? (
             <div className="border-b border-border px-md py-sm text-caption text-muted-foreground">{status}</div>
           ) : null}
-          {tool ? null : <SidebarLensSwitch actions={actions} />}
+          <SidebarLensSwitch actions={actions} />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-content="true">
             {list}
             <HerdrImportLine actions={actions} />
@@ -341,14 +347,17 @@ function SidebarEdge({
 
 /**
  * The pane whose row stands for the focused pane while a Workspace is in front
- * (`sidebarFocusPane` over every row the list can draw), or null.
+ * (`sidebarFocusPane` over every row the list can draw), or null. A tool's
+ * cell draws `toolWorkspaces` alone and raises nothing.
  */
-function useFocusRowPane(): string | null {
+function useFocusRowPane(toolWorkspaces: Workspace[] | null): string | null {
   const workspaceScreen = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
   const focusedPaneId = useShellStore((s) => s.focusedPaneId);
-  const workspaces = useShellStore((s) => contextWorkspaces(s.rest));
-  const agents = useShellStore((s) => contextAgents(s.rest, s.agents));
-  const scope = useShellStore((s) => deviceScope(s.rest, frontDeviceId(s.rest)));
+  const context = useShellStore((s) => contextWorkspaces(s.rest));
+  const tool = toolWorkspaces !== null;
+  const agents = useShellStore((s) => (tool ? everyPaneAgent(s.agents, s.rest?.status?.remote) : contextAgents(s.rest, s.agents)));
+  const scope = useShellStore((s) => (tool ? null : deviceScope(s.rest, frontDeviceId(s.rest))));
+  const workspaces = toolWorkspaces ?? context;
   const drawn = useMemo(() => sidebarPanes(workspaces, scope), [workspaces, scope]);
   return useMemo(() => (workspaceScreen ? sidebarFocusPane(focusedPaneId, agents, drawn) : null), [workspaceScreen, focusedPaneId, agents, drawn]);
 }
@@ -386,8 +395,10 @@ function useEmptyNamedTabs(checkout: Checkout, deviceId: string, agentRows: Boar
   return useMemo(() => sidebarTabGroups(checkout, deviceId, agentRows, agents).filter((group) => group.rows.length === 0).length, [checkout, deviceId, agentRows, agents]);
 }
 
+/** The checkout's sleeping conversations, the operator's: a tool's cell draws none. */
 function useSleepingCheckout(path: string, deviceId: string) {
-  const all = useShellStore((s) => s.rest?.navigator?.sleeping_sessions ?? NO_SLEEPERS);
+  const tool = useContext(InToolCell);
+  const all = useShellStore((s) => (tool ? NO_SLEEPERS : (s.rest?.navigator?.sleeping_sessions ?? NO_SLEEPERS)));
   return useMemo(() => all.filter((session) => session.node_id === deviceId && session.checkout_path === path), [all, path, deviceId]);
 }
 
@@ -413,14 +424,22 @@ function catalogLineOf(rest: SnapshotRest | null, t: TFunction<"translation">) {
  * there (docs/UI_BEHAVIOR.md: the remote context carries no pins). The row of
  * the scope the center shows is marked: a project on its Overview, or the
  * focused checkout and its agent while a Workspace is in front.
+ * In a tool's cell it lists the tool's projects on every device it reached
+ * (`toolSidebarProjects`), drawn by the same rows, with no raised section,
+ * since nothing there is the operator's turn, and another device's project
+ * naming its machine (operator decision 2026-11-15).
  */
-function ProjectList({ actions }: { actions: Actions }) {
+function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCell | null }) {
   const { t } = useInterfaceTranslation();
   const loaded = useShellStore((s) => s.rest !== null);
-  const remote = useShellStore((s) => focusedRemoteDevice(s.rest) !== null);
-  const workspaces = useShellStore((s) => contextWorkspaces(s.rest));
-  // The device folds are this machine's, like pins: a selected SSH device's tree has none.
-  const inactiveFold = useShellStore((s) => (remote ? undefined : s.rest?.navigator?.inactive_projects));
+  const remote = useShellStore((s) => !tool && focusedRemoteDevice(s.rest) !== null);
+  const contextList = useShellStore((s) => contextWorkspaces(s.rest));
+  const toolProjects = useToolSidebarProjects(tool);
+  const toolList = useMemo(() => toolProjects?.map((project) => project.workspace) ?? null, [toolProjects]);
+  const workspaces = toolList ?? contextList;
+  // The device folds are this machine's, like pins: a selected SSH device's tree has none, and a tool's cell
+  // dims none of the projects the tool works in.
+  const inactiveFold = useShellStore((s) => (remote || tool ? undefined : s.rest?.navigator?.inactive_projects));
   const focusedCheckoutId = useShellStore((s) =>
     remote ? (remoteView(remoteContext(s.rest)?.session ?? null, s.rest?.workspace_view)?.checkout.id ?? null) : (s.rest?.navigator?.focused_checkout_id ?? null),
   );
@@ -435,7 +454,7 @@ function ProjectList({ actions }: { actions: Actions }) {
   const frontScope = useShellStore((s) => deviceScope(s.rest, frontId));
   const openCheckouts = useShellStore((s) => s.rest?.ui_state?.session_collapsed_checkout_ids ?? NO_IDS);
   const focusedPaneId = useShellStore((s) => s.focusedPaneId);
-  const focusRowPane = useFocusRowPane();
+  const focusRowPane = useFocusRowPane(toolList);
   const workspaceVisible = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
   const focusedProjectId = workspaceVisible ? (workspaces.find((workspace) => workspace.checkouts.some((checkout) => checkout.id === focusedCheckoutId))?.id ?? null) : null;
   const lists = useRef<HTMLDivElement>(null);
@@ -452,17 +471,18 @@ function ProjectList({ actions }: { actions: Actions }) {
     revealed.current = focus;
     revealSidebarFocus(lists.current);
   }, [loaded, workspaceVisible, focusedCheckoutId, focusedPaneId]);
-  const catalogState = useShellStore((s) => catalogLineOf(s.rest, t)?.state ?? null);
-  const catalogText = useShellStore((s) => catalogLineOf(s.rest, t)?.text ?? null);
+  const catalogState = useShellStore((s) => (tool ? null : (catalogLineOf(s.rest, t)?.state ?? null)));
+  const catalogText = useShellStore((s) => (tool ? null : (catalogLineOf(s.rest, t)?.text ?? null)));
   const catalogLine = catalogState && catalogText ? { state: catalogState, text: catalogText } : null;
   const raisedOpen = useUiStore((s) => s.raisedOpen);
   // Needs You lists every device's rows, the front device's first; the rest of the list is the front device's.
   const asks = useEveryDeviceMissionAsks(frontId);
   // It reads the devices and their connections alone, so it is read again only when those move.
   const elsewhere = useMemo(() => elsewhereNeedsYou(useShellStore.getState().rest, localAgents, frontId), [devices, remoteStatuses, localAgents, frontId]);
+  // A tool's cell raises nothing: its Needs You and Done would be the operator's (PRD hide-external-control B41).
   const rows = useMemo(
-    () => projectRows(workspaces, { inactive_projects: inactiveFold }, listedAgents, frontScope, raisedOpen, asks, elsewhere),
-    [workspaces, inactiveFold, listedAgents, frontScope, raisedOpen, asks, elsewhere],
+    () => (tool ? projectRows(workspaces, {}, [], null) : projectRows(workspaces, { inactive_projects: inactiveFold }, listedAgents, frontScope, raisedOpen, asks, elsewhere)),
+    [tool, workspaces, inactiveFold, listedAgents, frontScope, raisedOpen, asks, elsewhere],
   );
   // The device's Needs You and Done come first, then the projects in their sections; Working and Seen are the Agents tab's.
   const raised = useMemo(() => rows.filter((row) => row.kind === "raised"), [rows]);
@@ -477,9 +497,11 @@ function ProjectList({ actions }: { actions: Actions }) {
   const numbered = useUiStore((s) => s.hint === "agents");
   const groupClosed = useGroupFolds((state) => state.closed);
   const numberOfPane = useMemo(
-    () => (numbered ? sidebarAgentNumbers(useShellStore.getState(), raisedOpen, groupClosed) : null),
-    [numbered, frontScope, rows, openCheckouts, workspaces, raisedOpen, groupClosed],
+    () => (numbered ? sidebarAgentNumbers(useShellStore.getState(), raisedOpen, groupClosed, tool) : null),
+    [numbered, frontScope, rows, openCheckouts, workspaces, raisedOpen, groupClosed, tool],
   );
+  // A tool's project on another machine names it, as the Overview's does; a device's own list is one machine's.
+  const machines = useMemo(() => new Map((toolProjects ?? []).map((project) => [project.workspace, project.device] as const)), [toolProjects]);
   // The folds are this machine's choices, like the inactive groups, so a
   // selected SSH device's tree is drawn open with every checkout's line two.
   const treeAgents = useMemo(() => everyPaneAgent(localAgents, remoteStatuses), [localAgents, remoteStatuses]);
@@ -496,13 +518,16 @@ function ProjectList({ actions }: { actions: Actions }) {
     workspaceScreen: workspaceVisible,
     openCheckouts,
     disclosure: true,
+    machineOf: (workspace) => machines.get(workspace) ?? null,
     actions,
     agentRowMenu,
   };
   if (!loaded) return <ListLoading />;
+  if (tool && workspaces.length === 0) return <ToolCellEmpty />;
   return (
     // The arrow keys move through both lists as one.
-    <div ref={lists} className="flex min-h-0 flex-1 flex-col" onKeyDown={moveSidebarKey}>
+    <InToolCell.Provider value={tool !== null}>
+    <div ref={lists} className="flex min-h-0 flex-1 flex-col" onKeyDown={moveSidebarKey} data-tool-cell={tool?.connection}>
       {/* One scrolling list: Needs You and Done are its first sections, each head
           sticking at the top and stacking under the heads above it while the
           rows pass under (as the 태스크 list's do), and each folds to its head. */}
@@ -527,6 +552,7 @@ function ProjectList({ actions }: { actions: Actions }) {
         ) : null}
       </ul>
     </div>
+    </InToolCell.Provider>
   );
 }
 
@@ -560,6 +586,8 @@ type ListContext = {
   openCheckouts: string[];
   /** False over a selected SSH device, whose tree is drawn with nothing folded. */
   disclosure: boolean;
+  /** The machine a project's row names, in a tool's cell for a project on another device; null for a device's own list. */
+  machineOf: (workspace: Workspace) => string | null;
   actions: Actions;
   agentRowMenu: AgentRowMenu;
 };
@@ -974,6 +1002,7 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             {/* A project's own mark, so its checkouts read as standing under it; a pinned one wears the pin in its place, and a Git project a folder with the branch mark. */}
             <ProjectMark workspace={workspace} />
             <ProjectName workspace={workspace} label />
+            <ProjectMachine workspace={workspace} context={context} />
             {/* A folded project still says what runs and asks inside it; open, its own rows say it. */}
             {expanded ? null : <StatusBadge counts={sumMarks(workspace.checkouts.map((checkout) => checkout.agent_summary?.marks))} className="group-hover:hidden group-has-focus-visible:hidden" data-project-status={workspace.id} />}
           </button>
@@ -1260,6 +1289,7 @@ const FolderRowView = memo(function FolderRowView({
           <span className="pointer-events-none flex h-(--size-sidebar-line) min-w-0 items-center gap-sm">
             <ProjectMark workspace={workspace} />
             <ProjectName workspace={workspace} hidden grow={false} label />
+            <ProjectMachine workspace={workspace} context={context} />
             <CheckoutBadge checkout={checkout} />
             <span className="flex-1" />
             <RowEnd>
@@ -1306,6 +1336,12 @@ function ProjectMark({ workspace }: { workspace: Workspace }) {
       <Icon aria-hidden="true" data-project-mark={workspace.id} className="size-(--size-icon-sm)" />
     </span>
   );
+}
+
+/** The machine a project in a tool's cell works on, when it is not this window's (`ListContext.machineOf`). */
+function ProjectMachine({ workspace, context }: { workspace: Workspace; context: ListContext }) {
+  const machine = context.machineOf(workspace);
+  return machine ? <DeviceChip label={machine} variant="inline" className="max-w-2/5 shrink-0" /> : null;
 }
 
 function KindGlyph({ view, deviceId, actions }: { view: CheckoutPresentation; deviceId: string; actions: Actions }) {

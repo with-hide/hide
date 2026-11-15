@@ -827,3 +827,95 @@ fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
         "View only hands the checkout to the operator"
     );
 }
+
+/// Operator decision 2026-11-15 (the tool's space reads as the operator's
+/// own, D-55): the tool's cell carries, for each checkout its sessions work
+/// in, the tree of those sessions drawn by the operator's checkout tree's
+/// rule, a delegated child open under its root, and the marks the
+/// checkout's badge counts; the operator's own tree and badge of the same
+/// checkout still hold only the operator's agent.
+#[test]
+fn a_tools_cell_carries_the_tree_of_its_sessions_in_each_checkout_they_work_in() {
+    let (mut runtime, connection) = kept_by_tool(row(Owner::Operator, Doing::Working));
+    let work = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0];
+    for (tab_id, pane_id) in [("work:child", "child"), ("work:mine", "mine")] {
+        let mut tab = work.tabs[0].clone();
+        tab.id = Some(tab_id.into());
+        tab.panes = vec![pane(pane_id, "/fixture/work")];
+        work.tabs.push(tab);
+    }
+    let mut child = row(Owner::Operator, Doing::Working);
+    child.pane_id = "child".into();
+    child.lineage_session = Some("child-session".into());
+    child.declared_parent_pane_id = Some("subject".into());
+    child.declared_parent_session = Some("tool-session".into());
+    let mut mine = row(Owner::Operator, Doing::Working);
+    mine.pane_id = "mine".into();
+    mine.lineage_session = Some("mine-session".into());
+    runtime.snapshot.navigator.agents.extend([child, mine]);
+    runtime
+        .hide_started
+        .tool_work
+        .push(crate::coordination::started::ToolWork {
+            connection: connection.clone(),
+            name: "nightly".into(),
+            agent_id: "agent-2".into(),
+            pane_id: "child".into(),
+            session: Some("child-session".into()),
+            ended: false,
+        });
+    // The operator opened the session's tree, a choice the cell's tree follows as theirs does.
+    runtime.snapshot.ui_state.expanded_agent_pane_ids = vec!["subject".into()];
+    runtime.refresh_agent_lineage();
+    runtime.sync_session_state();
+    crate::agent_state::sync_checkout_agent_summaries(
+        &mut runtime.snapshot.navigator.workspaces,
+        &runtime.snapshot.navigator.agents,
+    );
+    runtime.publish_mission_asks();
+    runtime.refresh_agent_scopes();
+
+    let rows = |tree: &crate::agent_state::tally::lineage::Tree| {
+        tree.visible_rows
+            .iter()
+            .map(|row| (row.pane_id.clone(), row.depth))
+            .collect::<Vec<_>>()
+    };
+    let cell = &runtime.snapshot.navigator.tools[0];
+    assert_eq!(cell.connection, connection);
+    let trees = cell
+        .devices
+        .iter()
+        .flat_map(|device| &device.checkouts)
+        .map(|checkout| {
+            (
+                checkout.project_id.as_str(),
+                checkout.checkout_id.as_str(),
+                rows(&checkout.sidebar_tree),
+                checkout.marks,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        trees,
+        vec![(
+            "project",
+            "work",
+            vec![("subject".to_owned(), 0), ("child".to_owned(), 1)],
+            crate::model::MarkCountsSnapshot {
+                going: 2,
+                ..Default::default()
+            },
+        )],
+        "the tool's session with its delegated child under it, and both on the checkout's badge"
+    );
+    let operator = &runtime.snapshot.navigator.workspaces[0].checkouts[0];
+    assert_eq!(
+        (
+            rows(&operator.agent_scope.sidebar_tree),
+            operator.agent_summary.marks.going
+        ),
+        (vec![("mine".to_owned(), 0)], 1),
+        "the operator's tree and badge of the same checkout hold only the operator's agent"
+    );
+}

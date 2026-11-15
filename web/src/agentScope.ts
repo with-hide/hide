@@ -182,10 +182,23 @@ export type ToolCell = {
   connection: string;
   name: string;
   turn: number;
-  /** The tool's work per device that holds any: its 태스크 cards and the Overview's members. */
-  devices: { device_id: string; tasks: ProjectTasksScope; members: AgentScope["members"] }[];
+  /** The tool's work per device that holds any: its 태스크 cards, the Overview's members and the checkouts its sessions work in. */
+  devices: { device_id: string; tasks: ProjectTasksScope; members: AgentScope["members"]; checkouts?: ToolCheckout[] }[];
   /** The tool's missions that are their own ask, oldest first. */
   mission_asks?: string[];
+};
+
+/**
+ * A checkout that holds a session an external tool keeps (`ToolCheckout`):
+ * the tree of the tool's sessions there, by the rule of a checkout's own
+ * `sidebar_tree`, and the marks its row's badge counts. The cell's 프로젝트
+ * tab draws these in place of the operator's (operator decision 2026-11-15).
+ */
+export type ToolCheckout = {
+  project_id: string;
+  checkout_id: string;
+  sidebar_tree: AgentTreeScope;
+  marks: MarkCounts;
 };
 
 /** Why a pull request stands where it does, as a kind the web words (`Reason`, PRD work-tab-pr-lens D-16). */
