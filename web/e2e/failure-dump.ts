@@ -5,17 +5,32 @@
 // unchanged: this explains a failure and never absorbs one.
 import { test, type Page } from "@playwright/test";
 
-/** Runs `step`; if it throws, logs and attaches `read()`'s answer under `label`, then rethrows the same error. */
-export async function dumpOnFailure<T>(label: string, read: () => unknown | Promise<unknown>, step: () => Promise<T>): Promise<T> {
+/**
+ * Runs `step`; if it throws, logs and attaches `read()`'s answer under `label`, then rethrows the same error.
+ * A read nests page and daemon reads in one object, and a nested read left unawaited would serialize as `{}`;
+ * every promise inside the answer is settled first, and one that rejects is kept as its reason.
+ */
+export async function dumpOnFailure<T>(label: string, read: () => unknown, step: () => Promise<T>): Promise<T> {
   try {
     return await step();
   } catch (error) {
     let dump: string;
-    try { dump = JSON.stringify(await read()); } catch (reading) { dump = JSON.stringify({ unavailable: String(reading) }); }
+    try { dump = JSON.stringify(await settled(read())); } catch (reading) { dump = JSON.stringify({ unavailable: String(reading) }); }
     console.log(`[failure dump] ${label}: ${dump}`);
     try { await test.info().attach(label, { body: dump, contentType: "application/json" }); } catch { /* no test is running: the log line above stands */ }
     throw error;
   }
+}
+
+/** `value` with every promise in it, at any depth of arrays and plain objects, replaced by what it resolved to. */
+async function settled(value: unknown): Promise<unknown> {
+  let resolved: unknown;
+  try { resolved = await value; } catch (reading) { return { unavailable: String(reading) }; }
+  if (Array.isArray(resolved)) return Promise.all(resolved.map(settled));
+  if (resolved !== null && typeof resolved === "object" && Object.getPrototypeOf(resolved) === Object.prototype) {
+    return Object.fromEntries(await Promise.all(Object.entries(resolved).map(async ([key, field]) => [key, await settled(field)])));
+  }
+  return resolved;
 }
 
 /** The agent tab strip as the page drew it: each tab's id, label and whether it is selected. */

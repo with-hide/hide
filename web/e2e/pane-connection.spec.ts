@@ -175,11 +175,11 @@ test("a Reopen the core refuses leaves the pane as it was and the popover says w
     // the popover's content, and which snapshot was in hand, which chip the
     // pane wore and what the popover held are gone once the run ends, so both
     // sides are kept.
-    await dumpOnFailure("the Reopen button and the popover before the press", () => ({
+    await dumpOnFailure("the Reopen button and the popover before the press", async () => ({
       sent: Object.fromEntries(sent),
-      popover: page.locator("[data-pane-connection-popover]").evaluateAll((nodes) => nodes.map((node) => ({ reason: node.getAttribute("data-pane-connection-popover"), text: (node.textContent ?? "").trim() }))),
-      chip: view.locator("[data-pane-connection]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-pane-connection"))),
-      reopen: page.locator(`[data-pane-reopen="${pane}"]`).evaluateAll((nodes) => nodes.map((node) => ({ disabled: (node as HTMLButtonElement).disabled, busy: node.getAttribute("aria-busy"), text: (node.textContent ?? "").trim() }))),
+      popover: await page.locator("[data-pane-connection-popover]").evaluateAll((nodes) => nodes.map((node) => ({ reason: node.getAttribute("data-pane-connection-popover"), text: (node.textContent ?? "").trim() }))),
+      chip: await view.locator("[data-pane-connection]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-pane-connection"))),
+      reopen: await page.locator(`[data-pane-reopen="${pane}"]`).evaluateAll((nodes) => nodes.map((node) => ({ disabled: (node as HTMLButtonElement).disabled, busy: node.getAttribute("aria-busy"), text: (node.textContent ?? "").trim() }))),
     }), () => page.locator(`[data-pane-reopen="${pane}"]`).click());
     await expect.poll(() => sent.get("pane_reopen")).toBe(1);
     const failure = page.locator("[data-pane-reopen-failed]");
