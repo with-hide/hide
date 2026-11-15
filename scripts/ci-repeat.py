@@ -50,6 +50,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -436,7 +437,7 @@ def declared_modules(package):
 def crate_targets(package):
     """The `(target, path)` pairs `cargo metadata` reports for one crate's `src`."""
     metadata = subprocess.run(
-        ["bash", "scripts/verify-cargo.sh", "metadata", "--format-version", "1", "--no-deps"],
+        [bash(), "scripts/verify-cargo.sh", "metadata", "--format-version", "1", "--no-deps"],
         cwd=ROOT, check=True, capture_output=True, text=True,
     )
     for entry in json.loads(metadata.stdout)["packages"]:
@@ -544,6 +545,21 @@ def plan_run_ignored(plan, lister=None):
     return decided
 
 
+def bash():
+    """The bash on PATH, and on Windows the Git Bash beside the checkout's own tools.
+
+    A bare `bash` in `subprocess` finds `C:\\Windows\\System32\\bash.exe` first,
+    which is the WSL launcher: with no distribution installed it prints that and
+    exits 1, so every listing this lane makes failed on Windows while its own
+    steps, run by Git Bash, went on (run 43661175346). Looking the program up
+    here and handing `subprocess` its path skips that directory.
+    """
+    program = shutil.which("bash")
+    if not program:
+        raise ValueError("bash is not on PATH, so nothing can be listed or run")
+    return program
+
+
 def nextest_lister(package, test, expression, run_ignored=""):
     """What `cargo nextest list` says one target of the package would run.
 
@@ -554,14 +570,26 @@ def nextest_lister(package, test, expression, run_ignored=""):
     `ignored-only`; only the last two are passed, so the ordinary listing
     stays the one nextest makes by itself.
     """
-    command = ["bash", "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package]
+    command = [bash(), "scripts/verify-cargo.sh", "nextest-list", "--profile", "ci", "-p", package]
     command += ["--test", "it"] if test == "it" else [f"--{test}s"] if test == "bin" else ["--lib"]
     if expression:
         command += ["-E", expression]
     if run_ignored:
         command += ["--run-ignored", run_ignored]
     command += ["--message-format", "json"]
-    return nextest_counted(subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout)
+    listed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    # A listing that fails is the lane's whole plan failing, and its reason is
+    # in the command's own output: the exit status alone named none of it (run
+    # 43659916395, where a Windows repeat stopped here). Both streams are
+    # shown, cut, because which one a failed `cargo` writes to is not fixed.
+    if listed.returncode != 0:
+        tail = lambda text: (text or "").strip()[-4000:]
+        raise ValueError(
+            f"listing what {package}'s {test} target would run failed with exit "
+            f"{listed.returncode} ({subprocess.list2cmdline(command)}):\n"
+            f"stdout:\n{tail(listed.stdout)}\nstderr:\n{tail(listed.stderr)}"
+        )
+    return nextest_counted(listed.stdout)
 
 
 def resolve(event, web, rust, repeat, runner, units=""):
