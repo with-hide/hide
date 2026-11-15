@@ -88,34 +88,15 @@ jobs:
         # hided/tests/it/system_ssh.rs signs in with a key ssh finds by itself
         # in the runner account's own ~/.ssh, and as a second account with a
         # password on a root sshd, which only a disposable runner may have.
+        # `scripts/prepare-ssh-accounts.sh` names each command before it runs
+        # it and stops one that overruns, because this step once timed out
+        # here with no output at all and named none of its commands
+        # (with-hide/hide-private#898). The step's limit stays as the
+        # backstop for a hang the script cannot see; the script's own budget
+        # is shorter, so it is what usually ends a stuck run.
         timeout-minutes: 3
         shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
-          echo "HIDE_E2E_SSH_DEFAULT_KEY=$HOME/.ssh/id_ed25519.pub" >> "$GITHUB_ENV"
-          account=hidepw
-          password=$(openssl rand -hex 16)
-          echo "::add-mask::$password"
-          if [ "$RUNNER_OS" = Linux ]; then
-            sudo useradd -m -s /bin/sh "$account"
-            echo "$account:$password" | sudo chpasswd
-            sudo mkdir -p /run/sshd
-          else
-            sudo sysadminctl -addUser "$account" -password "$password" -home "/Users/$account" -shell /bin/sh
-            sudo createhomedir -c -u "$account" >/dev/null
-          fi
-          config="$RUNNER_TEMP/password-sshd"
-          mkdir -p "$config"
-          ssh-keygen -q -t ed25519 -N '' -f "$config/host"
-          printf '%s\n' \
-            "ListenAddress 127.0.0.1:2222" "HostKey $config/host" "PidFile $config/sshd.pid" \
-            "PasswordAuthentication yes" "KbdInteractiveAuthentication no" "PubkeyAuthentication no" \
-            "UsePAM yes" > "$config/sshd_config"
-          sudo chown root "$config/host" "$config/sshd_config"
-          sudo /usr/sbin/sshd -f "$config/sshd_config" -E "$config/sshd.log"
-          echo "HIDE_E2E_SSH_PASSWORD=$account:$password:2222" >> "$GITHUB_ENV"
+        run: bash scripts/prepare-ssh-accounts.sh
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
