@@ -72,7 +72,7 @@ pub use sightings::{
 };
 pub use source::facts::NAMING_RECORD_LIMIT_BYTES;
 pub use source::window::{
-    PageBefore, read_bounded, read_first_record, read_page_before, read_tail,
+    PageBefore, read_bounded, read_first_records, read_page_before, read_tail,
 };
 
 pub use label_owner::{

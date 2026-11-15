@@ -254,10 +254,11 @@ pub enum Change<'a> {
     Started(Option<&'a str>),
     /// One subagent stopped: a known id moves from working to done once.
     Stopped(Option<&'a str>),
-    /// A subagent's own tool call: it works, as [`Change::Started`] says,
-    /// and the event reports only when that moved a count. A Codex follow-up
-    /// task to a finished subagent sends no `SubagentStart`, and its tool
-    /// calls come before its `SubagentStop`.
+    /// A subagent's own tool call, or agy's own model call: it works, as
+    /// [`Change::Started`] says, and the event reports only when that moved a
+    /// count. A Codex follow-up task to a finished subagent sends no
+    /// `SubagentStart`, and its tool calls come before its `SubagentStop`;
+    /// an agy subagent is known only from its second model call.
     Working(&'a str),
     /// The turn ended with this many subagents still running, for an agent
     /// that names none by id: none for an agent whose subagents end with its
@@ -908,7 +909,7 @@ pub fn apply_in(
             record.waiting.clear();
         }
         Change::Started(Some(subagent)) => record.start(subagent, told, now_unix_ms())?,
-        Change::Working(subagent) => record.start(subagent, Told::default(), now_unix_ms())?,
+        Change::Working(subagent) => record.start(subagent, told, now_unix_ms())?,
         Change::Started(None) => record.working = record.working.saturating_add(1),
         Change::Stopped(Some(subagent)) => record.stop(subagent),
         Change::Stopped(None) => {

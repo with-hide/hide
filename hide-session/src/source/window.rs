@@ -46,20 +46,25 @@ pub fn read_tail(path: &Path, maximum_bytes: u64) -> Result<PageBefore> {
     })
 }
 
-/// The file's first record, when it is whole within its first
-/// `maximum_bytes`, without its newline.
-pub fn read_first_record(path: &Path, maximum_bytes: u64) -> Result<Option<String>> {
+/// The file's first `count` records, each whole within the file's first
+/// `maximum_bytes`, without their newlines; the list ends at the first record
+/// that is not whole there.
+pub fn read_first_records(path: &Path, maximum_bytes: u64, count: usize) -> Result<Vec<String>> {
     let file = super::file::open(path).map_err(|error| SessionError::io("open", path, error))?;
     let mut head = super::frame::Head::new(file.take(maximum_bytes), maximum_bytes as usize);
-    match head
-        .next_record()
-        .map_err(|error| SessionError::io("read", path, error))?
-    {
-        Some(super::frame::HeadRecord::Complete(record)) => {
-            Ok(Some(String::from_utf8_lossy(&record).into_owned()))
+    let mut records = Vec::new();
+    while records.len() < count {
+        match head
+            .next_record()
+            .map_err(|error| SessionError::io("read", path, error))?
+        {
+            Some(super::frame::HeadRecord::Complete(record)) => {
+                records.push(String::from_utf8_lossy(&record).into_owned());
+            }
+            _ => break,
         }
-        _ => Ok(None),
     }
+    Ok(records)
 }
 
 /// One page of complete lines read backwards from a line boundary.

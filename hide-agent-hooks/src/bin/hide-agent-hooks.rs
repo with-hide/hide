@@ -479,18 +479,26 @@ fn antigravity_event(event: HookEvent, started: Instant) {
     else {
         return;
     };
-    let Some(conversation) = antigravity::Event::read(&payload, truncated).conversation else {
+    let read = antigravity::Event::read(&payload, truncated);
+    let Some(conversation) = read.conversation.clone() else {
         return;
     };
     let runtime = GuidanceAgent::Antigravity.id();
-    // A subagent's conversation opens with its parent's message, which agy
-    // writes as it starts it; the start waits a moment for that line.
-    let parent_wait = if event == HookEvent::SessionStart {
+    // A subagent's conversation opens with its parent's message, which an
+    // agy that does not say who prompted a conversation writes as it starts
+    // it; the start waits a moment for that line.
+    let parent_wait = if event == HookEvent::SessionStart && read.prompted.is_none() {
         Duration::from_millis(300)
     } else {
         Duration::ZERO
     };
     let parent = antigravity::root_of(&home, &conversation, Instant::now() + parent_wait);
+    if parent.is_none() && read.prompted == Some(false) {
+        // A subagent whose parent's message agy has not written yet, as at
+        // its start and first model call: nothing of the pane's is its, and
+        // it is counted from its next model call, when its parent is known.
+        return;
+    }
     let reporter = |session| Reporter {
         agent: Some(runtime),
         session: Some(session),
@@ -525,6 +533,21 @@ fn antigravity_event(event: HookEvent, started: Instant) {
             };
             report(
                 Change::Started(Some(&conversation)),
+                reporter(parent),
+                None,
+                told,
+            )
+        }
+        // Each model call of a subagent says it works: the first one after its
+        // parent's message landed starts it, where its start could not.
+        (HookEvent::UserPromptSubmit, Some(parent)) => {
+            let task = antigravity::subagent_task(&home, &conversation);
+            let told = Told {
+                task: task.as_deref(),
+                ..Told::default()
+            };
+            report(
+                Change::Working(&conversation),
                 reporter(parent),
                 None,
                 told,
@@ -580,7 +603,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         // where the letters due while the agent works are handed over (PRD
         // letters-to-busy-agents D-02).
         (HookEvent::UserPromptSubmit, None) => {
-            if antigravity::Event::read(&payload, truncated).invocation == Some(0) {
+            if read.invocation == Some(0) {
                 antigravity_prompt(&home, &conversation, started);
             } else {
                 antigravity_tool_gap(&home, &conversation, started);

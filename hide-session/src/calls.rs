@@ -202,7 +202,7 @@ pub fn codex_subagents_stopped_in_turn(
 /// [`TRANSCRIPT_TAIL_BYTES`]. `None` while the file has no complete first
 /// record yet; a file that cannot be read is an error.
 pub fn codex_subagent_of(transcript: &Path) -> crate::Result<Option<CodexSubagent>> {
-    let Some(line) = crate::read_first_record(transcript, TRANSCRIPT_TAIL_BYTES)? else {
+    let Some(line) = crate::read_first_records(transcript, TRANSCRIPT_TAIL_BYTES, 1)?.pop() else {
         return Ok(None);
     };
     let record = serde_json::from_str::<Value>(&line).unwrap_or(Value::Null);
