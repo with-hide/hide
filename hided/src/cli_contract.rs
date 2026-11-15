@@ -680,7 +680,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
-        options: &[required("--name", Key), switch("--json")],
+        options: &[
+            required("--name", Key),
+            switch("--no-wait"),
+            switch("--json"),
+        ],
         rest: None,
         answers: &["access_standing"],
         refusals: &[

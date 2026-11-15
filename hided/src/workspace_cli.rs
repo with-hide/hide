@@ -234,7 +234,12 @@ fn in_pane_order(
 /// bootstrap socket of the daemon in `state_dir` (PRD hide-external-control
 /// B18): never a device bridge, since a tool runs on the core's machine.
 fn bootstrap_tool(state_dir: &Path, key: String) -> Result<PathBuf, String> {
-    let request = access_request(AccessAsk::Use { key }, true)?;
+    // The folder this command runs in, `--repo`'s once it moved there: the
+    // tool names it, since Windows tells the daemon no other process's.
+    let folder = std::env::current_dir()
+        .ok()
+        .and_then(|folder| hide_platform::path::to_wire(&folder).ok());
+    let request = access_request(AccessAsk::Use { key, folder }, true)?;
     let mut stream = connect_bootstrap(state_dir)?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     read_bootstrap_answer(&mut stream, None)

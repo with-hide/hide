@@ -143,7 +143,7 @@
     "example": "hide device retry mini --wait"
   },
   "access request": {
-    "line": "Asks the operator to let this program, outside Hide's panes, use hide; run it again after the operator answers in Settings > External tools, and once approved the program's later hide commands run as it, at View only or Act.",
+    "line": "Asks the operator to let this program, outside Hide's panes, use hide, and waits up to ten minutes for the answer in Settings > External tools (--no-wait answers at once); once approved the program's later hide commands run as it, at View only or Act, with no second request.",
     "example": "hide access request --name nightly-bot"
   },
   "access status": {
@@ -275,15 +275,15 @@
     "example": "hide workspace info"
   },
   "file open": {
-    "line": "Shows a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the file waits in your session's Files list instead of taking the screen.",
+    "line": "Shows a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the file waits in your session's Files list instead of taking the screen. A program outside Hide's panes and outside every project names the project with --repo <folder>.",
     "example": "hide file open docs/spec.md"
   },
   "diff open": {
-    "line": "Shows the changes to a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, it waits in your session's Files list instead of taking the screen.",
+    "line": "Shows the changes to a file to the operator in Hide's View as a tab, where it waits until they look at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, it waits in your session's Files list instead of taking the screen. A program outside Hide's panes and outside every project names the project with --repo <folder>.",
     "example": "hide diff open src/lens.rs"
   },
   "browser open": {
-    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, where it waits until the operator looks at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the tab waits behind what they see. Only an http(s) or blank page can be driven by the other browser commands.",
+    "line": "Opens a web page, or a local file, as a browser tab in Hide's View, where it waits until the operator looks at it; it needs Hide's window open, and while the operator is looking at another pane of your checkout, the tab waits behind what they see. Only an http(s) or blank page can be driven by the other browser commands. A program outside Hide's panes and outside every project names the project with --repo <folder>.",
     "example": "hide browser open http://localhost:3000"
   },
   "browser connect": {

@@ -919,10 +919,11 @@ impl Runtime {
                 reason: "pane_not_connected",
                 next_action: "Reconnect the pane in Hide and run hide workspace info again",
             },
-            Caller::Checkout { .. } | Caller::Access { .. } => Refusal {
+            Caller::Checkout { .. } => Refusal {
                 reason: "checkout_not_registered",
                 next_action: "Run the command from a shell inside a registered project checkout, or reconnect Hide, and retry",
             },
+            Caller::Access { .. } => ACCESS_OUTSIDE_CHECKOUT,
         })
     }
 
@@ -1075,12 +1076,21 @@ fn caller_changed(caller_id: &str) -> Refusal {
             reason: "pane_changed",
             next_action: "Reconnect the pane and run hide workspace info again",
         },
-        Caller::Checkout { .. } | Caller::Access { .. } => Refusal {
+        Caller::Checkout { .. } => Refusal {
             reason: "checkout_not_registered",
             next_action: "Run the command from a shell inside a registered project checkout, or reconnect Hide, and retry",
         },
+        Caller::Access { .. } => ACCESS_OUTSIDE_CHECKOUT,
     }
 }
+
+/// An external tool's Workspace command from a folder no registered checkout
+/// holds: it names the project with `--repo` (PRD hide-external-control
+/// D-57), or runs from inside it.
+const ACCESS_OUTSIDE_CHECKOUT: Refusal = Refusal {
+    reason: "checkout_not_registered",
+    next_action: "Name the project with --repo <folder> (hide file open, diff open and browser open take it), or run the command from inside a project Hide shows",
+};
 
 /// `path` is `root` itself or a descendant of it, by whole path segments, so
 /// `/checkouts/ab` is not within `/checkouts/a`.

@@ -61,8 +61,8 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
     const live = daemon;
     const tool = toolRunner(live, home);
 
-    // B1-B4: the request waits for the operator, the window approves it, and the same request run again holds the key.
-    const asked = ok(tool(["access", "request", "--name", "nightly", "--json"]), "request");
+    // B1-B4, D-56: a request put up without waiting is pending, the window approves it, and the tool's next command holds the key.
+    const asked = ok(tool(["access", "request", "--name", "nightly", "--no-wait", "--json"]), "request");
     expect(asked.state).toBe("pending");
     const window = await connectControl({ origin: live.origin, token: live.token, clientKind: "web" });
     try {
@@ -71,11 +71,24 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
     } finally {
       window.close();
     }
-    const connected = ok(tool(["access", "request", "--name", "nightly", "--json"]), "request again");
-    expect(connected).toMatchObject({ state: "connected", level: "act" });
+    expect(ok(tool(["access", "status", "--json"]), "status")).toMatchObject({ state: "connected", level: "act" });
 
     // B21: an agent with no parent, its pane in the fixture's checkout, on a session the stand-in resumes.
     const repo = fs.realpathSync(path.join(fixture.root, "fixture"));
+
+    // D-57: from its home, outside every project, a tool's open is refused with the way out, and names the project with --repo.
+    const notes = path.join(repo, "tool-notes.md");
+    fs.writeFileSync(notes, "# notes\n");
+    // A View opens only while a window draws it, so one stays open for these opens.
+    const screen = await connectControl({ origin: live.origin, token: live.token, clientKind: "web" });
+    try {
+      const outside = tool(["file", "open", notes]);
+      expect(outside.ok, JSON.stringify(outside)).toBe(false);
+      expect(JSON.stringify(outside)).toContain("--repo <folder>");
+      expect(ok(tool(["file", "open", notes, "--repo", repo]), "file open --repo").view_id).toBeTruthy();
+    } finally {
+      screen.close();
+    }
     const session = `tool-helper-${process.pid}`;
     writeFixtureTranscript(claudeProjects(fixture), session, { task: "Tool helper", at: Date.now() });
     const spawn = ["agent", "spawn", "--name", "helper", "--intent", "help", "--kind", "claude", "--repo", repo, "--branch", "helper-task", "--", "--resume", session];
