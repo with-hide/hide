@@ -495,8 +495,10 @@ pub enum CloseReason {
     Terminated,
     /// The pane's program exited on its own, and what it left ended.
     ProgramExited,
-    /// Another connection took the holder over. Not a failure to retry: the
-    /// pane is someone else's now.
+    /// Another connection took the holder over. The pane runs on and is that
+    /// connection's now, so a connection that served it does not take it back;
+    /// an ask the closed connection carried, such as a `Terminate`, was not
+    /// read and goes again on a new connection (with-hide/hide-private#912).
     TakenOver,
     /// The first message was not a hello this build reads.
     HelloInvalid,
