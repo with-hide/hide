@@ -936,18 +936,18 @@ mod tests {
         facts
             .record("w1:p1", &counted(Some(vec![explore.clone()])), 0)
             .unwrap();
-        assert_eq!(laid(&mut facts), [explore.clone()]);
+        assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
         let stored: Stored = serde_json::from_slice(&encode(&facts.panes).unwrap()).unwrap();
         let mut facts = HookFacts {
             panes: stored.panes,
             account_start: 0,
             file: None,
         };
-        assert_eq!(laid(&mut facts), [explore.clone()]);
+        assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
         facts
             .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)), 1)
             .unwrap();
-        assert_eq!(laid(&mut facts), [explore.clone()]);
+        assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
         let mut renamed = explore.clone();
         renamed.task = Some("read the router".to_owned());
         assert!(
