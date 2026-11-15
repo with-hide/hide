@@ -929,7 +929,8 @@ A subagent has no pane and no row of its own, so it is not a delegated child: no
   A row with subagents has a parent's chevron, and opened, lists them after its children on the same rails as the same dimmed lines with nothing to press and no hover, as many as a parent shows children (`navigator.siblings_shown`), then `외 N개`; folded, as rows are until opened, it draws none (`sidebarTreeLines`, `web/src/sidebarTree.ts`).
   They also reach a row through its line, when it rests on them or a finished turn left them running, below.
 - The Overview work map: one small blue dot per running subagent, eight at most, slowly circling just outside the session's circle, which itself stays as it is (`SubagentOrbit`, `web/src/overviewGraphNodes.tsx`); a reduced-motion setting holds them still.
-- The phone: the same lines as the desktop rows; it lists no subagents under a row yet.
+- The phone: the same lines as the desktop rows, and under a row the same list as an opened desktop row.
+  The row's toggle counts both, `자식 2 ● 서브에이전트 3 ⌄`, the subagent mark setting the two counts apart, and a row with subagents and no children gets the toggle with that part alone; opened, the children come first, then up to five subagents as dimmed lines with nothing to tap, lighter than a child's row, then `외 N개`, or the one line `서브에이전트 N개 작업 중` for an agent that names none (`AgentItem`, `web/src/mobile/ListRows.tsx`; the core sends the count and the first five as `subagents` and `subagent_rows` on each row, `PhoneAgent` in `hide-core/src/agent_state/tally.rs`).
 - Nothing is drawn for none, nor for a count Hide cannot read: an agent that declares none, a hook that is not in or switched off, a session older than the hook (the reasons the core keeps in `PaneChildren.instrumented`), each exactly as none.
   The done count is drawn nowhere.
 

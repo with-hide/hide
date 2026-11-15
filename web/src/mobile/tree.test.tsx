@@ -101,6 +101,43 @@ describe("a parent's children on the list", () => {
   });
 });
 
+describe("an agent's subagents on the list", () => {
+  const named = (n: number) => Array.from({ length: n }, (_, at) => ({ id: `s${at}`, kind: "Explore", task: `task ${at}`, started_unix_ms: Date.now() - 60_000 }));
+  const subagentIds = (container: HTMLElement, within: string) => [...container.querySelectorAll(`${within} [data-phone-subagent]`)].map((line) => line.getAttribute("data-phone-subagent"));
+
+  it("open under the same toggle after the children, the rest as one line, with nothing to press", async () => {
+    const parent = agent("p", { children: kids(1), subagents: 7, subagent_rows: named(5) });
+    const { container, unmount } = await mount([working([parent])]);
+    try {
+      const toggle = container.querySelector('[data-phone-children-toggle="local|p"]')!;
+      expect(toggle.textContent).toContain("1 child");
+      expect(toggle.textContent).toContain("Subagents 7");
+      expect(container.querySelector("[data-phone-subagent]")).toBeNull();
+      await click(container, '[data-phone-children-toggle="local|p"]');
+      const list = container.querySelector('[data-phone-children="local|p"]')!;
+      expect([...list.children].map((item) => item.hasAttribute("data-phone-subagent") ? "subagent" : item.hasAttribute("data-phone-subagent-more") ? "more" : "child")).toEqual(["child", "subagent", "subagent", "subagent", "subagent", "subagent", "more"]);
+      expect(subagentIds(container, '[data-phone-children="local|p"]')).toEqual(["s0", "s1", "s2", "s3", "s4"]);
+      expect(list.querySelector("[data-phone-subagent-more]")!.textContent).toBe("2 more");
+      expect(list.querySelector('[data-phone-subagent="s0"]')!.textContent).toContain("Explore");
+      expect(list.querySelector('[data-phone-subagent="s0"] button, [data-phone-subagent-more] button')).toBeNull();
+    } finally {
+      await unmount();
+    }
+  });
+
+  it("open a row that has no children, and an agent that names none says how many work", async () => {
+    const parent = agent("p", { subagents: 2 });
+    const { container, unmount } = await mount([working([parent])]);
+    try {
+      expect(container.querySelector('[data-phone-children-toggle="local|p"]')!.textContent).not.toContain("child");
+      await click(container, '[data-phone-children-toggle="local|p"]');
+      expect(container.querySelector('[data-phone-children="local|p"] [data-phone-subagent-more]')!.textContent).toBe("2 subagents working");
+    } finally {
+      await unmount();
+    }
+  });
+});
+
 describe("a group's fold", () => {
   it("counts every top row, lists the first few and opens the rest in place with its sleeping ones named", async () => {
     const group = working(kids(3), kids(2, 3), { more_asleep: 1 });

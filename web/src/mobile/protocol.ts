@@ -10,6 +10,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
+import type { SubagentRow } from "../snapshot";
 import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, DecisionReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
@@ -31,6 +32,10 @@ export type PhoneAgent = {
   children_left?: number;
   /** The subagents still running under a finished turn not read yet, which its line ends with; absent when none. */
   subagents_left?: number;
+  /** How many subagents its agent runs inside its own session, which its children toggle counts beside its children; absent for none, for a count Hide cannot read, and from a Mac that predates it. */
+  subagents?: number;
+  /** The first five of them, oldest first, with what its agent named of each, listed after its children (docs/UI_BEHAVIOR.md, Subagents); absent when it names none. */
+  subagent_rows?: SubagentRow[];
   /** How many things its `wait` waits on, which its line counts; absent for running checks and when it waits for nothing. */
   wait_count?: number;
   /** How many of its own subagents its wait waits on too, which a children wait's line adds; absent when none. */

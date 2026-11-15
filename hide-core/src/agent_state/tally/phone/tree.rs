@@ -449,6 +449,40 @@ mod tests {
 
     /// B3: a parent opens while a descendant waits for the operator, and
     /// stays closed otherwise.
+    /// A row carries its agent's subagents as the desktop's row does: the
+    /// count, and the first five with what the agent named of each, so the
+    /// phone lists them after its children and counts the rest.
+    #[test]
+    fn a_row_carries_its_subagents_five_named_and_the_rest_counted() {
+        let named: Vec<Value> = (0..7)
+            .map(|at| json!({"id": format!("a{at}"), "kind": "Explore", "task": "찾기", "started_unix_ms": at}))
+            .collect();
+        let projection = projected(vec![
+            agent(
+                "busy",
+                "working",
+                10,
+                json!({"subagents": 9, "subagent_rows": named}),
+            ),
+            agent("alone", "working", 9, json!({})),
+        ]);
+        let busy = top(&projection, "working", "busy");
+        assert_eq!(busy.subagents, 9);
+        assert_eq!(
+            busy.subagent_rows
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a0", "a1", "a2", "a3", "a4"]
+        );
+        assert_eq!(busy.subagent_rows[0].kind.as_deref(), Some("Explore"));
+        let alone = serde_json::to_value(top(&projection, "working", "alone")).unwrap();
+        assert!(
+            alone.get("subagents").is_none() && alone.get("subagent_rows").is_none(),
+            "a row with none says nothing new to an older phone"
+        );
+    }
+
     #[test]
     fn a_parent_opens_only_while_a_descendant_asks() {
         let projection = projected(vec![

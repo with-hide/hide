@@ -32,21 +32,33 @@ export function subagentWords(t: ReturnType<typeof useInterfaceTranslation>["t"]
 }
 
 /**
+ * The text sizes of a subagent's line: the desktop lists' caption, or the
+ * phone list's body. A line has nothing to press, so the phone's takes no
+ * touch target's height and stays lighter than a child's row.
+ */
+const LINE_SIZE = {
+  caption: { line: "min-h-(--size-sidebar-line) gap-xs text-caption", time: "text-micro" },
+  body: { line: "gap-sm py-xs text-body", time: "text-body" },
+} as const;
+type LineSize = keyof typeof LINE_SIZE;
+
+/**
  * One subagent as a line under its agent: its mark, its kind, what it was
  * asked to do and how long it has run, dimmed and with nothing to press,
  * since a subagent has no pane to open. A kind or task the agent does not say
  * leaves only the plain word and the time. The list it stands in gives it its
  * role: a list item under a row, a disabled option in the child popover.
+ * `size` is the list's: caption on the desktop, body on the phone.
  */
-export function SubagentLine({ row, className, ...rest }: { row: SubagentRow } & HTMLAttributes<HTMLDivElement>) {
+export function SubagentLine({ row, size = "caption", className, ...rest }: { row: SubagentRow; size?: LineSize } & HTMLAttributes<HTMLDivElement>) {
   const { t } = useInterfaceTranslation();
   const named = row.kind ?? (row.task ? null : t("agents.subagents.unnamed"));
   return (
-    <div title={subagentWords(t, row)} data-subagent-row={row.id} className={cn("flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs text-caption opacity-(--opacity-dimmed)", className)} {...rest}>
+    <div title={subagentWords(t, row)} data-subagent-row={row.id} className={cn("flex min-w-0 items-center opacity-(--opacity-dimmed)", LINE_SIZE[size].line, className)} {...rest}>
       <SubagentMark />
       {named ? <span className="max-w-1/2 shrink-0 truncate text-subtle-foreground">{named}</span> : null}
       {row.task ? <span className="min-w-0 flex-1 truncate text-muted-foreground">{row.task}</span> : <span className="flex-1" />}
-      <Elapsed since={row.started_unix_ms} className="shrink-0 font-mono text-micro text-muted-foreground" />
+      <Elapsed since={row.started_unix_ms} className={cn("shrink-0 font-mono text-muted-foreground", LINE_SIZE[size].time)} />
     </div>
   );
 }
@@ -56,10 +68,10 @@ export function SubagentLine({ row, className, ...rest }: { row: SubagentRow } &
  * or with none listed, as for an agent that names no subagent by id,
  * `서브에이전트 N개 작업 중`.
  */
-export function SubagentMoreLine({ count, listed, className }: { count: number; listed: number; className?: string }) {
+export function SubagentMoreLine({ count, listed, size = "caption", className }: { count: number; listed: number; size?: LineSize; className?: string }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div data-subagent-more={count} className={cn("flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs text-caption text-muted-foreground opacity-(--opacity-dimmed)", className)}>
+    <div data-subagent-more={count} className={cn("flex min-w-0 items-center text-muted-foreground opacity-(--opacity-dimmed)", LINE_SIZE[size].line, className)}>
       <SubagentMark />
       <span className="truncate">{listed > 0 ? t("agents.subagents.more", { count }) : t("agents.subagents.working", { count })}</span>
     </div>
