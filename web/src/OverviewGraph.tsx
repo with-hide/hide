@@ -441,7 +441,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
   const startChord = commandLabel("start_agent");
   const showEvery = () => actions.changeOverviewGraph({ kind: "focus", focus: "all", include_resting: true });
   const showList = mode === "list" || layout.phase === "failed" || !size;
-  return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase}>
+  return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase} data-graph-tool={tool ? tool.connection : undefined}>
     {awake === 0 && model.agents.length === 0 ? (
       <EmptyWelcome pose="agents" title={t("overviewGraph.welcome")} detail={startsIn ? t("overviewGraph.welcomeWhere", { project: startsIn.workspace.label }) : undefined} data-graph-welcome="true">
         <span className="flex items-center gap-sm">

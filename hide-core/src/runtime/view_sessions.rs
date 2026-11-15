@@ -688,6 +688,17 @@ impl Runtime {
         let Some(scope) = self.session_scope_of_pane(pane_id) else {
             return crate::model::LookViews::default();
         };
+        // The phone has no tool's cell, where the Views an agent a tool
+        // keeps opened are listed, so none of them reach it (PRD
+        // hide-external-control D-52).
+        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
+        if self
+            .machine_agents(device)
+            .iter()
+            .any(|agent| agent.pane_id == pane_id && crate::agent_state::tool_keeps(agent))
+        {
+            return crate::model::LookViews::default();
+        }
         let mut found: Vec<(WorkspaceKey, &Display)> = Vec::new();
         for (key, layout) in self.every_view_layout() {
             for display in layout.displays() {
