@@ -503,11 +503,22 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
         }
     }
     let _resume = Resume(pid);
-    // The node's whole unwritten input cap, none of it refused: more than
-    // the holder's connection takes on every system (about 200 KiB on Linux,
-    // 8 KiB on macOS), so the writer stops on it with bytes left, and the
-    // renewal's barrier, which a backlog past the cap would refuse at once,
-    // waits behind them.
+    // SIGSTOP asks for the stop and the kernel stops the holder when it next
+    // runs. Until then the holder goes on reading, so keys written now can be
+    // drained into its socket and settle, and the renewal then rightly goes on
+    // to close a holder it found stopped: that is the failure this test
+    // reported (run 43551399472, `holder_renewal_unsettled`), not a lost
+    // write. The test waits for the state it needs.
+    wait_until("the earlier holder stops", || {
+        stopped(u32::try_from(pid).unwrap())
+    });
+    // The node's whole unwritten input cap, none of it refused: 256 KiB is
+    // more than a Unix socket buffers for its peer at the system's default
+    // (8 KiB on macOS, about 208 KiB on Linux), so the writer stops on it with
+    // bytes left, and the renewal's barrier, which a backlog past the cap
+    // would refuse at once, waits behind them. The stop above is what makes
+    // this so: while the holder was still running it took every byte, the
+    // writes settled, and the renewal went on to close it (run 43551399472).
     let piece = hide_node_link::terminal::MAX_UNSENT_KEY_BYTES / 8;
     for _ in 0..8 {
         next.service
@@ -536,6 +547,12 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_input_unsettled"),
         "{kept:?}"
     );
+    // A session still current cannot write to the stopped holder, so its
+    // barrier sat out the whole wait (`WRITES_LIMIT`). A released pane's
+    // session has already been let go, its writer ending within a second
+    // without writing the keys, so the barrier is told then and may answer at
+    // once; its keys never reaching the holder is what `pane_record` below and
+    // the kept holder show, not how long the answer took.
     if !released {
         assert!(started.elapsed() >= Duration::from_secs(4), "it waited");
     }

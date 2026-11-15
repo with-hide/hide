@@ -42,6 +42,8 @@ use hide_node_link::terminal::{
 
 use crate::fixture_v1;
 use crate::role::GO;
+#[cfg(unix)]
+use crate::support::stopped;
 use crate::support::{
     HANG_LIMIT, Home, PIDS_FILE, ROLE, Running, SCRIPT, Script, node_theme, print_ok, role_program,
     shell, source, wait_until,
@@ -236,6 +238,58 @@ impl ReportSink for Reports {
 }
 
 impl Reports {
+    /// Waits until a report for `pane` of `kind`, an `Error`'s or a `Note`'s,
+    /// is told, and answers its message.
+    fn wait_kind(&self, pane: &str, kind: &str) -> String {
+        let deadline = Instant::now() + HANG_LIMIT;
+        let mut told = self.told.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if let Some(message) = told.iter().find_map(|report| match report {
+                TerminalReport::Error {
+                    pane: named,
+                    kind: found,
+                    message,
+                }
+                | TerminalReport::Note {
+                    pane: named,
+                    kind: found,
+                    message,
+                } if named == pane && found == kind => Some(message.clone()),
+                _ => None,
+            }) {
+                return message;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "pane {pane} was never reported {kind}");
+            told = self
+                .changed
+                .wait_timeout(told, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// Whether `pane` was reported `kind`.
+    fn told_kind(&self, pane: &str, kind: &str) -> bool {
+        self.told
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|report| match report {
+                TerminalReport::Error {
+                    pane: named,
+                    kind: found,
+                    ..
+                }
+                | TerminalReport::Note {
+                    pane: named,
+                    kind: found,
+                    ..
+                } => named == pane && found == kind,
+                _ => false,
+            })
+    }
+
     /// Waits for `pane`'s state to be reported `state`, and answers it.
     fn wait_state(&self, pane: &str, state: &str) -> hide_node_link::terminal::PaneTerminalState {
         let deadline = Instant::now() + HANG_LIMIT;

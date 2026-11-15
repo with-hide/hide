@@ -757,10 +757,47 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
     );
 
     let started = Instant::now();
-    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
+    let mut found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let took = started.elapsed();
     eprintln!("reconcile of {PANES} lost panes with hangup-ignoring trees took {took:?}");
-    assert!(found.is_complete(), "{found:?}");
+    // A round takes up what its budget allows and leaves the rest to the next
+    // one, and a pane whose record could not be rewritten within the five
+    // seconds' wait for the records' lock is left unsettled for the next round
+    // too (`Panes::lock`; every reconcile takes that one lock, for the scan and
+    // for each judgment's write). The node's own recovery runs that next round
+    // until nothing is left (`Holders::recover`, `RECONCILE_ROUNDS`), so the
+    // test asks for those rounds rather than assuming one settles all eight,
+    // and holds the contract's own promise: each round settles a pane more than
+    // the one before, and the rounds end with every pane ended. A round that
+    // settles nothing new fails here instead of being waited out, and the last
+    // round must leave no pane unsettled.
+    let settled = |found: &hide_kit::panes::Reconciled| {
+        found
+            .panes
+            .values()
+            .filter(|judgment| matches!(judgment, Judgment::Ended(_)))
+            .count()
+    };
+    let mut ended = settled(&found);
+    let mut rounds = 1;
+    while ended < PANES {
+        rounds += 1;
+        assert!(
+            rounds <= PANES + 1,
+            "only {ended} of {PANES} panes were ended in {rounds} rounds: {found:?}"
+        );
+        found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
+        let more = settled(&found);
+        assert!(
+            more > ended,
+            "round {rounds} ended no pane more than the last: {found:?}"
+        );
+        ended = more;
+    }
+    assert!(
+        found.is_complete(),
+        "the last round left panes unsettled: {found:?}"
+    );
     for number in 0..PANES {
         let Some(Judgment::Ended(ended)) = found.panes.get(&format!("p{number}")) else {
             panic!("{found:?}");
