@@ -436,7 +436,7 @@ POLICY_ONLY = (
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh",
-    "scripts/check-core-touches-no-machine.py", "scripts/rust_scan.py",
+    "scripts/check-core-touches-no-machine.py",
     "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
@@ -541,8 +541,10 @@ NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
     ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
     ("scripts/check-relay-protocol.sh", {"relay-protocol"}),
-    # The repeat lane's selection and budget, which the plan job also imports.
+    # The repeat lane's selection and budget, which the plan job also imports,
+    # and the Rust module scanner it reads a crate's test modules with.
     ("scripts/ci-repeat.py", {"repeat"}),
+    ("scripts/rust_scan.py", {"repeat"}),
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),

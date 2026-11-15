@@ -659,7 +659,7 @@ class NamedPaths(unittest.TestCase):
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
             ".github/ISSUE_TEMPLATE/bug.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml", ".github/APPROVED_CONTRIBUTORS",
             "scripts/tests/test_ci_plan.py", "scripts/check-harness-ignore-anchor.sh",
-            "scripts/web-shell-measure/run.sh", "scripts/rust_scan.py",
+            "scripts/web-shell-measure/run.sh",
             # The design contract's generators and checks, which `design-contract.yml` runs.
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
