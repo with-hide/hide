@@ -292,6 +292,12 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       activity: "working",
       elapsed: "1m",
       subagents: 3,
+      // What Claude Code's hook names of each, oldest first.
+      subagent_rows: [
+        { id: "a1-s1", kind: "Explore", task: "사이드바 트리 코드 찾기", started_unix_ms: nowMs - 6 * 60_000 },
+        { id: "a1-s2", kind: "Plan", task: "들여쓰기 고칠 방법 정리", started_unix_ms: nowMs - 3 * 60_000 },
+        { id: "a1-s3", kind: "general-purpose", task: "좁은 폭 화면 확인", started_unix_ms: nowMs - 60_000 },
+      ],
       lineage_child_pane_ids: A1_CHILDREN,
       lineage_collapsed: !unfolded("a1"),
       descendant_counts: { error: 0, approval: 1, question: 1, working: 1, done: 1 },
@@ -364,7 +370,12 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     }),
     agent({ pane_id: "q1", identity_label: "브라우저 표시 확인", group: "needs_you", mark: "turn", status_code: "question", demand: "question", elapsed: "40m", detail: "주소 경계를 어디에 둘까요?" }),
     agent({ pane_id: "q2", identity_label: "검색 팔레트", group: "done", mark: "done", status_code: "done", activity: "stopped", elapsed: "1h" }),
-    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h", subagents: 6 }),
+    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h", subagents: 6,
+      // Codex CLI names each by the path it gave it, without a kind; past the ones listed the rest are counted.
+      subagent_rows: [
+        { id: "e1-s1", task: "find shortcut handlers", started_unix_ms: nowMs - 9 * 60_000 },
+        { id: "e1-s2", task: "check key conflicts", started_unix_ms: nowMs - 4 * 60_000 },
+      ] }),
   ];
 
   if (devices !== "one") agents.push(...HOME_AGENTS[content]);

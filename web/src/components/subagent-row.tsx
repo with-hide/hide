@@ -1,4 +1,4 @@
-import type { CSSProperties, HTMLAttributes } from "react";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { SidebarTreeLine } from "../sidebarTree";
@@ -81,14 +81,18 @@ export function SubagentMoreLine({ count, listed, size = "caption", className }:
 /**
  * A subagent's line in a sidebar tree, under its opened agent after its
  * children, on the same rails: a list item with nothing to press and no hover,
- * since there is no pane to open.
+ * since there is no pane to open. `children` end the line as they end the
+ * list's other rows, such as the project tree's fold slot, so its time stands
+ * in their time column.
  */
-export function SubagentTreeRow({ line, style, className }: { line: Extract<SidebarTreeLine, { kind: "subagent" | "subagents-more" }>; style?: CSSProperties; className?: string }) {
+export function SubagentTreeRow({ line, style, className, children }: { line: Extract<SidebarTreeLine, { kind: "subagent" | "subagents-more" }>; style?: CSSProperties; className?: string; children?: ReactNode }) {
   return (
     <li className={cn("flex min-w-0 items-stretch pr-xs", className)} style={style} data-tree-subagent={line.parent}>
       <TreeRails place={line.place} />
       <TreeChevron name="" open={null} hangs chain={line.place.chain} />
       {line.kind === "subagent" ? <SubagentLine row={line.subagent} className="min-w-0 flex-1 pl-xs" /> : <SubagentMoreLine count={line.count} listed={line.listed} className="min-w-0 flex-1 pl-xs" />}
+      {/* The same gap a row's head keeps before what ends it. */}
+      {children ? <span className="flex shrink-0 pl-xs">{children}</span> : null}
     </li>
   );
 }

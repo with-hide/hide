@@ -1687,7 +1687,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, fold, context }
           );
         }
         if (line.kind === "subagent" || line.kind === "subagents-more") {
-          return <SubagentTreeRow key={`${line.kind}:${line.parent}:${line.kind === "subagent" ? line.subagent.id : ""}`} line={line} style={{ paddingLeft: inset }} />;
+          return <SubagentTreeRow key={`${line.kind}:${line.parent}:${line.kind === "subagent" ? line.subagent.id : ""}`} line={line} style={{ paddingLeft: inset }}><FoldLane /></SubagentTreeRow>;
         }
         const { agent, depth } = line.row;
         const parent = depth > 0 ? context.agents.find((row) => row.pane_id === agent.lineage_parent_pane_id) : undefined;
