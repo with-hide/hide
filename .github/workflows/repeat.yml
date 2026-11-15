@@ -133,6 +133,16 @@ jobs:
           while IFS= read -r pattern; do args+=("$pattern"); done < "$RUNNER_TEMP/specs.txt"
           bash scripts/verify-web.sh web e2e-list --reporter=list "${args[@]}" > "$RUNNER_TEMP/list.txt"
           echo "web-count=$(python3 scripts/ci-repeat.py count-listed < "$RUNNER_TEMP/list.txt")" >> "$GITHUB_OUTPUT"
+      # The relay WebAssembly the phone's unit tests import: listing a file
+      # transforms its imports, so the listing needs it as the units job does.
+      - uses: ./.github/actions/relay-tools
+        if: steps.resolve.outputs.units-count-needed == 'true'
+        with:
+          save: false
+      - name: Build the relay WebAssembly the unit tests import
+        if: steps.resolve.outputs.units-count-needed == 'true'
+        timeout-minutes: 10
+        run: bash scripts/build-relay-wasm.sh
       - name: Count the unit tests
         # Each package's own Vitest lists the selected files' tests, so a table
         # that declares them counts as many as it runs. A file that lists none
