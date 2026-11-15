@@ -563,12 +563,15 @@ def nextest_lister(package, test, expression, run_ignored=""):
     command += ["--message-format", "json"]
     listed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     # A listing that fails is the lane's whole plan failing, and its reason is
-    # in the command's own standard error: the exit status alone named none of
-    # it (run 43659916395, where a Windows repeat stopped here).
+    # in the command's own output: the exit status alone named none of it (run
+    # 43659916395, where a Windows repeat stopped here). Both streams are
+    # shown, cut, because which one a failed `cargo` writes to is not fixed.
     if listed.returncode != 0:
+        tail = lambda text: (text or "").strip()[-4000:]
         raise ValueError(
-            f"listing what {package}'s {test} target would run failed "
-            f"({subprocess.list2cmdline(command)}):\n{listed.stderr.strip()}"
+            f"listing what {package}'s {test} target would run failed with exit "
+            f"{listed.returncode} ({subprocess.list2cmdline(command)}):\n"
+            f"stdout:\n{tail(listed.stdout)}\nstderr:\n{tail(listed.stderr)}"
         )
     return nextest_counted(listed.stdout)
 
