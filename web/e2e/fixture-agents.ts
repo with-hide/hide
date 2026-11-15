@@ -49,10 +49,19 @@ export async function setAgentState(daemon: Pick<Daemon, "origin" | "token">, pa
         ? `${clear}\x1b]0;✳ Claude Code\x07`
         : "\x1b]0;Fixture\x07\x1b[2J\x1b[Hdo you want to proceed?\n" + "bash command\n❯ 1. Yes\n2. No\n";
     sendKeys(control, pane, screen);
-    return control.until((rest) => {
+    // A wait that gives up keeps both sides (with-hide/hide-private#822, where
+    // a Windows run never saw the pane read working): the state the fixture
+    // asked for and the row the core held when the wait ended.
+    return dumpOnFailure(`${pane} reading ${state}`, () => withControl(daemon, (side) => side.until((rest) => {
+      const row = agentIn(rest, pane);
+      return {
+        asked: state,
+        row: row && { activity: row.activity, status_code: row.status_code, blocked: row.blocked, session: row.session_id },
+      };
+    }, "what the core held", 5_000)), () => control.until((rest) => {
       const row = agentIn(rest, pane);
       return reads(row, state) ? row : undefined;
-    }, `${pane} reading ${state}`, 20_000);
+    }, `${pane} reading ${state}`, 20_000));
   });
 }
 

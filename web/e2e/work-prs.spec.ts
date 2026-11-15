@@ -18,7 +18,7 @@ import { focusTab, newTab, openProject, openWorktree, withControl, type OpenedPr
 import { startEngine } from "./engine-fixture";
 import { setAgentState, startAgentInProject } from "./fixture-agents";
 import { startHided } from "./hided-fixture";
-import { fakeGh, git, head, moveHead, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
+import { fakeGh, git, head, holdReads, moveHead, releaseReads, skewCardHead, writes, type ExtraQuery } from "./work-prs-fixture";
 import { chord } from "./chords";
 import { chooseTheme, countSent, registerFolder, screenshot, showProjectRow, showSidebarPrs, showTool, setLanePinned } from "./wire";
 
@@ -424,6 +424,12 @@ test("a branch update on a pull request that moved is refused, looked at again, 
     await expect(behind.locator('[data-pr-card-reason="update"]')).toBeVisible();
     await expect(behind.locator("[data-pr-card-files]")).toBeVisible({ timeout: 30_000 });
     const shown = head(gh.state, 32);
+    // Opening the card reads it twice, once for the slot the core opened and
+    // once by the page on mount, and the list is read again beside them, so
+    // one of those can land after the push below. Both keep answering the
+    // pull request that was drawn, so the refused write is the operator's
+    // update going out on the head they saw, not a read that overtook it.
+    holdReads(gh.state);
     moveHead(gh.state, 32, shown.slice(0, 39) + "e");
     await behind.locator("[data-pr-card-update]").click();
     await behind.locator('[data-pr-card-confirm-yes="update"]').click();
@@ -433,6 +439,7 @@ test("a branch update on a pull request that moved is refused, looked at again, 
     await expect(behind.locator("[data-pr-card-update]")).toBeDisabled();
     // Look again reads the list and the card; the update goes out once both
     // show the new head, on the head the card showed (B33).
+    releaseReads(gh.state);
     await behind.locator("[data-pr-card-look-again]").click();
     await expect(behind.locator("[data-pr-card-title]")).toContainText("(moved)", { timeout: 30_000 });
     await expect(behind).toHaveAttribute("data-pr-card-head", `${shown.slice(0, 39)}e`, { timeout: 30_000 });
