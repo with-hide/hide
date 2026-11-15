@@ -257,7 +257,7 @@ jobs:
           set -euo pipefail
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
           python3 scripts/ci-repeat.py units-lines --plan "$PLAN" > "$RUNNER_TEMP/units.txt"
-          rm -f "$RUNNER_TEMP"/junit-*.xml
+          rm -f "$RUNNER_TEMP"/junit-*.xml "$RUNNER_TEMP/units-failed.txt"
           # Vitest has no `--repeat-each`: repetition is a `test()` option, not
           # a flag, so the file runs once per iteration and each run writes its
           # own report. `--retry=0` over any configured retry, so one failed
@@ -265,7 +265,10 @@ jobs:
           #
           # A failed run does not end the loop: every iteration still runs, so
           # the report below sees the whole repeat and names each failure.
-          # This step's own exit status is not the verdict; the next one is.
+          # This step's own exit status is not the verdict; the next one is,
+          # and it reads the iterations that exited non-zero from a file, so
+          # one that wrote no failing report (killed, or failing before any
+          # test) still fails the job.
           while IFS=$'\t' read -r package file; do
             echo "::group::$file x $REPEAT"
             report="$RUNNER_TEMP/junit-$package-$(echo "$file" | tr '/.' '--')"
@@ -278,7 +281,8 @@ jobs:
               # import (the relay WebAssembly) before the file runs.
               bash scripts/verify-web.sh "$package" test --retry=0 "$filter" \
                 --reporter=junit "--outputFile=$report.$iteration.xml" \
-                || echo "::error title=Failed run::$file failed on iteration $iteration of $REPEAT"
+                || { echo "::error title=Failed run::$file failed on iteration $iteration of $REPEAT"
+                     echo "$file iteration $iteration" >> "$RUNNER_TEMP/units-failed.txt"; }
               echo "::endgroup::"
             done
             echo "::endgroup::"
@@ -292,6 +296,11 @@ jobs:
         run: |
           python3 scripts/ci-repeat.py report --junit "$RUNNER_TEMP"/junit-*.*.xml
           python3 scripts/check-stress-report.py --junit "$RUNNER_TEMP"/junit-*.*.xml --repeat "${{ needs.count.outputs.repeat }}"
+          if [ -s "$RUNNER_TEMP/units-failed.txt" ]; then
+            echo "these iterations exited non-zero:" >&2
+            cat "$RUNNER_TEMP/units-failed.txt" >&2
+            exit 1
+          fi
 
   rust:
     name: repeat Rust tests (${{ needs.count.outputs.os }})
