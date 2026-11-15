@@ -479,11 +479,15 @@ fn a_close_during_a_renewal_ends_the_holder_the_renewal_leaves() {
 }
 
 /// The writes handed to the pane's holder before its agent slept are
-/// waited for before anything is judged, a released session's included,
+/// answered for before anything is judged, a released session's included,
 /// whose writer goes on writing what it was handed; the core's input that
 /// comes beside them never reaches the asleep pane, and writes that do not
 /// settle leave the earlier holder untouched. The holder is stopped, so its
-/// connection stops taking what the node writes.
+/// connection stops taking what the node writes: a writer whose whole backlog
+/// is waiting is refused at its cap, which is one answer this test makes for
+/// itself rather than leaving to the machine's socket, since a socket that
+/// took every byte would let the writes settle and the renewal rightly go on
+/// to end the holder.
 #[cfg(unix)]
 fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
     let folder = Folder::new();
@@ -503,16 +507,34 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
         }
     }
     let _resume = Resume(pid);
-    // The node's whole unwritten input cap, none of it refused: more than
-    // the holder's connection takes on every system (about 200 KiB on Linux,
-    // 8 KiB on macOS), so the writer stops on it with bytes left, and the
-    // renewal's barrier, which a backlog past the cap would refuse at once,
-    // waits behind them.
+    // SIGSTOP asks for the stop and the kernel stops the holder when it next
+    // runs. Until then the holder goes on reading, so keys written now can be
+    // drained into its socket and settle, and the renewal then rightly goes on
+    // to close a holder it found stopped: that is the failure this test
+    // reported (run 43551399472, `holder_renewal_unsettled`), not a lost
+    // write. The test waits for the state it needs.
+    wait_until("the earlier holder stops", || {
+        stopped(u32::try_from(pid).unwrap())
+    });
+    // Keys until the node refuses one past its writer's cap, which is the
+    // state this test needs, made rather than assumed. A stopped holder's
+    // socket may still take every byte written to it, and how much that is
+    // belongs to the machine (8 KiB on macOS; on the Linux runner that failed,
+    // the whole 256 KiB an earlier form of this test wrote), so a fixed count
+    // could settle and send the renewal on to close the stopped holder (run
+    // 43551399472). A key refused at the cap proves bytes are waiting that the
+    // writer has not handed over, which is what the barrier must answer for.
+    // It also makes the barrier's answer immediate (`WriteRefused::Full`), so
+    // the wait measured below is not this test's to assert.
     let piece = hide_node_link::terminal::MAX_UNSENT_KEY_BYTES / 8;
-    for _ in 0..8 {
+    for _ in 0..64 {
+        if next.reports.told_kind(PANE, "terminal.input_overflow") {
+            break;
+        }
         next.service
             .key(KeyTarget::Pane(PANE.to_owned()), vec![b' '; piece], 0);
     }
+    next.reports.wait_kind(PANE, "terminal.input_overflow");
     thread::scope(|scope| {
         // The holder is stopped, so the input can never be written: it is
         // either cancelled where it waits or refused at the asleep pane,
@@ -530,15 +552,11 @@ fn keeps_a_pane_whose_writes_do_not_settle(released: bool) {
             message: "released".to_owned(),
         });
     }
-    let started = Instant::now();
     let kept = renew_pane(&next.linked, &shell_start(&folder));
     assert!(
         matches!(&kept, Ok(HolderRenewal::Kept { code, .. }) if code == "pane_input_unsettled"),
         "{kept:?}"
     );
-    if !released {
-        assert!(started.elapsed() >= Duration::from_secs(4), "it waited");
-    }
     // A released session's writer is let go a second after its release, its
     // keys not written: the renewal is told that, or waits it out.
     assert_eq!(pane_record(&folder), before);
