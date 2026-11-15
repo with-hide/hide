@@ -169,6 +169,12 @@ pub struct HookCounts {
 /// subagents under its row, and a session running more says how many more.
 pub const SUBAGENTS_REPORTED: usize = 16;
 
+/// The running subagents a report lists: the oldest [`SUBAGENTS_REPORTED`],
+/// since the screens list them oldest first and say how many more run.
+pub fn reported_subagents(running: &[HookSubagent]) -> Vec<HookSubagent> {
+    running.iter().take(SUBAGENTS_REPORTED).cloned().collect()
+}
+
 /// The longest kind a report carries, in characters.
 pub const SUBAGENT_KIND_LIMIT: usize = 64;
 

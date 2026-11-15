@@ -601,12 +601,7 @@ impl SessionRecord {
             session: record.session.clone(),
             counters: record.counters(),
             turn: record.turn,
-            subagents: record
-                .running
-                .iter()
-                .take(crate::report::SUBAGENTS_REPORTED)
-                .cloned()
-                .collect(),
+            subagents: crate::report::reported_subagents(&record.running),
         })
     }
 }

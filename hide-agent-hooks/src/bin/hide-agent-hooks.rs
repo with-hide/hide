@@ -23,9 +23,7 @@ use hide_agent_adapter::HookDialect;
 use hide_agent_hooks::counters::{self, Change, Reporter, Said, SubagentInput, Told};
 use hide_agent_hooks::diagnosis::Diagnosis;
 use hide_agent_hooks::guidance::{self, GuidanceAgent};
-use hide_agent_hooks::report::{
-    self, HookCounts, HookRefusal, HookStatusReport, HookSubagent, HookTurn,
-};
+use hide_agent_hooks::report::{self, HookCounts, HookRefusal, HookStatusReport, HookTurn};
 use hide_agent_hooks::runtime::{AgentRuntime, HookEvent, hook_stdout};
 use hide_agent_hooks::{antigravity, basic};
 use hide_platform::process::{OwnedChild, OwnerWatch};
@@ -521,37 +519,19 @@ fn antigravity_event(event: HookEvent, started: Instant) {
     };
     match (event, parent.as_deref()) {
         // A subagent gets nothing of the pane's: no guidance, no Memory and
-        // no letter, which are the pane's own session's. Its start and end,
-        // a nested subagent's too, are counted under the pane's own
-        // conversation, the session recorded for the pane, with the task its
-        // parent's message gave it.
-        (HookEvent::SessionStart, Some(parent)) => {
+        // no letter, which are the pane's own session's. Its start and each of
+        // its model calls say it works, and the first that finds its parent
+        // counts it (agy 1.5.9 writes the parent's message only after the
+        // first model call); it and a nested subagent are counted under the
+        // pane's own conversation, the session recorded for the pane, with
+        // the task its parent's message gave it.
+        (HookEvent::SessionStart | HookEvent::UserPromptSubmit, Some(parent)) => {
             let task = antigravity::subagent_task(&home, &conversation);
             let told = Told {
                 task: task.as_deref(),
                 ..Told::default()
             };
-            report(
-                Change::Started(Some(&conversation)),
-                reporter(parent),
-                None,
-                told,
-            )
-        }
-        // Each model call of a subagent says it works: the first one after its
-        // parent's message landed starts it, where its start could not.
-        (HookEvent::UserPromptSubmit, Some(parent)) => {
-            let task = antigravity::subagent_task(&home, &conversation);
-            let told = Told {
-                task: task.as_deref(),
-                ..Told::default()
-            };
-            report(
-                Change::Working(&conversation),
-                reporter(parent),
-                None,
-                told,
-            )
+            report(Change::Working(&conversation), reporter(parent), None, told)
         }
         (HookEvent::Stop, Some(parent)) => report(
             Change::Stopped(Some(&conversation)),
@@ -1307,7 +1287,7 @@ fn run_hook(arguments: &[String], started: Instant) {
         },
         task: codex.task.as_deref(),
         asked: None,
-        tasks: if claude { &input.tasks } else { &[] },
+        tasks: &input.tasks,
     };
     report_pane(
         &home,
@@ -1423,7 +1403,7 @@ fn report_pane(
                     working: applied.counters.working,
                     done: applied.counters.done,
                 }),
-                counted.then(|| reported_subagents(&applied.subagents)),
+                counted.then(|| report::reported_subagents(&applied.subagents)),
                 speaks.then(|| applied.waiting.clone()),
             )
         }
@@ -1479,17 +1459,6 @@ fn report_pane(
     // standard error, so the hook never fails silently.
     let outcome = report::outcome(record_error, reported);
     report::record_and_say(home, &pane_id, agent, event.name(), &outcome);
-}
-
-/// The running subagents a report lists: the oldest
-/// [`report::SUBAGENTS_REPORTED`], since the screens list them oldest first
-/// and say how many more run.
-fn reported_subagents(running: &[HookSubagent]) -> Vec<HookSubagent> {
-    running
-        .iter()
-        .take(report::SUBAGENTS_REPORTED)
-        .cloned()
-        .collect()
 }
 
 /// How long a Codex subagent's start waits for its own session file to hold

@@ -445,13 +445,10 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
                 working: counts.working,
                 done: counts.done,
             }),
-            subagents: stored.as_ref().ok().map(|running| {
-                running
-                    .iter()
-                    .take(report::SUBAGENTS_REPORTED)
-                    .cloned()
-                    .collect()
-            }),
+            subagents: stored
+                .as_ref()
+                .ok()
+                .map(|running| report::reported_subagents(running)),
             session_start: false,
             waiting: None,
             account: None,
@@ -504,14 +501,7 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
                 })
             }),
             subagents: kept.as_ref().ok().and_then(|applied| {
-                counted.then(|| {
-                    applied
-                        .subagents
-                        .iter()
-                        .take(report::SUBAGENTS_REPORTED)
-                        .cloned()
-                        .collect()
-                })
+                counted.then(|| report::reported_subagents(&applied.subagents))
             }),
             session_start: false,
             waiting: None,
