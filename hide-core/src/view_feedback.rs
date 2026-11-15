@@ -95,6 +95,20 @@ impl Opener {
     }
 }
 
+/// The external tool whose work last opened a View: the tool itself
+/// (`hide file open` from its connection) or an agent it keeps (PRD
+/// hide-external-control D-55, D-38). Such a View is listed in that tool's
+/// cell and nowhere of the operator's.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolOpen {
+    /// The tool's connection id, as the access section names it.
+    pub connection: String,
+    /// When it was opened, moved on each open again, which orders the
+    /// cell's list newest first.
+    #[serde(default)]
+    pub opened_unix_ms: u64,
+}
+
 /// An agent's open the operator has not looked at yet (PRD
 /// unseen-agent-views D-07, D-19). It lives on the View, so it closes with it
 /// and never outnumbers the open Views (B32); looking at the View removes it.

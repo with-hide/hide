@@ -662,15 +662,12 @@ pub fn agent_group_for(
     }
     if ownership == Ownership::Tool {
         // The tool reads its agent's state and answers it itself (PRD
-        // hide-external-control D-09, B28), so unlike Hide AI's row the
-        // agent's own question, approval or block calls no one here; only
-        // a View it opened for the operator does (D-38), and a person's
-        // turn is laid over the group as on every root (B29).
-        return if look {
-            AgentGroup::NeedsYou
-        } else {
-            AgentGroup::Seen
-        };
+        // hide-external-control D-09, B28), so the agent's own question,
+        // approval or block calls no one here, and a View it opened is the
+        // tool's cell's, not the operator's to look at (D-38, D-55, B29);
+        // only a person's turn, laid over the group as on every root,
+        // reaches the operator (B29).
+        return AgentGroup::Seen;
     }
     if let Ownership::HideAi { operator_turn } = ownership {
         // Its home shows the work's progress and result; the operator is
@@ -1101,15 +1098,15 @@ fn raise_calls(agent: &SidebarAgentSnapshot) -> bool {
 }
 
 /// What an operator's own row says about the Views it opened that they have
-/// not seen (PRD unseen-agent-views D-05, D-14), and a tool's row, whose
-/// agent opened them for the operator, since a tool cannot look in its place
-/// (PRD hide-external-control D-38). A delegated row's go up as its
-/// ancestors' signals instead (D-10), and a home's row has none (D-18).
+/// not seen (PRD unseen-agent-views D-05, D-14). A delegated row's go up as
+/// its ancestors' signals instead (D-10), a home's row has none (D-18), and
+/// neither has a tool's, whose Views are its cell's (PRD
+/// hide-external-control D-38, D-55).
 fn look_of(
     agent: &SidebarAgentSnapshot,
     otherwise: impl FnOnce(&SidebarAgentSnapshot) -> AgentGroup,
 ) -> Option<crate::model::LookSnapshot> {
-    if !matches!(ownership_of(agent), Ownership::Operator | Ownership::Tool) {
+    if ownership_of(agent) != Ownership::Operator {
         return None;
     }
     let newest = agent.unseen_views.first()?;

@@ -252,6 +252,12 @@ pub struct Display {
     /// own address took it off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub openers: Vec<crate::view_feedback::Opener>,
+    /// The external tool whose work last opened this View, itself or an
+    /// agent it keeps (PRD hide-external-control D-55); absent for every
+    /// other View, and cleared by any other open of it. The operator's own
+    /// lists leave it out; the tool's cell lists it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<crate::view_feedback::ToolOpen>,
     /// Whether the operator opened it, from the Explorer, ⌘K, the file tree,
     /// a new tab's address field or a caller Hide could not bind to a pane:
     /// such a View is in every session's strip (D-10).
@@ -301,6 +307,7 @@ impl Display {
         self.openers.clear();
         self.operator = false;
         self.unseen = None;
+        self.tool = None;
     }
 
     /// Whether the Files strip of `scope` shows this View: the operator's
@@ -521,6 +528,7 @@ impl Layout {
             opener: None,
             openers: Vec::new(),
             operator: false,
+            tool: None,
             unseen: None,
             external: None,
         }

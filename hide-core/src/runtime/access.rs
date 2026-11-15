@@ -369,6 +369,85 @@ impl Runtime {
             .is_some_and(|connection| connection.level == Level::Act)
     }
 
+    /// Whether a tool that keeps its work holds `display`: the tool or an
+    /// agent it keeps was the last to open it (PRD hide-external-control
+    /// D-55). Such a View is the tool cell's and in none of the operator's
+    /// lists, the phone's included; once the tool lets go it is no one's
+    /// but the operator's again.
+    pub(crate) fn tool_keeps_view(&self, display: &crate::view_layout::Display) -> bool {
+        display
+            .tool
+            .as_ref()
+            .is_some_and(|open| self.access_keeps_work(&open.connection))
+    }
+
+    /// The Views each connection's tool opened, itself or through an agent
+    /// it keeps, on every checkout of this core: newest first, the oldest
+    /// dropped past `TOOL_VIEWS`, for the tools named in `tools` only
+    /// (PRD hide-external-control D-55, B48). Read from the Views' own
+    /// records on each publish; with no tool at Act nothing is read.
+    pub(super) fn tool_views(
+        &self,
+        tools: &[(String, String)],
+    ) -> std::collections::BTreeMap<String, Vec<crate::agent_state::ToolView>> {
+        type Opened<'a> = (
+            u64,
+            super::workspace_view::WorkspaceKey,
+            &'a crate::view_layout::Display,
+        );
+        let mut found: std::collections::BTreeMap<String, Vec<Opened<'_>>> =
+            std::collections::BTreeMap::new();
+        if tools.is_empty() {
+            return std::collections::BTreeMap::new();
+        }
+        for (key, layout) in self.every_view_layout() {
+            for display in layout.displays() {
+                let Some(open) = display.tool.as_ref() else {
+                    continue;
+                };
+                if tools
+                    .iter()
+                    .any(|(connection, _)| *connection == open.connection)
+                {
+                    found.entry(open.connection.clone()).or_default().push((
+                        open.opened_unix_ms,
+                        key.clone(),
+                        display,
+                    ));
+                }
+            }
+        }
+        found
+            .into_iter()
+            .map(|(connection, mut opened)| {
+                opened.sort_by_key(|opened| std::cmp::Reverse(opened.0));
+                opened.truncate(crate::agent_state::TOOL_VIEWS);
+                let views = opened
+                    .into_iter()
+                    .map(|(opened_unix_ms, key, display)| {
+                        let ids = self.agent_workspace_ids(&key);
+                        crate::agent_state::ToolView {
+                            view_id: display.id.clone(),
+                            kind: display.kind,
+                            label: super::view_areas::display_label(display),
+                            device_id: key.0.clone(),
+                            checkout_path: key.1.clone(),
+                            workspace_id: ids.as_ref().map(|(workspace, _)| workspace.clone()),
+                            checkout_id: ids.map(|(_, checkout)| checkout),
+                            unseen: display.unseen.is_some(),
+                            opened_unix_ms,
+                            opened_by: display
+                                .opener
+                                .as_ref()
+                                .map(|opener| self.view_opener_snapshot(opener).name),
+                        }
+                    })
+                    .collect();
+                (connection, views)
+            })
+            .collect()
+    }
+
     /// The external tool `work` is, as a row or a mission names it: whether
     /// the tool keeps it is read from its connection now (D-14, D-40).
     pub(crate) fn tool_work_snapshot(

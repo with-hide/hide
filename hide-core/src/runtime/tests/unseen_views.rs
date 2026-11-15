@@ -480,12 +480,12 @@ fn a_childs_unseen_view_turns_its_ancestors_unread_until_one_reads_it_or_the_ope
     assert!(row(&guard, "sender").look.is_none());
 }
 
-/// PRD hide-external-control B29 and operator decision 2026-11-14: a
-/// delegated child of an external tool's agent opening a View follows the
-/// rule every delegated child does. The child stays where it was, its root
-/// turns unread and stands in no Needs You, so the tool's work does not call
-/// the operator; once the tool's agent opens it again itself, it is its View
-/// for the operator, as on any root.
+/// PRD hide-external-control B29, D-38, D-55 and operator decision
+/// 2026-11-14: a delegated child of an external tool's agent opening a View
+/// follows the rule every delegated child does. The child stays where it
+/// was, its root turns unread and stands in no Needs You, so the tool's work
+/// does not call the operator; once the tool's agent opens it again itself,
+/// it is the tool's cell's View, never the operator's to look at.
 #[test]
 fn a_tools_delegated_childs_view_follows_every_delegated_childs_rule() {
     let (_root, runtime) = fixture(true);
@@ -525,9 +525,139 @@ fn a_tools_delegated_childs_view_follows_every_delegated_childs_rule() {
     assert!(root.unlisted, "and the tool's root still calls no one");
     open(&mut guard, "sender", "src/report.md");
     let root = row(&guard, "sender");
-    assert_eq!(root.look.as_ref().unwrap().view_id, view);
-    assert_eq!(root.group, "needs_you");
-    assert!(!root.unlisted, "its own View is the operator's to look at");
+    assert!(root.look.is_none(), "its own View is its cell's");
+    assert_ne!(root.group, "needs_you");
+    assert!(root.unlisted, "the operator's lists still leave it out");
+    let tool = guard
+        .view_layout_of(&key())
+        .and_then(|layout| layout.display(&view))
+        .and_then(|display| display.tool.clone());
+    assert_eq!(tool.map(|open| open.connection), Some(connection));
+}
+
+/// PRD hide-external-control D-55, B48, D-52: a View the tool itself opens is
+/// listed in its cell only, newest first, unseen until the operator looks at
+/// it. It reaches nothing of the operator's, and a disconnect takes the cell
+/// and its list away.
+#[test]
+fn a_tools_own_open_is_listed_in_its_cell_and_nowhere_of_the_operators() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    let connection = super::tool_work::connect(
+        &mut guard,
+        "00000000000000b9",
+        "9",
+        crate::access::Level::Act,
+    );
+    let caller = crate::workspace_control::access_caller_id(&connection, None);
+    keyboard(&mut guard, Some("sender"));
+    // The lane shows something else, so what the tool opens is not in front.
+    guard
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(crate::node::TEST_NODE, CHECKOUT)
+        .documents = false;
+    let first = open(&mut guard, &caller, "src/first.html");
+    let second = open(&mut guard, &caller, "src/second.html");
+    guard.publish_mission_asks();
+    let listed = |guard: &Runtime| -> Vec<(String, bool)> {
+        guard.snapshot.navigator.tools[0]
+            .views
+            .iter()
+            .map(|view| (view.view_id.clone(), view.unseen))
+            .collect()
+    };
+    assert_eq!(
+        listed(&guard),
+        vec![(second.clone(), true), (first.clone(), true)],
+        "newest first, unseen"
+    );
+    let cell = &guard.snapshot.navigator.tools[0].views[0];
+    assert_eq!(cell.label, "second.html");
+    assert!(cell.opened_by.is_none(), "the tool itself opened it");
+    assert!(cell.workspace_id.is_some() && cell.checkout_id.is_some());
+
+    // Nothing of the operator's: no row is told to look and no Needs You
+    // counts it.
+    assert!(
+        guard
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .all(|agent| agent.look.is_none())
+    );
+    assert_eq!(
+        guard.snapshot.navigator.devices[0]
+            .agent_scope
+            .groups
+            .needs_you,
+        0
+    );
+    let display = guard
+        .view_layout_of(&key())
+        .and_then(|layout| layout.display(&first))
+        .unwrap();
+    assert!(display.operator, "it stays in every session's strip");
+    assert!(guard.tool_keeps_view(display));
+
+    // Looking at it takes the unseen mark off, in the cell.
+    guard
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(crate::node::TEST_NODE, CHECKOUT)
+        .documents = true;
+    look_at(&mut guard, &first);
+    guard.publish_mission_asks();
+    assert_eq!(
+        listed(&guard),
+        vec![(second.clone(), true), (first.clone(), false)]
+    );
+
+    // The operator's own open of it takes it from the tool.
+    guard.stamp_view_opener(&key(), &second, None, None);
+    guard.publish_mission_asks();
+    assert_eq!(listed(&guard), vec![(first.clone(), false)]);
+
+    // A disconnect takes the cell, and with it the list.
+    assert!(
+        guard.access_event(crate::runtime::access::AccessEvent::Revoke {
+            id: connection.clone(),
+        })
+    );
+    guard.publish_mission_asks();
+    assert!(guard.snapshot.navigator.tools.is_empty());
+}
+
+/// Engineering principle 15: a tool's list is capped, the oldest going.
+#[test]
+fn a_tools_list_of_views_keeps_the_newest_at_its_cap() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    let connection = super::tool_work::connect(
+        &mut guard,
+        "00000000000000ba",
+        "a",
+        crate::access::Level::Act,
+    );
+    let caller = crate::workspace_control::access_caller_id(&connection, None);
+    let total = crate::agent_state::TOOL_VIEWS + 5;
+    let opened: Vec<String> = (0..total)
+        .map(|n| open(&mut guard, &caller, &format!("src/page{n}.html")))
+        .collect();
+    guard.publish_mission_asks();
+    let listed: Vec<String> = guard.snapshot.navigator.tools[0]
+        .views
+        .iter()
+        .map(|view| view.view_id.clone())
+        .collect();
+    assert_eq!(listed.len(), crate::agent_state::TOOL_VIEWS);
+    assert_eq!(listed[0], opened[total - 1], "newest first");
+    assert!(!listed.contains(&opened[0]), "the oldest went");
 }
 
 #[test]

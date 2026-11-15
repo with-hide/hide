@@ -200,6 +200,39 @@ pub struct ToolCell {
     /// The tool's missions that are their own ask, oldest first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mission_asks: Vec<String>,
+    /// The Views the tool or an agent it keeps opened, on every checkout of
+    /// this core, newest first and at most `TOOL_VIEWS` (PRD
+    /// hide-external-control D-55, B48). Laid on at every apply, like the
+    /// asks, and never part of the cached output.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ToolView>,
+}
+
+/// The Views one tool's cell keeps, newest first; the oldest go at the cap
+/// (engineering principle 15).
+pub const TOOL_VIEWS: usize = 20;
+
+/// One View a tool or its agent opened, enough to list it and open it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolView {
+    pub view_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    pub device_id: String,
+    /// The checkout the View sits in, by the path the device knows it by.
+    pub checkout_path: String,
+    /// The project and checkout ids the shell opens it through; absent
+    /// while the checkout is not in the catalog.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkout_id: Option<String>,
+    /// Whether the operator has not looked at it yet.
+    pub unseen: bool,
+    pub opened_unix_ms: u64,
+    /// The agent that opened it, absent when the tool itself did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opened_by: Option<String>,
 }
 
 /// An external tool's work on one device: its 태스크 cards, grouped by the
@@ -254,6 +287,7 @@ fn tool_cell(
             turn: 0,
             devices: Vec::new(),
             mission_asks: Vec::new(),
+            views: Vec::new(),
         };
     }
     let mut places = Vec::new();
@@ -296,6 +330,7 @@ fn tool_cell(
         turn: devices.iter().map(|device| device.tasks.needs_you).sum(),
         devices,
         mission_asks: Vec::new(),
+        views: Vec::new(),
     }
 }
 
@@ -741,6 +776,9 @@ pub(crate) struct Cache {
     /// Each tool's missions that are their own ask, by connection, laid on
     /// its cell at every apply as `mission_asks` is on a device's.
     tool_asks: BTreeMap<String, Vec<String>>,
+    /// Each tool's open Views, by connection, laid on its cell at every
+    /// apply (PRD hide-external-control D-55).
+    tool_views: BTreeMap<String, Vec<ToolView>>,
 }
 
 #[derive(Default)]
@@ -1335,19 +1373,21 @@ impl Cache {
         true
     }
 
-    /// Takes the tools that have a cell and each one's missions that are
-    /// their own ask, laid at the next refresh; true when either moved, so
-    /// the caller refreshes.
+    /// Takes the tools that have a cell, each one's missions that are their
+    /// own ask and each one's open Views, laid at the next refresh; true
+    /// when any moved, so the caller refreshes.
     pub(crate) fn note_tools(
         &mut self,
         tools: Vec<(String, String)>,
         asks: BTreeMap<String, Vec<String>>,
+        views: BTreeMap<String, Vec<ToolView>>,
     ) -> bool {
-        if self.tools == tools && self.tool_asks == asks {
+        if self.tools == tools && self.tool_asks == asks && self.tool_views == views {
             return false;
         }
         self.tools = tools;
         self.tool_asks = asks;
+        self.tool_views = views;
         true
     }
 
@@ -1380,6 +1420,9 @@ impl Cache {
                 if let Some(asks) = self.tool_asks.get(&cell.connection) {
                     cell.turn += asks.len();
                     cell.mission_asks.clone_from(asks);
+                }
+                if let Some(views) = self.tool_views.get(&cell.connection) {
+                    cell.views.clone_from(views);
                 }
                 cell
             })

@@ -186,6 +186,22 @@ export type ToolCell = {
   devices: { device_id: string; tasks: ProjectTasksScope; members: AgentScope["members"] }[];
   /** The tool's missions that are their own ask, oldest first. */
   mission_asks?: string[];
+  /** The Views the tool or an agent it keeps opened, newest first and capped by the core (D-55, B48). */
+  views?: ToolView[];
+};
+
+/** One View a tool or its agent opened: what its cell lists, and what `openViewAt` needs to open it. */
+export type ToolView = {
+  view_id: string;
+  kind: "file" | "diff" | "browser" | "external";
+  label: string;
+  device_id: string;
+  checkout_path: string;
+  /** Whether the operator has not looked at it yet. */
+  unseen: boolean;
+  opened_unix_ms: number;
+  /** The agent that opened it; absent when the tool itself did. */
+  opened_by?: string;
 };
 
 /** Why a pull request stands where it does, as a kind the web words (`Reason`, PRD work-tab-pr-lens D-16). */

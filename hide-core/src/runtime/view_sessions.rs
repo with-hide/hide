@@ -698,6 +698,12 @@ impl Runtime {
                 {
                     continue;
                 }
+                // The phone has no tool cell, so the Views a tool or its
+                // agent opened do not reach it (PRD hide-external-control
+                // D-52, B46).
+                if self.tool_keeps_view(display) {
+                    continue;
+                }
                 // Two tabs showing the same thing in one checkout are one
                 // row, which is unseen while either is and then names the
                 // unseen one: only that View being seen clears the eye.

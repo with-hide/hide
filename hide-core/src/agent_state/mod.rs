@@ -19,4 +19,4 @@ pub use turn::push;
 pub use turn::{RowState, TabState, Tone};
 
 pub(crate) use tally::scope::Cache as ScopeCache;
-pub use tally::scope::{Scope, ToolCell};
+pub use tally::scope::{Scope, TOOL_VIEWS, ToolCell, ToolView};

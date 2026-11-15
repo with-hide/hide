@@ -48,7 +48,8 @@ import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
 import { InToolCell, ToolLabel } from "./components/tool-mark";
-import type { TaskState, ToolCell } from "./agentScope";
+import { ToolViewList } from "./components/tool-views";
+import type { TaskState, ToolCell, ToolView } from "./agentScope";
 import { toolTaskList } from "./toolCells";
 
 const NO_FOLDS: string[] = [];
@@ -147,7 +148,9 @@ export function TaskLens({ actions }: { actions: Actions }) {
  * the 태스크 list of the work the tool keeps, by state, its first group what
  * waits on the tool's answer, then 작업 중 and 끝남. A task on another device
  * names it on its row; a cell with no work says so. The operator answers in a
- * row's pane from here as anywhere (B43).
+ * row's pane from here as anywhere (B43). The Views the tool or its agents
+ * opened are the group above them, `연 화면` (D-55, B48), and a cell with
+ * only those has work to show.
  */
 export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -160,14 +163,24 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
   const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t)), [rest, tool, byPane, t]);
   const count = list.groups.reduce((sum, group) => sum + rowCount(group.bands), 0) + list.resting.length + list.cleanup.length;
+  const views = tool.views ?? NO_VIEWS;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens="status" data-tool-cell={tool.connection}>
       <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
         <span className="min-w-0 flex-1 truncate" data-task-count={count}>{t("taskLens.count", { count })}</span>
       </div>
-      {count === 0 ? (
+      {views.length > 0 ? (
+        <section className="flex max-h-1/3 shrink-0 flex-col overflow-y-auto px-sm pb-xs" aria-label={t("taskLens.tool.views")} data-tool-cell-views={views.length}>
+          <h3 className="flex items-center gap-xs px-xs py-xs text-micro font-medium text-subtle-foreground">
+            <span>{t("taskLens.tool.views")}</span>
+            <span className="tabular-nums">{views.length}</span>
+          </h3>
+          <ToolViewList views={views} limit={VIEWS_SHOWN} actions={actions} />
+        </section>
+      ) : null}
+      {count === 0 && views.length === 0 ? (
         <p className="px-md py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
-      ) : (
+      ) : count === 0 ? null : (
         <InToolCell.Provider value={true}>
           <TaskGroups list={list} view="status" showProject={true} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
         </InToolCell.Provider>
@@ -175,6 +188,10 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
     </div>
   );
 }
+
+/** The Views a tool's cell shows before `더 보기`. */
+const VIEWS_SHOWN = 5;
+const NO_VIEWS: readonly ToolView[] = [];
 
 const TASK_VIEWS: readonly TaskView[] = ["status", "project"];
 

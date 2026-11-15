@@ -501,4 +501,20 @@ describe("selecting a tool's cell", () => {
     cellGoes("core");
     expect(shown()).toEqual({ overview: "core", rail: "core" });
   });
+
+  // PRD hide-external-control D-54, B47: the tile shows the tool's Overview as the center's page, never as a layer over
+  // the Workspace or as This Mac's panes left in place; a device tile gives the center back.
+  it("shows the tool's Overview as the center's page, from a Workspace and from its Overview layer, and a device tile takes the center back", () => {
+    for (const layer of [false, true]) {
+      select("", "core");
+      useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: layer });
+      createActions(() => true).focusTool(TOOL);
+      const { screen, overviewOpen, toolCell } = useUiStore.getState();
+      expect({ screen: screen?.kind, overviewOpen, toolCell }, `layer ${layer}`).toEqual({ screen: "main", overviewOpen: false, toolCell: TOOL });
+    }
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).focusDevice("core");
+    const { screen, toolCell } = useUiStore.getState();
+    expect({ screen: screen?.kind, toolCell }).toEqual({ screen: "workspace", toolCell: null });
+  });
 });

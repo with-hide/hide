@@ -2,7 +2,7 @@
 //! (docs/status-model.md, Ownership). The operator's own rows and Hide AI's
 //! rows reach the same lists as before external tools existed (PRD
 //! hide-external-control B37); an external tool's work reaches them only to
-//! ask a person or show a View (B26-B29).
+//! ask a person (B26-B29), and the Views it opens are its cell's (D-55).
 
 use super::*;
 use crate::model::{DeclaredHumanTurn, HideAiSnapshot, ToolWorkSnapshot, UnseenViewFact};
@@ -287,20 +287,20 @@ fn each_row_reaches_the_operators_lists_by_whose_work_it_is() {
     }
 }
 
-/// B26, B28, B29 (D-09, D-37, D-38): a tool's agent reaches the operator's
-/// lists only to ask a person or to show a View; its own question, its done
-/// turn and its work are the tool's to read. Once the tool no longer keeps
-/// it (View only, disconnected, left) it is the operator's row in every way
-/// (D-14).
+/// B26, B28, B29 (D-09, D-37, D-38, D-55): a tool's agent reaches the
+/// operator's lists only to ask a person; its own question, its done turn,
+/// its work and the Views it opened are the tool's to read. Once the tool no
+/// longer keeps it (View only, disconnected, left) it is the operator's row
+/// in every way (D-14).
 #[test]
-fn a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view() {
+fn a_tools_agent_reaches_the_operator_only_for_a_person() {
     let cases = [
         (Doing::Working, pool_only()),
         (Doing::Resting, pool_only()),
         (Doing::Question, pool_only()),
         (Doing::Done, pool_only()),
         (Doing::HumanTurn, called_out(false)),
-        (Doing::Look, called_out(true)),
+        (Doing::Look, pool_only()),
     ];
     for (doing, expected) in cases {
         assert_eq!(
@@ -325,7 +325,7 @@ fn a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view() {
 }
 
 /// B46, D-52: the phone has no tool's cell, so a tool's row that reaches its
-/// list, a person's turn or a View, names the tool, on the wire and so on its
+/// list, a person's turn, names the tool, on the wire and so on its
 /// second line; the operator's own rows send no name, which an older phone
 /// therefore never meets.
 #[test]
@@ -338,18 +338,17 @@ fn a_tools_row_on_the_phone_names_the_tool() {
             .unwrap_or_else(|| panic!("{owner:?} {doing:?} is on the phone"));
         serde_json::to_value(listed).unwrap().get("tool").cloned()
     };
-    for doing in [Doing::HumanTurn, Doing::Look] {
-        assert_eq!(
-            sent(Owner::Tool(true), doing),
-            Some(serde_json::json!("nightly")),
-            "kept {doing:?}"
-        );
-        assert_eq!(
-            sent(Owner::Operator, doing),
-            None,
-            "the operator's {doing:?}"
-        );
-    }
+    let doing = Doing::HumanTurn;
+    assert_eq!(
+        sent(Owner::Tool(true), doing),
+        Some(serde_json::json!("nightly")),
+        "kept {doing:?}"
+    );
+    assert_eq!(
+        sent(Owner::Operator, doing),
+        None,
+        "the operator's {doing:?}"
+    );
 }
 
 /// B27, B29: a child a tool's agent started with `--parent here` stays off
@@ -513,9 +512,10 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
 
 /// B28, B29: a tool's agent that asks its tool something, such as the
 /// decision of a mission it conducts, and also opened a View or waits on a
-/// person shows the operator only the View or the person's turn: its mark,
-/// its line and `외 N건` leave the tool's question out. The operator's own
-/// row keeps counting its question behind its person's turn.
+/// person shows the operator only the person's turn: its mark, its line and
+/// `외 N건` leave the tool's question out, and the View is its cell's (D-55).
+/// The operator's own row keeps counting its question behind its person's
+/// turn.
 #[test]
 fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
     let asking = |owner: Owner, doing: Doing| {
@@ -527,12 +527,12 @@ fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
         agent
     };
     let looking = asking(Owner::Tool(true), Doing::Look);
-    assert_eq!(looking.group, "needs_you");
-    assert_eq!(looking.mark, crate::agent_state::RowMark::Look);
     assert_eq!(
-        looking.state.ask, None,
-        "the row says the View, not the question"
+        looking.group, "seen",
+        "a View it opened is its cell's, not the operator's to look at"
     );
+    assert!(looking.look.is_none());
+    assert_eq!(looking.mark, crate::agent_state::RowMark::Waiting);
     let person = asking(Owner::Tool(true), Doing::HumanTurn);
     assert_eq!(person.mark, crate::agent_state::RowMark::Turn);
     let ask = person.state.ask.unwrap();

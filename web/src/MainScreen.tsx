@@ -33,9 +33,10 @@ import { OverviewGraph } from "./OverviewGraph";
 import { OverviewHistory } from "./OverviewHistory";
 import { workKey } from "./sessionWork";
 import { OverviewProjectHome } from "./OverviewProjectHome";
-import type { ToolCell } from "./agentScope";
+import type { ToolCell, ToolView } from "./agentScope";
 import { toolProjects } from "./toolCells";
 import { InToolCell } from "./components/tool-mark";
+import { ToolViewList } from "./components/tool-views";
 
 // The five Overview tabs share a device and project scope. Account usage
 // keeps its global scope. A wide detail retains the list beneath it, so
@@ -80,8 +81,10 @@ export function MainScreen({ actions, deviceId, tool = null }: { actions: Action
   const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
   const noProject = availability.state === "ready" && projects.length === 0 && !tool;
-  // A tool's cell with no work says so in the work's place (B42).
-  const noToolWork = tool !== null && projects.length === 0;
+  // The Views the tool or its agents opened are work of its own (D-55, B48), drawn beside its agents and missions.
+  const toolViews = tool?.views ?? NO_TOOL_VIEWS;
+  // A tool's cell with no work, and on the work tab no View either, says so in the work's place (B42, B47).
+  const noToolWork = tool !== null && projects.length === 0 && (view !== "work" || toolViews.length === 0);
   // A count is drawn only once the device has answered; before that a 0 would be a number nobody read.
   const counted = availability.state === "ready";
   const counts: Record<MainView, ReactNode> = {
@@ -125,7 +128,10 @@ export function MainScreen({ actions, deviceId, tool = null }: { actions: Action
             ) : noToolWork ? (
               <p className="px-lg py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
             ) : view === "work" ? (
-              <OverviewGraph projects={projects} deviceId={deviceId} tool={tool} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
+              <>
+                {tool && toolViews.length > 0 ? <ToolViewsSection views={toolViews} actions={actions} /> : null}
+                {tool && projects.length === 0 ? null : <OverviewGraph projects={projects} deviceId={deviceId} tool={tool} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />}
+              </>
             ) : view === "backlog" ? (
               <OverviewBacklog projects={projects} deviceId={deviceId} actions={actions} />
             ) : selectedProject ? (
@@ -151,6 +157,25 @@ export function MainScreen({ actions, deviceId, tool = null }: { actions: Action
     </InToolCell.Provider>
   );
 }
+
+const NO_TOOL_VIEWS: readonly ToolView[] = [];
+
+/** `연 화면` over a tool's map: the Views it or its agents opened, a row each, newest first (PRD hide-external-control D-55, B47, B48). */
+function ToolViewsSection({ views, actions }: { views: readonly ToolView[]; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <section className="flex flex-col gap-xs border-b border-border px-lg py-md" aria-label={t("taskLens.tool.views")} data-tool-overview-views={views.length}>
+      <h2 className="flex items-center gap-xs text-caption font-semibold text-foreground">
+        <span>{t("taskLens.tool.views")}</span>
+        <span className="font-normal tabular-nums text-muted-foreground">{views.length}</span>
+      </h2>
+      <ToolViewList views={views} limit={TOOL_VIEWS_SHOWN} actions={actions} />
+    </section>
+  );
+}
+
+/** The Views the Overview shows of a tool before `더 보기`; the sidebar keeps its own, shorter, list. */
+const TOOL_VIEWS_SHOWN = 8;
 
 function OverviewDetail({ kind, wide, children }: { kind: string; wide: boolean; children: ReactNode }) {
   const frame = useRef<HTMLElement>(null);

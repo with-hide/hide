@@ -72,10 +72,9 @@ impl RowMark {
         let ownership = ownership_of(agent);
         let (demand, activity, _) = axes_of(agent);
         // A tool's agent calls the operator only for a person's turn, its
-        // own or raised to it, and a View it opened for them; its question,
-        // its block and every other raise are the tool's to answer, so they
-        // neither outrank the View nor take the mark (PRD
-        // hide-external-control B28, B29).
+        // own or raised to it; its question, its block, every other raise
+        // and the Views it opened are the tool's, so they take no mark here
+        // (PRD hide-external-control B28, B29, D-55).
         let tool = ownership == Ownership::Tool;
         if tool && agent.human_turn.is_some() {
             return Self::Turn;
@@ -84,12 +83,11 @@ impl RowMark {
         // a block, a question, an approval or a raise outranks it and takes
         // the mark (D-18).
         if agent.look.is_some()
-            && (tool
-                || (demand == AgentDemand::None
-                    && !agent.blocked
-                    && agent.raised.is_empty()
-                    && agent.escalation.is_none()
-                    && agent.declared_human_turn.is_none()))
+            && demand == AgentDemand::None
+            && !agent.blocked
+            && agent.raised.is_empty()
+            && agent.escalation.is_none()
+            && agent.declared_human_turn.is_none()
         {
             return Self::Look;
         }
