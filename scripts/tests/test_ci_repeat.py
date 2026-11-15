@@ -139,7 +139,7 @@ class Detection(unittest.TestCase):
         self.assertEqual(
             asked,
             [("hide-platform", "it", "test(/^(stand_ins)::/)", ""), ("hide-platform", "it", "test(/^(stand_ins)::/)", "all"),
-             ("hide-platform", "it", "", "")],
+             ("hide-platform", "it", "", ""), ("hide-platform", "it", "", "all")],
         )
         # A helper beside a module that lists tests still runs the whole binary.
         plan = repeat.rust_plan(
@@ -364,6 +364,17 @@ class RustIgnoredAndHolder(unittest.TestCase):
               "tests": 10, "run_ignored": "ignored-only"}],
         )
 
+    def test_a_module_mixing_ignored_tests_is_found_from_nextests_own_listing(self):
+        # nextest's ordinary listing marks an ignored test a mismatch, so it
+        # reports none ignored; only the listing that asks for them all shows them.
+        def lister(package, test, expression, run_ignored=""):
+            return {"": (5, 0), "all": (7, 2)}[run_ignored]
+
+        plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "handshake"}], lister)
+        self.assertEqual((plan[0]["run_ignored"], plan[0]["tests"]), ("all", 7))
+        decided = repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "test(/^(handshake)::/)", "tests": 5}], lister)
+        self.assertEqual(decided[0]["run_ignored"], "all")
+
     def test_a_module_with_ignored_and_running_tests_runs_both(self):
         def lister(package, test, expression, run_ignored=""):
             return {"": (5, 2), "all": (7, 2)}[run_ignored]
@@ -377,7 +388,8 @@ class RustIgnoredAndHolder(unittest.TestCase):
 
     def test_an_ordinary_module_passes_no_flag_and_builds_no_holder(self):
         def lister(package, test, expression, run_ignored=""):
-            self.assertEqual(run_ignored, "")
+            # Asked with every ignored test too, it lists no more than without.
+            self.assertIn(run_ignored, ("", "all"))
             return (8, 0)
 
         plan = repeat.rust_plan([{"package": "hide-kit", "test": "lib", "module": "process::tests"}], lister)
@@ -530,7 +542,7 @@ class Command(unittest.TestCase):
                            {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9, "run_ignored": "ignored-only"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\tall\nhide-platform\tlib\t\tignored-only\n")
+        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fall\nhide-platform\x1flib\x1f\x1fignored-only\n")
         units = json.dumps([{"package": "web", "files": ["web/src/a.test.ts"], "tests": 2},
                             {"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
         result, _ = self.run_script("units-lines", "--plan", units)
@@ -542,8 +554,20 @@ class Command(unittest.TestCase):
         plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1, "run_ignored": "all"}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
-        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\tall\n")
+        self.assertEqual(result.stdout, "hided\x1fit\x1ftest(/^(seat)::/)\x1fall\n")
         self.assertNotIn("\r", result.stdout)
+
+    def test_the_rust_job_reads_an_empty_filterset_as_its_own_field(self):
+        # A tab-separated line lost its empty filterset to `read`, which folds
+        # a run of tabs, and the ignored flag became the filterset.
+        plan = json.dumps([{"package": "hide-platform", "test": "lib", "filter": "", "tests": 9, "run_ignored": "ignored-only"}])
+        result, _ = self.run_script("plan-lines", "--plan", plan)
+        read = subprocess.run(
+            ["bash", "-c", "while IFS=$'\\x1f' read -r package test expression run_ignored; do "
+                           "printf '%s|%s|%s|%s\\n' \"$package\" \"$test\" \"$expression\" \"$run_ignored\"; done"],
+            input=result.stdout, text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(read.stdout, "hide-platform|lib||ignored-only\n")
 
 
 class Verdict(unittest.TestCase):

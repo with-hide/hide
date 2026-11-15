@@ -502,15 +502,7 @@ def rust_plan(modules, lister):
             for name in names
         ):
             expression = ""
-        tests, ignored = lister(package, test, expression, "")
-        run_ignored = ""
-        if not tests:
-            ignored_only = lister(package, test, expression, "ignored-only")
-            if ignored_only[0]:
-                run_ignored, (tests, ignored) = "ignored-only", ignored_only
-        elif ignored:
-            tests, ignored = lister(package, test, expression, "all")
-            run_ignored = "all"
+        run_ignored, (tests, _) = ignored_flag(lister, package, test, expression)
         plan.append({
             "package": package, "test": test, "filter": expression, "tests": tests,
             "run_ignored": run_ignored,
@@ -535,14 +527,25 @@ def plan_run_ignored(plan, lister=None):
         package, test, expression = entry["package"], entry["test"], entry["filter"]
         run_ignored = entry.get("run_ignored", "")
         if not run_ignored:
-            tests, ignored = lister(package, test, expression, "")
-            if not tests:
-                if lister(package, test, expression, "ignored-only")[0]:
-                    run_ignored = "ignored-only"
-            elif ignored:
-                run_ignored = "all"
+            run_ignored = ignored_flag(lister, package, test, expression)[0]
         decided.append({**entry, "run_ignored": run_ignored})
     return decided
+
+
+def ignored_flag(lister, package, test, expression):
+    """`(run_ignored, (tests, ignored))`: the flag one plan entry needs, and what nextest lists with it.
+
+    nextest's own listing leaves an ignored test out as a mismatch, so the
+    ordinary listing never says that a module mixes ignored tests with the
+    others; the listing that asks for them all is compared with it instead,
+    and nextest's own filter decides both counts.
+    """
+    ordinary = lister(package, test, expression, "")
+    if not ordinary[0]:
+        ignored_only = lister(package, test, expression, "ignored-only")
+        return ("ignored-only", ignored_only) if ignored_only[0] else ("", ordinary)
+    every = lister(package, test, expression, "all")
+    return ("all", every) if every[0] > ordinary[0] else ("", ordinary)
 
 
 def bash():
@@ -646,8 +649,14 @@ def write_outputs(values):
     sys.stdout.write(line)
 
 
+# What separates the fields of a Rust plan line. A shell's `read` folds a run
+# of whitespace separators into one, so an empty filterset between two tabs
+# moved the ignored flag into its place; this separator is not whitespace.
+UNIT_SEPARATOR = "\x1f"
+
+
 def write_lines(lines):
-    """Lines of tab-separated fields for a shell to read, with LF endings.
+    """Lines of fields for a shell to read, with LF endings.
 
     `sys.stdout` translates `\\n` to the system's own ending, so on a Windows
     runner each line ended with `\\r\\n`; a trailing `\\r` entered nextest's
@@ -675,7 +684,7 @@ def main():
     sub.add_parser("count-nextest", help="count the tests of `cargo nextest list --message-format json` output on stdin")
     plan_parser = sub.add_parser("rust-plan", help="list the selected modules' tests and write the Rust job's plan")
     plan_parser.add_argument("--rust", required=True, help="the JSON list of modules")
-    lines_parser = sub.add_parser("plan-lines", help="one `package<TAB>test<TAB>filterset` line per target of a Rust plan")
+    lines_parser = sub.add_parser("plan-lines", help="one `package test filterset run_ignored` line per target of a Rust plan, fields split by UNIT_SEPARATOR")
     lines_parser.add_argument("--plan", required=True, help="the JSON plan")
     units_parser = sub.add_parser("units-plan", help="list the selected unit test files' tests and write the units job's plan")
     units_parser.add_argument("--units", required=True, help="the JSON list of unit test paths")
@@ -752,7 +761,7 @@ def main():
                 run_ignored = entry.get("run_ignored", "")
                 if run_ignored not in ("", "all", "ignored-only"):
                     raise ValueError(f"not a Rust plan entry: {entry!r}")
-                lines.append(f"{entry['package']}\t{entry['test']}\t{entry['filter']}\t{run_ignored}")
+                lines.append(UNIT_SEPARATOR.join((entry["package"], entry["test"], entry["filter"], run_ignored)))
             write_lines(lines)
         elif args.command == "count-nextest":
             print(nextest_listed(sys.stdin.read()))

@@ -395,7 +395,9 @@ jobs:
           # Only reports from this execution can prove completed work.
           rm -f target/nextest/ci/junit*.xml
           python3 scripts/ci-repeat.py plan-lines --plan "$PLAN" > "$RUNNER_TEMP/filters.txt"
-          while IFS=$'\t' read -r package test expression run_ignored; do
+          # `ci-repeat.py`'s UNIT_SEPARATOR, which `read` never folds as it
+          # folds tabs, so an empty filterset keeps its field.
+          while IFS=$'\x1f' read -r package test expression run_ignored; do
             echo "::group::$package $test ${expression:-whole target} x $REPEAT ${run_ignored:+($run_ignored)}"
             filter=()
             if [ -n "$expression" ]; then filter=(-E "$expression"); fi
