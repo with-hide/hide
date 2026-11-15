@@ -287,16 +287,21 @@ jobs:
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
           threads=()
           if [ -n "$THREADS" ]; then threads=(--test-threads "$THREADS"); fi
+          # A repetition shows a fix only if one failure fails the job, so no
+          # retry; a single run (the pull request's lane) keeps the ci
+          # profile's retry, so a flaky walk is filed rather than failing it.
+          stress=()
+          if [ "$REPEAT" != 1 ]; then stress=(--stress-count "$REPEAT" --retries 0); fi
           status=0
           log="$RUNNER_TEMP/nextest-stress.log"
-          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate --retries 0 --stress-count "$REPEAT" ${threads[@]+"${threads[@]}"} 2>&1 | tee "$log" || status=$?
+          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate ${stress[@]+"${stress[@]}"} ${threads[@]+"${threads[@]}"} 2>&1 | tee "$log" || status=$?
           # nextest's `--stress-count` ends 0 when its last iteration passed,
           # whatever the others did, so the exit status alone proves nothing:
           # the summary it printed is what says whether every iteration
           # passed. `scripts/check-stress-report.py` reads that summary, and
           # its own doc names run 43626029599, where this lane went green while
           # its summary said `20/20 stress run iterations: 19 passed, 1 failed`.
-          if ! python3 scripts/check-stress-report.py --summary "$log" --repeat "$REPEAT"; then
+          if [ "$REPEAT" != 1 ] && ! python3 scripts/check-stress-report.py --summary "$log" --repeat "$REPEAT"; then
             status=1
           fi
           # What the server did with the sessions a failed walk could not
