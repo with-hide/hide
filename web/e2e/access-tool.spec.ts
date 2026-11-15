@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
-import { connectControl } from "./hided-control.mjs";
+import { connectControl, useControl } from "./hided-control.mjs";
 import { startHided, type Daemon } from "./hided-fixture";
 import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
 import { fixtureExecutable } from "./platform-fixture";
@@ -64,13 +64,10 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
     // B1-B4: the request waits for the operator, the window approves it, and the same request run again holds the key.
     const asked = ok(tool(["access", "request", "--name", "nightly", "--json"]), "request");
     expect(asked.state).toBe("pending");
-    const window = await connectControl({ origin: live.origin, token: live.token, clientKind: "web" });
-    try {
+    await useControl(await connectControl({ origin: live.origin, token: live.token, clientKind: "web" }), async (window) => {
       window.send("access_approve", { id: asked.id as string, level: "act" });
       await expect.poll(() => tool(["access", "status", "--json"]).value?.state, { message: "the tool connected", timeout: 20_000 }).toBe("connected"); // wait-ok: the window's approval reached the core; the tool's next status reads it
-    } finally {
-      window.close();
-    }
+    });
     const connected = ok(tool(["access", "request", "--name", "nightly", "--json"]), "request again");
     expect(connected).toMatchObject({ state: "connected", level: "act" });
 

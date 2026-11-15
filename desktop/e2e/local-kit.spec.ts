@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { openProject } from "../../web/e2e/daemon-actions";
 import { startEngine } from "../../web/e2e/engine-fixture";
-import { connectStateDir } from "../../web/e2e/hided-control.mjs";
+import { connectStateDir, useControl } from "../../web/e2e/hided-control.mjs";
 import { enterWorkspace } from "../../web/e2e/wire";
 import {
   claudeSettings, codexDaemonWritten, codexHooks, readSettings, seedAgentFiles,
@@ -55,8 +55,7 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
   try {
     await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
     // The project the window opens below, made through the bundle's daemon as the web shell makes it.
-    const control = await connectStateDir(run.env.HIDE_STATE_DIR!);
-    try { await openProject(control, path.join(local.root, "fixture"), "fixture"); } finally { control.close(); }
+    await useControl(await connectStateDir(run.env.HIDE_STATE_DIR!), (control) => openProject(control, path.join(local.root, "fixture"), "fixture"));
     // B1: the first launch installs every part, asking nothing.
     await expect.poll(() => applied(daemonLog, nodeOf(run.env)).length, { timeout: 120_000 }).toBeGreaterThan(0);
     expect(applied(daemonLog, nodeOf(run.env))[0]!.components).toEqual(PARTS.map((id) => expect.objectContaining({ id, state: "installed" })));
