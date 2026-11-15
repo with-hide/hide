@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, type Page } from "@playwright/test";
-import { connectControl, type HidedControl } from "./hided-control.mjs";
+import { connectControl, useControl, type HidedControl } from "./hided-control.mjs";
 import { agentIn, areaShowing, closePane, focusPane, openProject, splitPane, startAgentInCheckout, startedAgentIn, tabOfPane, tabPanes, viewPane, waitForPaneInput } from "./daemon-actions";
 import { claudeProjects, panePrompt, paneShellOf, writeFixtureTranscript, type PaneShell } from "./pane-fixture";
 import { startHided, type Daemon, type DaemonEngine, type OpenedDaemon } from "./hided-fixture";
@@ -272,20 +272,20 @@ function openedByFirstDaemon<T>(server: EngineServer, open: (control: HidedContr
       terminal.push(encoded);
       terminalBytes += bytes;
     });
-    try {
-      made = await open(control, daemon);
-    } catch (error) {
-      // Run evidence for a reviewer: what the daemon published when the setup gave up.
-      const keep = process.env.HIDE_E2E_SCREENSHOT_DIR;
-      if (keep) {
-        const rest = await control.until((now) => now, "the last snapshot", 1_000).catch(() => null);
-        fs.writeFileSync(path.join(keep, `fixture-setup-${path.basename(server.root)}.json`), JSON.stringify(rest));
-        fs.writeFileSync(path.join(keep, `fixture-terminal-${path.basename(server.root)}.json`), JSON.stringify({ dropped: terminalDropped, chunks: terminal.map((encoded) => JSON.parse(encoded)) }));
+    made = await useControl(control, async () => {
+      try {
+        return await open(control, daemon);
+      } catch (error) {
+        // Run evidence for a reviewer: what the daemon published when the setup gave up.
+        const keep = process.env.HIDE_E2E_SCREENSHOT_DIR;
+        if (keep) {
+          const rest = await control.until((now) => now, "the last snapshot", 1_000).catch(() => null);
+          fs.writeFileSync(path.join(keep, `fixture-setup-${path.basename(server.root)}.json`), JSON.stringify(rest));
+          fs.writeFileSync(path.join(keep, `fixture-terminal-${path.basename(server.root)}.json`), JSON.stringify({ dropped: terminalDropped, chunks: terminal.map((encoded) => JSON.parse(encoded)) }));
+        }
+        throw error;
       }
-      throw error;
-    } finally {
-      control.close();
-    }
+    });
   };
   return { opened, need };
 }

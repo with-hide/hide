@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import { connectControl, useControl, type HidedControl, type Rest } from "./hided-control.mjs";
 import { dumpOnFailure } from "./failure-dump";
 import type { Daemon } from "./hided-fixture";
 import { paneProgramLine, type PaneShell } from "./pane-fixture";
@@ -19,14 +19,13 @@ type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: La
 type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };
 type NavigatorWorkspace = { id: string; path: string; label?: string; checkouts: { id: string; path?: string; tabs?: { id: string }[]; agent_groups?: { groups: { tabs: string[] }[] } }[] };
 
-/** Runs `use` on a connection of its own to `daemon`, closed whatever happens. */
+/**
+ * Runs `use` on a connection of its own to `daemon`, closed whatever happens,
+ * and returns once the daemon has applied every event `use` sent on it
+ * (`useControl`): the next step's connection cannot overtake them.
+ */
 export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, use: (control: HidedControl) => Promise<T>): Promise<T> {
-  const control = await connectControl(daemon);
-  try {
-    return await use(control);
-  } finally {
-    control.close();
-  }
+  return useControl(await connectControl(daemon), use);
 }
 
 /** The core's log of `daemon`, every file of it, as text. */
