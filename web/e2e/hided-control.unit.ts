@@ -87,7 +87,7 @@ async function startDaemon(): Promise<Daemon> {
 
 /** Resolves once the relay holds something the client sent. */
 async function heldSomething(daemon: Daemon): Promise<void> {
-  await vi.waitFor(() => expect(daemon.held()).toBeGreaterThan(0), { timeout: 5_000, interval: 5 });
+  await vi.waitFor(() => expect(daemon.held()).toBeGreaterThan(0), { timeout: 5_000, interval: 5 }); // wait-ok: the relay holds a frame the client sent
 }
 
 test("closing waits until the daemon has read every event sent before it and closed the connection", async () => {
