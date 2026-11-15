@@ -856,3 +856,65 @@ class IgnoredPreparation(unittest.TestCase):
         # The same decision the `--run-ignored` flag comes from, so a plan
         # with no ignored test builds nothing.
         self.assertLess(step.index("if [ -n \"$run_ignored\" ]"), step.index(". scripts/prepare-ignored-tests.sh"))
+
+
+class RustLegRuns(unittest.TestCase):
+    """What the repeat lane's Rust leg keeps and prepares for the tests it repeats.
+
+    A repeated run is proved by two things the lane has to make itself: the
+    nextest summary it reads afterward, and, on Windows, the ConPTY runtime a
+    pane holder runs on. Both were missing on real runs (43658075817 and
+    43658081062), and neither is about the tests a pull request changed.
+    """
+
+    def workflow(self):
+        import yaml
+        return yaml.safe_load((ROOT / ".github/workflows/repeat.yml").read_text())["jobs"]["rust"]
+
+    def steps_where(self, predicate):
+        return [step for step in self.workflow()["steps"] if predicate(step)]
+
+    def test_every_repeated_nextest_run_keeps_both_streams_its_summary_can_take(self):
+        # nextest writes its stress summary to standard error, so a tee of
+        # standard output alone can leave the log without one; the report step
+        # then fails a run whose every iteration passed.
+        repeats = self.steps_where(lambda step: "verify-cargo.sh nextest" in (step.get("run") or ""))
+        self.assertTrue(repeats, "the lane repeats no Rust run")
+        for step in repeats:
+            with self.subTest(step=step.get("name")):
+                run = step["run"]
+                self.assertIn("2>&1", run)
+                self.assertLess(run.index("2>&1"), run.index("| tee"))
+
+    def test_the_sibling_lanes_this_one_is_held_to_read_the_same_way(self):
+        # The rule is the lane's, not this file's: the two lanes that already
+        # got it right are the reference a reader can check. They write it
+        # across a continuation, so the pipe is found by the joined line.
+        for name in ("remote-mailbox.yml", "wsl-device.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            self.assertTrue(
+                re.search(r"2>&1\s*(?:\\\n)?\s*\| tee", text),
+                f"{name} tees only one stream of a repeated run",
+            )
+
+    def test_the_windows_leg_has_the_conpty_runtime_its_holder_tests_start_on(self):
+        # `hide-holder::it` starts a pane holder, which runs on the pinned
+        # ConPTY runtime; without the variable every test of it stops in its
+        # fixture before reaching its own body.
+        fetched = self.steps_where(lambda step: "fetch-conpty.py" in (step.get("run") or ""))
+        self.assertTrue(fetched, "no step fetches the ConPTY runtime")
+        for step in fetched:
+            self.assertEqual(step.get("if"), "runner.os == 'Windows'")
+            self.assertIn("HIDE_HOLDER_CONPTY", (step.get("env") or {}))
+        # The repeated run hands it on: an ordinary module never reaches the
+        # preparation that exports it for an ignored test.
+        repeating = self.steps_where(lambda step: "verify-cargo.sh nextest" in (step.get("run") or ""))
+        self.assertTrue(any("HIDE_HOLDER_CONPTY" in (step.get("env") or {}) for step in repeating))
+
+    def test_the_runtime_is_fetched_for_a_runner_not_for_a_module_name(self):
+        # A hand run of any crate's module on Windows needs it, so the
+        # condition is the runner: a step keyed to one crate's name would miss
+        # the next crate that starts a holder.
+        step = self.steps_where(lambda step: "fetch-conpty.py" in (step.get("run") or ""))[0]
+        self.assertEqual(step["if"], "runner.os == 'Windows'")
+        self.assertNotIn("hide-holder", step["if"])

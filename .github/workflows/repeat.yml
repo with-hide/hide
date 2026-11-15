@@ -332,6 +332,22 @@ jobs:
       - name: Install the holder tests' xterm
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
+      - name: Fetch the pinned ConPTY runtime
+        # A Windows holder runs on it, and the holder tests start one: without
+        # it every `hide-holder::it` test stops in its fixture naming the
+        # variable, before it reaches the test it was repeated for (run
+        # 43658081062 failed all 15 of the `records` module this way). The
+        # preparation step below does this for a plan that names an ignored
+        # test; a hand run of an ordinary module never reaches it, so the
+        # runtime is fetched here too, for every repeated module on Windows
+        # and not for one crate's name. The package is 1.7 MB (a cache keyed
+        # by its digest, `scripts/fetch-conpty.py`) and `wsl-device.yml` reads
+        # it the same way.
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        env:
+          HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
+        run: python scripts/fetch-conpty.py --out "$HIDE_HOLDER_CONPTY"
       # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 5
@@ -360,6 +376,10 @@ jobs:
         env:
           PLAN: ${{ needs.count.outputs.rust-plan }}
           REPEAT: ${{ needs.count.outputs.repeat }}
+          # The runtime the step above fetched, for the holder tests that
+          # start a pane on it (`hide-holder/tests/it/support.rs`). An empty
+          # value on another system is what those tests read there anyway.
+          HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
         run: |
           set -euo pipefail
           case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
@@ -392,8 +412,15 @@ jobs:
             # `--stress-count` exits 0 when the last iteration passed, so this
             # run's summary is kept and read below: an earlier iteration that
             # failed is a failed repeat the exit status does not show.
+            #
+            # nextest writes that summary to standard error, so both streams
+            # are kept: teeing only standard output left the log without a
+            # summary on a run where all 20 iterations passed, and the report
+            # step below failed it as unproven (run 43658075817, "the log holds
+            # no stress summary"). `remote-mailbox.yml` and `wsl-device.yml`
+            # already read their repeated runs this way.
             bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests=fail -p "$package" "${target[@]}" ${filter[@]+"${filter[@]}"} ${ignored[@]+"${ignored[@]}"} \
-              | tee -a "$RUNNER_TEMP/nextest.log"
+              2>&1 | tee -a "$RUNNER_TEMP/nextest.log"
             echo "::endgroup::"
           done < "$RUNNER_TEMP/filters.txt"
       - name: Report completed Rust runs
