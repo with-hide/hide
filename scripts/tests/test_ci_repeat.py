@@ -138,8 +138,7 @@ class Detection(unittest.TestCase):
         )
         self.assertEqual(
             asked,
-            [("hide-platform", "it", "test(/^(stand_ins)::/)", ""), ("hide-platform", "it", "test(/^(stand_ins)::/)", "all"),
-             ("hide-platform", "it", "", "")],
+            [("hide-platform", "it", "test(/^(stand_ins)::/)", ""), ("hide-platform", "it", "", "")],
         )
         # A helper beside a module that lists tests still runs the whole binary.
         plan = repeat.rust_plan(
@@ -347,22 +346,20 @@ class RustIgnoredAndHolder(unittest.TestCase):
     """What the Rust job is told beyond the filterset: the flag an ignored test
     needs and the holder it starts."""
 
-    def test_a_module_whose_tests_are_all_ignored_runs_them_only_when_asked(self):
-        # `engine::contract` is marked ignored because its tests start the
-        # built pane holder; a listing without the flag names none of them.
-        def lister(package, test, expression, run_ignored=""):
-            return {
-                "": (0, 0),
-                "all": (10, 10),
-                "ignored-only": (10, 10),
-            }[run_ignored]
+    def test_a_pull_requests_module_of_ignored_tests_runs_its_target_whole_without_them(self):
+        # `node_contract` is all ignored, and its tests need an sshd, the CLI
+        # build and a retained older build this lane does not prepare; a pull
+        # request that changes it repeats its binary's ordinary tests, as main
+        # did, and asks for no ignored test.
+        asked = []
 
-        plan = repeat.rust_plan([{"package": "hide-core", "test": "lib", "module": "engine::contract"}], lister)
-        self.assertEqual(
-            plan,
-            [{"package": "hide-core", "test": "lib", "filter": "test(/^(engine::contract)::/)",
-              "tests": 10, "run_ignored": "ignored-only"}],
-        )
+        def lister(package, test, expression, run_ignored=""):
+            asked.append(run_ignored)
+            return (0, 0) if expression else (293, 0)
+
+        plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "node_contract"}], lister)
+        self.assertEqual(plan, [{"package": "hided", "test": "it", "filter": "", "tests": 293, "run_ignored": ""}])
+        self.assertEqual(set(asked), {""})
 
     def test_a_module_mixing_ignored_tests_runs_its_ordinary_tests_only(self):
         # Its ignored tests need what other lanes prepare, or are a

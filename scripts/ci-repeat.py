@@ -478,40 +478,25 @@ def rust_plan(modules, lister):
     unknown) runs whole instead, whatever else was selected beside it, so N is
     always what runs and never an estimate.
 
-    An ignored test runs only when it is asked for, and nextest's own default
-    skips it, so a module whose selected tests are all ignored would list none
-    and be taken for a helper. `run_ignored` says what the job passes to run
-    what this plan counted: `ignored-only` when every test counted is ignored,
-    and empty otherwise.
-
-    An ignored test is one someone marked to run only where a thing it needs
-    is prepared: `scripts/prepare-ignored-tests.sh` puts the built pane holder
-    and the shells those tests name in place, and a plan whose entries ask for
-    ignored tests is a plan the job prepares that way first. That preparation
-    is what a module of ignored tests alone (`engine::contract`) needs. A
-    module or a whole binary that mixes them with ordinary tests runs its
-    ordinary tests only: its ignored ones need what other lanes prepare (an
-    sshd, an agent's program, Windows OpenSSH) or are a subprocess's entry
-    point that fails run alone, so asking for them would turn an ordinary pull
-    request red. The decision is this one, so no module name is written into
-    the workflow.
+    A pull request's plan asks for no ignored test. One is marked so because
+    it needs what an ordinary run does not prepare (an sshd, an agent's
+    program, Windows OpenSSH, a retained older build, or the call of a
+    subprocess whose entry point it is), and this lane prepares only the pane
+    holder and shells, so asking for them turned an ordinary change red. A
+    module of ignored tests alone lists none here and runs its target whole,
+    as a helper does, with its ordinary tests; a hand run that names it asks
+    for its ignored tests (`plan_run_ignored`). `run_ignored` is always empty.
     """
     plan = []
     for package, test, expression in nextest_filters(modules):
         names = sorted(module["module"] for module in modules
                        if module["package"] == package and module.get("test", "it") == test)
-        # A module is a helper when no test of its own runs, ignored or not.
-        # Asking with `--run-ignored` is what tells an all-ignored module (a
-        # test that needs the built holder) from a file that declares none.
-        if expression and any(
-            not any(lister(package, test, "test(/^(" + name + ")::/)", run_ignored)[0] for run_ignored in ("", "all"))
-            for name in names
-        ):
+        # A module that lists no ordinary test of its own runs its target whole.
+        if expression and any(not lister(package, test, "test(/^(" + name + ")::/)", "")[0] for name in names):
             expression = ""
-        run_ignored, (tests, _) = ignored_flag(lister, package, test, expression)
         plan.append({
-            "package": package, "test": test, "filter": expression, "tests": tests,
-            "run_ignored": run_ignored,
+            "package": package, "test": test, "filter": expression, "tests": lister(package, test, expression, "")[0],
+            "run_ignored": "",
         })
     return plan
 
@@ -522,34 +507,21 @@ def plan_run_ignored(plan, lister=None):
     A pull request's plan is counted in the `count` job, which lists on a
     runner of every system; a hand run names modules and nothing lists them,
     because the system asked for may not be the one the count job runs on. The
-    Rust job is on the system that runs them, so it asks nextest here, for the
-    same decision `rust_plan` takes: `ignored-only` where a listing without
-    the flag matches no test and one asking for ignored tests matches some,
-    `all` where a test it would run is marked ignored, and empty otherwise.
+    Rust job is on the system that runs them, so it asks nextest here:
+    `ignored-only` where a listing without the flag matches no test and one
+    asking for ignored tests matches some (a module someone named to repeat
+    its ignored tests, `engine::contract`), and empty otherwise. An entry with
+    ordinary tests runs those only, as `rust_plan` says why.
     """
     lister = lister or nextest_lister
     decided = []
     for entry in plan:
         package, test, expression = entry["package"], entry["test"], entry["filter"]
         run_ignored = entry.get("run_ignored", "")
-        if not run_ignored:
-            run_ignored = ignored_flag(lister, package, test, expression)[0]
+        if not run_ignored and not lister(package, test, expression, "")[0] and lister(package, test, expression, "ignored-only")[0]:
+            run_ignored = "ignored-only"
         decided.append({**entry, "run_ignored": run_ignored})
     return decided
-
-
-def ignored_flag(lister, package, test, expression):
-    """`(run_ignored, (tests, ignored))`: the flag one plan entry needs, and what nextest lists with it.
-
-    Only an entry whose every test is ignored asks for them (`rust_plan` says
-    why); one with ordinary tests runs those, as nextest's own listing counts
-    them.
-    """
-    ordinary = lister(package, test, expression, "")
-    if ordinary[0]:
-        return "", ordinary
-    ignored_only = lister(package, test, expression, "ignored-only")
-    return ("ignored-only", ignored_only) if ignored_only[0] else ("", ordinary)
 
 
 def bash():
