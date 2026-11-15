@@ -8,7 +8,7 @@ import { cn } from "../lib/utils";
 import { numberOf, numberedDevices } from "../numbering";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
 import { useShellStore } from "../store";
-import { toolCells } from "../toolCells";
+import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
 import { Button } from "./ui/button";
@@ -43,9 +43,8 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const tools = useShellStore((s) => toolCells(s.rest));
-  // A tool's cell, while one is selected, stands in front of the devices (PRD hide-external-control B40).
-  const picked = useUiStore((s) => s.toolCell);
-  const toolFront = tools.some((cell) => cell.connection === picked) ? picked : null;
+  // A tool's cell in front, read from what the center shows, is the one tile selected in place of a device's (PRD hide-external-control B40).
+  const toolFront = useFrontTool()?.connection ?? null;
   const tiles = useMemo<Tile[]>(() => {
     const own = windowDeviceId(devices);
     const shared = coreShared(devices);

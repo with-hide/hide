@@ -30,7 +30,7 @@ import { RAIL_ELBOW, TreeRails } from "./components/agent-tree";
 import { siblingsShown, sidebarTreeLines } from "./sidebarTree";
 import { moveSidebarKey, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
 import { groupFoldKey, useGroupFolds, useGroupName } from "./groupTabs";
-import { tabSurface } from "./recent";
+import { recentPanes, tabSurface } from "./recent";
 import { SleepingSessionRow } from "./components/sleeping-session-row";
 import { StatusBadge } from "./components/status-badge";
 import { Usage } from "./components/usage";
@@ -71,8 +71,8 @@ import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
 import { useUiStore } from "./ui";
 import { useOverviewCount } from "./Overview";
 import { revealSidebarFocus, sidebarFocusPane, sidebarPanes } from "./sidebarFocus";
-import { SidebarLensSwitch, TaskLens, ToolCellEmpty, ToolTaskLens } from "./TaskLens";
-import { toolCells, useFrontTool, useToolSidebarProjects } from "./toolCells";
+import { SidebarLensSwitch, TaskLens, ToolTaskLens } from "./TaskLens";
+import { toolCells, toolCheckoutPane, useFrontTool, useToolSidebarProjects } from "./toolCells";
 import type { ToolCell } from "./agentScope";
 import { InToolCell } from "./components/tool-mark";
 import { DeviceChip } from "./components/device-chip";
@@ -176,7 +176,11 @@ export function Sidebar({ actions }: { actions: Actions }) {
           ) : null}
           <SidebarLensSwitch actions={actions} />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-content="true">
-            {list}
+            {/* The list's slot fills the column above the lines and the footer, whichever list it holds and however
+                little that list draws, so no list, a device's or a tool's, empty or full, moves the footer. */}
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-list="true">
+              {list}
+            </div>
             <HerdrImportLine actions={actions} />
             <PracticeInvite actions={actions} />
             <div data-sidebar-footer="true" className="flex shrink-0 flex-wrap items-center gap-xs border-t border-border px-sm py-xs">
@@ -523,7 +527,6 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
     agentRowMenu,
   };
   if (!loaded) return <ListLoading />;
-  if (tool && workspaces.length === 0) return <ToolCellEmpty />;
   return (
     // The arrow keys move through both lists as one.
     <InToolCell.Provider value={tool !== null}>
@@ -545,9 +548,10 @@ function ProjectList({ actions, tool = null }: { actions: Actions; tool?: ToolCe
           <ProjectRowView key={rowKey(row)} row={row} first={index === 0 || listRows[index - 1]?.kind === "divider"} context={context} />
         ))}
         <CleanupRows workspaces={workspaces} context={context} deviceId={frontId} />
+        {/* A tool's cell with no work says so in the same place, in the tool's words (B42). */}
         {!remote && workspaces.length === 0 ? (
-          <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true">
-            {t("sidebar.noProjects")}
+          <li className="flex flex-col items-start gap-sm px-sm py-sm text-caption text-muted-foreground" data-projects-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
+            {tool ? t("taskLens.tool.empty") : t("sidebar.noProjects")}
           </li>
         ) : null}
       </ul>
@@ -933,6 +937,7 @@ function RepositoryMark({ workspace, actions }: { workspace: Workspace; actions:
 function WorkspaceRows({ workspace, quiet = false, first = false, context }: { workspace: Workspace; quiet?: boolean; first?: boolean; context: ListContext }) {
   const { t } = useInterfaceTranslation();
   const { treeAgents, actions, disclosure } = context;
+  const tool = useContext(InToolCell);
   const active = activeCheckouts(workspace);
   const inactive = inactiveCheckouts(workspace);
   const rowsByCheckout = useMemo(() => checkoutAgentRows(workspace, treeAgents, "sidebar"), [workspace, treeAgents]);
@@ -997,7 +1002,11 @@ function WorkspaceRows({ workspace, quiet = false, first = false, context }: { w
             aria-current={hiding === "project" ? "true" : undefined}
             aria-label={workspace.label}
             className="flex min-w-0 flex-1 self-stretch items-center gap-sm rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-            onClick={() => actions.openProject(workspace, projectRowExpansion(workspace, target, context.workspaceScreen ? context.focusedCheckoutId : null, disclosure))}
+            onClick={() => {
+              const expanded = projectRowExpansion(workspace, target, context.workspaceScreen ? context.focusedCheckoutId : null, disclosure);
+              if (tool && target) openCheckoutRow(actions, workspace, target, tool, undefined, expanded);
+              else actions.openProject(workspace, expanded);
+            }}
           >
             {/* A project's own mark, so its checkouts read as standing under it; a pinned one wears the pin in its place, and a Git project a folder with the branch mark. */}
             <ProjectMark workspace={workspace} />
@@ -1402,6 +1411,7 @@ function CheckoutOpenButton({
 }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const tool = useContext(InToolCell);
   // Read on every render, like `view.detail`: a memo keyed on the checkout would keep the Commit age from the last change to this row.
   const card = checkoutCard(workspace, checkout, Date.now(), t);
   return (
@@ -1419,10 +1429,23 @@ function CheckoutOpenButton({
         aria-label={label}
         disabled={disabled}
         className="rounded-sm disabled:pointer-events-auto disabled:cursor-default"
-        onClick={() => actions.openWorkspace(workspace.device_id, checkout.workspace_id, checkout.id, expanded, projectExpanded)}
+        onClick={() => openCheckoutRow(actions, workspace, checkout, tool, expanded, projectExpanded)}
       />
     </CheckoutCardHint>
   );
+}
+
+/**
+ * A checkout row's press (and a project row's, on the checkout it opens): the
+ * checkout's Workspace as the core holds it. In a tool's cell the row stands
+ * for the tool's sessions there, so when the tab the checkout shows is not
+ * one of theirs the press opens the tool's session instead
+ * (`toolCheckoutPane`), and the cell in front, read from the pane, stays.
+ */
+function openCheckoutRow(actions: Actions, workspace: Workspace, checkout: Checkout, tool: boolean, expanded?: boolean, projectExpanded?: boolean) {
+  const pane = tool ? toolCheckoutPane(checkout, recentPanes(useShellStore.getState().rest)) : null;
+  if (pane) return actions.openAgent(pane);
+  actions.openWorkspace(workspace.device_id, checkout.workspace_id, checkout.id, expanded, projectExpanded);
 }
 
 function CheckoutBadge({ checkout }: { checkout: Checkout }) {

@@ -6,7 +6,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { frontDeviceId } from "./devices";
 import { overviewDeviceOf } from "./overviewTasks";
-import "./toolCells";
+import { frontTool } from "./toolCells";
 import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
 import { FindBar } from "./Overlays";
@@ -450,8 +450,10 @@ describe("selecting a tool's cell", () => {
   afterEach(() => {
     window.location.hash = "";
     useShellStore.setState({ rest: null });
-    useUiStore.getState().setToolCell(null);
+    useUiStore.setState({ screen: null, overviewOpen: false });
   });
+  // The tool whose cell is in front, read from what the center shows.
+  const cellInFront = () => frontTool(useShellStore.getState().rest, useUiStore.getState().screen)?.connection ?? null;
   // `named` is the device a main page names, as a rail tile or a device's Overview opened as the page leaves it.
   const select = (hash: string, front: string, overview: string | null = null, named?: string) => {
     window.location.hash = hash;
@@ -460,7 +462,7 @@ describe("selecting a tool's cell", () => {
     useUiStore.getState().setOverview({ deviceId: overview });
     const sent: Parameters<DispatchFn>[0][] = [];
     createActions((event) => { sent.push(event); return true; }).focusTool(TOOL);
-    return { focus: sent.filter((event) => event.kind === "focus_device").map((event) => (event.payload as { device_id: string }).device_id), overview: useUiStore.getState().overview.deviceId, cell: useUiStore.getState().toolCell };
+    return { focus: sent.filter((event) => event.kind === "focus_device").map((event) => (event.payload as { device_id: string }).device_id), overview: useUiStore.getState().overview.deviceId, cell: cellInFront() };
   };
   // The machine the Overview shows, as `useOverviewDevice` reads it, beside the one the rail and the sidebar show once no cell stands.
   const shown = () => {
@@ -484,7 +486,8 @@ describe("selecting a tool's cell", () => {
     for (const [hash, own] of [["", "core"], ["#node=node-window", "node-window"]] as const) {
       expect(select(hash, "mini", null, "mini").focus, hash).toEqual([own]);
       cellGoes(own);
-      expect(useUiStore.getState().toolCell, hash).toBeNull();
+      expect(cellInFront(), hash).toBeNull();
+      expect(useUiStore.getState().screen, hash).toEqual({ kind: "main" });
       expect(shown(), hash).toEqual({ overview: own, rail: own });
     }
   });
@@ -496,7 +499,6 @@ describe("selecting a tool's cell", () => {
 
   it("drops a device the Overview named while the cell stood once the cell goes", () => {
     select("", "core");
-    useUiStore.setState({ screen: { kind: "main", deviceId: "mini" } });
     useUiStore.getState().setOverview({ deviceId: "mini" });
     cellGoes("core");
     expect(shown()).toEqual({ overview: "core", rail: "core" });
@@ -509,12 +511,43 @@ describe("selecting a tool's cell", () => {
       select("", "core");
       useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: layer });
       createActions(() => true).focusTool(TOOL);
-      const { screen, overviewOpen, toolCell } = useUiStore.getState();
-      expect({ screen: screen?.kind, overviewOpen, toolCell }, `layer ${layer}`).toEqual({ screen: "main", overviewOpen: false, toolCell: TOOL });
+      const { screen, overviewOpen } = useUiStore.getState();
+      expect({ screen: screen?.kind, overviewOpen, cell: cellInFront() }, `layer ${layer}`).toEqual({ screen: "main", overviewOpen: false, cell: TOOL });
     }
+    // This Mac's Workspace, an operator's pane in front, is where the center goes back to.
+    const now = useShellStore.getState().rest!;
+    const checkout = { id: "c", workspace_id: "w", path: "/fixture", label: "fixture", tabs: [{ id: "t", panes: [{ id: "mine" }] }], agent_scope: emptyScope() };
+    useShellStore.setState({ rest: { ...now, navigator: { ...now.navigator!, focused_checkout_id: "c", workspaces: [{ id: "w", device_id: "core", checkouts: [checkout] }] }, focused: { pane_id: "mine" }, workspace_view: { device_id: "core", path: "/fixture" } } as never });
     const sent: Parameters<DispatchFn>[0][] = [];
     createActions((event) => { sent.push(event); return true; }).focusDevice("core");
-    const { screen, toolCell } = useUiStore.getState();
-    expect({ screen: screen?.kind, toolCell }).toEqual({ screen: "workspace", toolCell: null });
+    expect({ screen: useUiStore.getState().screen?.kind, cell: cellInFront() }).toEqual({ screen: "workspace", cell: null });
+    expect(sent).toEqual([]);
+  });
+
+  it("opens on the tool's Overview page its own session's record in its own panel, and another's on the device's Overview", () => {
+    const actions = createActions(() => true);
+    select("", "core");
+    const now = useShellStore.getState().rest!;
+    const cell = { connection: TOOL, name: "nightly", turn: 0, devices: [{ device_id: "core", tasks: { cards: [], needs_you: 0, recency: "" }, members: [{ pane_id: "tool-pane", project_id: "w", checkout_id: "c" }] }] };
+    useShellStore.setState({ rest: { ...now, navigator: { ...now.navigator!, tools: [cell] } } as never, agents: [{ pane_id: "tool-pane", session_id: "s-tool" }, { pane_id: "mine", session_id: "s-mine" }] as never });
+    actions.openSessionRecord({ device_id: "core", agent: "claude", session_id: "s-tool" });
+    expect({ screen: useUiStore.getState().screen, panel: useUiStore.getState().overview.panel?.kind, cell: cellInFront() }).toEqual({ screen: { kind: "main", deviceId: "core", tool: TOOL }, panel: "record", cell: TOOL });
+    actions.openSessionRecord({ device_id: "core", agent: "claude", session_id: "s-mine" });
+    expect({ screen: useUiStore.getState().screen, cell: cellInFront() }).toEqual({ screen: { kind: "main", deviceId: "core" }, cell: null });
+  });
+
+  it("opens the 개요 and 미션 rows of a tool's cell on the tool's own pages, from the page and from a pane it keeps", () => {
+    const actions = createActions(() => true);
+    select("", "core");
+    actions.openMissions();
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions", tool: TOOL });
+    actions.toggleOverview();
+    expect(useUiStore.getState().screen).toEqual({ kind: "main", tool: TOOL });
+    // A device's tile from the tool's mission screen shows the device's missions.
+    actions.openMissions();
+    actions.focusDevice("core");
+    expect({ screen: useUiStore.getState().screen, cell: cellInFront() }).toEqual({ screen: { kind: "missions" }, cell: null });
+    actions.openMissions();
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
   });
 });

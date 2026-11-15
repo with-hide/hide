@@ -76,7 +76,8 @@ export function OverviewPage({ actions }: { actions: Actions }) {
 
 /**
  * The tool's cell the Overview shows (PRD hide-external-control D-48, B40):
- * the one in front while the Overview's own switch picked no device.
+ * the one in front (`frontTool`) while the Overview's own switch picked no
+ * device.
  */
 export function useOverviewTool(): ToolCell | null {
   const picked = useUiStore((s) => s.overview.deviceId);

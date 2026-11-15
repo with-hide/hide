@@ -31,7 +31,7 @@ async function drawn() {
   const tool: ToolCell = { connection: "c0ffee00c0ffee00", name: "nightly", turn: 0, devices: [] };
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: [{ id: "alpha", label: "alpha", device_id: "local", path: "/fixture", checkouts: [{ id: "alpha-main", workspace_id: "alpha", label: "main", path: "/fixture/alpha", tabs: [] }] }], focused_device_id: "local", tools: [tool] }, status: { remote: [] }, missions: { items: [], failed: false } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, agents: [], focusedPaneId: null, connection: "live", linkSummaries: null });
-  useUiStore.setState({ mainView: "work", toolCell: tool.connection });
+  useUiStore.setState({ mainView: "work", screen: { kind: "main", tool: tool.connection } });
   const sent: { kind: string; payload: Record<string, unknown> }[] = [];
   const container = document.createElement("div");
   document.body.append(container);
