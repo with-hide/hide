@@ -10,6 +10,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use hide_agent_hooks::hook_request::install::AccessAsk;
 use hide_core::access::{valid_key, valid_name};
@@ -18,12 +19,17 @@ use serde_json::{Value, json};
 
 use crate::env::Env;
 
-pub const USAGE: &str = "hide access request --name <name> [--json]\nhide access status [--json]\nhide access leave [--json]\nhide access list [--json]";
+pub const USAGE: &str = "hide access request --name <name> [--no-wait] [--json]\nhide access status [--json]\nhide access leave [--json]\nhide access list [--json]";
 
 const KEY_SCHEMA_VERSION: u32 = 1;
 /// A key file holds a name and a key: anything longer is not one.
 const KEY_FILE_LIMIT: u64 = 4096;
 const REQUEST_EXTENSION: &str = "request";
+/// How long `hide access request` waits for the operator's answer before it
+/// ends with the request still waiting (D-56).
+const ANSWER_WAIT: Duration = Duration::from_secs(600);
+/// How often a waiting request asks the core where it stands.
+const ANSWER_POLL: Duration = Duration::from_secs(1);
 const KEY_EXTENSION: &str = "key";
 
 #[derive(Debug, Eq, PartialEq)]
@@ -34,7 +40,12 @@ pub struct AccessCli {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum Verb {
-    Request { name: String },
+    /// `wait`: stays until the operator answers, up to [`ANSWER_WAIT`];
+    /// `--no-wait` answers at once.
+    Request {
+        name: String,
+        wait: bool,
+    },
     Status,
     Leave,
     List,
@@ -44,9 +55,11 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<AccessCli
     let verb = args.next().map(String::as_str);
     let mut json = false;
     let mut name = None;
+    let mut wait = true;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" if !json => json = true,
+            "--no-wait" if verb == Some("request") && wait => wait = false,
             "--name" if verb == Some("request") && name.is_none() => match args.next() {
                 Some(value) if valid_name(value) => name = Some(value.clone()),
                 _ => return Err(USAGE.to_owned()),
@@ -55,7 +68,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<AccessCli
         }
     }
     let verb = match (verb, name) {
-        (Some("request"), Some(name)) => Verb::Request { name },
+        (Some("request"), Some(name)) => Verb::Request { name, wait },
         (Some("status"), None) => Verb::Status,
         (Some("leave"), None) => Verb::Leave,
         (Some("list"), None) => Verb::List,
@@ -117,7 +130,7 @@ impl Refusal {
 
 pub fn run(env: &Env, cli: &AccessCli) -> Result<(), String> {
     let answer = match &cli.verb {
-        Verb::Request { name } => request(env, name),
+        Verb::Request { name, wait } => request(env, name, *wait),
         Verb::Status => status(env),
         Verb::Leave => leave(env),
         Verb::List => list(env),
@@ -142,8 +155,45 @@ pub fn run(env: &Env, cli: &AccessCli) -> Result<(), String> {
 }
 
 /// `hide access request --name <name>`: puts the tool up for the operator,
-/// or, asked again, answers where that request stands (B1, B5, B7, B9).
-fn request(env: &Env, name: &str) -> Result<Value, Refusal> {
+/// or, asked again, answers where that request stands (B1, B5, B7, B9), and
+/// unless `wait` is false stays until the operator answers (D-56).
+fn request(env: &Env, name: &str, wait: bool) -> Result<Value, Refusal> {
+    let answer = put_up(env, name)?;
+    if !wait || answer["state"] != "pending" {
+        return Ok(answer);
+    }
+    wait_for_answer(env, name, answer)
+}
+
+/// Asks the core where `name`'s request stands until the operator answers
+/// or [`ANSWER_WAIT`] passes. The request stays when the wait ends, and an
+/// interrupted wait loses nothing: the next command picks up the key once
+/// the operator approves ([`tool_key`]).
+#[allow(clippy::disallowed_methods)] // polls a state the operator's window changes in the core, bounded by ANSWER_WAIT
+fn wait_for_answer(env: &Env, name: &str, mut answer: Value) -> Result<Value, Refusal> {
+    let folder = hide_kit::layout::access_keys(&env.home);
+    eprintln!(
+        "Waiting up to {} minutes for the operator to approve {name} in Settings > External tools.",
+        ANSWER_WAIT.as_secs() / 60
+    );
+    let deadline = Instant::now() + ANSWER_WAIT;
+    while Instant::now() < deadline {
+        std::thread::sleep(ANSWER_POLL);
+        // Only this tool's own `leave` or a damaged file takes the request
+        // away meanwhile; either is answered as a fresh request would be.
+        let Some(key) = kept(&folder, name)? else {
+            return Err(Refusal::new("access_request_expired"));
+        };
+        answer = settle(env, &folder, key)?;
+        if answer["state"] != "pending" {
+            return Ok(answer);
+        }
+    }
+    Ok(answer)
+}
+
+/// Puts the tool up, or answers where its kept request or key stands.
+fn put_up(env: &Env, name: &str) -> Result<Value, Refusal> {
     refuse_in_pane(env)?;
     let folder = hide_kit::layout::access_keys(&env.home);
     let kept = match kept(&folder, name) {
@@ -303,9 +353,30 @@ pub(crate) fn tool_key(env: &Env) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let folder = hide_kit::layout::access_keys(&env.home);
-    chosen(env, &folder, true)
-        .map(|key| key.map(|key| key.key))
-        .map_err(|refusal| refusal.code)
+    match chosen(env, &folder, true) {
+        Ok(Some(key)) => Ok(Some(key.key)),
+        Ok(None) => Ok(approved_request(env, &folder)),
+        Err(refusal) if refusal.code == "access_not_connected" => {
+            approved_request(env, &folder).map_or(Err(refusal.code), |key| Ok(Some(key)))
+        }
+        Err(refusal) => Err(refusal.code),
+    }
+}
+
+/// The key of the request this home keeps once the operator has approved
+/// it, kept as the key from now on, so a tool whose `hide access request`
+/// ended before the answer needs no second one (D-56). A request still
+/// waiting, or one the core ended, leaves the command as it was with no
+/// key: a waiting request does not count for commands (B19), and an ended
+/// one is removed so the next `hide access request` asks anew.
+fn approved_request(env: &Env, folder: &Path) -> Option<String> {
+    let request = chosen(env, folder, false)
+        .ok()
+        .flatten()
+        .filter(|key| key.kept == Kept::Requested)?;
+    let key = request.key.clone();
+    let answer = settle(env, folder, request).ok()?;
+    (answer["state"] == "connected").then_some(key)
 }
 
 /// The state folder of the daemon a tool's command asks: `HIDE_STATE_DIR`
@@ -346,7 +417,7 @@ fn ask(env: &Env, ask: AccessAsk) -> Result<Value, Refusal> {
 
 fn waiting(mut value: Value, name: &str) -> Value {
     value["next_action"] = json!(format!(
-        "Wait until the operator approves the request in Settings > External tools, then run hide access request --name {name} again"
+        "Once the operator approves it in Settings > External tools, the next hide command runs as {name}; hide access request --name {name} waits for the answer"
     ));
     value
 }
@@ -561,9 +632,21 @@ mod tests {
             parse(request.iter()),
             Ok(AccessCli {
                 verb: Verb::Request {
-                    name: "nightly-bot".to_owned()
+                    name: "nightly-bot".to_owned(),
+                    wait: true
                 },
                 json: true
+            })
+        );
+        let no_wait = args(&["request", "--no-wait", "--name", "nightly-bot"]);
+        assert_eq!(
+            parse(no_wait.iter()),
+            Ok(AccessCli {
+                verb: Verb::Request {
+                    name: "nightly-bot".to_owned(),
+                    wait: false
+                },
+                json: false
             })
         );
         for verb in ["status", "leave", "list"] {
@@ -576,6 +659,8 @@ mod tests {
             &["status", "--name", "x"],
             &["approve", "x"],
             &["list", "--json", "--json"],
+            &["status", "--no-wait"],
+            &["request", "--name", "x", "--no-wait", "--no-wait"],
         ] {
             assert!(parse(args(wrong).iter()).is_err(), "{wrong:?}");
         }

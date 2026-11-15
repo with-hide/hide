@@ -1,16 +1,19 @@
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
 import { scopeAgents, type LensAgent } from "./overviewLens";
 import type { BoardProject } from "./projectBoard";
+import type { TaskState } from "./agentScope";
 import type { AgentRow, GraphProjectKey, OverviewGraphFocus, GraphScope, GraphSessionKey, OverviewGraphChoices, OverviewGraphMetadata, OverviewGraphParty } from "./snapshot";
 
-export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null; launchEffort: string | null };
+/** `activity`: the map's filter group of the session (`graphActivity`, or in a tool's cell `toolGraphActivity`). */
+export type GraphAgent = LensAgent & { id: string; projectId: string; deviceId: string; digest: string | null; launchModel: string | null; launchEffort: string | null; activity: GraphActivity };
 /** `startSlot`: the place the project's next session would take, where the map draws its start circle (issue 2514). */
 export type GraphProject = { id: string; project: BoardProject; agents: GraphAgent[]; roots: number; shown: GraphAgent[]; revealSlot: string | null; revealed: GraphAgent | null; startSlot: string };
 /** The map's `Add project` place: one project of its own with one place in it, held out of every admission. */
 export const ADD_PROJECT = { project: "\u0000add-project", slot: "\u0000add-project:slot", nodes: 2 } as const;
 export type GraphFocus = OverviewGraphFocus;
 /** `chosen`: the session whose details are open, drawn whatever the filter says (PRD pane-open-in-overview D-05). */
-export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null; chosen?: string | null };
+/** `tool`: the map is an external tool's cell, whose sessions stand by the tool's turn (`toolGraphActivity`). */
+export type GraphFocusOptions = { focus: GraphFocus; includeResting: boolean; pinned?: readonly string[]; selected?: string | null; chosen?: string | null; tool?: boolean };
 export type GraphActivity = Exclude<GraphFocus, "all"> | "unknown" | "idle" | "resting";
 export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeResting: false };
 
@@ -24,6 +27,22 @@ export function graphActivity(agent: AgentRow): GraphActivity {
     case "asleep": return "resting";
     default: return "unknown";
   }
+}
+/**
+ * A session's filter group in an external tool's cell (PRD hide-external-control B40): a task's root stands
+ * where the cell's sidebar puts its task, the core's card state, so the map's `도구가 답할 차례` counts and lists
+ * what the sidebar's does; a session that is no task's root, and a resting task's root, keep their own group,
+ * except that nothing in the cell is the operator's turn: a delegated session's ask is its task's work in
+ * progress, and a resting root's View is the operator's to look at in their own cell.
+ */
+export function toolGraphActivity(agent: AgentRow, card: TaskState | undefined): GraphActivity {
+  switch (card) {
+    case "needs_you": case "blocked": return "turn";
+    case "working": case "waiting": return "working";
+    case "done": return "results";
+  }
+  const own = graphActivity(agent);
+  return own !== "turn" ? own : card === undefined ? "working" : "idle";
 }
 /** Whether a session's own words, its title, checkout or branch, hold a search's lowercased needle. */
 export const graphSessionMatches = (row: GraphAgent, needle: string) => [row.agent.identity_label, row.checkout.label, row.checkout.branch].some((text) => text?.toLocaleLowerCase().includes(needle));
@@ -116,11 +135,13 @@ export function overviewGraphTeam(row: GraphAgent, model: Pick<OverviewGraphMode
 }
 
 /** Membership is the core's scope, never a cwd prefix, registration history or a fork origin. */
-function projectSessions(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined): Pick<GraphProject, "id" | "project" | "agents" | "roots">[] {
+function projectSessions(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined, tool = false): Pick<GraphProject, "id" | "project" | "agents" | "roots">[] {
   const proof = new Map((metadata?.sessions ?? []).map((session) => [JSON.stringify([session.device_id, session.pane_id]), session]));
   const seen = new Set<string>();
   return projects.map((project) => {
     const id = graphProjectId(project);
+    const cards = new Map((project.workspace.agent_scope.tasks?.cards ?? []).map((card) => [card.root, card.state]));
+    const activityOf = (agent: AgentRow) => (tool ? toolGraphActivity(agent, cards.get(agent.pane_id)) : graphActivity(agent));
     const agents = scopeAgents([project]).flatMap((row): GraphAgent[] => {
       const deviceId = row.agent.device_id;
       const session = proof.get(JSON.stringify([deviceId, row.agent.pane_id]));
@@ -128,7 +149,7 @@ function projectSessions(projects: readonly BoardProject[], metadata: OverviewGr
       const agentId = graphSessionId(deviceId, row.agent.pane_id, digest ?? row.agent.session_id ?? null);
       if (seen.has(agentId)) return [];
       seen.add(agentId);
-      return [{ ...row, id: agentId, projectId: id, deviceId, digest, launchModel: session?.launch_model ?? null, launchEffort: session?.launch_effort ?? null }];
+      return [{ ...row, id: agentId, projectId: id, deviceId, digest, launchModel: session?.launch_model ?? null, launchEffort: session?.launch_effort ?? null, activity: activityOf(row.agent) }];
     });
     agents.sort((a, b) => a.id.localeCompare(b.id));
     const parents = lineageParents(agents);
@@ -153,14 +174,14 @@ export function overviewProjectGraphCounts(projects: readonly BoardProject[], me
 
 export function overviewGraphModel(projects: readonly BoardProject[], metadata: OverviewGraphMetadata | undefined, projectId: string | null, options: GraphFocusOptions = GRAPH_FOCUS_DEFAULTS): OverviewGraphModel {
   const scoped = projects.filter((project) => projectId === null || project.workspace.id === projectId);
-  const sessions = projectSessions(scoped, metadata);
+  const sessions = projectSessions(scoped, metadata, options.tool);
   const allAgents = sessions.flatMap((group) => group.agents);
   const parentRows = lineageParents(allAgents);
   const parents = new Map([...parentRows].map(([id, parent]) => [id, parent.id]));
   const counts = { all: 0, turn: 0, working: 0, results: 0 };
-  const present = (row: GraphAgent) => options.includeResting || graphActivity(row.agent) !== "resting";
+  const present = (row: GraphAgent) => options.includeResting || row.activity !== "resting";
   const matches = allAgents.filter((row) => {
-    const activity = graphActivity(row.agent);
+    const activity = row.activity;
     if (present(row)) counts.all += 1;
     if (activity === "turn" || activity === "working" || activity === "results") counts[activity] += 1;
     return present(row) && (options.focus === "all" || activity === options.focus);
@@ -197,7 +218,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   for (let index = 0; index < ready.length; index += 1) {
     const row = ready[index]!;
     const kids = children.get(row.id) ?? [];
-    const safe = kids.every((child) => graphActivity(child.agent) === "resting" && quiet.get(child.id));
+    const safe = kids.every((child) => child.activity === "resting" && quiet.get(child.id));
     const count = kids.reduce((total, child) => total + Number(retained.has(child.id)) + (descendantCount.get(child.id) ?? 0), 0);
     quiet.set(row.id, safe);
     descendantCount.set(row.id, count);
@@ -254,7 +275,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
     group.shown.sort((a, b) => a.id.localeCompare(b.id));
     hidden += group.agents.length - group.shown.length - Number(group.revealed !== null);
   }
-  const agents = matches.sort((a, b) => PRIORITY[graphActivity(a.agent)] - PRIORITY[graphActivity(b.agent)] || a.id.localeCompare(b.id));
+  const agents = matches.sort((a, b) => PRIORITY[a.activity] - PRIORITY[b.activity] || a.id.localeCompare(b.id));
   const admitted = new Set(groups.map((group) => group.id));
   const visible = groups.flatMap((group) => [...group.shown, ...(group.revealed ? [group.revealed] : [])]);
   const placed = new Set(groups.flatMap((group) => group.shown.map((row) => row.id)));
@@ -269,7 +290,7 @@ export function overviewGraphModel(projects: readonly BoardProject[], metadata: 
   const summaries = sessions.flatMap((group): ProjectSummary[] => {
     const members = group.agents.filter((row) => retained.has(row.id));
     if (!members.length) return [];
-    const activity = members.map((row) => graphActivity(row.agent));
+    const activity = members.map((row) => row.activity);
     return [{ id: group.id, project: group.project, sessions: members.length, turn: activity.filter((value) => value === "turn").length, working: activity.filter((value) => value === "working").length, results: activity.filter((value) => value === "results").length, admitted: admitted.has(group.id) }];
   }).sort((a, b) => a.id.localeCompare(b.id));
   // Every proven session keeps its counterparts, drawn or not; the view decides which pairs it draws.

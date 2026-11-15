@@ -1462,6 +1462,35 @@ impl Core {
         lock_recover(&self.runtime).memory_scope(context)
     }
 
+    /// What a prompt hook in `caller`'s pane on `device` reads the open
+    /// questions of `session_id`, its session, from; none when it gives none
+    /// (`links::agent_asks`, docs/status-model.md, A question still waiting).
+    pub fn asks_give_scope(
+        &self,
+        device: &str,
+        caller: &str,
+        session_id: &str,
+    ) -> Option<crate::links::agent_asks::GiveScope> {
+        if !check_owner_thread(self, "asks.give") {
+            return None;
+        }
+        lock_recover(&self.runtime).asks_give_scope(device, caller, session_id)
+    }
+
+    /// What `hide session fold-ask` from `caller`'s pane writes through, run off
+    /// the owner thread by the caller (`FoldScope::run`).
+    pub fn fold_ask_scope(
+        &self,
+        device: &str,
+        caller: &str,
+        expected: &crate::workspace_control::Context,
+    ) -> Result<crate::links::agent_asks::FoldScope, String> {
+        if !check_owner_thread(self, "asks.fold") {
+            return Err("ask_unavailable".into());
+        }
+        lock_recover(&self.runtime).fold_ask_scope(device, caller, expected)
+    }
+
     pub fn workspace_control_query(
         &self,
         device_id: &str,

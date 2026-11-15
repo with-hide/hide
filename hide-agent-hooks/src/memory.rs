@@ -124,6 +124,10 @@ pub struct MemoryContext {
     /// and under its own cap, whether or not Memory answered (PRD
     /// memory-self-improve D-31).
     pub global: Option<String>,
+    /// The session's open questions a prompt gives its agent, with their
+    /// receipt line, in their own slot outside Memory's quota and whether or
+    /// not Memory answered (docs/status-model.md, A question still waiting).
+    pub asks: Option<String>,
 }
 
 impl MemoryContext {
@@ -132,19 +136,20 @@ impl MemoryContext {
             context: None,
             outcome,
             global: None,
+            asks: None,
         }
     }
 
-    /// The global instruction first, then Memory's context, or none.
+    /// The global instruction first, then Memory's context, then the open
+    /// questions, or none.
     pub fn joined(&self) -> Option<String> {
-        match (&self.global, &self.context) {
-            (None, None) => None,
-            (global, context) => Some(format!(
-                "{}{}",
-                global.as_deref().unwrap_or_default(),
-                context.as_deref().unwrap_or_default()
-            )),
-        }
+        let parts = [&self.global, &self.context, &self.asks];
+        parts.iter().any(|part| part.is_some()).then(|| {
+            parts
+                .iter()
+                .filter_map(|part| part.as_deref())
+                .collect::<String>()
+        })
     }
 }
 
@@ -230,6 +235,7 @@ pub fn memory_context_until(
         context: answer.context,
         outcome: answer.outcome.into(),
         global: answer.global,
+        asks: answer.asks,
     }
 }
 
@@ -286,21 +292,34 @@ mod tests {
     use super::*;
 
     /// B1, D-31: the global instruction rides beside Memory's context, first,
-    /// and alone when Memory gave nothing.
+    /// and alone when Memory gave nothing; a prompt's open questions come
+    /// last, and alone too.
     #[test]
     fn the_global_instruction_comes_before_memory_and_without_it() {
         let both = MemoryContext {
             context: Some("<memory/>\n".into()),
             outcome: HookMemoryOutcome::Empty,
             global: Some("<global/>\n".into()),
+            asks: Some("<asks/>\n".into()),
         };
-        assert_eq!(both.joined().as_deref(), Some("<global/>\n<memory/>\n"));
+        assert_eq!(
+            both.joined().as_deref(),
+            Some("<global/>\n<memory/>\n<asks/>\n")
+        );
         let alone = MemoryContext {
             context: None,
             outcome: HookMemoryOutcome::Unavailable,
             global: Some("<global/>\n".into()),
+            asks: None,
         };
         assert_eq!(alone.joined().as_deref(), Some("<global/>\n"));
+        let asks = MemoryContext {
+            context: None,
+            outcome: HookMemoryOutcome::Unavailable,
+            global: None,
+            asks: Some("<asks/>\n".into()),
+        };
+        assert_eq!(asks.joined().as_deref(), Some("<asks/>\n"));
         assert_eq!(
             MemoryContext::without(HookMemoryOutcome::Disabled).joined(),
             None

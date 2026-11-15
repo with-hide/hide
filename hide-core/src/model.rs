@@ -883,7 +883,8 @@ pub struct NavigatorSnapshot {
     /// search, focus, and project navigation never lose a folded project.
     pub inactive_projects: Vec<InactiveProjectGroupSnapshot>,
     pub agents: Vec<SidebarAgentSnapshot>,
-    /// The checkouts Hide AI started an agent in, by device and path. A list
+    /// The checkouts Hide AI, or an external tool that keeps its work, started
+    /// an agent in, by device and path. A list
     /// beside the checkouts, not a field on them, because a checkout row is
     /// rebuilt from Git and the engine at several places and would lose a value
     /// laid on it; the shell joins it by `(device_id, path)`.
@@ -959,13 +960,20 @@ pub enum HomeTurn {
     BranchReady,
 }
 
-/// A checkout Hide AI made for an agent it started.
+/// A checkout Hide made for an agent Hide AI started, or for one an external
+/// tool started while the tool keeps its work.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HideAiCheckoutSnapshot {
     pub device_id: String,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::coordination::SpawnTask>,
+    /// The name of the external tool whose work the checkout is, while its
+    /// connection stands at Act (PRD hide-external-control D-14); absent for
+    /// Hide AI's. Once the tool lets go the checkout is the operator's and
+    /// leaves this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]

@@ -58,6 +58,7 @@ hide agent end <id> [--actor <id>] [--keep-pane]
 - A child that never registered is still yours to look at: a spawn that stopped partway answers its code with `spawn` (`id` and `pane`), and `hide agent show <spawn id>`, or the intent you spawned it under, shows that spawn, its pane and its state. Running the same spawn again never starts a second child.
 - A stuck child: read its screen with `hide pane read <pane>`, then answer it with `hide pane send <pane> --key <name>`; Hide types an unconfirmed brief again once the screen is answered. You may answer a trust or approval screen for it when that is within your work: Hide does not check consent, and the operator sets how much agents may approve in Settings > Agents. A sign-in or a permission is the operator's: the agent at it declares it, as below.
 - A step only a person can take: run `hide agent ask-human auth <where>` for a sign-in, a re-authentication or an unlock, or `hide agent ask-human permission <where>` for an app connection or an OS permission, then stop and end your turn. `<where>` is where the person acts, such as `hide agent ask-human auth https://github.com/login` or `hide agent ask-human permission "System Settings > Privacy & Security > Camera"`; it is shown to the operator as you wrote it, a query or a code included, until the step is done. Your lineage's top row stands in the operator's 내 차례 with a key and they are told; when they have done it and press 다 했어요 you get a letter that says so, and a message they type to you ends it too. `hide agent ask-human --clear` takes it down if you got past the step yourself. Anything else, a decision included, goes to your parent with `hide request send`. A command that waits for a person's approval, such as `op read`, needs a timeout of its own, so you can declare and stop rather than hang.
+- A question you asked the operator waits in their 내 차례 until it is answered. Your prompt lists the ones still waiting, each once, with its id; when one no longer needs the operator (you decided or did it, someone else answered it, the work moved past it), fold it with `hide session fold-ask <id> --reason "<what settled it>"`. It moves under 정리됨 with your reason, and the operator can open it again; one they opened again is theirs, and the command refuses it with `ask_reopened`. Leave a question that still needs the operator.
 - `hide agent catalog` lists the agent items here, each agent's built-in default and each of its profiles a start can take, with the `--profile` value that starts it (`profile`, `default` for the built-in), its models, efforts and its account's weekly usage, so you can choose `--kind`, `--profile`, `--model` and `--effort`. A model is passed as listed; `model_labels` gives the name the agent shows for it, and `models_from_default` says a profile's own list could not be read and its agent's is listed instead.
 - A child of yours belongs to you: answer its letters, and tell the operator only what they have to decide.
 - `hide agent sleep <id>` puts a resting child of yours (or yourself) to sleep: its process ends, its conversation is kept, and a `request` or `block` letter wakes it; it answers `{"state":"ending"}`, or `asleep` when asked again, and refuses with a reason while the agent works, waits for the operator or is on the operator's screen.
@@ -135,14 +136,14 @@ hide device retry <device id or ssh alias> [--wait] [--json]
 ## Tools outside Hide
 
 ```
-hide access request --name <name> [--json]
+hide access request --name <name> [--no-wait] [--json]
 hide access status [--json]
 hide access leave [--json]
 hide access list [--json]
 ```
 
 - These are for a program outside Hide's panes, on the machine where Hide's core runs, such as a scheduler or another assistant; an agent in a Hide pane acts as itself and is refused with `access_from_pane`.
-- `request` asks the operator, who approves it in Settings › External tools as View only or Act; run the same `request` again to see the answer. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
+- `request` asks the operator, who approves it in Settings › External tools as View only or Act, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
 - View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does. No agent writes to a tool first.
 - What only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
 - A home with several tools' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a tool at any time, and `leave` disconnects it from the tool's side.
@@ -190,13 +191,15 @@ hide memory search <words> | show <card> | add <text> | stale <card> <reason>
 hide session list [--since <n>m|h|d] [--limit <n>] [--json]
 hide session record <id> [--json]
 hide session read <id> --request <n> | --from <n> [--events <n>] [--json]
+hide session fold-ask <id> --reason <text> [--json]
 ```
 
 - When the operator asks you to look through past work, narrow it in three steps instead of opening session files: `list` to scan one line per session (the last 7 days and 50 sessions unless you ask for more, 200 at most), `record` to read the one you picked as its session record shows it, and `read` only for the few requests whose exact words or tool output you need.
 - The scope is the Project of your checkout and the connected devices' checkouts of the same repository (the one each checkout's `origin` names), with every session they delegated; another Project's session is refused with `other_project`, and one on a device Hide is still reading with `device_reading`, which a retry a minute later answers.
 - A session is named by its agent id (`agent-N`) or its native session id; `record` numbers its requests from 1, and `read <id> --request <n>` reads the raw events around request `n`, `--from <n>` goes on from event `n` (16 events unless `--events` asks, 40 at most, and the answer names the next `--from`).
 - Every line says where its words come from: `[AI 요약]` is Hide AI's summary, `[원문]` what was sent or recorded as it was; check a summary against `read` before you rely on it.
-- `read` masks credentials, refuses a session file whose path looks like a credential file (`credential_path_refused`) and a disconnected device (`device_unavailable`); read the record instead. Nothing here changes the operator's screen.
+- `read` masks credentials, refuses a session file whose path looks like a credential file (`credential_path_refused`) and a disconnected device (`device_unavailable`); read the record instead. `list`, `record` and `read` change nothing on the operator's screen.
+- `fold-ask` folds a question your own session asked, as your prompt's open questions list it, out of the operator's 내 차례.
 
 ## Where to go next
 

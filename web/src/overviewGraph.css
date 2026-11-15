@@ -1,4 +1,6 @@
 .overview-graph { position: relative; min-width: 0; color: var(--foreground); }
+/* A tool's cell has no turn of the operator's (PRD hide-external-control D-46, issue 2597): its turn counts, edges, rings and asks draw in the grey of the cell's count, so every use of the warning colour below, and the Tailwind alias, reads muted inside it. */
+.overview-graph[data-graph-tool] { --warning: var(--muted-foreground); --color-warning: var(--muted-foreground); }
 /* With nothing awake the welcome fills the page, and a waiting mission stays under it. */
 .overview-graph:has(> [data-graph-welcome]) { display: flex; flex-direction: column; min-height: 100%; }
 .og-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: var(--spacing-xl) var(--spacing-lg) var(--spacing-lg); }

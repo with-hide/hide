@@ -88,6 +88,7 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_gate_operator_only"
             | "mission_gate_none"
             | "mission_gate_not_open"
+            | "mission_gate_passed"
             | "mission_machine_node_refused"
             | "mission_machine_no_repository"
             | "mission_nodes_unfinished"
@@ -714,6 +715,13 @@ pub struct SpawnRecord {
     )]
     pub launch: hide_agent_adapter::LaunchChoice,
     pub path: Option<String>,
+    /// The spawn made the worktree at `path` (`executor::made_by_spawn`, or
+    /// the create branch), rather than starting in one that was already the
+    /// operator's or in the repository's own folder; a record written
+    /// before it existed reads false. Only such a checkout is a tool's own
+    /// (PRD hide-external-control B26, `started::hide_started`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub made: bool,
     pub pane: Option<String>,
     /// The engine terminal `pane` ran when the spawn recorded it. A pane id
     /// can name another pane later, so only this proves the pane is the
@@ -1051,6 +1059,8 @@ pub(crate) enum Mutation {
         seed_tab: Option<naming::SeedTab>,
         id: String,
         path: Option<String>,
+        /// The spawn made the checkout at `path` (`SpawnRecord::made`).
+        made: bool,
         pane: Option<String>,
         /// The terminal `pane` runs, recorded with it.
         terminal: Option<String>,
@@ -1945,6 +1955,7 @@ pub(crate) fn apply_with(
                 args: args.clone(),
                 launch: launch.clone(),
                 path: None,
+                made: false,
                 pane: None,
                 terminal: None,
                 typed: 0,
@@ -2139,6 +2150,7 @@ pub(crate) fn apply_with(
             seed_tab,
             id,
             path,
+            made,
             pane,
             terminal,
             shell,
@@ -2195,7 +2207,8 @@ pub(crate) fn apply_with(
             // A step forward keeps a mission's start holding its place.
             record.reserved_at_unix_ms = now;
             if path.is_some() {
-                record.path = path.clone()
+                record.path = path.clone();
+                record.made |= *made;
             };
             if pane.is_some() {
                 record.pane = pane.clone()
@@ -4075,6 +4088,7 @@ mod tests {
                 seed_tab: None,
                 id: id.clone(),
                 path: Some("/fixture/topic".into()),
+                made: false,
                 pane: Some("child-pane".into()),
                 terminal: None,
                 shell: None,
@@ -4095,6 +4109,7 @@ mod tests {
                     seed_tab: None,
                     id,
                     path: None,
+                    made: false,
                     pane: Some("wrong".into()),
                     terminal: None,
                     shell: None,
@@ -4224,6 +4239,7 @@ mod tests {
                 seed_tab: None,
                 id: id.clone(),
                 path: Some("/fixture/topic".into()),
+                made: false,
                 pane: Some("worker-pane".into()),
                 terminal: None,
                 shell: None,
@@ -4766,6 +4782,7 @@ mod tests {
                     seed_tab: None,
                     id: spawn.clone(),
                     path: Some("/fixture/topic".into()),
+                    made: false,
                     pane: Some("worker-pane".into()),
                     terminal: None,
                     shell: None,
@@ -4911,6 +4928,7 @@ mod tests {
                 seed_tab: None,
                 id: spawn.clone(),
                 path: Some("/fixture/topic".into()),
+                made: false,
                 pane: Some("worker-pane".into()),
                 terminal: None,
                 shell: None,
@@ -5077,6 +5095,7 @@ mod tests {
                 seed_tab: None,
                 id: spawn.clone(),
                 path: Some("/fixture/topic".into()),
+                made: false,
                 pane: Some("worker-pane".into()),
                 terminal: None,
                 shell: None,
@@ -5658,6 +5677,7 @@ mod tests {
                 seed_tab: None,
                 id: spawn.clone(),
                 path: Some("/fixture/topic".into()),
+                made: false,
                 pane: None,
                 terminal: None,
                 shell: None,

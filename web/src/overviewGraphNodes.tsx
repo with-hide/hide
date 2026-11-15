@@ -5,12 +5,14 @@ import { AgentMark } from "./AgentMark";
 import { agentWithProfile, badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { AskLine } from "./components/agent-tree";
+import { ToolLed } from "./components/tool-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
+import { cn } from "./lib/utils";
 import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
 import type { ProjectAccent } from "./overviewGraphLines";
 import type { AgentRow } from "./snapshot";
@@ -179,7 +181,8 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
       {branch ? <span className="og-session-branch" aria-hidden="true"><GitBranchIcon aria-hidden="true" /><span>{branch}</span></span> : null}
-      {root || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
+      {/* A tool's agent leads its line with the tool's name, as its sidebar row does (PRD hide-external-control B31); never inside the tool's own cell. */}
+      {root || asking ? <ToolLed tool={row.agent.tool} className={cn("og-session-line", asking && "og-asking")}><GraphLine agent={row.agent} /></ToolLed> : null}
     </button>
     {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>
       <span>{team.folded ? `+${team.count}` : team.count}</span>

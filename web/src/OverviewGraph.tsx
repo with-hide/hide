@@ -3,6 +3,7 @@ import { EyeIcon, EyeOffIcon, MaximizeIcon, MinusIcon, PlusIcon, XIcon, LocateFi
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
+import { ToolLed } from "./components/tool-mark";
 import { AgentMark } from "./AgentMark";
 import { agentWithProfile, markWords, rowAccessibleName } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
@@ -25,7 +26,7 @@ import type { ToolCell } from "./agentScope";
 import { frontDeviceId, tileMonogram } from "./devices";
 import { Input } from "./components/ui/input";
 import { LAYOUT_NODE_LIMIT } from "./dependencyLayout";
-import { ADD_PROJECT, checkoutChip, GRAPH_CHOICES_DEFAULTS, graphActivity, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, graphSessionMatches, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
+import { ADD_PROJECT, checkoutChip, GRAPH_CHOICES_DEFAULTS, graphProjectIdOf, graphProjectKey, graphSessionId, graphSessionIdOf, graphSessionKey, graphSessionMatches, overviewGraphModel, overviewGraphTeam, sameGraphScope, type Communication, type GraphAgent, type GraphFocus, type OverviewGraphModel, type ProjectSummary } from "./overviewGraphModel";
 import { projectDropPlaces, useGraphTheme, useOverviewGraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { AddProjectGraphNode, ClusterGraphNode, GlowGraphNode, GraphLine, GraphStateCounts, hasGraphLine, launchWords, LineGraphEdge, OperatorGraphNode, ProjectGraphNode, SessionGraphNode, StartSlotGraphNode, TeamGraphNode, type AddProjectNode, type ClusterNode, type ExchangeBadge, type GlowNode, type LineEdge, type OperatorNode, type ProjectNode, type SessionNode, type StartSlotNode, type TeamNode } from "./overviewGraphNodes";
 import type { BoardProject } from "./projectBoard";
@@ -112,7 +113,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
   const host = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const theme = useGraphTheme();
-  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession, chosen: selection }), [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession, selection]);
+  const model = useMemo(() => overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession, chosen: selection, tool: tool !== null }), [projects, rest?.overview_graph, projectId, focus, includeResting, entry, highlightedSession, selection, tool]);
   // In an external tool's cell the map starts nothing: what the operator starts is never the tool's work (PRD hide-external-control B40).
   const starts = tool === null;
   const layout = useOverviewGraphLayout(model, host, retry, remembered, starts);
@@ -186,7 +187,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
   // session the filter leaves out and can make its team a quiet one. The budget is the map's
   // as it stands: choosing does not buy a project its admission (B9).
   const showSession = useCallback((row: GraphAgent, scoped: boolean, target?: HTMLElement) => {
-    const drawn = overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession, chosen: row.id });
+    const drawn = overviewGraphModel(projects, rest?.overview_graph, projectId, { focus, includeResting, pinned: entry ? [entry.id] : [], selected: highlightedSession, chosen: row.id, tool: tool !== null });
     if (!scoped && !drawn.projects.some((group) => group.id === row.projectId)) { revealProjectSession(row, true); return; }
     if (hiddenProjects.has(row.projectId)) {
       revealing.current = row.projectId;
@@ -323,7 +324,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
         const shape = root ? size.root : size.child;
         orbs.set(row.id, { x: point.x, y: point.y, r: shape.orb / 2 });
         const descendants = root ? members.filter((member) => member.id !== row.id && pointOf(member.id)!.team === row.id) : [];
-        const activity = descendants.map((member) => graphActivity(member.agent));
+        const activity = descendants.map((member) => member.activity);
         const team = descendants.length ? { count: descendants.length, turn: activity.filter((value) => value === "turn").length, going: activity.filter((value) => value === "working").length, done: activity.filter((value) => value === "results").length, folded: teamFolded(row.id), toggle: () => toggleTeam(row.id) } : null;
         const related = selection === row.id || teamOf(row.id) === chosenTeam || model.teams.get(row.id) === lineageTeam || counterparts.has(row.id);
         // The layout owns these fixed dimensions. Retaining them also preserves React Flow's
@@ -363,7 +364,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
   const tied = new Map<string, boolean>();
   for (const [id, at] of endpoint) {
     if (at === id && !drawnRoots.has(id)) continue;
-    tied.set(at, (tied.get(at) ?? false) || graphActivity(agentsById.get(id)!.agent) === "turn");
+    tied.set(at, (tied.get(at) ?? false) || agentsById.get(id)!.activity === "turn");
   }
   const turns = new Map(turnLines([...tied].map(([id, turn]) => ({ id, turn })), new Set(tied.keys()), lineState).map((turn) => [turn.id, turn.muted]));
   const selectedProject = selection ? agentsById.get(selection)?.projectId : undefined;
@@ -434,13 +435,13 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
   });
   const resetLayout = () => { layout.reset(); cameraInitialized.current = false; actions.changeOverviewGraph({ kind: "reset_places", scope }); };
   // With no session awake there is nothing to filter or arrange: the map gives its place to the one next step.
-  const awake = model.allAgents.filter((row) => graphActivity(row.agent) !== "resting").length;
+  const awake = model.allAgents.filter((row) => row.activity !== "resting").length;
   const inScope = projectId ? projects.filter((project) => project.workspace.id === projectId) : projects;
   const startsIn = inScope.length === 1 ? inScope[0] : undefined;
   const startChord = commandLabel("start_agent");
   const showEvery = () => actions.changeOverviewGraph({ kind: "focus", focus: "all", include_resting: true });
   const showList = mode === "list" || layout.phase === "failed" || !size;
-  return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase}>
+  return <div className="overview-graph" ref={host} data-overview-graph="true" data-graph-phase={layout.phase} data-graph-tool={tool ? tool.connection : undefined}>
     {awake === 0 && model.agents.length === 0 ? (
       <EmptyWelcome pose="agents" title={t("overviewGraph.welcome")} detail={startsIn ? t("overviewGraph.welcomeWhere", { project: startsIn.workspace.label }) : undefined} data-graph-welcome="true">
         <span className="flex items-center gap-sm">
@@ -455,7 +456,7 @@ function WorkGraph({ projects, deviceId, tool = null, actions, onOpenRecord, pro
         <div className="og-toolbar-actions">{mode === "graph" ? <><Button variant="ghost" size="sm" onClick={foldAll}>{t("overviewGraph.foldAll")}</Button><Button variant="ghost" size="sm" onClick={unfoldAll}>{t("overviewGraph.unfoldAll")}</Button></> : null}{projectId ? <Button variant="ghost" size="sm" onClick={() => useUiStore.getState().setOverview({ projectId: null })}>{t("overviewGraph.allProjects")}</Button> : null}<ToggleGroup type="single" value={mode} onValueChange={(value) => { if (value === "graph" || value === "list") setMode(value); }} aria-label={t("overviewGraph.title")}><ToggleGroupItem value="graph">{t("overviewGraph.graph")}</ToggleGroupItem><ToggleGroupItem value="list">{t("overviewGraph.list")}</ToggleGroupItem></ToggleGroup></div>
       </div>
       <div className="og-filters">
-        <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(`overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
+        <div role="group" aria-label={t("overviewGraph.filter")}><span className="og-filter-scope">{t("overviewGraph.sessionScope")}</span>{(["all", "turn", "working", "results"] as const).map((value) => <Button key={value} variant={focus === value ? "secondary" : "ghost"} size="sm" aria-pressed={focus === value} data-focus={value} onClick={() => setFocus(value)}>{t(tool && value === "turn" ? "taskLens.tool.group.needs_you" : `overviewGraph.focus.${value}`)} <span>{model.counts[value]}</span></Button>)}</div>
         <label><input type="checkbox" checked={includeResting} onChange={(event) => setIncludeResting(event.target.checked)} />{t("overviewGraph.includeResting")}</label>
       </div>
       {model.limited ? <p className="og-notice" role="status">{t("overviewGraph.limit", { count: LAYOUT_NODE_LIMIT })}</p> : null}
@@ -499,7 +500,7 @@ function ProjectColumn({ deviceId, projectId, tool, model, query, setQuery, hidd
   // Enter takes the first found session, else moves to the first found project still on the map.
   const takeFirst = (target: HTMLElement) => { if (found[0]) show(found[0].id, target); else { const first = summaries.find((summary) => !hidden.has(summary.id)); if (first) locate(first); } };
   // Every root whose turn it is, drawn, folded or hidden, so the list agrees with the projects' My turn counts.
-  const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && graphActivity(row.agent) === "turn");
+  const waiting = model.allAgents.filter((row) => model.roots.has(row.id) && row.activity === "turn");
   // A mission no row carries waits here too, first, as the device's Needs You counts it (PRD mission-node-simple B14),
   // or in a tool's cell as the tool's turn counts it (PRD hide-external-control B40);
   // a map narrowed to one project lists that project's missions only.
@@ -531,7 +532,8 @@ function ProjectColumn({ deviceId, projectId, tool, model, query, setQuery, hidd
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" title={row.agent.profile ? agentWithProfile(t, row.agent) : undefined} aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
-        <p>{row.agent.human_turn ? <HumanTurnLine turn={row.agent.human_turn} copy={actions.copyText} /> : row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what, row.agent.state.ask.subject) : <GraphLine agent={row.agent} />}</p>
+        {/* A tool's agent leads its line with the tool's name, as its sidebar row does (PRD hide-external-control B31); never inside the tool's own cell. */}
+        <p><ToolLed tool={row.agent.tool}>{row.agent.human_turn ? <HumanTurnLine turn={row.agent.human_turn} copy={actions.copyText} /> : row.agent.state.ask ? askWhat(t, row.agent.state.ask.verb, row.agent.state.ask.what, row.agent.state.ask.subject) : <GraphLine agent={row.agent} />}</ToolLed></p>
         <Button variant="secondary" size="sm" onClick={() => actions.openAgent(askingPane(row, model))}>{t("overviewGraph.answer")}</Button>
         {row.agent.human_turn ? <HumanTurnDone turn={row.agent.human_turn} actions={actions} /> : null}
       </div>)}

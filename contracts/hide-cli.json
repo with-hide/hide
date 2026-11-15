@@ -14,7 +14,7 @@
             "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again",
             "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
             "access_not_connected": "Run hide access request --name <name> first",
-            "access_pending": "Wait until the operator approves the request in Settings > External tools, then run hide access request again",
+            "access_pending": "Wait until the operator approves the request in Settings > External tools; the next hide command then runs as the tool",
             "access_refused": "The operator refused this tool; run hide access request --name <name> to ask again",
             "access_request_expired": "The request was dropped; run hide access request --name <name> to ask again",
             "access_revoked": "The operator disconnected this tool; run hide access request --name <name> to ask again",
@@ -1786,6 +1786,24 @@
                 "started"
             ],
             "title": "Retried",
+            "type": "object"
+        },
+        "fold_ask": {
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "state": {
+                    "enum": [
+                        "folded",
+                        "already_closed"
+                    ]
+                }
+            },
+            "required": [
+                "id",
+                "state"
+            ],
             "type": "object"
         },
         "inbox": {
@@ -4404,6 +4422,47 @@
         },
         {
             "answers": [
+                "fold_ask"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "session fold-ask",
+            "options": [
+                {
+                    "name": "--reason",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "ask_unknown",
+                "ask_reopened",
+                "ask_reason_invalid",
+                "ask_session_unknown",
+                "ask_unavailable",
+                "agent_pane_required",
+                "caller_context_changed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "agent_end"
             ],
             "arguments": [
@@ -4810,6 +4869,12 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "name": "--no-wait",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 },
                 {
                     "name": "--json",
@@ -6362,6 +6427,11 @@
                 }
             ],
             "command": "mission gate",
+            "needs_one_of": [
+                "--pass",
+                "--fix",
+                "--show"
+            ],
             "options": [
                 {
                     "name": "--mission",
@@ -6373,25 +6443,48 @@
                 },
                 {
                     "conflicts": [
-                        "--fix"
+                        "--fix",
+                        "--show"
                     ],
                     "name": "--pass",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--said"
+                    ],
                     "value": null
                 },
                 {
                     "conflicts": [
-                        "--pass"
+                        "--pass",
+                        "--show"
                     ],
                     "name": "--fix",
                     "required": false,
-                    "requires": [],
+                    "requires": [
+                        "--said"
+                    ],
                     "value": null
                 },
                 {
+                    "conflicts": [
+                        "--show"
+                    ],
                     "name": "--said",
-                    "required": true,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pass",
+                        "--fix",
+                        "--said"
+                    ],
+                    "name": "--show",
+                    "repeats_at_most": 16,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
@@ -6403,6 +6496,7 @@
                 "mission_node_unknown",
                 "mission_gate_none",
                 "mission_gate_not_open",
+                "mission_gate_passed",
                 "mission_gate_words_missing",
                 "mission_closed"
             ],
@@ -6906,7 +7000,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:8b2d38dcf0db9f6e909d5209f587d670b01c4431d267735de198e442e5dd6c54",
+    "digest": "sha256:53d4a2d1d3e4d4aa1a325301404c5b458cc486c4ebcd9c9167e84b3ff05393fc",
     "envelopes": {
         "access": {
             "answer": "value",

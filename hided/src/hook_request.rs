@@ -300,38 +300,79 @@ pub(crate) fn memory(
     ask: &hide_core::memory_hook::Ask,
 ) -> Result<Value, Failure> {
     let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
-    let scope = core.memory_scope(&cap.context, deadline).map_err(|reason| {
+    let asks = ask
+        .prompt_session()
+        .map(|session| (cap.pane_id.clone(), session.to_owned()));
+    let (scope, give) = core.hook_scope(&cap.context, asks, deadline);
+    let scope = scope.map_err(|reason| {
         hide_core::diagnostic!(json!({"component":"memory","kind":"hook.unavailable","pane":cap.pane_id,"device":cap.context.device_id,"reason":reason}));
     });
-    memory_answer(core.state_dir(), scope, ask, deadline)
+    // The session's open questions are read beside Memory, on a thread of
+    // their own that ends with its read, and left out when they miss the
+    // answer's deadline: the next prompt gives them, since a question counts
+    // as given only once its receipt comes back from the session's record.
+    let asks = give.and_then(|give| {
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("hook-asks".to_owned())
+            .spawn(move || {
+                let _ = send.send(give.context());
+            })
+            .map(|_| receive)
+            .map_err(|error| {
+                hide_core::diagnostic!(json!({"component":"session","kind":"asks.give_unstarted","pane":cap.pane_id,"error":error.to_string()}));
+            })
+            .ok()
+    });
+    let pane = cap.pane_id.clone();
+    let asks = move || {
+        asks.and_then(|receive| {
+            match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(asks) => asks,
+                Err(_) => {
+                    hide_core::diagnostic!(
+                        json!({"component":"session","kind":"asks.give_late","pane":pane})
+                    );
+                    None
+                }
+            }
+        })
+    };
+    memory_answer(core.state_dir(), scope, ask, deadline, asks)
 }
 
-/// A hook's answer: Memory's context when its scope was found, and on a
-/// session start the Hide global instruction whatever Memory answers (off,
-/// unresolved or unreachable; PRD memory-self-improve D-31). The global read
-/// is one small bounded file, outside Memory's deadline.
+/// A hook's answer: Memory's context when its scope was found, on a session
+/// start the Hide global instruction whatever Memory answers (off,
+/// unresolved or unreachable; PRD memory-self-improve D-31), and at a prompt
+/// the session's open questions `asks` reads, whatever Memory answers too.
+/// The global read is one small bounded file, outside Memory's deadline.
 fn memory_answer(
     state_dir: &std::path::Path,
     scope: Result<hide_core::memory_hook::Scope, ()>,
     ask: &hide_core::memory_hook::Ask,
     deadline: Instant,
+    asks: impl FnOnce() -> Option<String>,
 ) -> Result<Value, Failure> {
     let global = ask
         .starts_session()
         .then(|| hide_core::global_instruction::for_session(state_dir))
         .flatten();
-    let answer = match (scope, global) {
-        (Ok(scope), global) => hide_core::memory_hook::HookContext {
+    let memory = scope
+        .ok()
+        .map(|scope| hide_core::memory_hook::answer(&scope, ask, deadline));
+    let answer = match (memory, global, asks()) {
+        (Some(memory), global, asks) => hide_core::memory_hook::HookContext {
             global,
-            ..hide_core::memory_hook::answer(&scope, ask, deadline)
+            asks,
+            ..memory
         },
-        (Err(()), Some(global)) => hide_core::memory_hook::global_only(global),
-        (Err(()), None) => {
+        (None, None, None) => {
             return Err((
                 "memory_unavailable".to_owned(),
                 "Continue without Project Memory",
             ));
         }
+        (None, global, asks) => hide_core::memory_hook::without_memory(global, asks),
     };
     serde_json::to_value(answer).map_err(|_| {
         (
@@ -383,9 +424,15 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
         assert_eq!(
-            memory_answer(state.path(), Err(()), &ask("SessionStart"), deadline)
-                .unwrap_err()
-                .0,
+            memory_answer(
+                state.path(),
+                Err(()),
+                &ask("SessionStart"),
+                deadline,
+                || None
+            )
+            .unwrap_err()
+            .0,
             "memory_unavailable"
         );
         std::fs::write(
@@ -393,7 +440,14 @@ mod tests {
             "Answer in Korean.\n",
         )
         .unwrap();
-        let answer = memory_answer(state.path(), Err(()), &ask("SessionStart"), deadline).unwrap();
+        let answer = memory_answer(
+            state.path(),
+            Err(()),
+            &ask("SessionStart"),
+            deadline,
+            || None,
+        )
+        .unwrap();
         assert_eq!(answer["context"], Value::Null);
         assert_eq!(answer["outcome"], "unavailable");
         assert!(
@@ -409,10 +463,34 @@ mod tests {
                 .contains("Answer in Korean.")
         );
         assert_eq!(
-            memory_answer(state.path(), Err(()), &ask("UserPromptSubmit"), deadline)
-                .unwrap_err()
-                .0,
+            memory_answer(
+                state.path(),
+                Err(()),
+                &ask("UserPromptSubmit"),
+                deadline,
+                || None
+            )
+            .unwrap_err()
+            .0,
             "memory_unavailable"
         );
+    }
+
+    /// A prompt's open questions reach the agent whether or not Memory
+    /// answers, in their own slot.
+    #[test]
+    fn a_prompt_gets_its_open_questions_without_memory() {
+        let state = tempfile::tempdir().unwrap();
+        let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
+        let answer = memory_answer(
+            state.path(),
+            Err(()),
+            &ask("UserPromptSubmit"),
+            deadline,
+            || Some("<hide-open-questions>".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(answer["context"], Value::Null);
+        assert_eq!(answer["asks"], "<hide-open-questions>");
     }
 }

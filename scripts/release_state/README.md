@@ -19,7 +19,7 @@ The containers, network, image and work folder are removed on every exit; the ol
 
 ## Where the folder goes
 
-- `hide-core/tests/fixtures/release-state/<tag>/`: only what a start reads (the JSON stores, the SQLite stores with their logs folded in, `node.json`, the engine folder and the mission events). Logs, holders, sockets, scrollback, pane credentials, backups and pairing secrets are left behind.
+- `hide-core/tests/fixtures/release-state/<tag>/`: only what a start reads (the JSON stores, the SQLite stores with their logs folded in, `node.json`, the engine folder, the mission folder and the mission events). Logs, holders, sockets, scrollback, pane credentials, backups and pairing secrets are left behind.
 - `hide-kit/tests/fixtures/release-home/<tag>/device/`: what the release's kit left in the device's account, at its place in the home: the kit's record (`.hide/kit/installed.json`), Claude Code's `settings.json` with Hide's hooks beside the operator's, and the folder trust Hide recorded for a worktree it spawned into (`.claude.json`, `.hide/agent-hooks/claude-trust.json`). The core has none: it runs outside a desktop package, whose kit installs nothing.
 - `hide-core/tests/fixtures/release-state/<tag>.json`: the release's commit, the made-up ids, each scenario step with `ok` true, false, or null when the release itself refuses the step (`why` says what it answered), and `missions`, each mission as the release published it; a folder made before that was kept has none, and its missions are only read.
 
@@ -30,7 +30,9 @@ A release adds its folder in a pull request of its own, `test: add the <version>
 
 - Run `scripts/check-no-workstation-identity.sh --scope index` after `git add`, and read its answer: it must pass with the new folder staged.
 - The folders may hold only the made-up accounts `me` (core) and `remote` (device), the made-up machine ids `c0de0000000000000000000000000001` and `de510000000000000000000000000002`, the host names `core` and `device`, and the `example.invalid` git email. A path under `/Users/`, another account name, or a real machine id means the run was not isolated: do not commit it.
+- Read the `left behind:` line the script prints: a store a start reads that the release added (a new JSON or SQLite store, or a folder such as 1.2.8's `missions/`) goes into `KEEP_FILES` or `KEEP_FOLDERS` in `generate.py` and the folder is made again; otherwise the upgrade test never reads it.
 - Read `<tag>.json`: a step that is false where the previous release's is true is a scenario that broke, and is fixed before the folder is committed.
+- After `git add`, run the old engine name check of `CONTRIBUTING.md`, CI gates: a store that still carries a field named after the engine Hide used to run (`hook-facts.json` does) is listed on that check's allow-list with its count and the reason `fixture`, like the earlier folders, or the `policy checks` job refuses the pull request.
 - Run the upgrade tests: `scripts/verify-cargo.sh nextest -p hide-core --lib -E 'test(/upgrade_tests/)'` and `scripts/verify-cargo.sh nextest -p hide-kit --lib -E 'test(/upgrade_tests/)'`.
 
 ## When a folder comes out

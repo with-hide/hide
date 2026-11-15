@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
 //! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `workspace
-//! purpose`, `workspace remove`): each command's words, arguments and options, where its
+//! purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -455,6 +455,32 @@ pub const COMMANDS: &[Spec] = &[
             "ambiguous_participant",
         ],
     },
+    // Folds one of the caller's own session's open questions with the line
+    // saying what settled it, as Hide AI folds one; `already_closed` for a
+    // question no longer open, which is no failure.
+    Spec {
+        words: &["session", "fold-ask"],
+        arguments: &[Arg {
+            name: "id",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--reason", Text), switch("--json")],
+        rest: None,
+        answers: &["fold_ask"],
+        refusals: &[
+            "ask_unknown",
+            "ask_reopened",
+            "ask_reason_invalid",
+            "ask_session_unknown",
+            "ask_unavailable",
+            "agent_pane_required",
+            "caller_context_changed",
+        ],
+    },
     // The answer is the registration as it ended with what became of its
     // pane (`closed`, `kept`, `gone`, `other_agent`, `left`) and of its
     // conversation (`archived`, `archive_full`, `none`); `--keep-pane` ends
@@ -654,7 +680,11 @@ pub const COMMANDS: &[Spec] = &[
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
-        options: &[required("--name", Key), switch("--json")],
+        options: &[
+            required("--name", Key),
+            switch("--no-wait"),
+            switch("--json"),
+        ],
         rest: None,
         answers: &["access_standing"],
         refusals: &[
@@ -1357,26 +1387,37 @@ pub const COMMANDS: &[Spec] = &[
             value_with: None,
         }],
         repeats: None,
-        needs_one_of: &[],
+        // Relay the operator's answer, or show them the gate's screens.
+        needs_one_of: &["--pass", "--fix", "--show"],
         options: &[
             optional("--mission", Key),
             Opt {
                 name: "--pass",
                 value: None,
                 required: false,
-                requires: &[],
-                conflicts: &["--fix"],
+                requires: &["--said"],
+                conflicts: &["--fix", "--show"],
                 repeats: None,
             },
             Opt {
                 name: "--fix",
                 value: None,
                 required: false,
-                requires: &[],
-                conflicts: &["--pass"],
+                requires: &["--said"],
+                conflicts: &["--pass", "--show"],
                 repeats: None,
             },
-            required("--said", Text),
+            cleared("--said", Text, &["--show"]),
+            // A View id or a path the CLI opens as one, up to the core's
+            // `missions::VIEW_LINK_LIMIT`.
+            Opt {
+                name: "--show",
+                value: Some(Text),
+                required: false,
+                requires: &[],
+                conflicts: &["--pass", "--fix", "--said"],
+                repeats: Some(16),
+            },
         ],
         rest: None,
         answers: &["mission"],
@@ -1385,6 +1426,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_unknown",
             "mission_gate_none",
             "mission_gate_not_open",
+            "mission_gate_passed",
             "mission_gate_words_missing",
             "mission_closed",
         ],
@@ -1802,6 +1844,17 @@ fn answers() -> Value {
         shape(&["machine", "installed_known", "items"]),
     );
     map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
+    map.insert(
+        "fold_ask".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "state": {"enum": ["folded", "already_closed"]},
+            },
+            "required": ["id", "state"],
+        }),
+    );
     map.insert("agent_profiles".into(), shape(&["machine", "profiles"]));
     map.insert("agent_profile".into(), shape(&["machine", "profile"]));
     map.insert(
@@ -1970,6 +2023,7 @@ mod tests {
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
+                | CommandKind::FoldAsk { .. }
                 | CommandKind::Device(_)
                 | CommandKind::Access(_)
                 | CommandKind::Pane(_)
@@ -2085,7 +2139,7 @@ mod tests {
 
     /// The forms the exported grammar declares are the ones the CLI takes:
     /// each of a command's `needs_one_of` alone with its required
-    /// arguments, and none of them refused; an argument marked not required
+    /// arguments and the options it requires, and none of them refused; an argument marked not required
     /// left out; a repeated option up to its `repeats_at_most`, and not once
     /// more; an argument's `value_with` value taken with its option and
     /// refused without it.
@@ -2139,7 +2193,15 @@ mod tests {
                 assert!(!takes(&base), "hide {name} with none of {forms:?}");
             }
             for form in &forms {
-                let argv = with(&base, form.as_str().unwrap());
+                let mut argv = with(&base, form.as_str().unwrap());
+                // A form's own `requires` come with it (`gate --pass --said`).
+                let needs = options
+                    .iter()
+                    .find(|option| option["name"] == *form)
+                    .and_then(|option| option["requires"].as_array());
+                for need in needs.into_iter().flatten() {
+                    argv = with(&argv, need.as_str().unwrap());
+                }
                 assert!(takes(&argv), "hide {name} {form}: {:?}", parse_args(&argv));
             }
             for option in repeated {

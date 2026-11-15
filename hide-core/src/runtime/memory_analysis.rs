@@ -332,7 +332,9 @@ impl Runtime {
     /// the next pass, started at once, analyzes it (B2). Every
     /// registered device keeps its sessions while its link or reader is
     /// unavailable, for the pass after it is back.
-    pub(crate) fn take_memory_handoff(&mut self, device: &str, handoff: MemoryHandoff) {
+    pub(crate) fn take_memory_handoff(&mut self, device: &str, mut handoff: MemoryHandoff) {
+        // The open questions' receipts ride the same reads and need no Memory.
+        self.take_asks_receipts(device, &mut handoff.receipts);
         if let Err(reason @ "unregistered") = self.linked_node(device) {
             // Its sessions are the designed absence; receipts there are not.
             if !handoff.receipts.is_empty() {

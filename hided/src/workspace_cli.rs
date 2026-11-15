@@ -234,7 +234,12 @@ fn in_pane_order(
 /// bootstrap socket of the daemon in `state_dir` (PRD hide-external-control
 /// B18): never a device bridge, since a tool runs on the core's machine.
 fn bootstrap_tool(state_dir: &Path, key: String) -> Result<PathBuf, String> {
-    let request = access_request(AccessAsk::Use { key }, true)?;
+    // The folder this command runs in, `--repo`'s once it moved there: the
+    // tool names it, since Windows tells the daemon no other process's.
+    let folder = std::env::current_dir()
+        .ok()
+        .and_then(|folder| hide_platform::path::to_wire(&folder).ok());
+    let request = access_request(AccessAsk::Use { key, folder }, true)?;
     let mut stream = connect_bootstrap(state_dir)?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     read_bootstrap_answer(&mut stream, None)
@@ -531,6 +536,29 @@ pub fn request_plan(
             json!({"type":"plan","request_id":request_id,"command":command}),
             &request_id,
             true,
+            after,
+        )
+    })
+}
+
+/// `hide session fold-ask`: folds one of the caller's session's open questions
+/// with its reason. Running it again converges: a folded question answers
+/// that it is already closed.
+pub fn request_fold_ask(
+    credential: &mut Credential,
+    id: &str,
+    reason: &str,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"fold_ask","request_id":request_id,"id":id,"reason":reason}),
+            &request_id,
+            true,
+            Duration::from_secs(30),
             after,
         )
     })

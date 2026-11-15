@@ -529,6 +529,10 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
                 .is_some_and(|mark| mark.kind == super::escalation::MarkKind::Raised)
         {
             0
+        } else if waiting && agent.sleep.is_some() {
+            // A sleeping row keeps its wait, but the moon is not work in
+            // progress: it stands behind a working sibling, not before it.
+            if agent.unread { 3 } else { 4 }
         } else if waiting {
             1
         } else if activity == "working" {
@@ -658,15 +662,12 @@ pub fn agent_group_for(
     }
     if ownership == Ownership::Tool {
         // The tool reads its agent's state and answers it itself (PRD
-        // hide-external-control D-09, B28), so unlike Hide AI's row the
-        // agent's own question, approval or block calls no one here; only
-        // a View it opened for the operator does (D-38), and a person's
-        // turn is laid over the group as on every root (B29).
-        return if look {
-            AgentGroup::NeedsYou
-        } else {
-            AgentGroup::Seen
-        };
+        // hide-external-control D-09, B28), so the agent's own question,
+        // approval or block calls no one here, and neither does a View it
+        // opened: the eye is drawn in the tool's cell and no list of the
+        // operator's counts it (D-38); only a person's turn, laid over the
+        // group as on every root, reaches the operator (B29).
+        return AgentGroup::Seen;
     }
     if let Ownership::HideAi { operator_turn } = ownership {
         // Its home shows the work's progress and result; the operator is
@@ -700,14 +701,19 @@ pub fn agent_group_for(
 /// Where an external tool's row stands in the tool's own cell (PRD
 /// hide-external-control D-45, D-46, B40): its agent's question, approval or
 /// block is the tool's turn to answer, read or not, since the tool reads it
-/// and not the operator; otherwise it stands as the operator's own row
-/// would, with nothing of the operator's laid over it (a View to look at and
-/// a person's turn are the operator's, in their own Needs You). An answer
-/// typed into its pane clears the demand, and with it the tool's turn (B43).
+/// and not the operator; while it waits on a person, its own step or one
+/// raised to it, its work is in progress, never finished, since the step is
+/// the operator's, in their own Needs You (B29); otherwise it stands as the
+/// operator's own row would, with nothing of the operator's laid over it (a
+/// View to look at is the operator's too). An answer typed into its pane
+/// clears the demand, and with it the tool's turn (B43).
 pub(crate) fn tool_cell_group(agent: &SidebarAgentSnapshot) -> AgentGroup {
     let (demand, activity, unread) = axes_of(agent);
     if agent.blocked || demand != AgentDemand::None {
         return AgentGroup::NeedsYou;
+    }
+    if agent.human_turn.is_some() {
+        return AgentGroup::Working;
     }
     agent_group_for(
         demand,
@@ -1093,9 +1099,10 @@ fn raise_calls(agent: &SidebarAgentSnapshot) -> bool {
 
 /// What an operator's own row says about the Views it opened that they have
 /// not seen (PRD unseen-agent-views D-05, D-14), and a tool's row, whose
-/// agent opened them for the operator, since a tool cannot look in its place
-/// (PRD hide-external-control D-38). A delegated row's go up as its
-/// ancestors' signals instead (D-10), and a home's row has none (D-18).
+/// agent opened them to be looked at, which the tool's cell draws as the
+/// eye and no list of the operator's counts (PRD hide-external-control
+/// D-38). A delegated row's go up as its ancestors' signals instead (D-10),
+/// and a home's row has none (D-18).
 fn look_of(
     agent: &SidebarAgentSnapshot,
     otherwise: impl FnOnce(&SidebarAgentSnapshot) -> AgentGroup,
@@ -2057,6 +2064,86 @@ mod row_tests {
         derive_from_axes(&mut working);
         assert!(waiting.state.tree_rank < working.state.tree_rank);
         assert_eq!((waiting.state.tree_rank, working.state.tree_rank), (1, 2));
+    }
+
+    fn sleeping_row(wait: crate::model::AgentWait) -> SidebarAgentSnapshot {
+        let mut sleeping = row();
+        sleeping.activity = "stopped".into();
+        sleeping.completed = true;
+        sleeping.wait = Some(wait);
+        sleeping.sleep = Some(crate::model::AgentSleepSnapshot {
+            state: "sleeping".into(),
+            reason: None,
+            since_unix_ms: 1,
+            progress: None,
+            cause: None,
+        });
+        sleeping
+    }
+
+    /// A sleeping child keeps its wait, but the moon is not work in progress:
+    /// whatever it waits on, it stands behind a working sibling, so a parent's
+    /// children chip leads with the working mark (unread: behind the working
+    /// one and before the resting).
+    #[test]
+    fn a_sleeping_child_waiting_on_work_ranks_behind_a_working_one() {
+        use crate::model::AgentWait;
+        let mut working = row();
+        working.activity = "working".into();
+        derive_from_axes(&mut working);
+        for wait in [AgentWait::Checks, AgentWait::Background, AgentWait::Reply] {
+            let mut read = sleeping_row(wait);
+            read.unread = false;
+            derive_from_axes(&mut read);
+            assert_eq!(read.mark, RowMark::Asleep);
+            assert!(read.wait.is_some(), "its wait itself is unchanged");
+            assert_eq!(
+                (read.state.tree_rank, working.state.tree_rank),
+                (4, 2),
+                "a read sleeper waiting on {wait:?}"
+            );
+            let mut unread = sleeping_row(wait);
+            unread.unread = true;
+            derive_from_axes(&mut unread);
+            assert_eq!(
+                (unread.state.tree_rank, working.state.tree_rank),
+                (3, 2),
+                "an unread sleeper waiting on {wait:?}"
+            );
+        }
+    }
+
+    /// The operator has to act on a sleeping child that asks or is raised, so
+    /// it keeps the first rank, ahead of a working sibling.
+    #[test]
+    fn a_sleeping_child_that_asks_or_is_raised_ranks_first() {
+        let mut working = row();
+        working.activity = "working".into();
+        derive_from_axes(&mut working);
+
+        let mut asking = sleeping_row(crate::model::AgentWait::Checks);
+        asking.demand = "question".into();
+        derive_from_axes(&mut asking);
+
+        let mut raised_row = sleeping_row(crate::model::AgentWait::Checks);
+        raised_row.raised = vec![raised("grandchild", Some(10))];
+        derive_from_axes(&mut raised_row);
+
+        let mut under = sleeping_row(crate::model::AgentWait::Checks);
+        under.descendant_mark = Some(super::super::escalation::DescendantMark {
+            kind: super::super::escalation::MarkKind::Raised,
+            count: 1,
+        });
+        derive_from_axes(&mut under);
+
+        for (name, agent) in [
+            ("asking", &asking),
+            ("raised", &raised_row),
+            ("raised below", &under),
+        ] {
+            assert_eq!(agent.state.tree_rank, 0, "a sleeping child that is {name}");
+            assert!(agent.state.tree_rank < working.state.tree_rank);
+        }
     }
 
     /// status-marks D-25, B36: a row that waits on proven work draws the

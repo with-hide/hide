@@ -51,6 +51,21 @@ pub enum CriterionKind {
     Human,
 }
 
+impl CriterionKind {
+    /// Whether the node's worker answers for a line of this kind: it records
+    /// the line itself (`Runtime::record_criterion`), where the CI is Hide's,
+    /// the review and verification a checker's and the gate the operator's.
+    /// An end gate asks once these are met (`Runtime::gate_reached`), and an
+    /// open one of these waits on the worker. The match names every kind, so
+    /// a new kind is placed here before it compiles.
+    pub fn worker_answers(self) -> bool {
+        match self {
+            Self::Own | Self::Check | Self::Defect => true,
+            Self::Ci | Self::Review | Self::Verify | Self::Human => false,
+        }
+    }
+}
+
 /// Where the operator's answer to a human gate came from (PRD
 /// mission-human-gate D-21): the decision card, the phone, or the
 /// Conductor's pane, where it relays the operator's words.
@@ -289,8 +304,17 @@ pub struct Criterion {
     /// and the open decision together (PRD mission-human-gate D-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asked: Option<u64>,
-    /// On a human line: whether it asks before the node starts or after its
-    /// other lines are met (PRD node-presets D-06); a line written before
+    /// On a human line: the Views the Conductor showed the operator for it
+    /// while the node works, before its own lines are met (`hide mission
+    /// gate <node> --show`, operator decision 2026-11-14), each with when.
+    /// The gate asks with them; the operator's answer spends them, and so
+    /// does the node going back to work from a finish
+    /// (`MissionNode::back_to_work`), so the gate waits for the next showing
+    /// or for the node's own lines. An older build ignores the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shown: Vec<crate::missions::ViewLink>,
+    /// On a human line: whether it asks before the node starts or before
+    /// its CI and checkers (PRD node-presets D-06); a line written before
     /// start gates asks at the end. A build before them ignores the field
     /// and asks a start gate at the end (docs/missions.md in hide-private,
     /// the downgrade limits).
@@ -347,6 +371,7 @@ impl Criterion {
             fails_in_a_row: 0,
             via: None,
             asked: None,
+            shown: Vec::new(),
             when: GateWhen::End,
         }
     }
@@ -386,6 +411,7 @@ impl Criterion {
         self.evidence = Some(words);
         self.via = Some(via);
         self.asked = None;
+        self.shown.clear();
         self.by = Some(operator(now));
         true
     }

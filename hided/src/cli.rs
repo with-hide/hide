@@ -48,6 +48,12 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
+    /// `hide session fold-ask <id> --reason <text>`: one of the caller's
+    /// session's open questions, folded with its reason.
+    FoldAsk {
+        id: String,
+        reason: String,
+    },
     Device(crate::device_cli::DeviceCli),
     /// `hide access request|status|leave|list`: an external tool's own
     /// connection.
@@ -97,6 +103,8 @@ pub enum CommandKind {
         target: String,
         wait: bool,
         request_id: Option<String>,
+        /// `--repo <folder>`: the project to open in (D-57).
+        repo: Option<String>,
     },
     BrowserConnect {
         display_id: Option<String>,
@@ -133,6 +141,9 @@ pub enum CommandKind {
     WorkspaceAction {
         action: Action,
         request_id: Option<String>,
+        /// `--repo <folder>` of `hide file open` and `hide diff open`: the
+        /// project to open in (D-57); none for every other action.
+        repo: Option<String>,
     },
     /// `hide links`: a read of the link record (PRD link-graph D-19).
     Links(hide_core::links::query::LinksQuery),
@@ -148,16 +159,16 @@ const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | bran
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <folder>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
 /// active View area, and only the operator splits the areas.
 const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area";
 
-const FILE_USAGE: &str = "usage: hide file open <path> [--request-id <id>]";
+const FILE_USAGE: &str = "usage: hide file open <path> [--repo <folder>] [--request-id <id>]";
 
-const DIFF_USAGE: &str = "usage: hide diff open <path> [--request-id <id>]";
+const DIFF_USAGE: &str = "usage: hide diff open <path> [--repo <folder>] [--request-id <id>]";
 
 const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
 
@@ -531,6 +542,18 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("diff") => parse_open(iter, false),
         Some("view") => parse_view(iter),
         Some("links") => parse_links(iter),
+        Some("session") if args.get(2).map(String::as_str) == Some("fold-ask") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::session_cli::USAGE)))?;
+            let args = args[3..]
+                .iter()
+                .filter(|arg| *arg != "--json")
+                .cloned()
+                .collect::<Vec<_>>();
+            crate::session_cli::parse_fold_ask(&args)
+                .map(|(id, reason)| CommandKind::FoldAsk { id, reason })
+                .map_err(|reason| wrong(reason, crate::session_cli::USAGE))
+        }
         Some("session") => crate::session_cli::parse(iter)
             .map(CommandKind::Session)
             .map_err(|reason| wrong(reason, crate::session_cli::USAGE)),
@@ -677,7 +700,7 @@ fn parse_open<'a>(
         .next()
         .filter(|path| !path.is_empty() && !path.starts_with('-'))
         .ok_or(usage)?;
-    let mut request_id = None;
+    let (mut request_id, mut repo) = (None, None);
     while let Some(option) = iter.next() {
         match option.as_str() {
             "--beside" => return Err(BESIDE_REMOVED.to_owned()),
@@ -689,6 +712,7 @@ fn parse_open<'a>(
                         .clone(),
                 );
             }
+            "--repo" if repo.is_none() => repo = Some(folder_value(iter.next()).ok_or(usage)?),
             _ => return Err(usage.to_owned()),
         }
     }
@@ -697,7 +721,11 @@ fn parse_open<'a>(
     } else {
         Action::OpenDiff { path: path.clone() }
     };
-    Ok(CommandKind::WorkspaceAction { action, request_id })
+    Ok(CommandKind::WorkspaceAction {
+        action,
+        request_id,
+        repo,
+    })
 }
 
 fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
@@ -779,7 +807,18 @@ fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandK
         },
         _ => return Err(usage.to_owned()),
     };
-    Ok(CommandKind::WorkspaceAction { action, request_id })
+    Ok(CommandKind::WorkspaceAction {
+        action,
+        request_id,
+        repo: None,
+    })
+}
+
+/// A folder option's value: non-empty and not another option.
+fn folder_value(value: Option<&String>) -> Option<String> {
+    value
+        .filter(|folder| !folder.is_empty() && !folder.starts_with('-'))
+        .cloned()
 }
 
 fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
@@ -806,11 +845,14 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
     if verb != Some("open") {
         return Err(BROWSER_USAGE.to_owned());
     }
-    let (mut target, mut wait, mut request_id) = (None, false, None);
+    let (mut target, mut wait, mut request_id, mut repo) = (None, false, None, None);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--beside" => return Err(BESIDE_REMOVED.to_owned()),
             "--wait" if !wait => wait = true,
+            "--repo" if repo.is_none() => {
+                repo = Some(folder_value(iter.next()).ok_or(BROWSER_USAGE)?);
+            }
             "--request-id" if request_id.is_none() => {
                 request_id = Some(
                     iter.next()
@@ -828,6 +870,7 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
         target,
         wait,
         request_id,
+        repo,
     })
 }
 
@@ -902,6 +945,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
+                    | CommandKind::FoldAsk { .. }
                     | CommandKind::Device(_)
                     | CommandKind::Access(_)
                     | CommandKind::Pane(_)
@@ -941,6 +985,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
+        CommandKind::FoldAsk { id, reason } => crate::session_cli::run_fold_ask(&env, &id, &reason),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
         CommandKind::Access(cli) => crate::access_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
@@ -979,7 +1024,24 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             target,
             wait,
             request_id,
-        } => browser_open(&env, &target, wait, request_id.as_deref()),
+            repo,
+        } => {
+            let target = match repo {
+                Some(repo) => {
+                    let cwd = std::env::current_dir().map_err(|_| "cwd_unavailable".to_owned())?;
+                    let Ok(url) = crate::browser_cli::address(&target, &cwd) else {
+                        return workspace_refusal(
+                            "invalid_address",
+                            "Use an http or https address, or a readable HTML file",
+                        );
+                    };
+                    enter_repo(&env, &repo)?;
+                    url
+                }
+                None => target,
+            };
+            browser_open(&env, &target, wait, request_id.as_deref())
+        }
         CommandKind::BrowserConnect { display_id } => {
             let answer = browser_connect_value(&env, display_id.as_deref(), true)?;
             println!("{answer}");
@@ -1057,7 +1119,19 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         }
         CommandKind::ViewList { session } => view_list(&env, session.as_deref()),
         CommandKind::ViewStatus { view_id } => view_status(&env, &view_id),
-        CommandKind::WorkspaceAction { action, request_id } => {
+        CommandKind::WorkspaceAction {
+            action,
+            request_id,
+            repo,
+        } => {
+            let action = match repo {
+                Some(repo) => {
+                    let action = absolute_action(action)?;
+                    enter_repo(&env, &repo)?;
+                    action
+                }
+                None => action,
+            };
             workspace_action(&env, action, request_id.as_deref())
         }
         CommandKind::Links(query) => links(&env, &query),
@@ -1360,6 +1434,46 @@ fn links(env: &Env, query: &hide_core::links::query::LinksQuery) -> Result<(), S
             .unwrap_or("links_request_failed")
             .to_owned())
     }
+}
+
+/// `--repo <folder>` (D-57): moves the command into `folder` before it
+/// asks Hide, so a caller outside Hide's panes, an external tool among them,
+/// is bound to the project checkout that holds it, exactly as if it had run
+/// there: the command's working folder stays the one thing that names its
+/// checkout, and the option gives no caller a checkout it could not reach
+/// with `cd`. A pane's command opens in its own checkout whatever folder it
+/// runs in, so it is refused the option rather than have it ignored.
+fn enter_repo(env: &Env, repo: &str) -> Result<(), String> {
+    if env.pane_id.is_some() || std::env::var_os(crate::env::HIDE_CAP_REF).is_some() {
+        return workspace_refusal(
+            "repo_from_pane",
+            "An agent in a Hide pane opens in its own checkout; run the command without --repo",
+        );
+    }
+    std::env::set_current_dir(repo).or_else(|_| {
+        workspace_refusal(
+            "repo_not_found",
+            "Name the folder of a project Hide shows with --repo, and retry",
+        )
+    })
+}
+
+/// `action` with its path read against the folder the command ran in, before
+/// `--repo` moves the command elsewhere.
+fn absolute_action(action: Action) -> Result<Action, String> {
+    let absolute = |path: String| {
+        absolute_caller_path(&path)
+            .or_else(|reason| workspace_refusal(&reason, "Check the current directory and retry"))
+    };
+    Ok(match action {
+        Action::OpenFile { path } => Action::OpenFile {
+            path: absolute(path)?,
+        },
+        Action::OpenDiff { path } => Action::OpenDiff {
+            path: absolute(path)?,
+        },
+        other => other,
+    })
 }
 
 fn workspace_action(env: &Env, action: Action, request_id: Option<&str>) -> Result<(), String> {
@@ -3940,6 +4054,17 @@ mod tests {
                 target: "index.html".into(),
                 wait: false,
                 request_id: None,
+                repo: None,
+            })
+        );
+        // D-57: an outside caller names the project to open in.
+        assert_eq!(
+            parse(&["hide", "browser", "open", "hello.html", "--repo", "/films"]),
+            Ok(CommandKind::BrowserOpen {
+                target: "hello.html".into(),
+                wait: false,
+                request_id: None,
+                repo: Some("/films".into()),
             })
         );
         // Open no longer takes --beside, and says how to run it again
@@ -3962,6 +4087,7 @@ mod tests {
                 target: "localhost:3000".into(),
                 wait: true,
                 request_id: Some("1234567890000-abc".into()),
+                repo: None,
             })
         );
         for bad in [
@@ -3971,6 +4097,11 @@ mod tests {
             &["hide", "browser", "open", "a", "b"],
             &["hide", "browser", "open", "a", "--pane"],
             &["hide", "browser", "open", "a", "--reveal"],
+            &["hide", "browser", "open", "a", "--repo"],
+            &["hide", "browser", "open", "a", "--repo", "--wait"],
+            &[
+                "hide", "browser", "open", "a", "--repo", "/x", "--repo", "/y",
+            ],
             &[
                 "hide", "browser", "open", "a", "--pane", "p1", "--pane", "p2",
             ],
@@ -4285,9 +4416,11 @@ mod tests {
                     edge: Edge::Right
                 },
                 request_id: Some("1234567890000-abc".into()),
+                repo: None,
             })
         );
         assert!(parse(&["hide", "view", "select", "d2", "--workspace", "other"]).is_err());
+        assert!(parse(&["hide", "view", "select", "d2", "--repo", "/films"]).is_err());
         assert!(parse(&["hide", "view", "move", "d2", "--area", "a1"]).is_err());
         assert!(
             parse(&[
@@ -4345,6 +4478,7 @@ mod tests {
                     path: "src/lib.rs".into(),
                 },
                 request_id: None,
+                repo: None,
             })
         );
         for removed in [
@@ -4364,8 +4498,21 @@ mod tests {
                     path: "src/lib.rs".into(),
                 },
                 request_id: None,
+                repo: None,
             })
         );
+        assert_eq!(
+            parse(&["hide", "file", "open", "notes.md", "--repo", "/films"]),
+            Ok(CommandKind::WorkspaceAction {
+                action: Action::OpenFile {
+                    path: "notes.md".into(),
+                },
+                request_id: None,
+                repo: Some("/films".into()),
+            })
+        );
+        assert!(parse(&["hide", "file", "open", "a", "--repo"]).is_err());
+        assert!(parse(&["hide", "diff", "open", "a", "--repo", "/x", "--repo", "/y"]).is_err());
         assert!(parse(&["hide", "file", "open", "src/lib.rs", "--workspace", "other"]).is_err());
         assert!(parse(&["hide", "file", "open", "src/lib.rs", "--reveal"]).is_err());
     }

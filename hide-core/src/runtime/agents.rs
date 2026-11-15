@@ -4174,17 +4174,29 @@ impl Runtime {
         }
     }
 
-    /// The checkouts Hide made for the agents it started. A spawn's machine
-    /// is the id of the device the shell names its Projects by (this node's
-    /// own id for a local one), so it is the checkout's device as it stands.
+    /// The checkouts Hide made for the agents Hide AI started, and for those
+    /// an external tool started while its connection stands at Act, so the
+    /// sidebar tree draws both by one rule (PRD hide-ai-work-home D-17).
+    /// Once the tool lets go its checkout is the operator's and leaves the
+    /// list on the same pass as its rows (PRD hide-external-control D-14). A
+    /// spawn's machine is the id of the device the shell names its Projects
+    /// by (this node's own id for a local one), so it is the checkout's
+    /// device as it stands.
     fn hide_ai_checkouts(&self) -> Vec<crate::model::HideAiCheckoutSnapshot> {
         self.hide_started
             .checkouts
             .iter()
+            .filter(|started| {
+                started
+                    .tool
+                    .as_ref()
+                    .is_none_or(|tool| self.access_keeps_work(&tool.connection))
+            })
             .map(|started| crate::model::HideAiCheckoutSnapshot {
                 device_id: started.machine.clone(),
                 path: started.path.clone(),
                 task: started.task.clone(),
+                tool: started.tool.as_ref().map(|tool| tool.name.clone()),
             })
             .collect()
     }

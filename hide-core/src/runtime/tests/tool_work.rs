@@ -2,7 +2,7 @@
 //! (docs/status-model.md, Ownership). The operator's own rows and Hide AI's
 //! rows reach the same lists as before external tools existed (PRD
 //! hide-external-control B37); an external tool's work reaches them only to
-//! ask a person or show a View (B26-B29).
+//! ask a person (B26-B29); a View it opened is drawn in its cell (D-38).
 
 use super::*;
 use crate::model::{DeclaredHumanTurn, HideAiSnapshot, ToolWorkSnapshot, UnseenViewFact};
@@ -288,19 +288,19 @@ fn each_row_reaches_the_operators_lists_by_whose_work_it_is() {
 }
 
 /// B26, B28, B29 (D-09, D-37, D-38): a tool's agent reaches the operator's
-/// lists only to ask a person or to show a View; its own question, its done
-/// turn and its work are the tool's to read. Once the tool no longer keeps
-/// it (View only, disconnected, left) it is the operator's row in every way
-/// (D-14).
+/// lists only to ask a person; its own question, its done turn, its work and
+/// the Views it opened are the tool's to read (the cell draws the eye on its
+/// row). Once the tool no longer keeps it (View only, disconnected, left) it
+/// is the operator's row in every way (D-14).
 #[test]
-fn a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view() {
+fn a_tools_agent_reaches_the_operator_only_for_a_person() {
     let cases = [
         (Doing::Working, pool_only()),
         (Doing::Resting, pool_only()),
         (Doing::Question, pool_only()),
         (Doing::Done, pool_only()),
         (Doing::HumanTurn, called_out(false)),
-        (Doing::Look, called_out(true)),
+        (Doing::Look, pool_only()),
     ];
     for (doing, expected) in cases {
         assert_eq!(
@@ -325,7 +325,7 @@ fn a_tools_agent_reaches_the_operator_only_for_a_person_or_a_view() {
 }
 
 /// B46, D-52: the phone has no tool's cell, so a tool's row that reaches its
-/// list, a person's turn or a View, names the tool, on the wire and so on its
+/// list, a person's turn, names the tool, on the wire and so on its
 /// second line; the operator's own rows send no name, which an older phone
 /// therefore never meets.
 #[test]
@@ -338,18 +338,17 @@ fn a_tools_row_on_the_phone_names_the_tool() {
             .unwrap_or_else(|| panic!("{owner:?} {doing:?} is on the phone"));
         serde_json::to_value(listed).unwrap().get("tool").cloned()
     };
-    for doing in [Doing::HumanTurn, Doing::Look] {
-        assert_eq!(
-            sent(Owner::Tool(true), doing),
-            Some(serde_json::json!("nightly")),
-            "kept {doing:?}"
-        );
-        assert_eq!(
-            sent(Owner::Operator, doing),
-            None,
-            "the operator's {doing:?}"
-        );
-    }
+    let doing = Doing::HumanTurn;
+    assert_eq!(
+        sent(Owner::Tool(true), doing),
+        Some(serde_json::json!("nightly")),
+        "kept {doing:?}"
+    );
+    assert_eq!(
+        sent(Owner::Operator, doing),
+        None,
+        "the operator's {doing:?}"
+    );
 }
 
 /// B27, B29: a child a tool's agent started with `--parent here` stays off
@@ -513,8 +512,9 @@ fn the_tools_work_is_the_operators_the_moment_its_connection_no_longer_acts() {
 
 /// B28, B29: a tool's agent that asks its tool something, such as the
 /// decision of a mission it conducts, and also opened a View or waits on a
-/// person shows the operator only the View or the person's turn: its mark,
-/// its line and `외 N건` leave the tool's question out. The operator's own
+/// person shows the operator's side only the person's turn, and its own row the
+/// View or the person's turn: its mark, its line and `외 N건` leave the tool's
+/// question out. The operator's own
 /// row keeps counting its question behind its person's turn.
 #[test]
 fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
@@ -527,7 +527,10 @@ fn a_tools_own_question_never_leads_or_counts_on_the_operators_row() {
         agent
     };
     let looking = asking(Owner::Tool(true), Doing::Look);
-    assert_eq!(looking.group, "needs_you");
+    assert_eq!(
+        looking.group, "seen",
+        "the View calls no one: its eye is drawn in the tool's cell"
+    );
     assert_eq!(looking.mark, crate::agent_state::RowMark::Look);
     assert_eq!(
         looking.state.ask, None,
@@ -679,5 +682,148 @@ fn a_tools_cell_holds_its_work_and_counts_only_the_tools_turn() {
         project(&mut runtime),
         (Vec::new(), (1, 0)),
         "View only and a disconnect end the cells, and the work let go is the operator's"
+    );
+}
+
+/// A runtime with one project whose checkout holds `agent` in pane
+/// `subject`, registered as the work of a tool `nightly` at Act; answers
+/// the connection.
+fn kept_by_tool(agent: SidebarAgentSnapshot) -> (Runtime, String) {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![workspace(
+        "project",
+        "Project",
+        "/fixture",
+        vec![checkout(
+            "project",
+            "work",
+            "/fixture/work",
+            Some(pane("subject", "/fixture/work")),
+        )],
+    )];
+    let mut agent = agent;
+    agent.lineage_session = Some("tool-session".into());
+    runtime.snapshot.navigator.agents = vec![agent];
+    let connection = connect(
+        &mut runtime,
+        "00000000000000a7",
+        "7",
+        crate::access::Level::Act,
+    );
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: "agent-1".into(),
+        pane_id: "subject".into(),
+        session: Some("tool-session".into()),
+        ended: false,
+    }];
+    (runtime, connection)
+}
+
+/// B29, B40 (together check, step 5): a tool's agent waiting on a person
+/// (`hide agent ask-human`) has not finished, so the tool's cell keeps its
+/// task among the work in progress, as a wait, and never in 끝남, however
+/// its last turn ended; the person's step is the operator's, in their own
+/// Needs You, and never the tool's turn.
+#[test]
+fn a_tools_agent_waiting_on_a_person_stays_in_progress_in_the_tools_cell() {
+    use crate::agent_state::tally::tasks::TaskState;
+    let mut agent = row(Owner::Operator, Doing::HumanTurn);
+    agent.activity = "stopped".into();
+    agent.completed = true;
+    agent.unread = true;
+    let declared = agent.declared_human_turn.clone().unwrap();
+    let (mut runtime, connection) = kept_by_tool(agent);
+    // As the ledger's standing declaration lays it on every projection.
+    runtime.human_turns_laid.insert("subject".into(), declared);
+    runtime.refresh_agent_lineage();
+    runtime.sync_session_state();
+    runtime.publish_mission_asks();
+    runtime.refresh_agent_scopes();
+    let cell = &runtime.snapshot.navigator.tools[0];
+    assert_eq!(cell.connection, connection);
+    assert_eq!(
+        (
+            cell.turn,
+            cell.devices
+                .iter()
+                .flat_map(|device| &device.tasks.cards)
+                .map(|card| (card.root.as_str(), card.state))
+                .collect::<Vec<_>>()
+        ),
+        (0, vec![("subject", TaskState::Waiting)]),
+        "a person's step is no tool's turn and no finish"
+    );
+    assert_eq!(
+        runtime.snapshot.navigator.devices[0]
+            .agent_scope
+            .groups
+            .needs_you,
+        1,
+        "the person's step is the operator's"
+    );
+}
+
+/// D-17 of PRD hide-ai-work-home applied to a tool's work (together check,
+/// issue 2): the checkout Hide made for a tool's spawn is published beside
+/// Hide AI's, naming the tool, while the tool keeps its work, so the
+/// sidebar tree leaves it out by the same rule; once the tool lets go it is
+/// the operator's ordinary checkout and leaves the list.
+#[test]
+fn a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts() {
+    use crate::access::Level;
+    use crate::coordination::started::{CheckoutTool, StartedCheckout};
+    use crate::runtime::access::AccessEvent;
+    let (mut runtime, connection) = kept_by_tool(row(Owner::Operator, Doing::Working));
+    runtime.hide_started.checkouts = vec![
+        StartedCheckout {
+            machine: crate::node::TEST_NODE.into(),
+            path: "/fixture/.hide/worktrees/fixture/helper-task".into(),
+            task: None,
+            tool: Some(CheckoutTool {
+                connection: connection.clone(),
+                name: "nightly".into(),
+            }),
+        },
+        StartedCheckout {
+            machine: crate::node::TEST_NODE.into(),
+            path: "/fixture/.hide/worktrees/fixture/hide-memory-m72".into(),
+            task: None,
+            tool: None,
+        },
+    ];
+    // The level event itself republishes the list: the snapshot is read right after it, with no refresh of the
+    // test's own.
+    runtime.refresh_agent_lineage();
+    let listed = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .navigator
+            .hide_ai_checkouts
+            .iter()
+            .map(|listed| {
+                (
+                    listed.path.rsplit('/').next().unwrap().to_owned(),
+                    listed.tool.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(&runtime),
+        [
+            ("helper-task".to_owned(), Some("nightly".to_owned())),
+            ("hide-memory-m72".to_owned(), None)
+        ]
+    );
+    assert!(runtime.access_event(AccessEvent::Level {
+        id: connection,
+        level: Level::View,
+    }));
+    assert_eq!(
+        listed(&runtime),
+        [("hide-memory-m72".to_owned(), None)],
+        "View only hands the checkout to the operator"
     );
 }

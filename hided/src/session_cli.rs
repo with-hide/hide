@@ -3,14 +3,16 @@
 //! it as text for an agent to read, or prints it with `--json`. Both forms
 //! carry the same sessions, request numbers, source marks and omission
 //! counts (B19): a record past [`RECORD_TEXT_BYTES`] has its oldest flows
-//! folded before either form is printed (B7).
+//! folded before either form is printed (B7). `hide session fold-ask`
+//! folds one of the caller's own session's open questions
+//! (`hide_core::links::agent_asks`).
 
 use crate::env::Env;
 use hide_core::links::session_command::SessionCommand;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
-pub const USAGE: &str = "hide session list [--since <n>m|h|d] [--limit <n>] [--json]\nhide session record <id> [--json]\nhide session read <id> --request <n> | --from <n> [--events <n>] [--json]";
+pub const USAGE: &str = "hide session list [--since <n>m|h|d] [--limit <n>] [--json]\nhide session record <id> [--json]\nhide session read <id> --request <n> | --from <n> [--events <n>] [--json]\nhide session fold-ask <id> --reason <text> [--json]";
 
 /// The most a record's text takes; past it the oldest flows fold (D-12).
 pub const RECORD_TEXT_BYTES: usize = 64 * 1024;
@@ -122,6 +124,38 @@ pub fn run(env: &Env, cli: &Cli) -> Result<(), String> {
         print!("{}", draw(&value));
     }
     Ok(())
+}
+
+/// `hide session fold-ask <id> --reason <text>`: the question's id and the
+/// line saying what settled it, each one line.
+pub fn parse_fold_ask(args: &[String]) -> Result<(String, String), String> {
+    let text = |value: &String| {
+        (!value.trim().is_empty()
+            && !value.starts_with("--")
+            && !value.chars().any(char::is_control))
+        .then(|| value.clone())
+    };
+    let key = |value: &String| {
+        (value.len() <= 256 && !value.starts_with('-'))
+            .then(|| text(value))
+            .flatten()
+    };
+    match args {
+        [id, flag, reason] | [flag, reason, id] if flag == "--reason" => key(id).zip(text(reason)),
+        _ => None,
+    }
+    .ok_or_else(|| USAGE.to_owned())
+}
+
+/// Runs `hide session fold-ask`: folds one of the caller's session's open
+/// questions with its reason, printed in the same envelope as a `hide
+/// agent` answer.
+pub fn run_fold_ask(env: &Env, id: &str, reason: &str) -> Result<(), String> {
+    let result = (|| {
+        let mut credential = crate::workspace_cli::Credential::acquire(env)?;
+        crate::workspace_cli::request_fold_ask(&mut credential, id, reason)
+    })();
+    crate::agent_cli::print_answer(result)
 }
 
 /// The answer as text.

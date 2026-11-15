@@ -45,9 +45,12 @@ KEEP_FILES = {
     "local-issues.json", "composer-marks.json", "hook-facts.json", "node.json",
     "host-id", "github-snapshot.json", "global-instruction.md",
     "links.sqlite3", "usage.sqlite3", "suggestions.sqlite3", "session-search.sqlite3", "project-memory.sqlite3",
-    "factory.sqlite3", "factory.v1.sqlite3",
+    "factory.sqlite3", "factory.v1.sqlite3", "access.json",
 }
-KEEP_FOLDERS = {"engine", "mission-events"}
+# `missions` is the mission folder book (one file per mission, its index and
+# its histories) every release since 1.2.8 writes; `mission-events` is the
+# legacy book's histories before it.
+KEEP_FOLDERS = {"engine", "mission-events", "missions"}
 # What a start reads from the device's account outside its state folder: the kit's
 # record of what it installed and the agent configuration it put Hide's hooks
 # into. Kept per machine in `hide-kit/tests/fixtures/release-home/<tag>/<machine>/`,
@@ -208,11 +211,18 @@ def keep(state, out):
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    left = []
     for entry in sorted(state.iterdir()):
         if entry.is_file() and entry.name in KEEP_FILES:
             shutil.copy(entry, out / entry.name)
         elif entry.is_dir() and entry.name in KEEP_FOLDERS:
             shutil.copytree(entry, out / entry.name, ignore=shutil.ignore_patterns("*.sock", "*.lock", "*.log"))
+        else:
+            left.append(entry.name + ("/" if entry.is_dir() else ""))
+    # Named so a store a new release writes is seen, not dropped unread: a
+    # start's store missing from KEEP_FILES or KEEP_FOLDERS is never upgraded
+    # in the test (1.2.8's `missions/` read as no missions until it was kept).
+    print("left behind: " + (", ".join(left) or "nothing"))
 
 
 def keep_homes(homes, out):

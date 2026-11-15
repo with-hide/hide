@@ -484,8 +484,8 @@ fn a_childs_unseen_view_turns_its_ancestors_unread_until_one_reads_it_or_the_ope
 /// delegated child of an external tool's agent opening a View follows the
 /// rule every delegated child does. The child stays where it was, its root
 /// turns unread and stands in no Needs You, so the tool's work does not call
-/// the operator; once the tool's agent opens it again itself, it is its View
-/// for the operator, as on any root.
+/// the operator; once the tool's agent opens it again itself, its row draws
+/// the eye in the tool's cell, as on any root, and still calls no one.
 #[test]
 fn a_tools_delegated_childs_view_follows_every_delegated_childs_rule() {
     let (_root, runtime) = fixture(true);
@@ -526,8 +526,113 @@ fn a_tools_delegated_childs_view_follows_every_delegated_childs_rule() {
     open(&mut guard, "sender", "src/report.md");
     let root = row(&guard, "sender");
     assert_eq!(root.look.as_ref().unwrap().view_id, view);
-    assert_eq!(root.group, "needs_you");
-    assert!(!root.unlisted, "its own View is the operator's to look at");
+    assert_ne!(root.group, "needs_you", "the eye calls no one");
+    assert!(root.unlisted, "and the operator's lists still leave it out");
+}
+
+/// PRD hide-external-control D-38, D-55, B29, D-52: a View an agent the tool
+/// keeps opened shows as any agent's does, inside the tool's cell: the row
+/// carries the eye and the View is in that session's Files list. It reaches
+/// nothing of the operator's, the phone's Views list included, and it neither
+/// moves the row into the tool's turn nor adds to the cell's number.
+#[test]
+fn a_view_a_tools_agent_opened_is_the_eye_on_its_row_in_the_tools_cell_only() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    let connection = super::tool_work::connect(
+        &mut guard,
+        "00000000000000b9",
+        "9",
+        crate::access::Level::Act,
+    );
+    guard.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: connection.clone(),
+        name: "nightly".into(),
+        agent_id: "agent-1".into(),
+        pane_id: "recipient".into(),
+        session: Some("recipient-session".into()),
+        ended: false,
+    }];
+    guard.refresh_agent_lineage();
+    keyboard(&mut guard, Some("sender"));
+    keyboard(&mut guard, None);
+    let view = open(&mut guard, "recipient", "src/report.md");
+    guard.sync_session_state();
+    guard.publish_mission_asks();
+    guard.refresh_agent_scopes();
+
+    // The row draws the eye, and the View is in its session's list.
+    let agent = row(&guard, "recipient");
+    assert_eq!(agent.mark, RowMark::Look);
+    assert_eq!(agent.look.as_ref().unwrap().view_id, view);
+    assert!(
+        guard
+            .view_layout_of(&key())
+            .and_then(|layout| layout.display(&view))
+            .is_some_and(|display| !display.openers.is_empty() && display.unseen.is_some())
+    );
+    // The tool's cell holds the row where its state puts it, and the eye
+    // does not make it the tool's turn.
+    let cell = &guard.snapshot.navigator.tools[0];
+    assert_eq!(cell.turn, 0);
+    let cards: Vec<_> = cell
+        .devices
+        .iter()
+        .flat_map(|device| &device.tasks.cards)
+        .collect();
+    assert_eq!(cards.len(), 1);
+    assert_ne!(
+        cards[0].state,
+        crate::agent_state::tally::tasks::TaskState::NeedsYou
+    );
+    // None of the operator's.
+    assert_ne!(agent.group, "needs_you");
+    assert!(agent.unlisted);
+    assert_eq!(
+        guard.snapshot.navigator.devices[0]
+            .agent_scope
+            .groups
+            .needs_you,
+        0
+    );
+    let phone = guard.phone_looks("recipient");
+    assert!(phone.views.is_empty() && phone.omitted == 0);
+}
+
+/// PRD hide-external-control D-55 (operator decision, session based): a View
+/// the tool itself opens with `hide file open`, from its connection and with
+/// no Hide session behind it, is the operator's own open as on any caller
+/// that is no agent: a tab for every strip, no mark and no stamp.
+#[test]
+fn a_tools_direct_open_is_the_operators_own_open() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    let connection = super::tool_work::connect(
+        &mut guard,
+        "00000000000000ba",
+        "a",
+        crate::access::Level::Act,
+    );
+    keyboard(&mut guard, Some("sender"));
+    let caller = crate::workspace_control::access_caller_id(&connection, None);
+    let view = open(&mut guard, &caller, "src/hello.html");
+    let display = guard
+        .view_layout_of(&key())
+        .and_then(|layout| layout.display(&view))
+        .unwrap();
+    assert!(display.operator && display.openers.is_empty() && display.opener.is_none());
+    assert!(
+        display.unseen.is_none(),
+        "no mark: nobody opened it for them"
+    );
+    assert!(
+        guard
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .all(|agent| agent.look.is_none())
+    );
 }
 
 #[test]

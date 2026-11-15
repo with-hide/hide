@@ -213,6 +213,7 @@ fn a_start_that_failed_after_its_tab_opened_joins_the_group_and_its_card_follows
             seed_tab: None,
             id: reserved["id"].as_str().unwrap().into(),
             path: Some(PATH.into()),
+            made: false,
             pane: Some(pane.clone()),
             terminal: None,
             shell: None,

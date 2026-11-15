@@ -36,6 +36,8 @@ fn ask(id: &str, text: &str, at: u64) -> MissedWork {
         backlog_key: None,
         creating: false,
         reason: None,
+        reopened: false,
+        given: false,
     }
 }
 
