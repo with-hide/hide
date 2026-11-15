@@ -2242,7 +2242,10 @@ mod tests {
             CloseReason::InputFailed,
             CloseReason::HolderFailed,
         ] {
-            assert!(matches!(asked_to_end(reason), Asked::Again(_)), "{reason:?}");
+            assert!(
+                matches!(asked_to_end(reason), Asked::Again(_)),
+                "{reason:?}"
+            );
         }
         // A holder that dropped the connection may not have read the ask: it
         // goes again, and a failure that says anything else does not.
