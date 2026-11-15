@@ -18,7 +18,7 @@ import type { Actions } from "../actions";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cardVersion, dismissUpdateCard, readyVersion, releaseNotesUrl, restartIntoUpdate, useUpdateStatus } from "../updates";
 import { Button } from "./ui/button";
-import { useLateClose } from "./ui/layer";
+import { useReturnFocus } from "./ui/layer";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Hint } from "./ui/tooltip";
 import { hintSide, menuSide, type MenuPlace } from "./menu-place";
@@ -89,8 +89,9 @@ export function UpdateReadyButton({ actions, place }: { actions: Actions; place:
   // Radix hands the keyboard back from a timer after the close, and under load
   // that timer runs after the operator moved on: the hand-back would take the
   // keyboard from a menu opened since, and the key they pressed would land on
-  // the ↑ button (issue 2547). `useLateClose` leaves such a hand-back alone.
-  const lateClose = useLateClose(() => button.current);
+  // the ↑ button (issue 2547). `useReturnFocus` hands it back to the button only
+  // while nothing the operator chose holds the keyboard.
+  const lateClose = useReturnFocus(open, { target: () => button.current });
   if (ready === null) return null;
   const fold = () => {
     setOpened(false);
