@@ -92,7 +92,13 @@ pub enum AccessAsk {
     /// `hide access leave`.
     Leave { key: String },
     /// Any other command, run as the connection: its one-shot credential.
-    Use { key: String },
+    /// `folder` is the folder the command runs in, which gives its
+    /// Workspace commands a checkout (PRD hide-external-control D-28, D-57).
+    Use {
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<String>,
+    },
 }
 
 /// The refusal a daemon or node of installation `own` gives `request` before

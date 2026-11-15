@@ -888,13 +888,17 @@ fn attest_bootstrap(
 
 /// Binds an external tool's command to the connection its key proves (PRD
 /// hide-external-control B18): the core compares the key's hash and names
-/// the connection, and the folder the command ran in, read from the kernel
-/// as a checkout caller's is, gives its Workspace commands a checkout when
-/// one is registered there (D-28). A folder the kernel does not name, or
-/// one no checkout holds, leaves the tool its connection alone.
+/// the connection, and the folder the command runs in gives its Workspace
+/// commands a checkout when one is registered there (D-28). The tool names
+/// that folder itself (`named`), since Windows reports no other process's
+/// working folder; its word gives it nothing a `cd` would not, because the
+/// key, not the folder, is what proves the tool. Without one the kernel's
+/// answer is read, and a folder no checkout holds, or none at all, leaves
+/// the tool its connection alone.
 pub(crate) fn attest_access(
     peer: i32,
     key_sha256: String,
+    named: Option<&str>,
     core: &CoreHandle,
 ) -> Result<Attestation, String> {
     let proved = core.access(hide_core::access::Call::Prove { key_sha256 })?;
@@ -904,7 +908,12 @@ pub(crate) fn attest_access(
         .ok_or("access_unavailable")?
         .to_owned();
     let node = core.node();
-    let folder = caller_directory(peer).ok();
+    let folder = match named {
+        Some(named) => hide_platform::fs::identity::canonical(Path::new(named))
+            .ok()
+            .and_then(|folder| hide_platform::path::to_wire(&folder).ok()),
+        None => caller_directory(peer).ok(),
+    };
     let caller_id = hide_core::workspace_control::access_caller_id(&connection, folder.as_deref());
     let context = folder
         .and_then(|_| {

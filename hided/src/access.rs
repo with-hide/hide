@@ -133,7 +133,7 @@ pub(crate) fn answer_bootstrap(
         AccessAsk::Request { key, .. }
         | AccessAsk::Status { key }
         | AccessAsk::Leave { key }
-        | AccessAsk::Use { key } => key,
+        | AccessAsk::Use { key, .. } => key,
     };
     if !valid_key(key) {
         return (refused("invalid_request"), None);
@@ -163,8 +163,9 @@ pub(crate) fn answer_bootstrap(
         }
         AccessAsk::Status { .. } => Call::Status { key_sha256 },
         AccessAsk::Leave { .. } => Call::Leave { key_sha256 },
-        AccessAsk::Use { .. } => {
-            return match use_credential(peer, request, key_sha256, registry, core, port) {
+        AccessAsk::Use { folder, .. } => {
+            let folder = folder.as_deref();
+            return match use_credential(peer, request, key_sha256, folder, registry, core, port) {
                 Ok(path) => match hide_platform::path::to_wire(&path) {
                     Ok(reference) => (json!({"ok": true, "reference": reference}), Some(path)),
                     Err(_) => (refused("reference_unavailable"), Some(path)),
@@ -183,6 +184,7 @@ fn use_credential(
     peer: i32,
     request: &PaneRequest,
     key_sha256: String,
+    folder: Option<&str>,
     registry: &Registry,
     core: &CoreHandle,
     port: u16,
@@ -194,7 +196,7 @@ fn use_credential(
         peer,
         hide_node::pane_proof::process_start(peer).ok_or("caller_unavailable")?,
     );
-    let attestation = crate::pane_auth::attest_access(peer, key_sha256, core)?;
+    let attestation = crate::pane_auth::attest_access(peer, key_sha256, folder, core)?;
     crate::pane_auth::issue_access(registry, &attestation, &request.nonce, port, holder)
         .map_err(str::to_owned)
 }

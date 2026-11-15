@@ -1439,8 +1439,8 @@ fn links(env: &Env, query: &hide_core::links::query::LinksQuery) -> Result<(), S
 /// `--repo <folder>` (D-57): moves the command into `folder` before it
 /// asks Hide, so a caller outside Hide's panes, an external tool among them,
 /// is bound to the project checkout that holds it, exactly as if it had run
-/// there: the folder the kernel reports for the command stays the only one
-/// Hide reads, and the option gives no caller a checkout it could not reach
+/// there: the command's working folder stays the one thing that names its
+/// checkout, and the option gives no caller a checkout it could not reach
 /// with `cd`. A pane's command opens in its own checkout whatever folder it
 /// runs in, so it is refused the option rather than have it ignored.
 fn enter_repo(env: &Env, repo: &str) -> Result<(), String> {
