@@ -3044,6 +3044,7 @@ impl Runtime {
         // Everything one event changes is one selection: the look it leaves
         // is read once, in the event's own frame (`look.rs`).
         let (changed, read) = self.change_look(|runtime| runtime.dispatch_event(event, false));
+        self.trace_view("dispatch_json");
         changed || read
     }
 

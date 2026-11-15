@@ -2019,6 +2019,41 @@ impl Runtime {
                 panes: Vec::new(),
             };
         }
+        self.trace_view("sync_active_tab_projection");
+    }
+    /// TEMPORARY (#2575 diagnosis): logs who moved the front checkout, the
+    /// shown tab or the keyboard pane, with the core frames that did it.
+    pub(crate) fn trace_view(&self, site: &'static str) {
+        static LAST: std::sync::Mutex<Option<[Option<String>; 4]>> = std::sync::Mutex::new(None);
+        let now = [
+            self.snapshot.navigator.focused_checkout_id.clone(),
+            self.snapshot.tab.id.clone(),
+            self.snapshot.focused.pane_id.clone(),
+            self.snapshot.terminal.pane_id.clone(),
+        ];
+        let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last.as_ref() == Some(&now) {
+            return;
+        }
+        let from = last.replace(now.clone());
+        let stack = std::backtrace::Backtrace::force_capture().to_string();
+        let frames = stack
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains("hide_core::") && !line.contains("trace_view"))
+            .map(|line| line.split_once(": ").map_or(line, |(_, name)| name))
+            .take(24)
+            .collect::<Vec<_>>();
+        crate::diagnostic!(serde_json::json!({
+            "component": "view_trace",
+            "kind": "view.trace",
+            "site": site,
+            "from": from,
+            "to": now,
+            "tab_asks": self.tab_focus_requests.iter().map(|request| request.tab_id.clone()).collect::<Vec<_>>(),
+            "engine_seen": self.engine_focused_tab_seen,
+            "frames": frames,
+        }));
     }
     /// Applies a live session-sync result: projected agents on success, an
     /// explicit engine status on failure. Returns whether the snapshot changed.
@@ -3282,7 +3317,9 @@ impl Runtime {
                 focus_check,
             );
         }
+        self.trace_view("apply_session_update.layout");
         changed |= self.settle_selection_projection();
+        self.trace_view("apply_session_update.settled");
         changed |= self.follow_start(None);
         changed |= self.refresh_sessions_after_catalog_change(catalog_changed);
         changed |= self.refresh_browser_inventory_scope();
@@ -3905,6 +3942,7 @@ impl Runtime {
             }
             self.snapshot.terminal.pane_id = Some(layout.focused_pane_id.clone());
             self.snapshot.focused.pane_id = Some(layout.focused_pane_id.clone());
+            self.trace_view("apply_pane_layout.adopt");
             self.release_operator_focus_if_moved(&previous_focus, &layout.focused_pane_id);
             // Zoom is the engine's, and its subject is the focused pane. While
             // Hide keeps a focus the engine has not confirmed, taking the zoom
