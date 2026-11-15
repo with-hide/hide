@@ -169,7 +169,8 @@ function ToolViewsSection({ views, actions }: { views: readonly ToolView[]; acti
         <span>{t("taskLens.tool.views")}</span>
         <span className="font-normal tabular-nums text-muted-foreground">{views.length}</span>
       </h2>
-      <ToolViewList views={views} limit={TOOL_VIEWS_SHOWN} actions={actions} />
+      {/* The list keeps the width the Overview's own side lists have (`--size-lane-min`), so a row's dot stays by its name. */}
+      <div className="max-w-(--size-lane-min)"><ToolViewList views={views} limit={TOOL_VIEWS_SHOWN} actions={actions} /></div>
     </section>
   );
 }

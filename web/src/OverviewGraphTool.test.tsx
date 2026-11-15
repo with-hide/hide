@@ -3,6 +3,7 @@
 // centre is the tool, by its rail tile's monogram, where a device's map draws
 // the operator with a `+`; the missions it lists wait on the tool, not the
 // operator; and nothing on it starts the operator's work.
+import { readFileSync } from "node:fs";
 import { ReactFlowProvider } from "@xyflow/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -173,4 +174,30 @@ it("words and counts a tool's map filter as the tool's cell does: its turn is wh
   expect(seen.filter).toEqual(["All 2", "Tool's turn 1", "Working 1", "Unread results 0"]);
   expect(seen.heading).toBe("Tool's turn");
   expect(seen.asks.map((ask) => ask.pane)).toEqual(["q"]);
+});
+
+// Issue 2597, PRD hide-external-control D-46: nothing in a tool's cell is the operator's turn, so its map draws no
+// warning colour: the filter chip's turn count, the project rows' counts, the edges and the asks all use it through
+// one variable, which the tool's map sets to the grey of the cell's count; a device's map keeps its own.
+it("draws a tool's map with no warning colour and leaves a device's map as it was", async () => {
+  const css = readFileSync(`${process.cwd()}/src/overviewGraph.css`, "utf8");
+  const rule = css.split("\n").find((line) => line.startsWith(".overview-graph[data-graph-tool]")) ?? "";
+  expect(rule, "the tool's map redefines the warning colour").toContain("--warning: var(--muted-foreground)");
+  expect(rule, "and the alias Tailwind's text-warning reads").toContain("--color-warning: var(--muted-foreground)");
+  expect(css.split("\n").filter((line) => /--warning\s*:/.test(line)).map((line) => line.split("{")[0]!.trim()), "no other rule recolours it").toEqual([".overview-graph[data-graph-tool]"]);
+  const hosts = async (tool: ToolCell | null) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    initializeInterfaceI18n("en");
+    useShellStore.setState({ rest: { navigator: { devices: [{ id: "local", kind: "local", agent_scope: emptyScope() }], workspaces: [], focused_device_id: "local", tools: tool ? [tool] : [] }, status: { remote: [] }, missions: { items: [], failed: false } } as unknown as SnapshotRest, agents: [], focusedPaneId: null, connection: "live", linkSummaries: null });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(<TooltipProvider><OverviewGraph projects={[]} deviceId="local" tool={tool} actions={createActions(() => true)} /></TooltipProvider>));
+    const found = { marked: container.querySelector("[data-overview-graph]")?.hasAttribute("data-graph-tool"), warningClass: /text-warning|bg-warning|border-warning/.test(container.innerHTML) };
+    await act(async () => root.unmount());
+    return found;
+  };
+  expect(await hosts(TOOL)).toEqual({ marked: true, warningClass: false });
+  expect(await hosts(null)).toMatchObject({ marked: false });
 });
