@@ -222,7 +222,10 @@ fn opening(path: &Path) -> Opening {
         if step.get("type").and_then(Value::as_str) != Some("SYSTEM_MESSAGE") {
             return Opening::Own;
         }
-        let content = step.get("content").and_then(Value::as_str).unwrap_or_default();
+        let content = step
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if step.get("source").and_then(Value::as_str) == Some("SYSTEM")
             && let Some(at) = content.find("[Message]")
         {

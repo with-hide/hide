@@ -179,7 +179,7 @@ impl Machine {
             "step_index": 0,
             "source": "SYSTEM_SDK",
             "type": "SYSTEM_MESSAGE",
-            "content": "<SYSTEM_MESSAGE>\nThe following system message was injected by a SessionStart hook:\nherdr\n</SYSTEM_MESSAGE>",
+            "content": "<SYSTEM_MESSAGE>\nThe following system message was injected by a SessionStart hook:\nanother tool's note\n</SYSTEM_MESSAGE>",
         });
         let message = json!({
             "step_index": 1,
@@ -410,7 +410,13 @@ fn a_subagent_known_before_its_parent_is_counted_from_its_next_model_call() {
     }
     assert_eq!(machine.inbox_calls().len(), asked);
     assert!(machine.record_of(SUBAGENT).is_none());
-    assert!(machine.record_of(CONVERSATION).unwrap().subagents.is_empty());
+    assert!(
+        machine
+            .record_of(CONVERSATION)
+            .unwrap()
+            .subagents
+            .is_empty()
+    );
 
     machine.subagent_of(SUBAGENT, CONVERSATION);
     let next = subagent("UserPromptSubmit", Some(1));
