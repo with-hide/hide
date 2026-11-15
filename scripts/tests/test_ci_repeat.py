@@ -127,22 +127,32 @@ class Detection(unittest.TestCase):
     def test_a_module_that_lists_no_test_runs_its_crates_whole_binary_and_n_is_what_lists(self):
         asked = []
 
-        def lister(package, test, expression):
-            asked.append((package, test, expression))
-            return 0 if expression else 293
+        def lister(package, test, expression, run_ignored=""):
+            asked.append((package, test, expression, run_ignored))
+            return (0, 0) if expression else (293, 0)
 
         plan = repeat.rust_plan([{"package": "hide-platform", "module": "stand_ins"}], lister)
-        self.assertEqual(plan, [{"package": "hide-platform", "test": "it", "filter": "", "tests": 293}])
-        self.assertEqual(asked, [("hide-platform", "it", "test(/^(stand_ins)::/)"), ("hide-platform", "it", "")])
+        self.assertEqual(
+            plan,
+            [{"package": "hide-platform", "test": "it", "filter": "", "tests": 293, "run_ignored": ""}],
+        )
+        self.assertEqual(
+            asked,
+            [("hide-platform", "it", "test(/^(stand_ins)::/)", ""), ("hide-platform", "it", "test(/^(stand_ins)::/)", "all"),
+             ("hide-platform", "it", "", "")],
+        )
         # A helper beside a module that lists tests still runs the whole binary.
         plan = repeat.rust_plan(
             [{"package": "hide-platform", "module": "resident"}, {"package": "hide-platform", "module": "stand_ins"}],
-            lambda package, test, expression: 293 if not expression else (0 if "stand_ins)" in expression and "resident" not in expression else 9),
+            lambda package, test, expression, run_ignored="": (293, 0) if not expression else (0, 0) if "stand_ins)" in expression and "resident" not in expression else (9, 0),
         )
-        self.assertEqual(plan, [{"package": "hide-platform", "test": "it", "filter": "", "tests": 293}])
+        self.assertEqual(plan, [{"package": "hide-platform", "test": "it", "filter": "", "tests": 293, "run_ignored": ""}])
         # A module that lists tests keeps its filter, and a helper adds nothing to 20 web tests: N = 20 + 5.
-        plan = repeat.rust_plan([{"package": "hide-relay-protocol", "module": "admission"}], lambda package, test, expression: 5)
-        self.assertEqual(plan, [{"package": "hide-relay-protocol", "test": "it", "filter": "test(/^(admission)::/)", "tests": 5}])
+        plan = repeat.rust_plan([{"package": "hide-relay-protocol", "module": "admission"}], lambda package, test, expression, run_ignored="": (5, 0))
+        self.assertEqual(
+            plan,
+            [{"package": "hide-relay-protocol", "test": "it", "filter": "test(/^(admission)::/)", "tests": 5, "run_ignored": ""}],
+        )
 
     def test_a_hand_run_module_that_does_not_exist_is_refused_before_anything_runs(self):
         for item in ("hided:lib:no_such_module", "no-such-crate:lib:seat", "hided:lib:", "hided:seat", "hided:examples:seat"):
@@ -238,6 +248,18 @@ class RustCount(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 repeat.nextest_listed(text)
 
+    def test_a_listing_names_the_ignored_tests_its_matched_ones_include(self):
+        # A listing without `--run-ignored` names the ignored tests and marks
+        # them, so `nextest_counted` tells a test that runs from one that waits
+        # to be asked for; `nextest_listed` counts the migrated filter only.
+        self.assertEqual(repeat.nextest_counted(json.dumps(NEXTEST_LIST)), (3, 0))
+        both = {"rust-suites": {"hide-core": {"testcases": {
+            "contract::one": {"ignored": True, "filter-match": {"status": "matches"}},
+            "contract::two": {"ignored": False, "filter-match": {"status": "matches"}},
+        }}}}
+        self.assertEqual(repeat.nextest_counted(json.dumps(both)), (2, 1))
+        self.assertEqual(repeat.nextest_listed(json.dumps(both)), 2)
+
 
 class Playwright(unittest.TestCase):
     def test_the_count_is_the_lists_total_line(self):
@@ -320,6 +342,50 @@ class Nextest(unittest.TestCase):
             with self.subTest(module=module), self.assertRaises(ValueError):
                 repeat.nextest_filters([module])
 
+
+class RustIgnoredAndHolder(unittest.TestCase):
+    """What the Rust job is told beyond the filterset: the flag an ignored test
+    needs and the holder it starts."""
+
+    def test_a_module_whose_tests_are_all_ignored_runs_them_only_when_asked(self):
+        # `engine::contract` is marked ignored because its tests start the
+        # built pane holder; a listing without the flag names none of them.
+        def lister(package, test, expression, run_ignored=""):
+            return {
+                "": (0, 0),
+                "all": (10, 10),
+                "ignored-only": (10, 10),
+            }[run_ignored]
+
+        plan = repeat.rust_plan([{"package": "hide-core", "test": "lib", "module": "engine::contract"}], lister)
+        self.assertEqual(
+            plan,
+            [{"package": "hide-core", "test": "lib", "filter": "test(/^(engine::contract)::/)",
+              "tests": 10, "run_ignored": "ignored-only"}],
+        )
+
+    def test_a_module_with_ignored_and_running_tests_runs_both(self):
+        def lister(package, test, expression, run_ignored=""):
+            return {"": (5, 2), "all": (7, 2)}[run_ignored]
+
+        plan = repeat.rust_plan([{"package": "hided", "test": "it", "module": "handshake"}], lister)
+        self.assertEqual(
+            plan,
+            [{"package": "hided", "test": "it", "filter": "test(/^(handshake)::/)",
+              "tests": 7, "run_ignored": "all"}],
+        )
+
+    def test_an_ordinary_module_passes_no_flag_and_builds_no_holder(self):
+        def lister(package, test, expression, run_ignored=""):
+            self.assertEqual(run_ignored, "")
+            return (8, 0)
+
+        plan = repeat.rust_plan([{"package": "hide-kit", "test": "lib", "module": "process::tests"}], lister)
+        self.assertEqual(
+            plan,
+            [{"package": "hide-kit", "test": "lib", "filter": "test(/^(process::tests)::/)",
+              "tests": 8, "run_ignored": ""}],
+        )
 
 class Resolve(unittest.TestCase):
     """What a pull request's call and a hand run each hand the lane."""
@@ -461,7 +527,7 @@ class Command(unittest.TestCase):
         plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1},
                            {"package": "hide-platform", "test": "lib", "filter": "", "tests": 9}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
-        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\nhide-platform\tlib\t\n")
+        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\t\nhide-platform\tlib\t\t\n")
         units = json.dumps([{"package": "web", "files": ["web/src/a.test.ts"], "tests": 2},
                             {"package": "desktop", "files": ["desktop/src/main/env.test.ts"], "tests": 5}])
         result, _ = self.run_script("units-lines", "--plan", units)
@@ -472,7 +538,7 @@ class Command(unittest.TestCase):
         # reached nextest as unparsed input (run 43619979993).
         plan = json.dumps([{"package": "hided", "test": "it", "filter": "test(/^(seat)::/)", "tests": 1}])
         result, _ = self.run_script("plan-lines", "--plan", plan)
-        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\n")
+        self.assertEqual(result.stdout, "hided\tit\ttest(/^(seat)::/)\t\n")
         self.assertNotIn("\r", result.stdout)
 
 
@@ -673,3 +739,50 @@ class StressReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IgnoredPreparation(unittest.TestCase):
+    """What an ignored test needs is prepared once, and both lanes call that.
+
+    `pr.yml` and `repeat.yml` run ignored tests (`--run-ignored only`) that
+    start the built pane holder and real login shells. The list of what they
+    need is one script, so a test that needs one more thing is a change in one
+    place and not in two workflows that then drift.
+    """
+
+    def workflow(self, name):
+        import yaml
+        return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())["jobs"]
+
+    def steps_running(self, job, needle):
+        return [step for step in job["steps"] if needle in (step.get("run") or "")]
+
+    def test_the_script_prepares_the_holder_and_the_shells_it_names(self):
+        script = (ROOT / "scripts/prepare-ignored-tests.sh").read_text(encoding="utf-8")
+        self.assertIn("HIDE_TEST_HOLDER_BIN", script)
+        self.assertIn("HIDE_HOLDER_CONPTY", script)
+        # The shells are named once, as the table the loop reads, so a shell
+        # added to the table is the one change its new variable needs.
+        for shell in ("ZSH:zsh", "FISH:fish", "BASH:bash", "TCSH:tcsh", "CSH:bsd-csh"):
+            self.assertIn(shell, script)
+        self.assertIn("verify-cargo.sh build -p hide-holder --bin hide-holder", script)
+        self.assertIn("fetch-conpty.py", script)
+
+    def test_both_lanes_prepare_ignored_tests_with_that_script_and_nothing_of_their_own(self):
+        pr = self.workflow("pr.yml")
+        repeat = self.workflow("repeat.yml")["rust"]
+        for job, lane in ((pr["rust"], "rust"), (pr["windows-check"], "windows-check"), (repeat, "rust")):
+            with self.subTest(lane=lane):
+                sourced = self.steps_running(job, ". scripts/prepare-ignored-tests.sh")
+                self.assertTrue(sourced, f"{lane} calls no shared preparation")
+                for step in job["steps"]:
+                    run = step.get("run") or ""
+                    self.assertNotIn("HIDE_TEST_HOLDER_BIN=$PWD", run, f"{lane} prepares the holder itself: {step.get('name')}")
+                    self.assertNotIn("--bin hide-holder", run, f"{lane} builds the holder itself: {step.get('name')}")
+
+    def test_the_repeat_lane_prepares_only_where_the_plan_asked_for_an_ignored_test(self):
+        repeat = self.workflow("repeat.yml")["rust"]
+        step = self.steps_running(repeat, "plan-lines")[0]["run"]
+        # The same decision the `--run-ignored` flag comes from, so a plan
+        # with no ignored test builds nothing.
+        self.assertLess(step.index("if [ -n \"$run_ignored\" ]"), step.index(". scripts/prepare-ignored-tests.sh"))

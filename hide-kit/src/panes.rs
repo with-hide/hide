@@ -1689,16 +1689,19 @@ enum Asked {
 
 /// The close reason a `Terminate` was answered with.
 ///
-/// A pane's terminal attaches as its close is asked for, and the holder
-/// closes the connection that carried the `Terminate` with `taken_over`
-/// before it reads the message: that close is the connection's, not the
-/// pane's, and reading it as the end reported a pane that still ran
-/// (with-hide/hide-private#912).
+/// Only two reasons say the pane went: the holder ended it as asked
+/// (`terminated`) or its program exited (`program_exited`). Every other close
+/// is the connection's. A pane's terminal attaches as its close is asked for,
+/// and the holder closes the connection that carried the `Terminate` with
+/// `taken_over` before it reads the message; reading that as the end reported
+/// a pane that still ran (with-hide/hide-private#912). The same holds for a
+/// connection closed `size_invalid`, `input_failed` or `holder_failed`: the
+/// pane runs on and the ask must go again.
 fn asked_to_end(reason: CloseReason) -> Asked {
-    if reason == CloseReason::TakenOver {
-        return Asked::Again(reason.name().to_owned());
+    match reason {
+        CloseReason::Terminated | CloseReason::ProgramExited => Asked::Ended(reason),
+        _ => Asked::Again(reason.name().to_owned()),
     }
-    Asked::Ended(reason)
 }
 
 /// What a connection that failed mid-ask says of the pane's end.
@@ -2222,23 +2225,24 @@ mod tests {
     /// `Terminate` with `taken_over` before reading it. That close says the
     /// connection was replaced, not that the pane ended: asking again is the
     /// only answer that can end it, and reading the close as the end left a
-    /// running holder behind a refused close.
+    /// running holder behind a close reported as done.
     #[test]
-    fn a_terminate_another_connection_took_over_is_asked_again_and_is_not_the_panes_end() {
-        assert!(matches!(
-            asked_to_end(CloseReason::TakenOver),
-            Asked::Again(_)
-        ));
-        for reason in [
-            CloseReason::Terminated,
-            CloseReason::ProgramExited,
-            CloseReason::Released,
-            CloseReason::HolderFailed,
-        ] {
+    fn only_a_close_that_says_the_pane_ended_ends_the_ask() {
+        for reason in [CloseReason::Terminated, CloseReason::ProgramExited] {
             assert!(
                 matches!(asked_to_end(reason), Asked::Ended(ended) if ended == reason),
                 "{reason:?}"
             );
+        }
+        // The pane runs on after each of these, so the ask goes again.
+        for reason in [
+            CloseReason::TakenOver,
+            CloseReason::Released,
+            CloseReason::SizeInvalid,
+            CloseReason::InputFailed,
+            CloseReason::HolderFailed,
+        ] {
+            assert!(matches!(asked_to_end(reason), Asked::Again(_)), "{reason:?}");
         }
         // A holder that dropped the connection may not have read the ask: it
         // goes again, and a failure that says anything else does not.
