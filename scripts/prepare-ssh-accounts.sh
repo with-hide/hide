@@ -116,12 +116,15 @@ set_password() {
     printf '%s:%s\n' "$account" "$password" | sudo chpasswd
 }
 
-# The macOS account, with its password. `sysadminctl -addUser` says on its
-# own line whether it took the password, and the answer is not guessable from
-# a green exit: it prints `No clear text password or interactive option was
-# specified` and still creates the account, with no password for sshd to
-# accept. The account is read back after this for the hash that line would
-# leave out (with-hide/hide#2554).
+# The macOS account, with its password.
+#
+# `sysadminctl -addUser` prints `No clear text password or interactive option
+# was specified` on a run that did take the password, which is why that line
+# was read for months as the cause of the sign-in this lane could not make
+# (with-hide/hide#2554). It is not: the account carries its password either
+# way, and the cause was the Remote Login list at the caller. The line stays
+# in the log, so a later reader sees it and the record read below that says
+# whether there is a password at all.
 make_account() {
     sudo sysadminctl -addUser "$account" -password "$password" \
         -home "/Users/$account" -shell /bin/sh
@@ -130,8 +133,9 @@ make_account() {
 # Whether the account holds a password, judged by the directory record and
 # not by re-sending the password, which would put it in the runner's process
 # list. macOS keeps a password as a `ShadowHash` entry of the account's
-# `AuthenticationAuthority`; an account made without one has none, and sshd
-# then refuses every sign-in to it however the client asks.
+# `AuthenticationAuthority`, and this is what answers the `sysadminctl` line
+# above: a run of this lane printed that line on 2026-11-15 and the record
+# held the password, so the line alone proves nothing and the record does.
 account_holds_a_password() {
     local authority
     authority=$(sudo dscl . -read "/Users/$account" AuthenticationAuthority) || return 1
@@ -203,15 +207,16 @@ else
     run_named "the password account (sysadminctl -addUser $account)" make_account
     run_named "the password account's home folder (createhomedir $account)" \
         sudo createhomedir -c -u "$account"
-    # macOS keeps a list of who Remote Login may sign in, and its sshd's PAM
+    # This is the cause the lane's password journey failed on every macOS
+    # nightly from 2026-10-31 to 2026-11-14 (with-hide/hide#2554): macOS
+    # keeps a list of who Remote Login may sign in, its sshd's PAM
     # configuration asks that list on every connection (`pam_sacl.so
-    # sacl_service=ssh` in /etc/pam.d/sshd). A server started on a runner
-    # whose Remote Login is on therefore refuses an account that is not on
-    # the list, and the refusal happens before ssh ever asks for a password:
-    # the client is told `Connection closed by 127.0.0.1 port 2222` and
-    # nothing says why (with-hide/hide#2554). The list is the
-    # `com.apple.access_ssh` group, and a runner with Remote Login off has
-    # none, which allows everyone and needs no edit.
+    # sacl_service=ssh` in /etc/pam.d/sshd), and a server on a runner whose
+    # Remote Login is on refuses an account that is not on the list before
+    # ssh is ever asked for a password. The client then sees only
+    # `Connection closed by 127.0.0.1 port 2222`, with no cause on either
+    # side. A runner with Remote Login off has no list at all, which allows
+    # everyone and needs no edit.
     add_to_ssh_service_acl
     # The account is proven here rather than left to the lane an hour later:
     # an account that holds no password fails sshd every time, and says

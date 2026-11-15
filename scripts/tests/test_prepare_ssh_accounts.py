@@ -58,8 +58,7 @@ exec REAL_MKDIR "${arguments[@]}"
 '''
 # `dscl` answers the macOS account read: a record whose
 # `AuthenticationAuthority` carries the password hash, or one without it when
-# a test names `ACCOUNT_WITHOUT_PASSWORD`, which is the account a `sysadminctl`
-# that lost `-password` leaves behind.
+# a test names `ACCOUNT_WITHOUT_PASSWORD`.
 DSCL = r'''#!/usr/bin/env bash
 echo "dscl $*" >> "$SSH_LOG"
 if [ "${ACCOUNT_WITHOUT_PASSWORD:-}" = 1 ]; then
@@ -112,8 +111,7 @@ class PrepareSshAccounts(unittest.TestCase):
             (bin_dir / name).chmod(0o755)
         # `dscl` answers the macOS account read the script makes after
         # `sysadminctl`: a record with a password, unless a test asks for one
-        # without it (`ACCOUNT_WITHOUT_PASSWORD`), which is what the runner
-        # in with-hide/hide#2554 had.
+        # without it (`ACCOUNT_WITHOUT_PASSWORD`).
         (bin_dir / 'dscl').write_text(DSCL)
         (bin_dir / 'dscl').chmod(0o755)
         (bin_dir / 'sudo').write_text(SUDO)
@@ -251,10 +249,12 @@ class PrepareSshAccounts(unittest.TestCase):
                          self.calls())
 
     def test_a_mac_account_with_no_password_fails_the_preparation(self):
-        # A `sysadminctl` that lost its `-password` leaves an account sshd
-        # refuses every time, and the lane then reports only ssh's
-        # `Connection closed` (with-hide/hide#2554). This script is where
-        # that cause is named, before the lane spends an hour on a build.
+        # An account with no password is refused by sshd every time, and the
+        # lane then reports only ssh's `Connection closed`. That was not
+        # this lane's cause (the account did hold its password, and the
+        # Remote Login list was), but it is the one failure the sysadminctl
+        # line above makes look likely, so the record is read and this is
+        # where it is named, before the lane spends 20 minutes on a build.
         done, _ = self.run_script(RUNNER_OS='macOS', ACCOUNT_WITHOUT_PASSWORD='1')
         self.assertEqual(done.returncode, 1, done.stderr + done.stdout)
         self.assertIn('hidepw holds no password', done.stderr)
