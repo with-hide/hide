@@ -159,13 +159,16 @@ jobs:
         with:
           save: false
       - name: Count the Rust tests
-        # What nextest lists for the changed modules' filtersets, ignored tests
-        # excluded, so N is the tests that run. A package whose modules list
-        # none (a helper file) runs its whole `it` binary instead, and a
-        # change to `support` or `main.rs` selects that whole binary; the
-        # decision is `rust_plan` in scripts/ci-repeat.py. This builds the
-        # changed crates' tests once, and the Rust job builds them again on its
-        # own runner. A listing that fails fails the lane.
+        # What nextest lists for the changed modules' filtersets, so N is the
+        # tests that run. A package whose modules list none (a helper file)
+        # runs its whole `it` binary instead, and a change to `support` or
+        # `main.rs` selects that whole binary. An ignored test is counted too,
+        # and the plan says what the job passes to run it, so the tests a
+        # module marks ignored to run only where the holder is prepared are
+        # proved by this lane as any other test is. The decision is `rust_plan`
+        # in scripts/ci-repeat.py. This builds the changed crates' tests once,
+        # and the Rust job builds them again on its own runner. A listing that
+        # fails fails the lane.
         id: rust-count
         if: steps.resolve.outputs.rust-count-needed == 'true'
         timeout-minutes: 25
@@ -348,6 +351,11 @@ jobs:
         # test of its own to its whole target, and a PR helper or all-ignored
         # module to its crate's whole `it` binary. Once chosen, a plan that
         # runs no test fails on a PR as on a hand run.
+        #
+        # A hand run of a module nobody changes - a test marked `#[ignore]`
+        # that needs the built pane holder - is proved here too: the plan
+        # names the flag that runs it and the holder it starts, and only that
+        # selection pays for building the holder.
         timeout-minutes: 75
         env:
           PLAN: ${{ needs.count.outputs.rust-plan }}
@@ -358,8 +366,8 @@ jobs:
           # Only reports from this execution can prove completed work.
           rm -f target/nextest/ci/junit*.xml
           python3 scripts/ci-repeat.py plan-lines --plan "$PLAN" > "$RUNNER_TEMP/filters.txt"
-          while IFS=$'\t' read -r package test expression; do
-            echo "::group::$package $test ${expression:-whole target} x $REPEAT"
+          while IFS=$'\t' read -r package test expression run_ignored; do
+            echo "::group::$package $test ${expression:-whole target} x $REPEAT ${run_ignored:+($run_ignored)}"
             filter=()
             if [ -n "$expression" ]; then filter=(-E "$expression"); fi
             case "$test" in
@@ -368,10 +376,23 @@ jobs:
               bin) target=(--bins) ;;
               *) echo "unknown Rust target '$test'" >&2; exit 1 ;;
             esac
+            # Only the plan's own decision adds the flag: an ignored test runs
+            # only when it is asked for, and the plan asked only where every
+            # test it counted is ignored (docs/TESTING.md, "The repeat lane").
+            ignored=()
+            if [ -n "$run_ignored" ]; then
+              ignored=(--run-ignored "$run_ignored")
+              # An ignored test is one that needs something prepared: the same
+              # preparation `pr.yml`'s own ignored step makes, in one script so
+              # the two cannot drift (the built pane holder and the shells
+              # those tests start). It runs twice at most in a leg, and only
+              # where the plan asked for an ignored test.
+              . scripts/prepare-ignored-tests.sh
+            fi
             # `--stress-count` exits 0 when the last iteration passed, so this
             # run's summary is kept and read below: an earlier iteration that
             # failed is a failed repeat the exit status does not show.
-            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests=fail -p "$package" "${target[@]}" ${filter[@]+"${filter[@]}"} \
+            bash scripts/verify-cargo.sh nextest --profile ci --retries 0 --stress-count "$REPEAT" --no-tests=fail -p "$package" "${target[@]}" ${filter[@]+"${filter[@]}"} ${ignored[@]+"${ignored[@]}"} \
               | tee -a "$RUNNER_TEMP/nextest.log"
             echo "::endgroup::"
           done < "$RUNNER_TEMP/filters.txt"
