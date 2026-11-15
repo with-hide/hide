@@ -749,7 +749,11 @@ pub(crate) fn pane(id: &str, cwd: &str) -> PaneSnapshot {
     }
 }
 
-fn tab(workspace_id: &str, checkout_id: &str, pane: Option<PaneSnapshot>) -> TabSnapshot {
+pub(crate) fn tab(
+    workspace_id: &str,
+    checkout_id: &str,
+    pane: Option<PaneSnapshot>,
+) -> TabSnapshot {
     TabSnapshot {
         agent: None,
         naming: crate::model::TabNaming {

@@ -1010,7 +1010,7 @@ Folded lines (a team's review asks, old pull requests) are in no count: the PRs 
 Within a group the order is the reason's urgency, then the newest update (the newest merge for Merging · merged), then the larger number.
 Times in a reason are the instants they began, never durations, so time passing publishes nothing; the web counts them on its one clock.
 
-`<checkout> only` keeps a row whose `checkout_ids` hold the checkout: the one on the pull request's branch, the ones its recorded sessions ran in and the ones its live agents sit in.
+`<checkout> only` keeps a row whose `checkout_ids` hold the checkout: the one on the pull request's branch, the ones its recorded sessions ran in and the ones its live agents sit in, an agent being the pull request's only when the pull request recorded its session; a checkout where only other agents work is not one of them, so a tool's cell lists no pull request merely because its own agents work beside it.
 A project with no GitHub remote has no board, and `gh` missing or signed out is a state of the project's GitHub status, not an empty board.
 
 ### A task's stage
