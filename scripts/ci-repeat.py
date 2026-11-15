@@ -561,7 +561,16 @@ def nextest_lister(package, test, expression, run_ignored=""):
     if run_ignored:
         command += ["--run-ignored", run_ignored]
     command += ["--message-format", "json"]
-    return nextest_counted(subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout)
+    listed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    # A listing that fails is the lane's whole plan failing, and its reason is
+    # in the command's own standard error: the exit status alone named none of
+    # it (run 43659916395, where a Windows repeat stopped here).
+    if listed.returncode != 0:
+        raise ValueError(
+            f"listing what {package}'s {test} target would run failed "
+            f"({subprocess.list2cmdline(command)}):\n{listed.stderr.strip()}"
+        )
+    return nextest_counted(listed.stdout)
 
 
 def resolve(event, web, rust, repeat, runner, units=""):
