@@ -17,6 +17,7 @@ use hide_kit::panes::{
     ENDED_KEPT, HOLDER_CAP, Judgment, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal,
     StartRequest, Started,
 };
+use hide_node::terminal::holder::RECONCILE_ROUNDS;
 
 use crate::role::GO;
 use crate::support::{
@@ -764,13 +765,13 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
     // one, and a pane whose record could not be rewritten within the five
     // seconds' wait for the records' lock is left unsettled for the next round
     // too (`Panes::lock`; every reconcile takes that one lock, for the scan and
-    // for each judgment's write). The node's own recovery runs that next round
-    // until nothing is left (`Holders::recover`, `RECONCILE_ROUNDS`), so the
-    // test asks for those rounds rather than assuming one settles all eight,
-    // and holds the contract's own promise: each round settles a pane more than
-    // the one before, and the rounds end with every pane ended. A round that
-    // settles nothing new fails here instead of being waited out, and the last
-    // round must leave no pane unsettled.
+    // for each judgment's write). The node's own recovery runs those rounds,
+    // and only `RECONCILE_ROUNDS` of them, before it reports what is left for
+    // the next start, so this holds the contract the node relies on: within
+    // that many rounds, each one lists no failure and ends a pane more than
+    // the one before, and the last leaves every pane ended. More rounds than
+    // the node runs would pass a sequence that leaves a pane behind in the
+    // product.
     let settled = |found: &hide_kit::panes::Reconciled| {
         found
             .panes
@@ -778,25 +779,26 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
             .filter(|judgment| matches!(judgment, Judgment::Ended(_)))
             .count()
     };
-    let mut ended = settled(&found);
-    let mut rounds = 1;
-    while ended < PANES {
-        rounds += 1;
+    let mut ended = 0;
+    for round in 1..=RECONCILE_ROUNDS {
         assert!(
-            rounds <= PANES + 1,
-            "only {ended} of {PANES} panes were ended in {rounds} rounds: {found:?}"
+            found.failed.is_none(),
+            "round {round} failed after {ended} of {PANES} panes were ended: {found:?}"
         );
-        found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
         let more = settled(&found);
         assert!(
             more > ended,
-            "round {rounds} ended no pane more than the last: {found:?}"
+            "round {round} ended no pane more than the last ({ended} of {PANES}): {found:?}"
         );
         ended = more;
+        if ended == PANES {
+            break;
+        }
+        found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     }
-    assert!(
-        found.failed.is_none(),
-        "the rounds ended every pane but one round failed: {found:?}"
+    assert_eq!(
+        ended, PANES,
+        "{PANES} panes were not all ended in the node's {RECONCILE_ROUNDS} rounds: {found:?}"
     );
     for number in 0..PANES {
         let Some(Judgment::Ended(ended)) = found.panes.get(&format!("p{number}")) else {

@@ -68,7 +68,7 @@ const ASK_LIMIT: Duration = Duration::from_secs(5);
 /// bounds a start's reconcile to about nine minutes however many panes it
 /// finds; one reconcile takes up every pane of a state folder unless their
 /// holders are slow to end.
-const RECONCILE_ROUNDS: usize = 8;
+pub const RECONCILE_ROUNDS: usize = 8;
 
 /// The panes this node opens through their holders, by pane id: those it
 /// started or adopted and has not ended, and those whose holder it is
