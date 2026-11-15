@@ -40,7 +40,8 @@ import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
 import { backlogIntent } from "./overviewBacklog";
 import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
-import { expectSurface, type Surface } from "./recent";
+import { expectSurface, recentPanes, type Surface } from "./recent";
+import { frontTool, keptBy, toolKeeps } from "./toolCells";
 import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
 import { armKeyTarget } from "./keyTarget";
@@ -89,7 +90,7 @@ import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
-import { useShellStore } from "./store";
+import { focusedPaneOf, useShellStore } from "./store";
 import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
@@ -518,6 +519,65 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
+
+  /**
+   * A row with a View to look at brings its newest unseen View forward with
+   * the pane (PRD unseen-agent-views B3): the core does both in the pane's
+   * focus. A device's pane is focused on its device, and its View, which
+   * this core holds, follows in the checkout's focus.
+   */
+  const openAgent = (paneId: string, look?: LookAt) => {
+    beginOpening({ paneId });
+    // A request id makes the core answer this click, a pane that is gone
+    // or a device's refusal included, so the opening says why at once
+    // rather than waiting out its bound in silence (issue 2505).
+    const { event, remote } = openPaneEvent(paneId, { requestId: remoteRequestId(), report: true, revealUnseen: Boolean(look) });
+    dispatch(event);
+    if (remote) {
+      if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
+      return;
+    }
+    // The core's answer moves the keys only when it moves the focus, so a
+    // pane already focused would leave them on the row, link or mark that
+    // was pressed. The operator asked for the pane, so the open takes the
+    // keys itself while the pane is on screen; the terminal reports no
+    // click for a focus it is given (`focusTerminal`).
+    if (ui().screen?.kind === "workspace" && useShellStore.getState().focusedPaneId === paneId) focusTerminal(paneId);
+    // From the mission screen's `← <pane>` the pane is often the focused one
+    // already, so the core moves nothing: the Workspace comes back at once
+    // and the terminal takes the keys once it is drawn (PRD mission-screen B14).
+    else if (ui().screen?.kind === "missions" && useShellStore.getState().focusedPaneId === paneId) {
+      ui().setScreen({ kind: "workspace" });
+      requestAnimationFrame(() => focusTerminal(paneId));
+    }
+  };
+
+  /**
+   * A device's tile pressed while a tool's cell is in front: the cell in
+   * front is read from what the center shows (`frontTool`), so the center
+   * comes back to the device on something no tool keeps. The device's
+   * Workspace as the core holds it, unless the pane it focuses is a tool's;
+   * else that device's pane the keyboard was in last that no tool keeps;
+   * else its Overview. True when the pane's own open brings the device
+   * forward, so nothing more is sent.
+   */
+  const showDeviceFromTool = (deviceId: string): boolean => {
+    const now = rest();
+    ui().setOverview({ deviceId: null, projectId: null, panel: null });
+    const focused = now ? focusedPaneOf(now) : null;
+    if (frontDeviceId(now) === deviceId && frontCheckout(now) && workspaceViewOf(now) && !(focused && toolKeeps(now, deviceId, focused))) {
+      ui().setScreen({ kind: "workspace" });
+      return false;
+    }
+    const agents = allPaneAgents(useShellStore.getState().agents, now?.status?.remote);
+    const pane = recentPanes(now).find((id) => agents.some((row) => row.pane_id === id && (row.device_id ?? localDeviceId(now)) === deviceId) && !toolKeeps(now, deviceId, id));
+    if (pane) {
+      openAgent(pane);
+      return true;
+    }
+    ui().setScreen({ kind: "main", deviceId });
+    return false;
+  };
 
   /**
    * What a mission's detail opens in the 보기 slot (a node's plan, a worker's
@@ -1663,19 +1723,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A rail tile (PRD home-device-rail D-09): that device in front. A device
      * Overview on screen follows the device, so the sidebar and the center
-     * keep naming the same one.
+     * keep naming the same one. From a tool's cell the center comes back to
+     * the device on something no tool keeps (`showDeviceFromTool`), since
+     * the cell in front is read from what the center shows.
      */
     focusDevice(deviceId: string) {
       const screen = ui().screen;
-      // The tool's Overview page gives the center back to the device chosen, whose Workspace shows once it is in front (PRD hide-external-control D-54, B47).
-      const leavingTool = ui().toolCell !== null && screen?.kind === "main" && !ui().overviewOpen;
-      // A device's tile shows that device, in place of a tool's cell (PRD hide-external-control B40).
-      ui().setToolCell(null);
-      // The mission screen follows the rail to the device chosen (PRD mission-screen D-06).
-      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
-      if (leavingTool) {
-        ui().setOverview({ deviceId: null, projectId: null, panel: null });
-        ui().setScreen({ kind: "workspace" });
+      // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
+      if (screen?.kind === "missions") {
+        ui().setMissions({ deviceId: null });
+        if (screen.tool !== undefined) ui().setScreen({ kind: "missions" });
+      } else if (frontTool(rest(), screen) !== null) {
+        if (showDeviceFromTool(deviceId)) return;
       } else if (screen?.kind === "main" && screen.deviceId !== deviceId) {
         // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
         ui().setOverview({ deviceId: null, projectId: null, panel: null });
@@ -1686,11 +1745,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * Shows a tool's cell (PRD hide-external-control D-45, D-54, B40, B47):
-     * the sidebar and the center's Overview page read the tool's work in
-     * place of a device's. This machine comes to the front under it, so the
-     * cell gone (a disconnect, a leave, View only) leaves the window on This
-     * Mac (B44).
+     * A tool's tile (PRD hide-external-control D-45, D-54, B40, B47): the
+     * tool's Overview as the center's page, which names the tool, so its
+     * cell is in front (`frontTool`) until the center shows something else.
+     * This machine comes to the front under it, so the cell gone (a
+     * disconnect, a leave, View only) leaves the window on This Mac (B44).
      */
     focusTool(connection: string) {
       const screen = ui().screen;
@@ -1699,11 +1758,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const own = windowDeviceId(rest()?.navigator?.devices);
       // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
       ui().setOverview({ deviceId: null, projectId: null, panel: null });
-      ui().setToolCell(connection);
       // The tool's Overview is the center's page, not a layer over the Workspace (D-54, B47): its agents, its missions
       // and the Views it opened, each one press from its pane or View. A device tile takes the center back (`focusDevice`).
       // It names this window's own machine, which the page shows again once the cell goes.
-      useUiStore.setState({ screen: { kind: "main", deviceId: own }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
+      useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
       if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 
@@ -1983,9 +2041,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * screen on its table, whatever the center showed (D-04), the device the
      * rail has in front, every project and 끝남 folded (B3, B4).
      */
+    /** The mission screen of the scope in front: a tool's cell's lists the tool's missions (PRD hide-external-control B40). */
     openMissions() {
+      const tool = frontTool(rest(), ui().screen);
       ui().setMissions(MISSION_ENTRY);
-      ui().setScreen({ kind: "missions" });
+      ui().setScreen(tool ? { kind: "missions", tool: tool.connection } : { kind: "missions" });
     },
 
     /**
@@ -2032,9 +2092,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
       const state = ui();
+      const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
+      // A tool's mission screen lists the tool's missions on every device, so its row opens beside the list and the cell stays (B40).
+      if (state.screen?.kind === "missions" && state.screen.tool !== undefined && keptBy(mission, state.screen.tool)) return state.setMissions({ selected: missionId, projectId });
       if (mission.device_id !== frontDeviceId(rest())) this.focusDevice(mission.device_id);
       // A chip that leaves this mission out lets go, so the list beside it holds the mission (B10).
-      const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
       state.setMissions({ deviceId: mission.device_id, selected: missionId, projectId });
       if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
     },
@@ -2649,37 +2711,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.openAgent(paneId, agent?.look);
     },
 
-    /**
-     * A row with a View to look at brings its newest unseen View forward with
-     * the pane (PRD unseen-agent-views B3): the core does both in the pane's
-     * focus. A device's pane is focused on its device, and its View, which
-     * this core holds, follows in the checkout's focus.
-     */
-    openAgent(paneId: string, look?: LookAt) {
-      beginOpening({ paneId });
-      // A request id makes the core answer this click, a pane that is gone
-      // or a device's refusal included, so the opening says why at once
-      // rather than waiting out its bound in silence (issue 2505).
-      const { event, remote } = openPaneEvent(paneId, { requestId: remoteRequestId(), report: true, revealUnseen: Boolean(look) });
-      dispatch(event);
-      if (remote) {
-        if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
-        return;
-      }
-      // The core's answer moves the keys only when it moves the focus, so a
-      // pane already focused would leave them on the row, link or mark that
-      // was pressed. The operator asked for the pane, so the open takes the
-      // keys itself while the pane is on screen; the terminal reports no
-      // click for a focus it is given (`focusTerminal`).
-      if (ui().screen?.kind === "workspace" && useShellStore.getState().focusedPaneId === paneId) focusTerminal(paneId);
-      // From the mission screen's `← <pane>` the pane is often the focused one
-      // already, so the core moves nothing: the Workspace comes back at once
-      // and the terminal takes the keys once it is drawn (PRD mission-screen B14).
-      else if (ui().screen?.kind === "missions" && useShellStore.getState().focusedPaneId === paneId) {
-        ui().setScreen({ kind: "workspace" });
-        requestAnimationFrame(() => focusTerminal(paneId));
-      }
-    },
+    openAgent,
 
     /**
      * Pins or unpins a project. A row the engine shows without a registration is
@@ -3264,11 +3296,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         if (frontCheckout(rest()) && rest()?.workspace_view) state.setScreen({ kind: "workspace" });
         return;
       }
-      // Every open starts on the rail's front device with no project chosen (B1), as a page or as a layer.
+      // Every open starts on the scope in front, the rail's device or a tool's cell, with no project chosen (B1), as a page or as a layer.
       state.setOverview({ deviceId: null, projectId: null, panel: null });
       useUiStore.setState({ overviewReveal: null });
       if (state.screen?.kind !== "workspace" || !frontCheckout(rest()) || !rest()?.workspace_view) {
-        state.setScreen({ kind: "main" });
+        // A layer over a tool's pane reads the tool from the pane; the page names it, as the tool's tile does.
+        const tool = frontTool(rest(), state.screen);
+        state.setScreen(tool ? { kind: "main", tool: tool.connection } : { kind: "main" });
         return;
       }
       const target = state.overlay === "search" ? state.searchReturnFocus : document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -3319,6 +3353,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
       if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at);
+      // A tool's Overview page opens its own session's record in its own panel, so the press stays in the tool's cell (PRD hide-external-control B40).
+      const screen = ui().screen;
+      if (screen?.kind === "main" && screen.tool !== undefined && !ui().overviewOpen) {
+        const tool = screen.tool;
+        const own = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).some((row) => row.session_id === session.session_id && toolKeeps(rest(), session.device_id, row.pane_id, tool));
+        if (own) return ui().setOverview({ panel: { kind: "record", session } });
+      }
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
     /**

@@ -94,9 +94,8 @@ export function MissionScreen({ actions }: { actions: Actions }) {
   const place = useUiStore((s) => s.missions);
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const deviceId = place.deviceId ?? front;
-  // A tool's cell in front shows the missions the tool keeps (PRD hide-external-control B40).
-  const frontToolCell = useFrontTool();
-  const tool = place.deviceId === null ? frontToolCell : null;
+  // The screen opened in a tool's cell names the tool and shows the missions it keeps, on every device (PRD hide-external-control B40).
+  const tool = useFrontTool();
   const missions = useDeviceMissions(deviceId, tool?.connection ?? null);
   const deviceConnectedNow = useShellStore((s) => deviceConnected(s.rest, deviceId));
   const connected = tool !== null || deviceConnectedNow;

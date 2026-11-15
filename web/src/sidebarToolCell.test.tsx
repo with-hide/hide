@@ -6,6 +6,10 @@ import tokensText from "../../design/tokens.json?raw";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createActions } from "./actions";
+import { agentCycle } from "./areaCycle";
+import { noteAreaFrame } from "./areaFrames";
+import { commitCycle } from "./keyboard";
+import { resetRecent } from "./recent";
 import type { AgentScope, AgentTreeScope, PrBoard, ToolCell } from "./agentScope";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { clientI18n } from "./i18n/translator";
@@ -13,7 +17,7 @@ import { sidebarNumbers } from "./numbering";
 import { Sidebar } from "./sidebar";
 import type { AgentRow, Checkout, Device, SidebarLens, SidebarProject, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
-import { useUiStore } from "./ui";
+import { useUiStore, type Screen } from "./ui";
 
 // Operator decision 2026-11-15: a tool's cell has the operator's 프로젝트 |
 // 태스크 | PR switch and 상태 | 프로젝트 view switch, each list holding the
@@ -129,12 +133,14 @@ function snapshot(lens: SidebarLens, view: TaskView = "status", chosen: SidebarP
 
 let cleanup: (() => Promise<void>) | null = null;
 let sent: { kind: string; payload: unknown }[] = [];
+let drawnActions: ReturnType<typeof createActions> | null = null;
 afterEach(async () => {
   await cleanup?.();
   cleanup = null;
 });
 
-async function render(rest: SnapshotRest, tool: string | null) {
+/** Draws the sidebar over `screen`; a tool's cell is in front while the page names the tool, as its tile opens it. */
+async function render(rest: SnapshotRest, tool: string | null, screen: Screen = tool === null ? { kind: "main" } : { kind: "main", tool }) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   const tokens = (JSON.parse(tokensText) as { tokens: Record<string, { value: number }> }).tokens;
@@ -143,9 +149,10 @@ async function render(rest: SnapshotRest, tool: string | null) {
   const shell = useShellStore.getState();
   const ui = useUiStore.getState();
   useShellStore.setState({ rest, agents: rest.navigator?.agents ?? AGENTS, connection: "live", focusedPaneId: null });
-  useUiStore.setState({ screen: { kind: "main" }, overviewOpen: false, toolCell: tool });
+  useUiStore.setState({ screen, overviewOpen: false });
   sent = [];
   const actions = createActions((event) => { sent.push(event as { kind: string; payload: unknown }); return true; });
+  drawnActions = actions;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -285,11 +292,132 @@ it("lists in a tool's PR tab only the pull requests of the checkouts its session
 it("numbers with ⌥n the list a tool's cell shows: its sessions' roots in 프로젝트, its tasks in 태스크, as the chip narrows them", () => {
   const numbered = (lens: SidebarLens, toolCell: string | null, chosen: SidebarProject | null = null, wide = false) => {
     const rest = snapshot(lens, "status", chosen, wide);
-    return [...sidebarNumbers({ rest, agents: rest.navigator!.agents! }, { raisedOpen: [], taskFoldsOpen: [], toolCell }).values()];
+    return [...sidebarNumbers({ rest, agents: rest.navigator!.agents! }, { raisedOpen: [], taskFoldsOpen: [], screen: toolCell === null ? null : { kind: "main", tool: toolCell } }).values()];
   };
   expect(numbered("projects", TOOL.connection)).toEqual(["tool-root"]);
   expect(numbered("tasks", TOOL.connection)).toEqual(["tool-root"]);
   expect(numbered("projects", null)).toEqual(["mine", "theirs"]);
   expect(numbered("tasks", TOOL.connection, null, true)).toEqual(["tool-two", "tool-root"]);
   expect(numbered("tasks", TOOL.connection, { device_id: "local", workspace_id: "alpha" }, true)).toEqual(["tool-root"]);
+});
+
+/**
+ * The core's answer once `paneId` is in front: its checkout focused and the
+ * pane first in the order the keyboard visited panes, as the core keeps it.
+ */
+function inFront(rest: SnapshotRest, checkoutId: string, paneId: string): SnapshotRest {
+  const recent = rest.ui_state?.recent_pane_ids ?? [];
+  return {
+    ...rest,
+    navigator: { ...rest.navigator!, focused_checkout_id: checkoutId, focused_workspace_id: "alpha" },
+    focused: { pane_id: paneId },
+    ui_state: { ...rest.ui_state!, recent_pane_ids: [paneId, ...recent.filter((id) => id !== paneId)] },
+  } as SnapshotRest;
+}
+
+/** The Agent area as the Workspace draws it for `checkoutId`, showing the tab of `paneId`, which the pane cycle reads. */
+function drawArea(checkoutId: string, paneId: string) {
+  const tab = `${checkoutId}:${paneId}`;
+  noteAreaFrame("agent", { workspace: { device_id: "local", path: `/fixture/${checkoutId}` }, layout: { root: { area: { id: "a1", active: tab, displays: [{ id: tab }] } }, canvases: {} }, geometry: { areas: [{ id: "a1" }] } } as never);
+}
+
+/** ⌃Tab once from the pane the keyboard is in, released at once, as the keyboard's cycle does it. */
+async function cycleOnce(checkoutId: string, paneId: string) {
+  drawArea(checkoutId, paneId);
+  const cycle = agentCycle(useShellStore.getState().rest, { kind: "pane", workspace: checkoutId, paneId })!;
+  await act(async () => { commitCycle({ ...cycle, index: (cycle.index + 1) % cycle.items.length }, drawnActions!); });
+}
+
+/** The pane the last `focus_pane` asked for. */
+const focusAsked = () => (sent.filter((event) => event.kind === "focus_pane").at(-1)?.payload as { pane_id: string } | undefined)?.pane_id;
+
+/** The core moves the focus where it was asked, and the page shows the Workspace once that open landed (`CenterScreen`). */
+async function coreFocuses(checkoutId: string, paneId: string) {
+  await act(async () => {
+    useShellStore.setState((state) => ({ rest: inFront(state.rest!, checkoutId, paneId), focusedPaneId: paneId }));
+    useUiStore.getState().setScreen({ kind: "workspace" });
+  });
+}
+
+const railSelected = (container: HTMLElement) => [...container.querySelectorAll('[data-device-rail] [aria-pressed="true"]')].map((tile) => tile.getAttribute("data-rail-tile") ?? `tool:${tile.getAttribute("data-rail-tool")}`);
+const listCell = (container: HTMLElement) => container.querySelector("[data-sidebar-content] [data-tool-cell]")?.getAttribute("data-tool-cell") ?? null;
+
+// PRD hide-external-control B40 as the operator found it (2026-11-15): a tool's cell is a scope like a device's,
+// so landing on another pane by any path moves the rail and the lists with it, as landing on a device's pane does.
+it("moves the rail and the lists with ⌃Tab as a device's do: off a tool's session onto the operator's pane, and back onto the tool's", async () => {
+  resetRecent();
+  noteAreaFrame("agent", null);
+  try {
+    // The operator was in their own pane, then pressed the tool's tile and its session's row.
+    const container = await render(inFront(snapshot("projects"), "alpha-main", "mine"), null, { kind: "workspace" });
+    expect(railSelected(container)).toEqual(["local"]);
+    await act(async () => container.querySelector<HTMLElement>(`[data-rail-tool="${TOOL.connection}"]`)!.click());
+    expect(railSelected(container)).toEqual([`tool:${TOOL.connection}`]);
+    expect(listCell(container)).toBe(TOOL.connection);
+    await act(async () => container.querySelector<HTMLElement>('[data-agent-open="tool-root"]')!.click());
+    expect(focusAsked()).toBe("tool-root");
+    await coreFocuses("alpha-tool", "tool-root");
+    expect(railSelected(container)).toEqual([`tool:${TOOL.connection}`]);
+    expect(listCell(container)).toBe(TOOL.connection);
+
+    // ⌃Tab lands on the operator's pane: the rail selects the device and the sidebar lists the operator's work.
+    await cycleOnce("alpha-tool", "tool-root");
+    expect(focusAsked()).toBe("mine");
+    await coreFocuses("alpha-main", "mine");
+    expect(railSelected(container)).toEqual(["local"]);
+    expect(listCell(container)).toBeNull();
+    expect(projects(container)).toEqual(["alpha", "beta"]);
+
+    // ⌃Tab back onto the tool's session selects the tool's tile, as landing on a device's pane selects that device.
+    await cycleOnce("alpha-main", "mine");
+    expect(focusAsked()).toBe("tool-root");
+    await coreFocuses("alpha-tool", "tool-root");
+    expect(railSelected(container)).toEqual([`tool:${TOOL.connection}`]);
+    expect(listCell(container)).toBe(TOOL.connection);
+    expect(projects(container)).toEqual(["alpha"]);
+  } finally {
+    noteAreaFrame("agent", null);
+  }
+});
+
+it("takes the window off a tool's session onto the device with the device's tile, landing on the operator's last pane there", async () => {
+  resetRecent();
+  const container = await render(inFront(inFront(snapshot("projects"), "alpha-main", "mine"), "alpha-tool", "tool-root"), null, { kind: "workspace" });
+  expect(railSelected(container)).toEqual([`tool:${TOOL.connection}`]);
+  // This Mac is in front already, under the tool's session: the press brings back the pane the operator was last in.
+  await act(async () => container.querySelector<HTMLElement>('[data-rail-tile="local"]')!.click());
+  expect(focusAsked()).toBe("mine");
+  await coreFocuses("alpha-main", "mine");
+  expect(railSelected(container)).toEqual(["local"]);
+  expect(listCell(container)).toBeNull();
+});
+
+it("opens from a tool's checkout row the tool's session there when the checkout shows the operator's tab, so the press stays in the cell", async () => {
+  resetRecent();
+  const rest = snapshot("projects");
+  // The operator's named tab is the one the worktree shows.
+  const alpha = rest.navigator!.workspaces!.find((row) => row.id === "alpha")!;
+  alpha.checkouts = alpha.checkouts.map((row) => (row.id === "alpha-tool" ? { ...row, active_tab_id: "alpha-tool:notes" } : row));
+  const container = await render(rest, TOOL.connection);
+  await act(async () => container.querySelector<HTMLElement>('[data-checkout="alpha-tool"]')!.click());
+  expect(sent.filter((event) => event.kind === "focus_checkout")).toEqual([]);
+  expect(focusAsked()).toBe("tool-root");
+});
+
+// B42 and the operator's 2026-11-15 capture: the usage footer stays at the bottom in an empty tool cell. The slot the
+// lists stand in fills the column above the footer, so whatever a list draws, empty or full, the footer cannot ride up.
+it("keeps the footer under a list slot that fills the column, in every list of an empty tool's cell and of the operator's", async () => {
+  const empty = (rest: SnapshotRest): SnapshotRest => ({ ...rest, navigator: { ...rest.navigator!, tools: [{ connection: TOOL.connection, name: TOOL.name, turn: 0, devices: [] }] } }) as SnapshotRest;
+  for (const [lens, tool] of [["projects", TOOL.connection], ["tasks", TOOL.connection], ["prs", TOOL.connection], ["projects", null], ["tasks", null]] as const) {
+    const container = await render(empty(snapshot(lens)), tool);
+    const content = container.querySelector<HTMLElement>("[data-sidebar-content]")!;
+    const footer = content.querySelector<HTMLElement>(":scope > [data-sidebar-footer]")!;
+    // The child of the column that holds the list grows to fill it, and the footer comes after it.
+    const slot = [...content.children].find((child) => child !== footer && child.contains(tool ? container.querySelector("[data-tool-cell-empty]") : container.querySelector(lens === "tasks" ? "[data-task-lens]" : "[data-project-list]")));
+    expect(slot, `${lens} ${tool}`).toBeDefined();
+    expect(slot!.classList.contains("flex-1") && slot!.classList.contains("min-h-0"), `${lens} ${tool}`).toBe(true);
+    expect(slot!.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING, `${lens} ${tool}`).toBeTruthy();
+    if (tool) expect(container.querySelector("[data-tool-cell-empty]")?.textContent, lens).toBe("아직 맡은 일이 없어요");
+    await unmount();
+  }
 });

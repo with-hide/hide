@@ -12,7 +12,6 @@ import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./Si
 import { useShellStore } from "./store";
 import type { ToolCell } from "./agentScope";
 import { toolProjectChoice, toolSidebarProjects } from "./toolCells";
-import { ToolCellEmpty } from "./TaskLens";
 
 // The sidebar's PR list (PRD lane-two-columns D-20, B41; PRD
 // sidebar-task-lens D-17, D-45): every pull request of the rail's device in
@@ -51,8 +50,9 @@ export function SidebarPrs({ actions, tool = null }: { actions: Actions; tool?: 
           </Hint>
         ) : null}
       </div>
+      {/* A tool's cell with no work says so where the list's own line stands, in the tool's words (B42). */}
       {held?.length === 0
-        ? <ToolCellEmpty />
+        ? <p className="px-md py-sm text-caption text-muted-foreground" data-prs-view="empty" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
         : model.projects === 0 && model.reading.state !== "blocked"
         ? <p className="px-md py-sm text-caption text-muted-foreground" data-prs-view="no-remote">{t("prs.noRemote")}</p>
         : <PrList model={model} actions={actions} onlyCheckout={false} showProject={filter === null} onAllCheckouts={() => actions.setSidebarProject(null)} />}

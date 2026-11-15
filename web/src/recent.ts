@@ -147,7 +147,8 @@ export function currentSurface(rest: SnapshotRest | null, viewInUse: boolean): S
  * the device in front.
  */
 export function currentEntry(screen: Screen | null, rest: SnapshotRest | null, viewInUse: boolean): RecentEntry | null {
-  if (screen?.kind === "main") return screenVisit(screen, frontDeviceId(rest));
+  // A tool's Overview is its tile's page, not a device's place: a row of the order names a device, so the tool's page joins none.
+  if (screen?.kind === "main") return screen.tool === undefined ? screenVisit(screen, frontDeviceId(rest)) : null;
   return currentSurface(rest, viewInUse);
 }
 

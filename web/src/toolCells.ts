@@ -1,17 +1,18 @@
 // An external tool's cell beside the devices (PRD hide-external-control
 // D-45..D-53): the core publishes one per tool connected at Act with the
-// work it keeps (`navigator.tools`); the window picks which cell it shows.
-// This only reads which tool is in front and what its cell holds.
+// work it keeps (`navigator.tools`). Which cell is in front is a scope, as a
+// device is, read from what the center shows (`frontTool`), never a choice
+// kept beside it; this reads that and what a cell holds.
 
 import type { PrBoard, ToolCell } from "./agentScope";
-import { localDeviceId } from "./devices";
+import { frontDeviceId, localDeviceId } from "./devices";
 import type { BoardProject } from "./projectBoard";
 import { missionAsks } from "./missions";
 import { catalogWorkspaces, type AgentRow, type Checkout, type CheckoutAgentSummary, type Mission, type SidebarProject, type SnapshotRest, type TaskView } from "./snapshot";
 import { taskList, type TaskList } from "./taskList";
 import { boardProjects } from "./navigation";
-import { useShellStore } from "./store";
-import { useUiStore } from "./ui";
+import { focusedPaneOf, useShellStore } from "./store";
+import { useUiStore, type Screen } from "./ui";
 import { useMemo } from "react";
 
 const NO_TOOLS: ToolCell[] = [];
@@ -21,28 +22,70 @@ export function toolCells(rest: SnapshotRest | null): ToolCell[] {
   return rest?.navigator?.tools ?? NO_TOOLS;
 }
 
-/** The cell `picked` names while its tool is still at Act, else none: the window then shows the device in front (B44). */
-export function frontTool(rest: SnapshotRest | null, picked: string | null): ToolCell | null {
-  return picked === null ? null : (toolCells(rest).find((cell) => cell.connection === picked) ?? null);
+/**
+ * The tool whose cell is in front, or null while the device the core
+ * focuses is, as a device's is read from what the center shows: a tool's
+ * Overview or mission page while that page names it (its tile, or the
+ * sidebar's 개요 and 미션 rows in its cell), else on a Workspace the tool
+ * that keeps the pane in front, so landing on a tool's pane by any path
+ * brings its cell forward and landing anywhere else takes it away, as
+ * landing on a device's pane brings that device. A tool that is no longer
+ * at Act has no cell, so its pages and panes read as the device's (B44).
+ */
+export function frontTool(rest: SnapshotRest | null, screen: Screen | null): ToolCell | null {
+  const cells = toolCells(rest);
+  if (!rest || cells.length === 0) return null;
+  if (screen?.kind === "main" || screen?.kind === "missions") return screen.tool === undefined ? null : (cells.find((cell) => cell.connection === screen.tool) ?? null);
+  if (screen?.kind !== "workspace") return null;
+  const pane = focusedPaneOf(rest);
+  return pane === null ? null : keeperOf(cells, frontDeviceId(rest), pane);
 }
 
-// A cell that goes (disconnect, leave, View only) is forgotten at once: the
-// window shows the device under it (B44), and Act again on the same tool does
-// not take the window back into its cell unasked. A device the Overview named
-// while the cell stood gives way too, so the Overview, the rail and the
-// sidebar show the same machine.
+/** The tool that keeps `paneId` on `deviceId` now, by its cell's members. */
+function keeperOf(cells: readonly ToolCell[], deviceId: string, paneId: string): ToolCell | null {
+  return cells.find((cell) => cell.devices.some((device) => device.device_id === deviceId && device.members.some((member) => member.pane_id === paneId))) ?? null;
+}
+
+/** Whether the tool of `connection`, or with none any tool, keeps `paneId` on `deviceId`: a press leaving a tool's cell does not land on it, and one inside it stays. */
+export function toolKeeps(rest: SnapshotRest | null, deviceId: string, paneId: string, connection?: string): boolean {
+  const keeper = keeperOf(toolCells(rest), deviceId, paneId);
+  return keeper !== null && (connection === undefined || keeper.connection === connection);
+}
+
+// A page that names a tool forgets it once the cell goes (disconnect, leave,
+// View only): the window shows the device under it (B44), and Act again on
+// the same tool does not take the page back into its cell unasked. A device
+// the Overview named while the cell stood gives way too, so the Overview,
+// the rail and the sidebar show the same machine.
 useShellStore.subscribe((state) => {
   const ui = useUiStore.getState();
-  if (ui.toolCell === null || state.rest === null || frontTool(state.rest, ui.toolCell) !== null) return;
-  ui.setToolCell(null);
+  const screen = ui.screen;
+  if ((screen?.kind !== "main" && screen?.kind !== "missions") || screen.tool === undefined || state.rest === null) return;
+  if (toolCells(state.rest).some((cell) => cell.connection === screen.tool)) return;
   if (ui.overview.deviceId !== null) ui.setOverview({ deviceId: null });
-  if (ui.screen?.kind === "main" && ui.screen.deviceId !== undefined) useUiStore.setState({ screen: { kind: "main" } });
+  useUiStore.setState({ screen: { kind: screen.kind } });
 });
 
-/** The tool cell this window shows, or null while it shows a device. */
+/** The tool cell this window shows, or null while it shows a device (`frontTool`). */
 export function useFrontTool(): ToolCell | null {
-  const picked = useUiStore((s) => s.toolCell);
-  return useShellStore((s) => frontTool(s.rest, picked));
+  const screen = useUiStore((s) => s.screen);
+  return useShellStore((s) => frontTool(s.rest, screen));
+}
+
+/**
+ * The pane a checkout's row opens in a tool's cell in place of the
+ * checkout's own focus, or null when the tab the checkout shows is already
+ * one the tool's sessions stand in (`checkout` is the cell's, cut to those
+ * tabs by `toolSidebarProjects`), so the row opens the checkout as the
+ * operator's does. Otherwise the checkout would land on the operator's tab
+ * there and leave the cell, so the row opens the tool's session the keyboard
+ * was in last (`recent`, most recent first), else its first.
+ */
+export function toolCheckoutPane(checkout: Checkout, recent: readonly string[]): string | null {
+  if (checkout.tabs.some((tab) => tab.id === checkout.active_tab_id)) return null;
+  const rows = checkout.agent_scope.sidebar_tree.rows;
+  const held = new Set(rows.map((row) => row.pane_id));
+  return recent.find((id) => held.has(id)) ?? rows[0]?.pane_id ?? null;
 }
 
 /**

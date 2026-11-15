@@ -832,7 +832,12 @@ They are still found by ⌘K, the recent panel, the tab strip and `hide agent li
 
 A mission such an agent conducts is the tool's too (B30, D-36): a device's mission screen, the sidebar's `미션` number, its 내 차례 rows, its decision, gate and safety-net cards, the device's Needs You, its notices and the phone's mission list leave it out, and the tool's cell lists it.
 
-Selecting a tool's tile shows the tool's cell in the sidebar, the mission screen and the Overview in place of a device's (B40), with the Overview opening as the center's page at once (D-54, B47) and this window's own machine in front under it; the selection is the window's alone, and a cell that goes is forgotten at once, so Act again on the same tool brings its tile back without taking the window into it (B44).
+A tool's cell is a scope as a device is, and which scope is in front follows what the center shows, never a choice kept beside it (operator decision 2026-11-15): the tool's Overview or mission page, or on a Workspace a pane of an agent the tool keeps, puts the tool's cell in front; anything else puts the device the core focuses in front.
+The rail's selection, the top row's name, the sidebar's lists, the Overview and the mission screen all read that one scope (B40).
+So every path that moves the center moves them with it, ⌃Tab, ⌘K, ⌥n, a Needs You row, a notice, an Overview node and a mission's node alike: landing on a pane of the tool's agent selects the tool's tile, as landing on a pane of the Mac mini selects the Mac mini, and landing on any other pane selects that pane's device and shows the operator's lists.
+A View reads as the pane in front of its Workspace does, since the View areas stand beside that pane and the keyboard returns to it.
+Selecting a tool's tile shows its Overview as the center's page at once (D-54, B47), with this window's own machine in front under it, and the 개요 and 미션 rows of its cell open the tool's own Overview and mission screen; which cell a window shows is the window's alone.
+A page that names a tool forgets it once the cell goes, so Act again on the same tool brings its tile back without taking that page into it (B44); a pane of the tool's agent in front reads as the tool's again once its work is the tool's again, as it would on its device.
 A device the Overview named, its own switch's or the page's, gives way on both moves, so once the cell goes the Overview, the rail and the sidebar show the same machine:
 
 - The sidebar has the operator's `프로젝트 | 태스크 | PR` switch and the 태스크 list's `상태 | 프로젝트` switch, on the same stored choices, and each list holds the tool's work alone (operator decision 2026-11-15).
@@ -854,6 +859,7 @@ A device the Overview named, its own switch's or the page's, gives way on both m
   The Projects tab counts the tool's tasks in each project, even one the operator works in too, the tool's turn as `도구 차례 N` in no warning colour.
   The places dragged on a tool's map are its own; the filter and the hidden and folded projects are one choice for every map, as they are across devices.
 - The Overview and `미션` rows of the sidebar draw no number in a tool's cell, since their numbers are the operator's (B41).
+- Every press in the cell lands on the tool's work: a session row opens its pane, and a checkout row, or a project row through the checkout it opens, brings that checkout forward as the operator's does while the tab it shows is the tool's, else opens the tool's session there that the keyboard was in last, or its first, since the checkout would otherwise show the operator's tab and leave the cell; a mission row of the tool's mission screen opens beside the tool's list, on whatever device the mission runs; and on the tool's Overview page a session's record opens in that page's panel while the session is the tool's.
 
 The operator can answer in a row's pane from the cell; the answer takes the row out of the tool's turn, and the work stays the tool's (B43).
 ⌥n numbers the list the cell shows as it numbers a device's: the 태스크 list's rows as the chip narrows them, else the 프로젝트 list's session roots.
@@ -870,7 +876,7 @@ Setting the same connection to Act again takes the work back, and a new connecti
 A connected device's agents follow the same rules.
 A checkout Hide made for the tool's agent is drawn in a device's tree by the rule of a checkout Hide AI made ([Work Hide AI does for a home](#work-hide-ai-does-for-a-home)), only while it is in front or an agent the operator started works in it, and without Hide AI's task line; once the tool lets go it is an ordinary checkout.
 The phone has no tool's cell (B46; `docs/INSTALL.md`, What each system supports); a tool's person's turn on the phone's list leads its second line with the tool's name, as the desktop's sidebar row does, and a View its agent opened is not on the phone at all.
-Web owner: `web/src/toolCells.ts` (which cell is in front and what it holds, `toolSidebarProjects` the projects its 프로젝트 and PR tabs draw, `toolProjectChoice` the stored project read for the tool), `ToolProjectFilter` in `web/src/SidebarProjectFilter.tsx`, `ToolTaskLens` in `web/src/TaskLens.tsx`, `ProjectList` in `web/src/sidebar.tsx` and `SidebarPrs` in `web/src/SidebarPrs.tsx` with their `tool`, `ToolTileView` in `web/src/components/device-rail.tsx`, `toolGraphActivity` in `web/src/overviewGraphModel.ts` (the map's filter in the cell), `drawnInTree` in `web/src/hideAiOrigin.ts` (the tool's checkout), and `ToolMark`, `ToolLabel` and `ToolLed` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs`, `hide-core/src/agent_state/tally/scope.rs` (`ToolCell`) and `hide-core/src/runtime/access.rs`.
+Web owner: `web/src/toolCells.ts` (which cell is in front, `frontTool`, read from the center's page and the pane in front, and what it holds, `toolSidebarProjects` the projects its 프로젝트 and PR tabs draw, `toolProjectChoice` the stored project read for the tool), `ToolProjectFilter` in `web/src/SidebarProjectFilter.tsx`, `ToolTaskLens` in `web/src/TaskLens.tsx`, `ProjectList` in `web/src/sidebar.tsx` and `SidebarPrs` in `web/src/SidebarPrs.tsx` with their `tool`, `ToolTileView` in `web/src/components/device-rail.tsx`, `toolGraphActivity` in `web/src/overviewGraphModel.ts` (the map's filter in the cell), `drawnInTree` in `web/src/hideAiOrigin.ts` (the tool's checkout), and `ToolMark`, `ToolLabel` and `ToolLed` in `web/src/components/tool-mark.tsx` (the tool's name); core owners: `hide-core/src/coordination/started.rs`, `hide-core/src/agent_state/axes.rs`, `hide-core/src/agent_state/tally/scope.rs` (`ToolCell`) and `hide-core/src/runtime/access.rs`.
 
 ### Agent logo view mode
 
@@ -2309,7 +2315,8 @@ A tool's tile is the size of a device's, a ring rather than a filled square so i
 Its one mark is a grey pill (`--muted-foreground`) with the number of what waits on the tool's answer, `9+` from 10, and no Needs You, app badge or notice of the operator's counts it (B39, B41).
 A tool with nothing waiting has no mark, and a tool at View only has no tile (D-47).
 Selecting a tool's tile shows the tool's Overview as the center's page, never as a layer over the Workspace, and its cell in the sidebar ([Work an external tool keeps](#work-an-external-tool-keeps)), with This Mac in front under it, so the center no longer keeps This Mac's agent panes as if nothing had changed (PRD hide-external-control D-54, B47) and a tool that leaves Act, and its tile with it, leaves the window on This Mac (B44).
-A device's tile takes the center back to that device's Workspace.
+The selected tile, a device's or a tool's, follows what the center shows: landing on a pane of a tool's agent by any path selects the tool's tile, and landing on any other pane selects that pane's device.
+A device's tile takes the center back to that device's Workspace; from a tool's cell, to the Workspace as the core holds it unless the pane it focuses is the tool's, else to that device's pane the keyboard was in last that no tool keeps, else to the device's Overview, so the press never lands back on the tool's work.
 Which cell a window shows is the window's own: another window and the phone keep theirs.
 ⌥⌘1-9 numbers the devices only.
 
@@ -2391,6 +2398,7 @@ The core owns account windows and shared preferences (`usage`, `ui_state.usage`)
 The declaration lists all seven agents; only agents with a declared limit source appear in the footer and popover.
 
 The footer draws up to three pinned account windows at its left edge, and, while the device rail is hidden, the View menu, Help and Settings at its right edge.
+It stays at the sidebar's foot whatever list the sidebar shows, a device's or a tool's, empty or full: the list's slot fills the column above it (`data-sidebar-list` in `web/src/sidebar.tsx`), so no list moves it.
 Defaults pin the weekly window of each agent that is on by default and reports one (Claude Code and Codex), leaving a slot for the operator's own pin.
 Each chip shows the agent mark and its rounded percent, naming the window when the agent has multiple visible chips.
 A numberless not-started or expired chip always names its window.

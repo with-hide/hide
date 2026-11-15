@@ -175,7 +175,7 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
         <ViewSwitch view={view} actions={actions} />
       </div>
       {count === 0 ? (
-        <ToolCellEmpty />
+        <NoTasks actions={actions} tool />
       ) : (
         <InToolCell.Provider value={true}>
           <TaskGroups list={list} view={view} showProject={view === "status" && !chosen} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
@@ -183,12 +183,6 @@ export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actio
       )}
     </div>
   );
-}
-
-/** What every tab of a tool's cell says while the tool keeps nothing to show there (B42). */
-export function ToolCellEmpty() {
-  const { t } = useInterfaceTranslation();
-  return <p className="px-md py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>;
 }
 
 const TASK_VIEWS: readonly TaskView[] = ["status", "project"];
@@ -221,12 +215,17 @@ function TaskSkeleton() {
   );
 }
 
-function NoTasks({ actions }: { actions: Actions }) {
+/**
+ * An empty 태스크 list: a device's offers a new agent; a tool's says in its
+ * words that the tool keeps nothing (B42), since what the operator starts is
+ * never the tool's work.
+ */
+function NoTasks({ actions, tool = false }: { actions: Actions; tool?: boolean }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-tasks-empty="true">
-      <p>{t("taskLens.empty")}</p>
-      <Button variant="outline" size="sm" onClick={() => actions.openStartPanel()} data-tasks-new-agent="true"><PlusIcon />{t("taskLens.newAgent")}</Button>
+    <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-tasks-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
+      <p>{tool ? t("taskLens.tool.empty") : t("taskLens.empty")}</p>
+      {tool ? null : <Button variant="outline" size="sm" onClick={() => actions.openStartPanel()} data-tasks-new-agent="true"><PlusIcon />{t("taskLens.newAgent")}</Button>}
     </div>
   );
 }

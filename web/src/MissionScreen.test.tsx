@@ -36,9 +36,9 @@ const MISSIONS = [
   mission("mission-9", { device_id: "mini" }),
 ];
 
-type Setup = { missions?: { items: Mission[]; failed?: string } | null; place?: Partial<MissionPlace>; remote?: unknown[]; agents?: AgentRow[]; tools?: ToolCell[]; toolCell?: string | null };
+type Setup = { missions?: { items: Mission[]; failed?: string } | null; place?: Partial<MissionPlace>; remote?: unknown[]; agents?: AgentRow[]; tools?: ToolCell[]; /** The tool the screen names, as the 미션 row in its cell opens it. */ tool?: string };
 
-async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], agents = [], tools = [], toolCell = null }: Setup = {}) {
+async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], agents = [], tools = [], tool }: Setup = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (value: string) => value });
@@ -58,7 +58,7 @@ async function mount({ missions = { items: MISSIONS }, place = {}, remote = [], 
       overview_graph: { sessions: [] },
     } as unknown as SnapshotRest,
   });
-  useUiStore.setState({ screen: { kind: "missions" }, missions: { ...MISSION_ENTRY, ...place }, toolCell });
+  useUiStore.setState({ screen: tool === undefined ? { kind: "missions" } : { kind: "missions", tool }, missions: { ...MISSION_ENTRY, ...place } });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
   const container = document.createElement("div");
@@ -95,7 +95,7 @@ describe("the table (B2-B5)", () => {
     expect(operator.q('[data-mission-row="mission-5"] [data-tool-mark="c0ffee00c0ffee00"]')?.textContent).toBe("nightly");
     await operator.unmount();
     const cell = { connection: tool.connection, name: "nightly", turn: 1, devices: [], mission_asks: [] };
-    const { q, all, unmount } = await mount({ missions, tools: [cell], toolCell: tool.connection });
+    const { q, all, unmount } = await mount({ missions, tools: [cell], tool: tool.connection });
     expect(q("[data-mission-screen-tool]")?.dataset.missionScreenTool).toBe(tool.connection);
     expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
     expect(q("[data-mission-screen-device-name]")?.textContent).toBe("· nightly");
@@ -105,24 +105,37 @@ describe("the table (B2-B5)", () => {
     // Inside the tool's cell every mission is the tool's, so neither the row nor the opened mission names it again.
     expect(q("[data-mission-row] [data-tool-mark]")).toBeNull();
     await unmount();
-    const cellDetail = await mount({ missions, tools: [cell], toolCell: tool.connection, place: { selected: "mission-4" } });
+    const cellDetail = await mount({ missions, tools: [cell], tool: tool.connection, place: { selected: "mission-4" } });
     expect(cellDetail.q('[data-mission-list-row="mission-4"]')).not.toBeNull();
     expect(cellDetail.q("[data-tool-mark]")).toBeNull();
     await cellDetail.unmount();
+  });
+
+  it("opens a tool's mission beside the tool's list, on whatever device it runs, and the cell stays (PRD hide-external-control B40)", async () => {
+    const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
+    const missions = { items: [mission("mission-1"), mission("mission-4", { tool, device_id: "mini" })] };
+    const cell = { connection: tool.connection, name: "nightly", turn: 0, devices: [], mission_asks: [] };
+    const { q, press, events } = await mount({ missions, tools: [cell], tool: tool.connection });
+    await press(q('[data-mission-row="mission-4"] button'));
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions", tool: tool.connection });
+    expect(q('[data-mission-list-row="mission-4"]')).not.toBeNull();
+    expect(q("[data-mission-screen-tool]")?.dataset.missionScreenTool).toBe(tool.connection);
+    // The mission's device stays where it is under the cell: the tool's screen lists every device's.
+    expect(events.filter((event) => event.kind === "focus_device")).toEqual([]);
   });
 
   it("returns to the device once the tool's cell goes, and stays there when the tool acts again (PRD hide-external-control B44)", async () => {
     const tool = { connection: "c0ffee00c0ffee00", name: "nightly", owns: true };
     const missions = { items: [mission("mission-1"), mission("mission-4", { tool })] };
     const cell = { connection: tool.connection, name: "nightly", turn: 0, devices: [], mission_asks: [] };
-    const { q, all } = await mount({ missions, tools: [cell], toolCell: tool.connection });
+    const { q, all } = await mount({ missions, tools: [cell], tool: tool.connection });
     expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-4"]);
     const navigator = (tools: unknown[]) => act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, navigator: { ...state.rest!.navigator!, tools } } as SnapshotRest })));
     // Disconnect, leave or View only: the cell goes and the window shows the device's missions.
     await navigator([]);
     expect(q("[data-mission-screen-tool]")).toBeNull();
     expect(all("[data-mission-row]").map((row) => row.dataset.missionRow)).toEqual(["mission-1"]);
-    expect(useUiStore.getState().toolCell).toBeNull();
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
     // Act again on the same tool: its tile is back, and the window stays on the device until it is picked.
     await navigator([cell]);
     expect(q("[data-mission-screen-tool]")).toBeNull();
