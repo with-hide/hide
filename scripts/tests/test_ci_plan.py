@@ -1286,6 +1286,16 @@ class MacosOnPullRequests(unittest.TestCase):
 
 
 class Aggregate(unittest.TestCase):
+    def test_a_sparse_checkout_carries_every_script_its_scripts_load(self):
+        # A job that checks out only some scripts dies at import when one of them
+        # loads a sibling the list left out, before it can report on any lane.
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for block in re.findall(r"sparse-checkout: \|\n((?:[ \t]+\S.*\n)+?)[ \t]+sparse-checkout-cone-mode", workflow.read_text()):
+                listed = {line.strip() for line in block.splitlines()}
+                for script in sorted(path for path in listed if path.endswith(".py")):
+                    for sibling in re.findall(r'Path\(__file__\)\.resolve\(\)\.parent / "([^"]+\.py)"', (ROOT / script).read_text()):
+                        self.assertIn(f"scripts/{sibling}", listed, f"{workflow.name}: {script} loads {sibling}")
+
     def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
         jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
                 "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
