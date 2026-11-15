@@ -918,3 +918,15 @@ class RustLegRuns(unittest.TestCase):
         step = self.steps_where(lambda step: "fetch-conpty.py" in (step.get("run") or ""))[0]
         self.assertEqual(step["if"], "runner.os == 'Windows'")
         self.assertNotIn("hide-holder", step["if"])
+
+    def test_the_listing_calls_bash_by_the_path_it_resolved(self):
+        # `subprocess` on Windows searches System32 before PATH, where
+        # `bash.exe` is the WSL launcher: a bare "bash" made every listing fail
+        # there with "Windows Subsystem for Linux has no installed
+        # distributions", while the lane's own steps, run by Git Bash, went on
+        # (run 43661175346). The lister names the resolved program instead.
+        source = (ROOT / "scripts/ci-repeat.py").read_text(encoding="utf-8")
+        self.assertNotIn('["bash", "scripts/verify-cargo.sh"', source)
+        self.assertIn('[bash(), "scripts/verify-cargo.sh"', source)
+        # The helper is the repository's own answer to that trap.
+        self.assertIn("shutil.which", source)
