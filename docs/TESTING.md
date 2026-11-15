@@ -1043,7 +1043,7 @@ Nothing is handed to the nightly.
   Fewer than three repeats shows too little, so a pull request that changes more than 66 tests runs over 200.
   The job summary says how many tests were counted and the repeat chosen.
 - **Web specs** run through `web-e2e.yml` with `specs` and `repeat` (one shard that builds in place, the same fixtures and runner setup as the suite) as `playwright test --retries=0 --repeat-each=<repeat> <spec>$...`; it files no flaky issue, because a retry is what classifies a test as flaky and this run has none.
-  **Unit test files** run as `<package> test --retry=0 --repeat-each=<repeat> <file>`, the package's own `test` script, which builds what the tests import.
+  **Unit test files** run as `<package> test --retry=0 <file>` once per iteration, `<repeat>` times, through the package's own `test` script, which builds what the tests import; Vitest has no `--repeat-each`, and each iteration writes its own report, which `scripts/check-stress-report.py` reads for the verdict.
   **Rust modules** run under nextest on the `rust` lane's caches with `--profile ci --retries 0 --stress-count <repeat>`, selected by target: `--test it` for a `tests/it` module, `--lib` or `--bins` for a `src` module.
   A PR's all-ignored module runs its ignored tests, prepared as above; the remote mailbox lane has its own `repeat` input for its opt-in tests.
   A hand run keeps the named module's filter, so a module with no runnable test fails; a module whose tests are all ignored is proved this way, which is how a fix to one is shown on the system it failed (`gh workflow run repeat.yml --ref <branch> -f rust='hide-core:lib:engine::contract' -f repeat=20`).
