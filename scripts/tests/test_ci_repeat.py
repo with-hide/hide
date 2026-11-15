@@ -780,6 +780,36 @@ class IgnoredPreparation(unittest.TestCase):
                     self.assertNotIn("HIDE_TEST_HOLDER_BIN=$PWD", run, f"{lane} prepares the holder itself: {step.get('name')}")
                     self.assertNotIn("--bin hide-holder", run, f"{lane} builds the holder itself: {step.get('name')}")
 
+    def test_a_hand_run_asks_this_runner_which_flag_its_modules_need(self):
+        # A hand run names modules and lists nothing, since the system asked
+        # for may not be the count job's. The Rust job asks nextest where it
+        # runs: a module with no default match and ignored matches is proved
+        # with `--run-ignored ignored-only`, and a module with a mix runs all.
+        asked = []
+
+        def lister(package, test, expression, run_ignored=""):
+            asked.append((package, expression, run_ignored))
+            return {"": (0, 0), "ignored-only": (10, 10), "all": (11, 10)}[run_ignored]
+
+        plan = repeat.plan_run_ignored([{"package": "hide-core", "test": "lib",
+                                         "filter": "test(/^(engine::contract)::/)", "run_ignored": ""}], lister)
+        self.assertEqual(plan, [{"package": "hide-core", "test": "lib", "filter": "test(/^(engine::contract)::/)",
+                                 "run_ignored": "ignored-only"}])
+
+        mixed = {}
+
+        def mixed_lister(package, test, expression, run_ignored=""):
+            return {"": (5, 1), "all": (7, 1)}[run_ignored]
+
+        self.assertEqual(
+            repeat.plan_run_ignored([{"package": "hided", "test": "it", "filter": "", "run_ignored": ""}], mixed_lister)[0]["run_ignored"],
+            "all",
+        )
+        # A plan the count job already decided is not asked again.
+        decided = {"package": "hide-kit", "test": "lib", "filter": "", "run_ignored": "ignored-only"}
+        self.assertEqual(repeat.plan_run_ignored([decided], lambda *args: self.fail("asked again")), [decided])
+        self.assertEqual(mixed, {})
+
     def test_the_repeat_lane_prepares_only_where_the_plan_asked_for_an_ignored_test(self):
         repeat = self.workflow("repeat.yml")["rust"]
         step = self.steps_running(repeat, "plan-lines")[0]["run"]

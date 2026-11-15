@@ -517,6 +517,33 @@ def rust_plan(modules, lister):
     return plan
 
 
+def plan_run_ignored(plan, lister=None):
+    """Each plan entry with the flag its tests need, asked on this runner.
+
+    A pull request's plan is counted in the `count` job, which lists on a
+    runner of every system; a hand run names modules and nothing lists them,
+    because the system asked for may not be the one the count job runs on. The
+    Rust job is on the system that runs them, so it asks nextest here, for the
+    same decision `rust_plan` takes: `ignored-only` where a listing without
+    the flag matches no test and one asking for ignored tests matches some,
+    `all` where a test it would run is marked ignored, and empty otherwise.
+    """
+    lister = lister or nextest_lister
+    decided = []
+    for entry in plan:
+        package, test, expression = entry["package"], entry["test"], entry["filter"]
+        run_ignored = entry.get("run_ignored", "")
+        if not run_ignored:
+            tests, ignored = lister(package, test, expression, "")
+            if not tests:
+                if lister(package, test, expression, "ignored-only")[0]:
+                    run_ignored = "ignored-only"
+            elif ignored:
+                run_ignored = "all"
+        decided.append({**entry, "run_ignored": run_ignored})
+    return decided
+
+
 def nextest_lister(package, test, expression, run_ignored=""):
     """What `cargo nextest list` says one target of the package would run.
 
@@ -690,7 +717,7 @@ def main():
             write_lines(lines)
         elif args.command == "plan-lines":
             lines = []
-            for entry in json.loads(args.plan):
+            for entry in plan_run_ignored(json.loads(args.plan)):
                 if (not PACKAGE.match(entry["package"]) or entry.get("test") not in ("it", "lib", "bin")
                         or not re.fullmatch(r"(?:test\(/\^\([a-z0-9_:|]+\)::/\))?", entry["filter"])):
                     raise ValueError(f"not a Rust plan entry: {entry!r}")
