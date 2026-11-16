@@ -10,7 +10,7 @@ import { agentProductName } from "./agentAdapters";
 import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { AskLine, askParts, DecisionViewsCount, FoldButton, foldOnElbow, TreeChevron, TreeFold, TreeMoreButton, TreeRails, type TreePlace } from "./components/agent-tree";
+import { AskLine, askParts, DecisionViewsCount, FoldButton, foldOnElbow, markCenter, TREE_INSET, TREE_ROOT_FOLD, TreeDeparture, TreeFold, TreeMoreButton, TreeRails, type TreePlace } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
 import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
@@ -55,14 +55,8 @@ import { toolProjectChoice, toolTaskList } from "./toolCells";
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
 /** A mission row's mark stands on a task row's mark column, past the chevron's lane. */
-/**
- * Where a task row's mark stands, as a 프로젝트 tree row's does: past the column its fold stands on (`TASK_FOLD`),
- * so a child's rail comes down under its parent's mark (docs/UI_BEHAVIOR.md, the agent tree). A mission row that
- * stands among the tasks keeps the same column.
- */
-const TASK_INSET = "calc(var(--size-lineage-chevron) + var(--spacing-xs))";
-/** The center of a root task's fold, left of its mark. */
-const TASK_FOLD = "calc(var(--size-lineage-chevron) / 2)";
+/** Where a task row's mark stands (`TREE_INSET`); a mission row that stands among the tasks keeps the same column. */
+const TASK_INSET = TREE_INSET;
 /** A row's second line by the task's state: a question and a block are the operator's turn, both in the warning colour (B8; status-marks B32). */
 const LINE_TONE: Partial<Record<TaskState, string>> = { needs_you: "text-warning", blocked: "text-warning" };
 
@@ -500,7 +494,8 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} style={{ paddingLeft: TASK_INSET }} onClick={go}>
-      {open !== null ? <TreeFold at={TASK_FOLD}><FoldButton name={agent.identity_label} open={open} onClick={toggle} disabled={disabled} data-task-chevron={agent.pane_id} /></TreeFold> : null}
+      {open ? <TreeDeparture at={markCenter(TASK_INSET)} /> : null}
+      {open !== null ? <TreeFold at={TREE_ROOT_FOLD}><FoldButton name={agent.identity_label} open={open} onClick={toggle} disabled={disabled} data-task-chevron={agent.pane_id} /></TreeFold> : null}
       <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
@@ -801,10 +796,9 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
     <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
       data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} style={{ paddingLeft: TASK_INSET }} onClick={go}>
       <TreeRails place={place} />
-      {/* Below the indent limit the row keeps a lane its parent's rail comes down; above it, the fold lies on the row's elbow. */}
-      {place.chain ? <TreeChevron name={child.identity_label} open={open} onToggle={toggle} hangs chain={place.chain} disabled={disabled} data-task-chevron={child.pane_id} />
-        : open !== null ? <TreeFold at={foldOnElbow(TASK_INSET, place.depth)}><FoldButton name={child.identity_label} open={open} onClick={toggle} disabled={disabled} data-task-chevron={child.pane_id} /></TreeFold> : null}
-      <div className={cn("flex min-w-0 flex-1 flex-col gap-xs py-xs", place.chain && "pl-xs")}>
+      {open && !place.chain ? <TreeDeparture at={markCenter(TASK_INSET, place)} /> : null}
+      {open !== null ? <TreeFold at={foldOnElbow(TASK_INSET, place)}><FoldButton name={child.identity_label} open={open} onClick={toggle} disabled={disabled} data-task-chevron={child.pane_id} /></TreeFold> : null}
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
             aria-label={[child.identity_label, forkLabel(t, child), agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
@@ -848,7 +842,6 @@ function TreeMoreRow({ line, onShowAll }: { line: Extract<SidebarTreeLine, { kin
   return (
     <li className="flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent" style={{ paddingLeft: TASK_INSET }}>
       <TreeRails place={line.place} />
-      {line.place.chain ? <TreeChevron name="" open={null} hangs chain={line.place.chain} /> : null}
       <TreeMoreButton count={line.count} onShowAll={() => onShowAll(line.parent)} data-task-focus="tree-more" />
     </li>
   );

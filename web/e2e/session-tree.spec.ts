@@ -76,11 +76,12 @@ test("the 태스크 list opens a five-level tree, stops the indent at three and 
     await expect(childRow(deeper)).toContainText("넷째 단계 로그 확인", { timeout: 30_000 });
     expect(await panel.locator("[data-task-child]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-depth")))).toEqual(["1", "2", "3", "4"]);
 
-    // The fourth level keeps the third level's column: as many rail columns, and it hangs from the rail above.
+    // The fourth level stands one column past the third and hangs from the rail that leaves the third's mark.
     const columns = (pane: string) => childRow(pane).locator("[data-tree-rails] > span").count();
-    expect(await columns(deeper)).toBe(await columns(deep));
+    expect(await columns(deeper)).toBe(await columns(deep) + 1);
     await expect(childRow(deeper).locator("[data-tree-pass]")).toHaveCount(1);
     await expect(childRow(deep).locator("[data-tree-elbow]")).toHaveCount(1);
+    await expect(childRow(deep).locator("[data-tree-departure]")).toHaveCount(1);
 
     // A child shows the full branch only where the checkout differs from the parent's.
     await expect(childRow(child).locator(`[data-task-branch="${child}"]`)).toHaveText("prd/child");

@@ -14,7 +14,7 @@ import { RowLetterMark } from "./letter-mark";
 import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
-import { AskLine, FoldButton, foldOnElbow, TreeFold, TreeRails, type TreePlace } from "./agent-tree";
+import { AskLine, FoldButton, foldOnElbow, markCenter, TreeDeparture, TreeFold, TreeRails, type TreePlace } from "./agent-tree";
 import { AgentPrHover, PrHoverCard } from "./pr-mark";
 import { pullsStaleness, rowPulls } from "../prMark";
 import type { SessionPull } from "../snapshot";
@@ -69,7 +69,7 @@ export type SidebarTreeSlot = {
   /** Null for a row with no children; a grandchild's chevron opens the popover instead. */
   open: boolean | null;
   onToggle: () => void;
-  /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
+  /** Where a root's chevron centers, left of its mark: the column the checkout's own chevron and glyph share. */
   fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
   popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
@@ -258,7 +258,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         />
       </Hint>
       {tree ? <TreeRails place={tree.place} /> : null}
-      {tree && tree.open !== null && depth > 0 ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, depth)} returnFocus={() => main.current?.focus()} /> : null}
+      {tree?.open && !tree.popover && !tree.place.chain ? <TreeDeparture at={markCenter(inset, tree.place)} /> : null}
+      {tree && tree.open !== null && depth > 0 ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, tree.place)} returnFocus={() => main.current?.focus()} /> : null}
       <SessionRowBody
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"
