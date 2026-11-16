@@ -29,7 +29,6 @@ import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/en
 import { PartsMark } from "./components/pr-mark";
 import { archivedProject, archivedRows, archiveOffer } from "./archive";
 import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
-import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
 import { hideAiWords, homeTurnLine } from "./hideAiOrigin";
@@ -37,7 +36,8 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
 import { allAgents as everyPaneAgent, agentsByPane } from "./paneAgents";
-import { rowPulls } from "./prMark";
+import { prMarkParts, rowPulls } from "./prMark";
+import { conductedBy } from "./missions";
 import { machineName } from "./screenMachine";
 import { checkoutPathOfPane, sessionTreeLines } from "./sessionTree";
 import { sessionOfAgent } from "./sessionWork";
@@ -479,6 +479,16 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   // The core refuses to resolve work that runs or waits, or an approval prompt (`sessions::resolve_refusal`), so the menu does not offer it.
   const resolvable = !agent.resolved && agent.activity !== "working" && agent.group !== "working" && agent.demand !== "approval";
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
+  const pulls = rowPulls(agent);
+  const conducts = useShellStore((s) => conductedBy(s.rest, agent) !== null);
+  const toolList = useContext(InToolCell);
+  // The PR mark and the mission chip end the second line while the row has one, so the title keeps the first;
+  // a row with no second line keeps them before its time (operator decision 2026-11-17).
+  const lineShown = Boolean(taskLineParts(t, entry) || (showProject && project) || (!toolList && agent.tool));
+  const chips = prMarkParts(pulls) || conducts ? <>
+    <AgentPrMark agent={agent} pulls={pulls} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+    <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
+  </> : null;
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
   // wears a hollow `!` and is dimmed; the mark says it was read, so no word repeats it (needs-you-cleanup B10).
@@ -510,11 +520,10 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
           {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
-          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
-          <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
+          {lineShown ? null : chips}
           <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
+        <SecondLine entry={entry} showProject={showProject} read={read} chips={lineShown ? chips : null} actions={actions} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -726,14 +735,13 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
  */
-function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
+function SecondLine({ entry, showProject, read = false, chips, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; chips: ReactNode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
   const toolList = useContext(InToolCell);
   const { agent, card, project } = entry;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
-  const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
-  const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
+  const parts = taskLineParts(t, entry);
   // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
   const tool = toolList ? undefined : agent.tool;
   if (!parts && !(showProject && project) && !tool) return null;
@@ -746,10 +754,20 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
         {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
+        <LineChips>{chips}</LineChips>
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
     </>
   );
+}
+
+/** What a task row's second line says: its ask, a Hide AI home's turn, or its agent's line; a resting row with nothing unfinished says nothing. */
+function taskLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], { agent, card }: TaskEntry): LineParts | null {
+  const ask = card.state === "needs_you" ? agent.state.ask : null;
+  const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
+  if (ask) return askParts(t, ask);
+  if (turn) return { lead: null, text: homeTurnLine(t, turn), tail: null };
+  return card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
 }
 
 /**
@@ -760,6 +778,12 @@ function SecondLine({ entry, showProject, read = false, actions }: { entry: Task
  * children still working); work in progress says its sentence.
  */
 function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
+  const parts = agentLineOf(t, agent);
+  // Parts that say nothing are no line: the row keeps one line and its marks stay on it.
+  return parts && (parts.lead || parts.text || parts.tail) ? parts : null;
+}
+
+function agentLineOf(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
   const own = stateLine(agent);
   if (own === null) return null;
   // A row whose move is to look says the View, as the sidebar's does (`sidebarLine`): an external tool's
@@ -792,6 +816,10 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
   const toggle = () => actions.toggleSessionTree(child.pane_id);
   const menu = useTaskMenu(child, record, go, false, disabled, actions, false);
   const quiet = !child.state.title_emphasized && !(selected && child.state.selection_emphasizes_title);
+  const pulls = rowPulls(child);
+  // As on a task's row, the PR mark ends the second line while the row has one, and stands before the time otherwise.
+  const lineShown = Boolean(child.human_turn) || childLineParts(t, child) !== null;
+  const chips = prMarkParts(pulls) ? <AgentPrMark agent={child} pulls={pulls} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} /> : null;
   return (
     <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
       data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} style={{ paddingLeft: TASK_INSET }} onClick={go}>
@@ -811,30 +839,42 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          {lineShown ? null : chips}
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
-        <ChildLine child={child} actions={actions} />
+        <ChildLine child={child} chips={lineShown ? chips : null} actions={actions} />
         {child.state.branch_badge ? <BranchLine agent={child} branch={child.state.branch_badge} /> : null}
       </div>
     </li>
   );
 }
 
-function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
+function ChildLine({ child, chips, actions }: { child: AgentRow; chips: ReactNode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown());
   // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
   if (child.human_turn) {
     return <>
-      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /></div>
+      <div className={cn(indent, "flex min-w-0 items-center gap-xs text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /><LineChips>{chips}</LineChips></div>
       <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
     </>;
   }
   const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
-  const parts: LineParts | null = ask ? askParts(t, ask) : agentLineParts(t, child);
+  const parts = childLineParts(t, child);
   if (!parts) return null;
-  return <div className={cn(indent, "flex min-w-0 text-micro", ask ? "text-warning" : "text-subtle-foreground")} data-task-line={ask ? "ask" : "label"}><RowLineText parts={parts} className="min-w-0 flex-1" title={partsTitle(parts)} /></div>;
+  return <div className={cn(indent, "flex min-w-0 items-center gap-xs text-micro", ask ? "text-warning" : "text-subtle-foreground")} data-task-line={ask ? "ask" : "label"}><RowLineText parts={parts} className="min-w-0 flex-1" title={partsTitle(parts)} /><LineChips>{chips}</LineChips></div>;
+}
+
+/** What a child row's second line says: its ask while it asks, else its agent's line. */
+function childLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], child: AgentRow): LineParts | null {
+  const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
+  return ask ? askParts(t, ask) : agentLineParts(t, child);
+}
+
+/** A task row's PR mark and mission chip at the end of its second line, on the right edge whatever the line says before them. */
+function LineChips({ children }: { children: ReactNode }) {
+  if (!children) return null;
+  return <span className="ml-auto flex shrink-0 items-center gap-xs self-center text-caption" data-task-chips="">{children}</span>;
 }
 
 /** Past five siblings, the rest wait behind one line at their depth (B10). */
