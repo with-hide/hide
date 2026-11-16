@@ -26,7 +26,7 @@ import { checkoutAgentRows, type BoardRow } from "./projectBoard";
 import { FoldLane, SidebarAgentRow, type AgentRowMenu, type SidebarTreeSlot } from "./components/sidebar-agent-row";
 import { SidebarMissionRow, useEveryDeviceMissionAsks } from "./components/sidebar-mission-row";
 import { useMissionTurnCount } from "./MissionScreen";
-import { marksFrom, railsFrom, TreeDeparture, TreeMoreButton, TreeRailPast, TreeRails } from "./components/agent-tree";
+import { holderLead, TreeDeparture, TreeMoreButton, TreeRailPast, TreeRails } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
 import { holderTreeLines, siblingsShown, type SidebarTreeLine } from "./sidebarTree";
 import { moveSidebarKey, namedGroupsShown, sidebarNamedGroups, sidebarTabGroups, type SidebarCollection, type SidebarTabGroup } from "./sidebarTabs";
@@ -738,6 +738,10 @@ function RaisedAgentRow({ listed: { agent, device, chip }, context }: { listed: 
 const PROJECT_COLUMN = "var(--spacing-sm)";
 /** Where a group header's briefcase stands, one step past the chevron it shares with the checkout's glyph column; its rows hang from it. */
 const GROUP_GLYPH_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-icon-sm) + var(--spacing-xs))`;
+/** Where a plain folder's name and its agents' marks start. */
+const PROJECT_NAME_COLUMN = "calc(var(--spacing-sm) + var(--size-checkout-icon) + var(--spacing-sm))";
+/** Where a checkout's name, its line two and its agents' marks start. */
+const CHECKOUT_NAME_COLUMN = `calc(${PROJECT_COLUMN} + var(--size-checkout-icon) + var(--spacing-xs))`;
 
 /**
  * A row control that waits for the pointer, inside a row `EntryContextMenu`
@@ -1224,7 +1228,7 @@ const CheckoutRowView = memo(function CheckoutRowView({
           {secondLine ? <PurposeLine purpose={purpose} origin={checkout.purpose?.origin} age={view.age} raisedFrom={raisedFrom} /> : null}
         </div>
       </EntryContextMenu>
-      {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} context={context} /> : null}
+      {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} marks={CHECKOUT_NAME_COLUMN} context={context} /> : null}
     </li>
   );
 });
@@ -1322,7 +1326,7 @@ const FolderRowView = memo(function FolderRowView({
           {secondLine ? <PurposeLine purpose={purpose} origin={checkout.purpose?.origin} age={null} raisedFrom={raisedFrom} /> : null}
         </div>
       </EntryContextMenu>
-      {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} context={context} /> : null}
+      {visibleRows.length > 0 || (open && (sleeping.length + emptyTabs > 0 || !!checkout.agent_groups)) ? <OpenAgentRows checkout={checkout} groupTabs={open} deviceId={workspace.device_id} agentRows={visibleRows} sleeping={open ? sleeping : NO_SLEEPERS} marks={PROJECT_NAME_COLUMN} context={context} /> : null}
     </li>
   );
 });
@@ -1531,13 +1535,12 @@ function PurposeLine({ purpose, origin, age, raisedFrom }: { purpose: string | n
  * on it. A dormant conversation has no pane or numbered shortcut, and hangs
  * from nothing.
  */
-function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, context }: { checkout: Checkout; groupTabs: boolean; deviceId: string; agentRows: BoardRow[]; sleeping: SleepingSession[]; context: TreeContext }) {
+function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, marks, context }: { checkout: Checkout; groupTabs: boolean; deviceId: string; agentRows: BoardRow[]; sleeping: SleepingSession[]; marks: string; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const closed = useGroupFolds((state) => state.closed);
   const groups = useMemo(() => sidebarTabGroups(checkout, deviceId, agentRows, context.agents), [checkout, deviceId, agentRows, context.agents]);
   const named = useMemo(() => sidebarNamedGroups(checkout, groups), [checkout, groups]);
   const segments = useMemo(() => groups.map((group): HolderEntry => ({ kind: "segment", segment: group, key: group.tab?.id ?? "unplaced", tab: group.tab?.id ?? undefined, line: true })), [groups]);
-  const marks = marksFrom(HOLDER_GLYPH);
   // The core publishes the ungrouped collection first, and a header names a
   // collection against the others, so a checkout holding no named group draws
   // its ungrouped rows alone under the checkout, with no header at all
@@ -1561,7 +1564,7 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, con
           <Button variant="text" size="inline" aria-label={t(open ? "groups.fold" : "groups.unfold", { name })} aria-expanded={open} onClick={() => useGroupFolds.getState().toggle(foldKey)}>{open ? <ChevronDownIcon className="size-(--size-icon-sm)" /> : <ChevronRightIcon className="size-(--size-icon-sm)" />}</Button>
           <Hint label={name} reveals><Button variant="text" size="inline" data-sidebar-group-select={group.id ?? "ungrouped"} aria-current={selected ? "true" : undefined} className={cn("min-w-0 flex-1 justify-start", selected && "font-medium text-foreground")} onClick={() => context.actions.agentGroup({ device_id: deviceId, path: checkout.path }, group.id, { action: "select" })}><BriefcaseBusinessIcon className={cn("size-(--size-icon-sm) shrink-0", selected ? "text-foreground" : "text-muted-foreground")} /><span className="truncate">{name}</span></Button></Hint>
         </div>
-        {open ? <ul className="mt-xxs"><CollectionRows checkout={checkout} deviceId={deviceId} collection={collection} glyph={GROUP_GLYPH} context={context} /></ul> : null}
+        {open ? <ul className="mt-xxs"><CollectionRows checkout={checkout} deviceId={deviceId} collection={collection} glyph={GROUP_GLYPH} marks={`calc(${marks} + var(--spacing-md))`} context={context} /></ul> : null}
       </li>;
     })}
     {sleeping.map((session) => <SleepingSessionRow key={session.sleep_id} session={session} actions={context.actions} inset={marks} />)}
@@ -1569,13 +1572,13 @@ function OpenAgentRows({ checkout, groupTabs, deviceId, agentRows, sleeping, con
   // A checkout with no named group keeps the core's own order for its ungrouped
   // collection, its rows hung from the checkout's own glyph.
   if (groupTabs && ungrouped && checkout.agent_groups) return <ul className="isolate mt-xxs mb-sm" data-checkout-agents-open={checkout.id}>
-    <CollectionRows checkout={checkout} deviceId={deviceId} collection={ungrouped} glyph={HOLDER_GLYPH} context={context} />
+    <CollectionRows checkout={checkout} deviceId={deviceId} collection={ungrouped} glyph={HOLDER_GLYPH} marks={marks} context={context} />
     {sleeping.map((session) => <SleepingSessionRow key={session.sleep_id} session={session} actions={context.actions} inset={marks} />)}
   </ul>;
   // The list before any catalog answered for its groups: one segment per tab, in
   // the order the checkout itself publishes them.
   return <ul className={cn("isolate", groupTabs && "mt-xxs mb-sm")} data-checkout-agents-open={checkout.id}>
-    <HolderRows checkout={checkout} deviceId={deviceId} entries={segments} glyph={HOLDER_GLYPH} tabLines={groupTabs} context={context} />
+    <HolderRows checkout={checkout} deviceId={deviceId} entries={segments} glyph={HOLDER_GLYPH} marks={marks} tabLines={groupTabs} context={context} />
     {sleeping.map((session) => <SleepingSessionRow key={session.sleep_id} session={session} actions={context.actions} inset={marks} />)}
   </ul>;
 }
@@ -1606,7 +1609,7 @@ type HolderEntry = { kind: "draft"; id: string; group: string | null } | { kind:
  * them, a group header's briefcase or, when no named group exists, the
  * checkout's own glyph.
  */
-function CollectionRows({ checkout, deviceId, collection, glyph, context }: { checkout: Checkout; deviceId: string; collection: SidebarCollection; glyph: string; context: TreeContext }) {
+function CollectionRows({ checkout, deviceId, collection, glyph, marks, context }: { checkout: Checkout; deviceId: string; collection: SidebarCollection; glyph: string; marks: string; context: TreeContext }) {
   const entries = useMemo(() => {
     const { group, segments, drafts } = collection;
     const placed = new Set(group.tabs);
@@ -1619,7 +1622,7 @@ function CollectionRows({ checkout, deviceId, collection, glyph, context }: { ch
       ...segments.filter((segment) => segment.tab === null || !placed.has(segment.tab.id!)).map((segment): HolderEntry => ({ kind: "segment", segment, key: segment.tab?.id ?? "unplaced", tab: undefined, line: false })),
     ];
   }, [collection]);
-  return <HolderRows checkout={checkout} deviceId={deviceId} entries={entries} glyph={glyph} tabLines context={context} />;
+  return <HolderRows checkout={checkout} deviceId={deviceId} entries={entries} glyph={glyph} marks={marks} tabLines context={context} />;
 }
 
 /**
@@ -1629,14 +1632,14 @@ function CollectionRows({ checkout, deviceId, collection, glyph, context }: { ch
  * the last root (`holderTreeLines`). A draft tab and an empty tab's line hang
  * nothing; the rail passes them while a root follows.
  */
-function HolderRows({ checkout, deviceId, entries, glyph, tabLines, context }: { checkout: Checkout; deviceId: string; entries: readonly HolderEntry[]; glyph: string; tabLines: boolean; context: TreeContext }) {
+function HolderRows({ checkout, deviceId, entries, glyph, marks, tabLines, context }: { checkout: Checkout; deviceId: string; entries: readonly HolderEntry[]; glyph: string; marks: string; tabLines: boolean; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
   const siblings = useShellStore((s) => siblingsShown(s.rest));
   const segments = useMemo(() => entries.flatMap((entry) => (entry.kind === "segment" ? [entry.segment.rows] : [])), [entries]);
   // A root or child the operator opened lists its own subagents after its children (docs/UI_BEHAVIOR.md, Subagents).
   const lines = useMemo(() => holderTreeLines(segments, shownAll, siblings, (row) => row.depth < 2 && !row.agent.lineage_collapsed), [segments, shownAll, siblings]);
-  const marks = marksFrom(glyph);
+  const lead = holderLead(glyph, marks);
   const showAll = (parent: string) => setShownAll((before) => new Set(before).add(parent));
   const lastRoots = entries.findLastIndex((entry) => entry.kind === "segment" && entry.segment.rows.length > 0);
   let segment = 0;
@@ -1646,7 +1649,7 @@ function HolderRows({ checkout, deviceId, entries, glyph, tabLines, context }: {
     const own = lines[segment++]!;
     return <li key={entry.key} data-sidebar-tab-group={entry.tab}>
       {tabLines && entry.line ? <EmptyTabLine group={entry.segment} checkout={checkout} deviceId={deviceId} inset={marks} past={past} context={context} /> : null}
-      <AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} lines={own} inset={railsFrom(glyph)} onShowAll={showAll} context={context} />
+      <AgentTreeRows checkoutId={checkout.id} deviceId={deviceId} lines={own} inset={lead.inset} first={lead.first} onShowAll={showAll} context={context} />
     </li>;
   })}</>;
 }
@@ -1681,8 +1684,8 @@ function EmptyTabLine({ group, checkout, deviceId, inset, past, context }: { gro
   );
 }
 
-/** One tab segment's tree `lines` (`holderTreeLines`), their rails starting at `inset`. */
-function AgentTreeRows({ checkoutId, deviceId, lines, inset, onShowAll, context }: { checkoutId: string; deviceId: string; lines: readonly SidebarTreeLine[]; inset: string; onShowAll: (parent: string) => void; context: TreeContext }) {
+/** One tab segment's tree `lines` (`holderTreeLines`), their rails starting at `inset`, the first column `first` wide (`holderLead`). */
+function AgentTreeRows({ checkoutId, deviceId, lines, inset, first, onShowAll, context }: { checkoutId: string; deviceId: string; lines: readonly SidebarTreeLine[]; inset: string; first: string; onShowAll: (parent: string) => void; context: TreeContext }) {
   const { t } = useInterfaceTranslation();
   // Which devices are reachable now, as one value, so a reconnect redraws the rows that name one.
   const reachable = useShellStore((s) => [localDeviceId(s.rest), ...(s.rest?.status?.remote ?? []).filter((row) => row.state === "connected").map((row) => row.target_id)].join("\n"));
@@ -1693,13 +1696,13 @@ function AgentTreeRows({ checkoutId, deviceId, lines, inset, onShowAll, context 
         if (line.kind === "more") {
           return (
             <li key={`more:${line.parent}`} className="flex items-stretch rounded-sm pr-xs hover:bg-accent" style={{ paddingLeft: inset }}>
-              <TreeRails place={line.place} />
+              <TreeRails place={line.place} first={first} />
               <TreeMoreButton count={line.count} onShowAll={() => onShowAll(line.parent)} />
             </li>
           );
         }
         if (line.kind === "subagent" || line.kind === "subagents-more") {
-          return <SubagentTreeRow key={`${line.kind}:${line.parent}:${line.kind === "subagent" ? line.subagent.id : ""}`} line={line} style={{ paddingLeft: inset }}><FoldLane /></SubagentTreeRow>;
+          return <SubagentTreeRow key={`${line.kind}:${line.parent}:${line.kind === "subagent" ? line.subagent.id : ""}`} line={line} first={first} style={{ paddingLeft: inset }}><FoldLane /></SubagentTreeRow>;
         }
         const { agent, depth } = line.row;
         const parent = depth > 0 ? context.agents.find((row) => row.pane_id === agent.lineage_parent_pane_id) : undefined;
@@ -1712,6 +1715,7 @@ function AgentTreeRows({ checkoutId, deviceId, lines, inset, onShowAll, context 
           : null;
         const tree: SidebarTreeSlot = {
           place: line.place,
+          first,
           open: opens ? depth < 2 && !agent.lineage_collapsed : null,
           onToggle: () => context.actions.toggleAgentTree(agent.pane_id),
           popover: hasChildren && depth >= 2 ? {

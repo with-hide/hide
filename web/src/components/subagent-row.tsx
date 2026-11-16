@@ -86,11 +86,11 @@ export function SubagentMoreLine({ count, listed, size = "caption", className }:
  * list's other rows, such as the project tree's fold slot, so its time stands
  * in their time column.
  */
-export function SubagentTreeRow({ line, style, className, children }: { line: Extract<SidebarTreeLine, { kind: "subagent" | "subagents-more" }>; style?: CSSProperties; className?: string; children?: ReactNode }) {
+export function SubagentTreeRow({ line, first, style, className, children }: { line: Extract<SidebarTreeLine, { kind: "subagent" | "subagents-more" }>; first?: string; style?: CSSProperties; className?: string; children?: ReactNode }) {
   return (
     <li className={cn("flex min-w-0 items-stretch pr-xs", className)} style={style} data-tree-subagent={line.parent}>
       {/* Like a child's row, its mark follows its elbow, which meets its line's middle. */}
-      <TreeRails place={line.place} mid={LINE_MID} />
+      <TreeRails place={line.place} mid={LINE_MID} first={first} />
       {line.kind === "subagent" ? <SubagentLine row={line.subagent} className="min-w-0 flex-1" /> : <SubagentMoreLine count={line.count} listed={line.listed} className="min-w-0 flex-1" />}
       {/* The same gap a row's head keeps before what ends it. */}
       {children ? <span className="flex shrink-0 pl-xs">{children}</span> : null}

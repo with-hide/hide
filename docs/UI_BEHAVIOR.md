@@ -1874,7 +1874,7 @@ Checkouts start open, and `session_collapsed_checkout_ids` keeps only the checko
 An open checkout or plain folder lists its ungrouped collection and named groups in creation order, with tabs inside each group and the real agents beneath their tab.
 The ungrouped collection wears a header only while the checkout holds a named group: a checkout with none draws its rows alone under the checkout, with no header, on the columns a checkout's own tabs have always stood on.
 An empty ungrouped collection that is not the selected group draws nothing at all.
-A group header stands one step in from the checkout's own row, its disclosure chevron on the checkout's kind-glyph column and its briefcase and name past it, and its roots hang from that briefcase as a checkout's hang from its glyph, one indent past it.
+A group header stands one step in from the checkout's own row, its disclosure chevron on the checkout's kind-glyph column and its briefcase and name past it, and its roots hang from that briefcase as a checkout's hang from its glyph, their marks one step in from the checkout's name column.
 The list uses the core's membership for every group, including groups whose canvases are hidden, rather than inferring membership from the front tab bar.
 Empty groups, drafts and terminal-only tabs stay reachable, with no invented agent row or agent count.
 Group disclosure changes only this page's fold state; selecting the group's name changes the checkout's selected group.
@@ -1886,7 +1886,7 @@ The tab line's tooltip and accessible name give that name, and shell panes never
 A resolved session whose pane is still live stays a row under its tab, drawn dimmed whole like an unknown row with its mark and line from its own state and `해결됨 · ` leading its hover (PRD sidebar-every-tab-line B3); a live tab is never left as an empty tab line, and a closed pane's resolved session draws no row; a linked worktree whose only agents are resolved stays in the `Worktrees with no agents` fold, and shows the dimmed row once the fold is opened.
 It takes a root shortcut number in physical order, opens its pane when pressed, and brightens again when a new request makes the session unresolved.
 Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
-Roots stand one `--size-lineage-indent` step past the glyph they hang from and lineage children one more step each, on the same elbow rails, and each root's lineage disclosure stays in its trailing slot.
+Roots keep their marks on the name column of the row they hang from (a checkout's or a plain folder's name, one step further under a named group), the elbow from its glyph reaching them there (`holderLead`), and lineage children stand one `--size-lineage-indent` step further each, on the same elbow rails, and each root's lineage disclosure stays in its trailing slot.
 A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
 A catalog without named-group metadata draws the same tab lines, and a named empty tab remains reachable.
 A folded checkout keeps drawing and numbering only the roots that ask for the operator, and a resolved root asks for nothing even when its session ended on a question.

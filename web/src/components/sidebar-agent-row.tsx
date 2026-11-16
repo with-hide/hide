@@ -66,6 +66,8 @@ export function FoldLane() {
 /** Where a sidebar row sits in a drawn tree, and how its chevron opens its children. */
 export type SidebarTreeSlot = {
   place: TreePlace;
+  /** How wide the row's first rail column is, when its holder sets it (`holderLead`). */
+  first?: string;
   /** Null for a row with no children; a grandchild's chevron opens the popover instead. */
   open: boolean | null;
   onToggle: () => void;
@@ -131,7 +133,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   onOpen: (paneId: string) => void;
   /** Opens a PR of the row's mark from its card or list; `external` asks for the default browser. */
   onOpenPullRequest: (pull: SessionPull, external: boolean) => void;
-  /** Where the row's first column starts: a tree row's rails, from its holder's glyph (`railsFrom`), another row's mark. */
+  /** Where the row's first column starts: a tree row's rails, from its holder's glyph (`holderLead`), another row's mark. */
   inset: string;
   /** False where the row above already names the row's checkout. */
   branchShown?: boolean;
@@ -255,10 +257,10 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           onDragStart={(event) => beginAgentDrag(agent, event)}
         />
       </Hint>
-      {tree ? <TreeRails place={tree.place} /> : null}
-      {tree?.open && !tree.popover && !tree.place.chain ? <TreeDeparture at={markCenter(inset, tree.place)} /> : null}
+      {tree ? <TreeRails place={tree.place} first={tree.first} /> : null}
+      {tree?.open && !tree.popover && !tree.place.chain ? <TreeDeparture at={markCenter(inset, tree.place, tree.first)} /> : null}
       {/* A root's chevron lies on its holder's rail, as a child's lies on its parent's: every row hangs from the row above (`holderTreeLines`). */}
-      {tree && tree.open !== null ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, tree.place)} returnFocus={() => main.current?.focus()} /> : null}
+      {tree && tree.open !== null ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, tree.place, tree.first)} returnFocus={() => main.current?.focus()} /> : null}
       <SessionRowBody
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"

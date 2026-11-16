@@ -204,16 +204,20 @@ function columns(place: TreePlace): number {
  * limit the elbow hangs from the one rail the deeper levels share. No tint is
  * laid behind an opened subtree.
  */
-export function TreeRails({ place, mid = ROW_MID }: { place: TreePlace; mid?: string }) {
+export function TreeRails({ place, mid = ROW_MID, first }: { place: TreePlace; mid?: string; first?: string }) {
   if (place.depth === 0) return null;
-  const column = "relative w-(--size-lineage-indent) shrink-0";
+  // The first column is `first` wide when a holder sets it (`holderLead`), every other one indent.
+  const column = (index: number, child: ReactNode, data?: Record<`data-${string}`, string>) => (
+    <span key={index} className="relative w-(--size-lineage-indent) shrink-0" style={index === 0 && first ? { width: first } : undefined} {...data}>{child}</span>
+  );
+  const at = place.rails.length;
   return (
     <span aria-hidden="true" className="flex shrink-0 self-stretch" data-tree-rails={place.depth}>
-      {place.rails.map((rail, index) => <span key={index} className={column}>{rail ? <Rail /> : null}</span>)}
+      {place.rails.map((rail, index) => column(index, rail ? <Rail /> : null))}
       {place.chain ? <>
-        <span className={column} data-tree-pass={place.chain.pass ? "rail" : "none"}>{place.chain.pass ? <Rail /> : null}</span>
-        <span className={column} data-tree-elbow={place.chain.on ? "middle" : "last"}><Elbow last={!place.chain.on} mid={mid} /></span>
-      </> : <span className={column} data-tree-elbow={place.last ? "last" : "middle"}><Elbow last={place.last} mid={mid} /></span>}
+        {column(at, place.chain.pass ? <Rail /> : null, { "data-tree-pass": place.chain.pass ? "rail" : "none" })}
+        {column(at + 1, <Elbow last={!place.chain.on} mid={mid} />, { "data-tree-elbow": place.chain.on ? "middle" : "last" })}
+      </> : column(at, <Elbow last={place.last} mid={mid} />, { "data-tree-elbow": place.last ? "last" : "middle" })}
     </span>
   );
 }
@@ -257,9 +261,14 @@ export function TreeFold({ at, children }: { at: string; children: ReactNode }) 
   return <span className="absolute top-xs z-10 h-(--size-sidebar-line) w-(--size-lineage-chevron) -translate-x-1/2" style={{ left: at }}>{children}</span>;
 }
 
+/** How far a row's first `count` columns reach: the first `first` wide when a holder sets it, the rest one indent each. */
+function reach(count: number, first?: string): string {
+  return count > 0 && first ? `${first} + var(--size-lineage-indent) * ${count - 1}` : `var(--size-lineage-indent) * ${count}`;
+}
+
 /** Where a tree row's mark centers: past its inset and its rails' columns. */
-export function markCenter(inset: string, place?: TreePlace): string {
-  return `calc(${inset} + var(--size-lineage-indent) * ${place ? columns(place) : 0} + var(--size-agent-mark) / 2)`;
+export function markCenter(inset: string, place?: TreePlace, first?: string): string {
+  return `calc(${inset} + ${reach(place ? columns(place) : 0, first)} + var(--size-agent-mark) / 2)`;
 }
 
 /**
@@ -283,19 +292,21 @@ export function TreeRailPast({ at }: { at: string }) {
   return <span aria-hidden="true" data-tree-rail-past="" className="pointer-events-none absolute inset-y-0 w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${at} - var(--size-hairline) / 2)` }} />;
 }
 
-/** Where a holder's rows' rails start: half a mark left of the center of its glyph at `glyph`, so their first column's rail runs through it. */
-export function railsFrom(glyph: string): string {
-  return `calc(${glyph} - var(--size-agent-mark) / 2)`;
+/**
+ * Where a 프로젝트 holder's tree starts (a checkout, a plain folder or a named
+ * group): its rows' rails half a mark left of its glyph's center at `glyph`, so
+ * their first column's rail runs through it, and that first column reaching to
+ * `marks`, the holder's name column, where its roots' marks stand; every column
+ * after it is one indent.
+ */
+export function holderLead(glyph: string, marks: string): { inset: string; first: string } {
+  const inset = `calc(${glyph} - var(--size-agent-mark) / 2)`;
+  return { inset, first: `calc(${marks} - ${inset})` };
 }
 
-/** Where a holder's rows' marks stand: one indent past their rails' start, as a child stands one indent past its parent. */
-export function marksFrom(glyph: string): string {
-  return `calc(${railsFrom(glyph)} + var(--size-lineage-indent))`;
-}
-
-/** A child row's fold center: on its elbow's rail, the middle of its parent's mark, one indent column short of the row's mark. */
-export function foldOnElbow(inset: string, place: TreePlace): string {
-  return `calc(${inset} + var(--size-lineage-indent) * ${columns(place) - 1} + var(--size-agent-mark) / 2)`;
+/** A tree row's fold center: on its elbow's rail, the middle of the mark above, one column short of the row's mark. */
+export function foldOnElbow(inset: string, place: TreePlace, first?: string): string {
+  return `calc(${inset} + ${reach(columns(place) - 1, first)} + var(--size-agent-mark) / 2)`;
 }
 
 /** The line that stands for a parent's children past the sibling limit (B12): `N개 더`, which opens them in place. */
