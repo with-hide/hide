@@ -267,9 +267,30 @@ export function markCenter(inset: string, place?: TreePlace): string {
  * down to the row's foot, where its first child's elbow takes it on, so the
  * rail is seen to come out of the parent's mark. A row below the indent limit
  * draws none: its children hang from the rail its ancestor at the limit left.
+ * A holder's row (a 프로젝트 checkout, plain folder or named group) draws the
+ * same from its glyph, `mark` high and centered at `mid`, and `reach`es past
+ * its foot across the gap above its list.
  */
-export function TreeDeparture({ at, mid = ROW_MID }: { at: string; mid?: string }) {
-  return <span aria-hidden="true" data-tree-departure="" className="pointer-events-none absolute bottom-0 w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${at} - var(--size-hairline) / 2)`, top: `calc(${mid} + var(--size-agent-mark) / 2)` }} />;
+export function TreeDeparture({ at, mid = ROW_MID, mark = "var(--size-agent-mark)", reach }: { at: string; mid?: string; mark?: string; reach?: string }) {
+  return <span aria-hidden="true" data-tree-departure="" className="pointer-events-none absolute w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${at} - var(--size-hairline) / 2)`, top: `calc(${mid} + ${mark} / 2)`, bottom: reach ? `calc(-1 * ${reach})` : 0 }} />;
+}
+
+/**
+ * A holder's rail passing a line that hangs nothing from it, such as an empty
+ * tab's line, on its way to a later row it does hang (`holderTreeLines`).
+ */
+export function TreeRailPast({ at }: { at: string }) {
+  return <span aria-hidden="true" data-tree-rail-past="" className="pointer-events-none absolute inset-y-0 w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${at} - var(--size-hairline) / 2)` }} />;
+}
+
+/** Where a holder's rows' rails start: half a mark left of the center of its glyph at `glyph`, so their first column's rail runs through it. */
+export function railsFrom(glyph: string): string {
+  return `calc(${glyph} - var(--size-agent-mark) / 2)`;
+}
+
+/** Where a holder's rows' marks stand: one indent past their rails' start, as a child stands one indent past its parent. */
+export function marksFrom(glyph: string): string {
+  return `calc(${railsFrom(glyph)} + var(--size-lineage-indent))`;
 }
 
 /** A child row's fold center: on its elbow's rail, the middle of its parent's mark, one indent column short of the row's mark. */

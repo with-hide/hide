@@ -69,8 +69,6 @@ export type SidebarTreeSlot = {
   /** Null for a row with no children; a grandchild's chevron opens the popover instead. */
   open: boolean | null;
   onToggle: () => void;
-  /** Where a root's chevron centers, left of its mark: the column the checkout's own chevron and glyph share. */
-  fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
   popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
 };
@@ -133,7 +131,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   onOpen: (paneId: string) => void;
   /** Opens a PR of the row's mark from its card or list; `external` asks for the default browser. */
   onOpenPullRequest: (pull: SessionPull, external: boolean) => void;
-  /** Where a root's first column starts. */
+  /** Where the row's first column starts: a tree row's rails, from its holder's glyph (`railsFrom`), another row's mark. */
   inset: string;
   /** False where the row above already names the row's checkout. */
   branchShown?: boolean;
@@ -259,7 +257,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       </Hint>
       {tree ? <TreeRails place={tree.place} /> : null}
       {tree?.open && !tree.popover && !tree.place.chain ? <TreeDeparture at={markCenter(inset, tree.place)} /> : null}
-      {tree && tree.open !== null && depth > 0 ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, tree.place)} returnFocus={() => main.current?.focus()} /> : null}
+      {/* A root's chevron lies on its holder's rail, as a child's lies on its parent's: every row hangs from the row above (`holderTreeLines`). */}
+      {tree && tree.open !== null ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, tree.place)} returnFocus={() => main.current?.focus()} /> : null}
       <SessionRowBody
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"
@@ -316,10 +315,6 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           </span>
         ) : null}
       </SessionRowBody>
-      {tree && depth === 0 && tree.open !== null ? (
-        // A root's chevron stands left of its mark, as a task's does in the 태스크 list.
-        <TreeFold at={tree.fold}><FoldButton name={agent.identity_label} open={tree.open} onClick={tree.onToggle} data-tree-chevron={agent.pane_id} /></TreeFold>
-      ) : null}
       {number !== null ? <Keycap number={number} /> : null}
     </li>
     </EntryContextMenu>
@@ -327,8 +322,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
 });
 
 /**
- * A child row's chevron, on its own elbow: it folds the row's children in place, or on a grandchild opens the
- * popover rooted on it (B13). `at` is the elbow's rail.
+ * A tree row's chevron, on its own elbow, a root's on its holder's rail: it folds the row's children in place, or on
+ * a grandchild opens the popover rooted on it (B13). `at` is the elbow's rail.
  */
 function RowChevron({ agent, tree, open, at, returnFocus }: { agent: AgentRow; tree: SidebarTreeSlot; open: boolean; at: string; returnFocus: () => void }) {
   const { t } = useInterfaceTranslation();

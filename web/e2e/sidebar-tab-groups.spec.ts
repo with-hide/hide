@@ -108,7 +108,7 @@ test("2-1-2 tab segments stand on one column with no guide and no line while the
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const tabs = [engine.tab, alone.tab, pair.tab];
-    // A tab draws no mark in the list: a line in the tree only joins an agent to the agents it started.
+    // A tab draws no mark in the list: a line joins the folder to its agents and an agent to the agents it started.
     for (const tab of tabs) await expect(guide(page, tab)).toHaveCount(0);
     await expect(page.locator("[data-project-list] [data-sidebar-tab-line]")).toHaveCount(0);
     const singleAgent = segment(page, alone.tab).locator("[data-agent-open]");
@@ -130,6 +130,13 @@ test("2-1-2 tab segments stand on one column with no guide and no line while the
     expect(marks).toHaveLength(5);
     expect(new Set(marks.map((mark) => mark.x)).size).toBe(1);
     expect(marks[0]!.x).toBeGreaterThanOrEqual(kind.x + kind.width);
+    // The five roots hang from the folder's glyph across the three tabs: one rail leaves the glyph's middle and gives
+    // each root an elbow, and only the last one bends there.
+    await expect(owner.locator("[data-tree-departure]")).toHaveCount(1);
+    const elbows = page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-tree-elbow]");
+    expect(await elbows.evaluateAll((spans) => spans.map((span) => span.getAttribute("data-tree-elbow")))).toEqual(["middle", "middle", "middle", "middle", "last"]);
+    // The elbow's column starts half a mark (6) left of the rail it draws, which runs through the glyph's middle.
+    expect(Math.abs((await position(elbows.first())).x + 6 - (kind.x + kind.width / 2))).toBeLessThan(1);
     // The title follows the status mark alone, one mark and one gap after it (agent-mark-quiet B1): no provider logo stands between them.
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));

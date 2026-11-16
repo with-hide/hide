@@ -57,6 +57,16 @@ export function sidebarNamedGroups(checkout: Checkout, segments: readonly Sideba
   });
 }
 
+/**
+ * Whether an opened checkout's list shows its named groups, each a header its
+ * rows hang from, rather than its rows under the checkout itself: the core
+ * lists a named group beside the ungrouped one (docs/UI_BEHAVIOR.md, Sidebar hierarchy).
+ */
+export function namedGroupsShown(checkout: Checkout, opened: boolean): boolean {
+  const groups = checkout.agent_groups?.groups ?? [];
+  return opened && groups.some((group) => group.id === null) && groups.some((group) => group.id !== null);
+}
+
 /** Up/Down/Home/End traverse only the visible main row controls. */
 export function moveSidebarKey(event: import("react").KeyboardEvent<HTMLElement>): void {
   if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
