@@ -181,8 +181,10 @@ def main():
 
 
 # The extension's version, which the released helper answers only when it is
-# its own: `hide_agent_hooks::pi_extension::VERSION` in 1.2.3 and 1.2.4.
-PI_EXTENSION = 15
+# its own: `hide_agent_hooks::pi_extension::VERSION` at the release's commit,
+# which the generator reads there and writes beside this file (15 from 1.2.3,
+# 16 from 1.2.10).
+PI_EXTENSION = Path("/opt/pi-extension-version")
 PI_VERSION = "1.0.4"
 
 
@@ -204,6 +206,7 @@ def pi_main(argv):
     if hooks is None:
         print("no hook program", file=sys.stderr)
         return 1
+    version = int(PI_EXTENSION.read_text())
     cwd = os.getcwd()
     folder = Path.home() / ".pi/agent/sessions" / ("--" + cwd.lstrip("/").replace("/", "-") + "--")
     folder.mkdir(parents=True, exist_ok=True)
@@ -222,7 +225,7 @@ def pi_main(argv):
     parent = [None]
 
     def helper(operation, **fields):
-        subprocess.run([hooks, "pi", operation], input=json.dumps(dict(version=PI_EXTENSION, **fields)),
+        subprocess.run([hooks, "pi", operation], input=json.dumps(dict(version=version, **fields)),
                        text=True, capture_output=True, timeout=30, env=env)
 
     def record(role, text):

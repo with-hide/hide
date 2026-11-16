@@ -14,4 +14,5 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY --from=build /src/agent /usr/local/bin/claude
 COPY --from=build /src/agent /usr/local/bin/pi
 COPY agent.py /opt/agent.py
+COPY pi-extension-version /opt/pi-extension-version
 COPY hide /opt/hide
