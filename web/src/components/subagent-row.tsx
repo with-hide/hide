@@ -89,8 +89,9 @@ export function SubagentTreeRow({ line, style, className, children }: { line: Ex
   return (
     <li className={cn("flex min-w-0 items-stretch pr-xs", className)} style={style} data-tree-subagent={line.parent}>
       <TreeRails place={line.place} />
-      <TreeChevron name="" open={null} hangs chain={line.place.chain} />
-      {line.kind === "subagent" ? <SubagentLine row={line.subagent} className="min-w-0 flex-1 pl-xs" /> : <SubagentMoreLine count={line.count} listed={line.listed} className="min-w-0 flex-1 pl-xs" />}
+      {/* Like a child's row, its mark follows its elbow; below the indent limit it keeps the lane its parent's rail comes down. */}
+      {line.place.chain ? <TreeChevron name="" open={null} hangs chain={line.place.chain} /> : null}
+      {line.kind === "subagent" ? <SubagentLine row={line.subagent} className={cn("min-w-0 flex-1", line.place.chain && "pl-xs")} /> : <SubagentMoreLine count={line.count} listed={line.listed} className={cn("min-w-0 flex-1", line.place.chain && "pl-xs")} />}
       {/* The same gap a row's head keeps before what ends it. */}
       {children ? <span className="flex shrink-0 pl-xs">{children}</span> : null}
     </li>

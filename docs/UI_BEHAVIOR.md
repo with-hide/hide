@@ -763,7 +763,8 @@ A parent waiting on a working descendant stays Working; a descendant that asks w
 A root with direct children has a chevron at its left and starts folded; the opened roots persist across launches and device reconnects.
 Folded, it wears its descendant mark, the turn mark and N for raised descendants, and nothing when its descendants are working, asking it, idle or done: a parent waiting on a working child already shows its ring and that child's line, and a child's ask that is not raised already turns the parent unread (PRD session-record-redesign D-04).
 The core still computes the working mark; no surface draws it.
-Opened, its children follow most urgent first, joined to it by rails, and a child with children has its own chevron; grandchildren are one step further in, and a grandchild with children opens the tree popover from its chevron.
+Opened, its children follow most urgent first, joined to it by one rail that comes down under its mark and turns into each child's mark, and a child with children has its own chevron, laid on the elbow where that rail turns to it; grandchildren are one step further in, and a grandchild with children opens the tree popover from its chevron.
+The 프로젝트 tree and the 태스크 list draw these rows alike (`TreeRails`, `TreeFold`, `TreeMoreButton` in `web/src/components/agent-tree.tsx`): a row's mark follows its elbow whether or not it opens, a root's chevron stands left of its mark, a subagent's line and `N개 더` hang on the same short elbow, and a line in the tree only ever joins an agent to the agents it started (operator decision 2026-11-16); only a 태스크 row below the indent limit keeps a chevron lane, down which its parent's rail comes and turns to its mark (`cappedPlaces`).
 A child that works on another device than its parent follows the parent the same way: the parent's row opens it, and it is the parent's tree that draws it, since the child's own device lists no line for a worktree only delegated children work in (`session_folds.child_only`).
 Opening a pane on another device from a child row or chip, a band's Open or a relationship step brings that device to the front, and opening a pane of this machine while a device is in front brings this machine back (`openPaneEvent`).
 Past five siblings the rest wait behind `N개 더`, which opens them in place.
@@ -1821,7 +1822,7 @@ A checkout row's `Set as default checkout` sets it; the item is disabled with it
 Remote catalogs still derive home from Git-root facts and do not yet display the primary checkout stored by the remote core.
 Open, draft, merged, and closed pull requests keep their own lifecycle shapes and colors; they draw once a window is attached, without any other screen open, and a restart draws the previous run's answer muted as stale until the first read replaces it; stale GitHub data mutes only the icon, an unavailable GitHub lookup falls back to the branch glyph, and a missing folder colors its branch glyph as danger and omits the age.
 In the web shell every row reads on the left and ends the same way on the right: its time or its status badge (a project or folder row has neither, and a GitHub project's row ends in its repository's mark instead), then a fold slot kept at rest, so nothing moves when a control shows and the times and badges of checkout and agent rows end on one column while checkout chevrons stand on another.
-An agent root's chevron stands at its left instead, as a task's does in the 태스크 list, centered on its tab's guide, the column of the checkout's glyph or of its group's briefcase.
+An agent root's chevron stands at its left instead, as a task's does in the 태스크 list, centered under the checkout's glyph or its group's briefcase.
 A folded chevron is always shown; an unfolded one shows under the pointer, while focus is inside the row, while its menu is open, and always on an input with no hover.
 Under the pointer or keyboard focus a project or folder row shows `+` and `⋯` in a slot that keeps their width at rest, so the name never shortens when they show and they leave when the pointer does.
 `+` (`Start agent in <project>`) opens the start panel aimed at the project's main checkout, or the folder itself; where that checkout cannot take an agent the panel picks its target by its own rule and the operator can change it there.
@@ -1866,28 +1867,28 @@ The core admits the workspace/checkout pair before changing focus or expansion a
 A later engine projection failure retains these accepted values under the existing focus policy.
 The last-commit age stays in place whatever the pointer does and while the menu is open.
 A plain folder row puts its folder glyph where a project's name starts, so every top-level row shares one left edge, and its name and second line follow the glyph.
-Opened folder projects use the same neutral selected fill and unboxed tab segments as opened checkouts, with the guide under the folder glyph.
+Opened folder projects use the same neutral selected fill and unboxed tab segments as opened checkouts, with their roots' chevrons under the folder glyph.
 Their required secondary lines and metadata remain visible.
 An opened checkout keeps its rows on the sidebar background, without an enclosing card, border or group fill.
 Checkouts start open, and `session_collapsed_checkout_ids` keeps only the checkouts the operator explicitly closes across launches.
 An open checkout or plain folder lists its ungrouped collection and named groups in creation order, with tabs inside each group and the real agents beneath their tab.
 The ungrouped collection wears a header only while the checkout holds a named group: a checkout with none draws its rows alone under the checkout, with no header, on the columns a checkout's own tabs have always stood on.
 An empty ungrouped collection that is not the selected group draws nothing at all.
-A group header stands one step in from the checkout's own row, its disclosure chevron on the checkout's kind-glyph column and its briefcase and name past it, so a collection never reads deeper than the rows beneath it, and the tab guide hangs under that briefcase.
+A group header stands one step in from the checkout's own row, its disclosure chevron on the checkout's kind-glyph column and its briefcase and name past it, so a collection never reads deeper than the rows beneath it, and its roots' chevrons stand under that briefcase.
 The list uses the core's membership for every group, including groups whose canvases are hidden, rather than inferring membership from the front tab bar.
 Empty groups, drafts and terminal-only tabs stay reachable, with no invented agent row or agent count.
 Group disclosure changes only this page's fold state; selecting the group's name changes the checkout's selected group.
 A tab line selects its owning group, area and tab, while an agent row continues to its pane.
 The sidebar keeps a root and its complete lineage subtree together under the root's actual tab; children working in another tab do not inflate that tab's physical agent count.
 Tab names use the manual name or localized `Tab N` from the core's stable number, while a draft reads New tab; automatic tabbar task titles remain independent.
-When a checkout holds two tabs or more, every tab draws its guide, whatever it holds or is named, in both ungrouped and named collections; the guide runs down from the glyph it hangs under and bends on a rounded corner into its last root row, never past it. A checkout with one tab draws no guide, because there is no other segment to tell it from. Only a tab holding no agent also draws a tab line, which says its name alone: a tab with agents is told by its rows and the guide that gathers them, and its name stays in the tab strip.
+A tab draws no mark of its own in the list, whatever it holds or is named, in both ungrouped and named collections, and its segment follows the one before it with no gap, so a line in the tree only ever joins an agent to the agents it started (operator decision 2026-11-16). Only a tab holding no agent draws a tab line, which says its name alone: a tab with agents is told by its rows, and its name stays in the tab strip.
 The tab line's tooltip and accessible name give that name, and shell panes never count as agents, so a terminal-only or operator-named empty tab keeps its line.
 A resolved session whose pane is still live stays a row under its tab, drawn dimmed whole like an unknown row with its mark and line from its own state and `해결됨 · ` leading its hover (PRD sidebar-every-tab-line B3); a live tab is never left as an empty tab line, and a closed pane's resolved session draws no row; a linked worktree whose only agents are resolved stays in the `Worktrees with no agents` fold, and shows the dimmed row once the fold is opened.
 It takes a root shortcut number in physical order, opens its pane when pressed, and brightens again when a new request makes the session unresolved.
 Group, tab and agent controls are stops in Arrow Up/Down and Home/End traversal, and click, Enter and Space use the same navigation.
 Lineage children retain their `--size-lineage-indent` step and elbow rails, and each root's lineage disclosure stays in its trailing slot.
 A tab has no disclosure state of its own; a stored tab fold from an earlier version is ignored on load and dropped on the next write.
-A catalog without named-group metadata draws the same tab guides and lines, and a named empty tab remains reachable.
+A catalog without named-group metadata draws the same tab lines, and a named empty tab remains reachable.
 A folded checkout keeps drawing and numbering only the roots that ask for the operator, and a resolved root asks for nothing even when its session ended on a question.
 Focused sidebar agent and checkout rows use the neutral `--secondary` fill.
 Root shortcuts follow the physical grouping order and deduplicate raised occurrences, with no numbers for group lines, tab lines or children.

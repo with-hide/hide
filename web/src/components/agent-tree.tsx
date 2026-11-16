@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon, EyeIcon } from "lucide-react";
 import type { TFunction } from "i18next";
+import type { ComponentProps, ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
@@ -7,12 +8,12 @@ import type { LineParts } from "../agentRow";
 import { askSubjectText } from "../askSubject";
 import { DeviceChip } from "./device-chip";
 import { HumanTurnCopy, type CopyText } from "./human-turn-copy";
+import { Button } from "./ui/button";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
 // D-37 to D-43): a Needs You row's ask line, the one descendant
-// mark a folded parent wears, the
-// elbow rails and the chevron lane of a tree row, and the tree button. The
-// core decides every value; these only draw it.
+// mark a folded parent wears, the elbow rails of a tree row, its fold and the
+// "N more" line. The core decides every value; these only draw it.
 
 /** What to do, or the verb's own words when no label line or letter says it (B3). */
 export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: string | null | undefined, subject?: AskSubject | null): string {
@@ -158,8 +159,10 @@ export const RAIL_ELBOW = "border-0 border-b-(length:--size-hairline) border-l-(
 
 /**
  * The rails left of a tree row (D-38): a rail down each level whose ancestor
- * has a later sibling, then this row's elbow from its parent's chevron lane.
- * No tint is laid behind an opened subtree.
+ * has a later sibling, then this row's elbow, the parent's rail coming down
+ * under the parent's mark and turning into this row's mark. The row's mark
+ * follows the elbow directly, whether or not the row opens: its fold lies over
+ * the row (`TreeFold`). No tint is laid behind an opened subtree.
  */
 export function TreeRails({ place }: { place: TreePlace }) {
   if (place.depth === 0) return null;
@@ -187,13 +190,69 @@ export function TreeRails({ place }: { place: TreePlace }) {
 }
 
 /**
- * The chevron lane left of a tree row's mark: a chevron where the row has
- * children, and while it is open a rail leaving it down to the children.
- * A row with none keeps the lane, crossed by its elbow when it hangs from a parent.
+ * The tree's fold button: a chevron, right while folded and down while open,
+ * that answers a press without pressing the row under it. As a popover's
+ * trigger (`popup`) it says it opens a dialog instead of an expanded state.
+ */
+export function FoldButton({ name, open, popup = false, className, onClick, ...rest }: { name: string; open: boolean; popup?: boolean } & Omit<ComponentProps<"button">, "children">) {
+  const { t } = useInterfaceTranslation();
+  const label = t(open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name });
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label={label}
+      aria-expanded={popup ? undefined : open}
+      aria-haspopup={popup ? "dialog" : undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.(event);
+      }}
+      className={cn("flex size-full items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50", className)}
+      {...rest}
+    >
+      {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+    </button>
+  );
+}
+
+/**
+ * Where a tree row's fold stands, laid over the row instead of in a lane of
+ * its own, so a row's mark keeps its column whether it opens or not and the
+ * rail runs from a parent's mark to its children's (docs/UI_BEHAVIOR.md, the
+ * agent tree): a root's left of its mark, a child's on its own elbow, where
+ * its parent's rail turns to it (`foldOnElbow`). `at` is the fold's center
+ * in the row; the row positions it, so the row is `relative`.
+ */
+export function TreeFold({ at, children }: { at: string; children: ReactNode }) {
+  return <span className="absolute top-xs z-10 h-(--size-sidebar-line) w-(--size-lineage-chevron) -translate-x-1/2" style={{ left: at }}>{children}</span>;
+}
+
+/** A child row's fold center: its elbow's rail, `depth - 1` indent steps past the row's inset. */
+export function foldOnElbow(inset: string, depth: number): string {
+  return `calc(${inset} + var(--size-lineage-indent) * ${depth - 1} + var(--size-lineage-rail-x))`;
+}
+
+/** The line that stands for a parent's children past the sibling limit (B12): `N개 더`, which opens them in place. */
+export function TreeMoreButton({ count, onShowAll, className, ...data }: { count: number; onShowAll: () => void; className?: string } & Record<`data-${string}`, string>) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <Button variant="text" size="inline" data-tree-more={count} className={cn("min-w-0 flex-1 justify-start py-xs pl-xxs text-caption", className)} onClick={onShowAll} {...data}>
+      <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">{t("agentSessions.tree.more", { count })}</span>
+    </Button>
+  );
+}
+
+/**
+ * A chevron lane left of a row's mark, for the trees that still draw one: a
+ * 태스크 row below the indent limit, where its parent's rail comes down the
+ * lane and turns to the mark (`cappedPlaces`), and the child tree popover's
+ * rows. While open, a rail leaves the chevron down to the children; a row
+ * with none keeps the lane, crossed by its elbow when it hangs from a parent.
  */
 export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = false, popup = false, ...data }: { name: string; open: boolean | null; onToggle?: () => void; hangs: boolean; chain?: TreeChain; disabled?: boolean; popup?: boolean } & Record<`data-${string}`, string>) {
   // The lane spans the row; its chevron sits on line one, below the row's top padding.
-  const { t } = useInterfaceTranslation();
   if (open === null || !onToggle) {
     return (
       <span aria-hidden="true" className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
@@ -207,27 +266,11 @@ export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = fal
       </span>
     );
   }
-  const label = t(open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name });
   return (
     <span className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
       {chain ? <span aria-hidden="true" className="absolute top-0 left-(--size-lineage-rail-x) h-xs w-(--size-hairline) bg-lineage-rail" /> : null}
       {open || chain?.on ? <span aria-hidden="true" className="absolute top-(--size-lineage-departure-y) bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" /> : null}
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={label}
-        aria-expanded={popup ? undefined : open}
-        aria-haspopup={popup ? "dialog" : undefined}
-        disabled={disabled}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggle();
-        }}
-        className="relative z-10 mt-xs flex h-(--size-sidebar-line) w-full items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        {...data}
-      >
-        {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
-      </button>
+      <FoldButton name={name} open={open} popup={popup} disabled={disabled} onClick={onToggle} className="relative z-10 mt-xs h-(--size-sidebar-line) w-full" {...data} />
     </span>
   );
 }

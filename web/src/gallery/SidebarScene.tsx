@@ -14,7 +14,7 @@ import { SettingsGate } from "../SettingsSheet";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { withMissionAsk } from "./MissionScene";
-import { applyEvent, OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene, sidebarStatusAxisScene, type SceneContent, type SceneDevices, type SceneFolds, type SceneFront } from "./sceneData";
+import { applyEvent, OFFLINE_DEVICE, REFERENCE_FOLDS, sidebarScene, sidebarStatusAxisScene, withSceneTasks, type SceneContent, type SceneDevices, type SceneFolds, type SceneFront } from "./sceneData";
 
 /** What one scene document shows; every value comes from its query string. */
 export type SceneParams = {
@@ -77,13 +77,15 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
   const scene = useMemo(() => axis ? sidebarStatusAxisScene(content, folds, Date.now()) : sidebarScene(content, folds, Date.now(), devices), [content, folds, devices, axis]);
   useLayoutEffect(() => {
     const sized = width === null ? scene.rest : { ...scene.rest, ui_state: { ...scene.rest.ui_state, sidebar_width: width } };
-    const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown", sidebar_lens: lens === "projects" ? "projects" as const : "tasks" as const, task_view: lens === "tasks-project" ? "project" as const : "status" as const, agent_logo_mode: logos } };
+    // The 태스크 lens lists This Mac's tasks, the 프로젝트 tree's roots, with the same trees unfolded.
+    const tasked = lens === "projects" ? sized : withSceneTasks(sized, scene.agents, folds.expandedAgents);
+    const shown = { ...tasked, ui_state: { ...tasked.ui_state, device_rail_visible: rail === "shown", sidebar_lens: lens === "projects" ? "projects" as const : "tasks" as const, task_view: lens === "tasks-project" ? "project" as const : "status" as const, agent_logo_mode: logos } };
     // `mission-ask`: a mission waits on the operator with no session row to carry it, so Needs You lists the mission itself.
     // `mission-close-refused`: the same, for a mission whose nodes are all done and whose close was refused.
     // `mission-gate`: the same, for a reached review gate (PRD mission-human-gate D-23).
     const rest = state === "mission-ask" || state === "mission-close-refused" || state === "mission-gate" ? withMissionAsk(shown, "local", Date.now(), state === "mission-ask" ? "no-conductor" : state === "mission-gate" ? "gate-nocond" : "close-refused") : shown;
     useShellStore.setState({ rest, agents: scene.agents, connection: "live", ...(axis ? { focusedPaneId: "a1" } : {}) });
-  }, [scene, width, rail, axis, state, lens, logos]);
+  }, [scene, width, rail, axis, state, lens, logos, folds.expandedAgents]);
 
   useLayoutEffect(() => {
     useUiStore.setState({ screen: axis ? { kind: "workspace" } : { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "hide" }, overviewOpen: false });
