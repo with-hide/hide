@@ -85,24 +85,3 @@ export function sidebarTreeLines(rows: readonly BoardRow[], shownAll: ReadonlySe
   const places = place(out.map((line) => (line.kind === "agent" ? line.row.depth : line.depth)));
   return out.map((line, index) => ({ ...line, place: places[index]! }) as SidebarTreeLine);
 }
-
-/**
- * A 프로젝트 holder's lines (a checkout's, a plain folder's or a named group's,
- * docs/UI_BEHAVIOR.md, the agent tree): its tab segments' trees drawn as one
- * tree hung from the holder's glyph, so every root is one level in, with its
- * elbow on the holder's rail, and that rail runs on past each root's subtree,
- * across the segments, to the last root. Returned per segment, in order: a line
- * stays with the segment of the agent row before it, so a row's subagents and
- * its `N개 더` stay with its tree.
- */
-export function holderTreeLines(segments: readonly (readonly BoardRow[])[], shownAll: ReadonlySet<string>, siblings: number, opened: (row: BoardRow) => boolean): SidebarTreeLine[][] {
-  const segmentOf = new Map(segments.flatMap((rows, index) => rows.map((row) => [row, index] as const)));
-  const lines = sidebarTreeLines(segments.flat(), shownAll, siblings, (depths) => treePlaces(depths.map((depth) => depth + 1)), opened);
-  const out = segments.map((): SidebarTreeLine[] => []);
-  let at = 0;
-  for (const line of lines) {
-    if (line.kind === "agent") at = segmentOf.get(line.row)!;
-    out[at]!.push(line);
-  }
-  return out;
-}

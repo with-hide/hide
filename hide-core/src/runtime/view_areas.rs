@@ -2064,8 +2064,10 @@ impl Runtime {
                     .and_then(|id| layout.display(id))
                     .map(|page| (page.openers.clone(), page.operator, page.opener.clone()));
                 let own = |display: &mut Display| match (&opener, &parent) {
-                    (Some(opener), _) => display.opened_by(opener.clone()),
+                    (Some(opener), _) => display.opened_by(opener.clone(), stamp),
                     (None, Some((openers, operator, mark))) => {
+                        // The page's own new tab is its sessions' newest View.
+                        display.opened_stamp = stamp;
                         for known in openers {
                             if !display.openers.iter().any(|held| held.same_agent(known)) {
                                 display.openers.push(known.clone());
@@ -3127,6 +3129,7 @@ impl Runtime {
                                 .map(|opener| self.view_opener_snapshot(opener)),
                             comments,
                             not_delivered,
+                            unseen: display.unseen.is_some(),
                             external: display.external.clone(),
                         }
                     })

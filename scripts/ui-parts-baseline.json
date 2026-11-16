@@ -174,7 +174,7 @@
     "button": 1
   },
   "web/src/components/sidebar-agent-row.tsx": {
-    "button": 1
+    "button": 3
   },
   "web/src/components/sidebar-header.tsx": {
     "button": 4

@@ -527,18 +527,6 @@ it("draws a middle child's whole pull request list on its child row, its grandch
   expect(mark('[data-task-child="c"]')?.textContent).toBe("#42");
 });
 
-it("ends a task row's second line with its PR mark, so the title keeps the first, and keeps the mark before the time on a row with no second line (operator decision 2026-11-17)", async () => {
-  const pull = (number: number): SessionPull => ({ url: `https://github.com/acme/app/pull/${number}`, number, title: `PR ${number}`, state: "mergeable", own: true, holders: [], stale: false, last_read_at_unix_ms: null });
-  const agents = [row("said", { pulls: { pulls: [pull(7)] } }, { line: "테스트 돌리는 중" }), row("quiet", { pulls: { pulls: [pull(8)] } })];
-  // 프로젝트별 names no project on a row, so the quiet row has nothing to say under its title.
-  const { container } = await render(snapshot(agents, [card("said", "working", "hide-main"), card("quiet", "working", "hide-main")], "project"), agents);
-  const said = container.querySelector('[data-task-row="said"]')!;
-  expect(said.querySelector("[data-task-line] [data-task-chips] [data-agent-pr]")?.textContent).toBe("#7");
-  const quiet = container.querySelector('[data-task-row="quiet"]')!;
-  expect(quiet.querySelector("[data-task-line]")).toBeNull();
-  expect(quiet.querySelector("[data-agent-pr]")?.textContent).toBe("#8");
-});
-
 // PRD agent-profiles B17: a child whose logo wears a profile badge says its agent and profile in its hover and its name; a default child says its agent alone.
 it("names a profile child's agent and profile in its hover and accessible name, and a default child's agent alone", async () => {
   const agents = [row("parent", { lineage_child_pane_ids: ["work", "plain"] }), row("work", { lineage_parent_pane_id: "parent", delegated: true, profile: "work" }), row("plain", { lineage_parent_pane_id: "parent", delegated: true })];

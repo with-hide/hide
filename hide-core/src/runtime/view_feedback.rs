@@ -307,18 +307,16 @@ impl Runtime {
         view_id: &str,
         opener: Option<Opener>,
     ) {
-        let stamped = self.change_view_layout(key, |layout, _| {
+        let stamped = self.change_view_layout(key, |layout, stamp| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
             let changed = match opener {
+                // Every open stamps the View, the same agent's again too, so
+                // it leads its pane's `N views` as the newest.
                 Some(opener) => {
-                    let changed = display.opener.as_ref() != Some(&opener)
-                        || display.openers.last() != Some(&opener);
-                    if changed {
-                        display.opened_by(opener);
-                    }
-                    changed
+                    display.opened_by(opener, stamp);
+                    true
                 }
                 None => !std::mem::replace(&mut display.operator, true),
             };
@@ -1699,22 +1697,23 @@ impl Runtime {
         let mut displays = Vec::new();
         collect_displays(&layout.root, &mut displays);
         let mut opened: Vec<OpenedViewSnapshot> = Vec::new();
-        let mut shown: Vec<(String, crate::view_layout::Shown<'_>)> = Vec::new();
+        let mut shown: Vec<(String, crate::view_layout::Shown<'_>, u64)> = Vec::new();
         let views = self.view_layout_of(key);
         for display in &displays {
             let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()) else {
                 continue;
             };
-            let unseen = views
-                .and_then(|views| views.display(&display.id))
-                .is_some_and(|stored| stored.unseen.is_some());
+            let stored = views.and_then(|views| views.display(&display.id));
+            let unseen = stored.is_some_and(|stored| stored.unseen.is_some());
+            let stamp = stored.map_or(0, |stored| stored.opened_stamp);
             // Two tabs showing the same thing are one row, which is unseen
             // while either is and then presses the unseen one: the row is how
             // the operator reaches it, and only that tab coming forward sees it.
-            match shown.iter().position(|(row_pane, row_shown)| {
+            match shown.iter().position(|(row_pane, row_shown, _)| {
                 *row_pane == pane && *row_shown == display.shown()
             }) {
                 Some(index) => {
+                    shown[index].2 = shown[index].2.max(stamp);
                     let row = &mut opened[index];
                     if unseen && !row.unseen {
                         row.view_id = display.id.clone();
@@ -1722,7 +1721,7 @@ impl Runtime {
                     }
                 }
                 None => {
-                    shown.push((pane.clone(), display.shown()));
+                    shown.push((pane.clone(), display.shown(), stamp));
                     opened.push(OpenedViewSnapshot {
                         pane_id: pane,
                         view_id: display.id.clone(),
@@ -1736,6 +1735,15 @@ impl Runtime {
                 }
             }
         }
+        // Newest open first; a View stored before opens were stamped keeps
+        // the layout's order after them.
+        let mut rows: Vec<(u64, OpenedViewSnapshot)> = shown
+            .iter()
+            .map(|(_, _, stamp)| *stamp)
+            .zip(opened)
+            .collect();
+        rows.sort_by_key(|(stamp, _)| std::cmp::Reverse(*stamp));
+        let opened: Vec<OpenedViewSnapshot> = rows.into_iter().map(|(_, row)| row).collect();
         let feedback = self.feedback_of(key);
         let send = self.view_feedback.sends.get(key).cloned();
         let deleted = self

@@ -35,7 +35,7 @@ it("opens groups and drafts in a checkout with no live tabs or agents, and foldi
   try {
     useGroupFolds.setState({ closed: new Set() });
     useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false });
-    useShellStore.setState({ connection: "live", agents: [], rest: legacyRest({ navigator: { siblings_shown: 5, devices: [local], workspaces: [workspace], focused_device_id: "local", focused_checkout_id: checkout.id } }, []) });
+    useShellStore.setState({ connection: "live", agents: [], rest: legacyRest({ navigator: { devices: [local], workspaces: [workspace], focused_device_id: "local", focused_checkout_id: checkout.id } }, []) });
     await act(async () => root.render(<TooltipProvider><Sidebar actions={actions} /></TooltipProvider>));
     expect(container.querySelector('[data-checkout-toggle="checkout"]')).not.toBeNull();
     expect(container.querySelector('[data-sidebar-group-select="empty"]')?.textContent).toContain("Preparation");

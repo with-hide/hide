@@ -97,7 +97,7 @@ test("the only tab of a checkout draws its segment with no guide and no line, na
   } finally { daemon.stop(); engine.stop(); }
 });
 
-test("2-1-2 tab segments stand on one column with no guide and no line while they hold agents", async ({ page }) => {
+test("2-1-2 tab segments align every tab's guide with its rows, and no tab with agents draws a line", async ({ page }) => {
   const engine = await startFixture();
   let daemon: Awaited<ReturnType<typeof startHided>> | undefined;
   try {
@@ -108,8 +108,7 @@ test("2-1-2 tab segments stand on one column with no guide and no line while the
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const tabs = [engine.tab, alone.tab, pair.tab];
-    // A tab draws no mark in the list: a line joins the folder to its agents and an agent to the agents it started.
-    for (const tab of tabs) await expect(guide(page, tab)).toHaveCount(0);
+    for (const tab of tabs) await expect(guide(page, tab)).toHaveCount(1);
     await expect(page.locator("[data-project-list] [data-sidebar-tab-line]")).toHaveCount(0);
     const singleAgent = segment(page, alone.tab).locator("[data-agent-open]");
     await expect(singleAgent).toBeVisible();
@@ -119,8 +118,8 @@ test("2-1-2 tab segments stand on one column with no guide and no line while the
 
     // This checkout holds no named group, so it draws no collection header at
     // all (group-tabs D-14): its tabs and agents stand on the checkout's own
-    // columns, past the checkout's own glyph. The fixture's checkout is a plain
-    // folder, so its row is the project's.
+    // columns, and each tab's guide hangs under the checkout's own glyph. The
+    // fixture's checkout is a plain folder, so its row is the project's.
     const owner = page.locator("[data-project-list] [data-project-menu]").first();
     const ownerRow = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
     await expect(page.locator("[data-project-list] [data-sidebar-named-group]")).toHaveCount(0);
@@ -130,22 +129,22 @@ test("2-1-2 tab segments stand on one column with no guide and no line while the
     expect(marks).toHaveLength(5);
     expect(new Set(marks.map((mark) => mark.x)).size).toBe(1);
     expect(marks[0]!.x).toBeGreaterThanOrEqual(kind.x + kind.width);
-    // The five roots hang from the folder's glyph across the three tabs: one rail leaves the glyph's middle and gives
-    // each root an elbow, and only the last one bends there.
-    await expect(owner.locator("[data-tree-departure]")).toHaveCount(1);
-    const elbows = page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-tree-elbow]");
-    expect(await elbows.evaluateAll((spans) => spans.map((span) => span.getAttribute("data-tree-elbow")))).toEqual(["middle", "middle", "middle", "middle", "last"]);
-    // The elbow's column starts half a mark (6) left of the rail it draws, which runs through the glyph's middle.
-    expect(Math.abs((await position(elbows.first())).x + 6 - (kind.x + kind.width / 2))).toBeLessThan(1);
     // The title follows the status mark alone, one mark and one gap after it (agent-mark-quiet B1): no provider logo stands between them.
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));
 
+    // Every tab draws a 1px guide under the checkout's own kind glyph, which bends into its last row toward the marks.
+    const center = kind.x + kind.width / 2;
+    for (const tab of tabs) {
+      const line = await position(guide(page, tab));
+      expect(Math.abs(line.x + 0.5 - center)).toBeLessThanOrEqual(0.5);
+      expect(line.x + line.width).toBeLessThanOrEqual(marks[0]!.x);
+    }
     const first = await position(segment(page, engine.tab));
     const middle = await position(segment(page, alone.tab));
     const last = await position(segment(page, pair.tab));
     // The first segment hangs 2px under its checkout, and segments are
-    // contiguous: a tab's segment is its rows alone, with no gap between tabs.
+    // contiguous: a tab's segment is its rows alone, beside its guide.
     expect(first.y - ownerRow.y - ownerRow.height).toBe(2);
     expect(middle.y - first.y - first.height).toBe(0);
     expect(last.y - middle.y - middle.height).toBe(0);

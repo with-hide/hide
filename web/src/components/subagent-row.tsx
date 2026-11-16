@@ -3,7 +3,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { SidebarTreeLine } from "../sidebarTree";
 import type { AgentRow, SubagentRow } from "../snapshot";
-import { LINE_MID, TreeRails } from "./agent-tree";
+import { TreeChevron, TreeRails } from "./agent-tree";
 import { Elapsed } from "./elapsed";
 
 /**
@@ -44,8 +44,7 @@ type LineSize = keyof typeof LINE_SIZE;
 
 /**
  * One subagent as a line under its agent: its mark, its kind, what it was
- * asked to do and how long it has run, in the muted tone of a row's second
- * line rather than a dimmed one, and with nothing to press,
+ * asked to do and how long it has run, dimmed and with nothing to press,
  * since a subagent has no pane to open. A kind or task the agent does not say
  * leaves only the plain word and the time. The list it stands in gives it its
  * role: a list item under a row, a disabled option in the child popover.
@@ -55,7 +54,7 @@ export function SubagentLine({ row, size = "caption", className, ...rest }: { ro
   const { t } = useInterfaceTranslation();
   const named = row.kind ?? (row.task ? null : t("agents.subagents.unnamed"));
   return (
-    <div title={subagentWords(t, row)} data-subagent-row={row.id} className={cn("flex min-w-0 items-center", LINE_SIZE[size].line, className)} {...rest}>
+    <div title={subagentWords(t, row)} data-subagent-row={row.id} className={cn("flex min-w-0 items-center opacity-(--opacity-dimmed)", LINE_SIZE[size].line, className)} {...rest}>
       <SubagentMark />
       {named ? <span className="max-w-1/2 shrink-0 truncate text-subtle-foreground">{named}</span> : null}
       {row.task ? <span className="min-w-0 flex-1 truncate text-muted-foreground">{row.task}</span> : <span className="flex-1" />}
@@ -72,7 +71,7 @@ export function SubagentLine({ row, size = "caption", className, ...rest }: { ro
 export function SubagentMoreLine({ count, listed, size = "caption", className }: { count: number; listed: number; size?: LineSize; className?: string }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div data-subagent-more={count} className={cn("flex min-w-0 items-center text-muted-foreground", LINE_SIZE[size].line, className)}>
+    <div data-subagent-more={count} className={cn("flex min-w-0 items-center text-muted-foreground opacity-(--opacity-dimmed)", LINE_SIZE[size].line, className)}>
       <SubagentMark />
       <span className="truncate">{listed > 0 ? t("agents.subagents.more", { count }) : t("agents.subagents.working", { count })}</span>
     </div>
@@ -86,12 +85,12 @@ export function SubagentMoreLine({ count, listed, size = "caption", className }:
  * list's other rows, such as the project tree's fold slot, so its time stands
  * in their time column.
  */
-export function SubagentTreeRow({ line, first, style, className, children }: { line: Extract<SidebarTreeLine, { kind: "subagent" | "subagents-more" }>; first?: string; style?: CSSProperties; className?: string; children?: ReactNode }) {
+export function SubagentTreeRow({ line, style, className, children }: { line: Extract<SidebarTreeLine, { kind: "subagent" | "subagents-more" }>; style?: CSSProperties; className?: string; children?: ReactNode }) {
   return (
     <li className={cn("flex min-w-0 items-stretch pr-xs", className)} style={style} data-tree-subagent={line.parent}>
-      {/* Like a child's row, its mark follows its elbow, which meets its line's middle. */}
-      <TreeRails place={line.place} mid={LINE_MID} first={first} />
-      {line.kind === "subagent" ? <SubagentLine row={line.subagent} className="min-w-0 flex-1" /> : <SubagentMoreLine count={line.count} listed={line.listed} className="min-w-0 flex-1" />}
+      <TreeRails place={line.place} />
+      <TreeChevron name="" open={null} hangs chain={line.place.chain} />
+      {line.kind === "subagent" ? <SubagentLine row={line.subagent} className="min-w-0 flex-1 pl-xs" /> : <SubagentMoreLine count={line.count} listed={line.listed} className="min-w-0 flex-1 pl-xs" />}
       {/* The same gap a row's head keeps before what ends it. */}
       {children ? <span className="flex shrink-0 pl-xs">{children}</span> : null}
     </li>

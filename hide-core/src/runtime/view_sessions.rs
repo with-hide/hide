@@ -870,7 +870,9 @@ mod tests {
             let mut display =
                 layout.new_display(&format!("/repo/{name}"), DisplayKind::File, None, false);
             match terminal {
-                Some(terminal) => display.opened_by(opener(terminal, Some(terminal))),
+                Some(terminal) => {
+                    display.opened_by(opener(terminal, Some(terminal)), stamp as u64 + 1)
+                }
                 None => display.operator = true,
             }
             layout.insert("a1", display, stamp as u64 + 1).unwrap();
@@ -960,12 +962,12 @@ mod tests {
         let mut layout = layout(&[("README.md", Some("t1"))]);
         let readme = id(&layout, "README.md");
         let display = layout.display_mut(&readme).unwrap();
-        display.opened_by(opener("t2", Some("t2")));
+        display.opened_by(opener("t2", Some("t2")), 0);
         assert!(display.shown_to(Some(&scope("t1", Some("t1")))));
         assert!(display.shown_to(Some(&scope("t2", Some("t2")))));
         assert_eq!(display.opener.as_ref().unwrap().terminal_id, "t2");
         // Opening it again moves that session to the end, once.
-        display.opened_by(opener("t1", Some("t1")));
+        display.opened_by(opener("t1", Some("t1")), 0);
         let order: Vec<&str> = display
             .openers
             .iter()

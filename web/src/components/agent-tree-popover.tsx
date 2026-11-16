@@ -14,7 +14,7 @@ import { machineName } from "../screenMachine";
 import { useShellStore } from "../store";
 import { siblingsShown } from "../sidebarTree";
 import { useUiStore } from "../ui";
-import { askWhat, AskLine, DescendantMark, FoldButton, foldOnElbow, markCenter, TREE_INSET, TREE_ROOT_FOLD, TreeDeparture, TreeFold, TreeRails, treePlaces, type TreePlace } from "./agent-tree";
+import { askWhat, AskLine, DescendantMark, TreeChevron, TreeRails, treePlaces } from "./agent-tree";
 import { AgentPrHover } from "./pr-mark";
 import { AgentRecordTitle } from "./agent-record-title";
 import { rowPulls } from "../prMark";
@@ -46,14 +46,6 @@ type Line =
  * A child that finished and was read waits folded below its siblings (B18,
  * D-13), unless a descendant below it still asks or works.
  */
-/** A popover row's mark column: past the item's own padding and the fold column, as a task row's (`TREE_INSET`). */
-const POPOVER_INSET = `calc(var(--spacing-sm) + ${TREE_INSET})`;
-
-/** Where a popover row's fold centers: left of a top row's mark, on a child's elbow below it. */
-function popoverFold(place: TreePlace): string {
-  return place.depth === 0 ? `calc(var(--spacing-sm) + ${TREE_ROOT_FOLD})` : foldOnElbow(POPOVER_INSET, place);
-}
-
 const finishedAndRead = (row: AgentRow) => row.status_code === "done" && !row.unread && !row.descendant_mark;
 
 /**
@@ -247,10 +239,10 @@ export function AgentTreePopover({
                     onSelect={() => (line.kind === "more" ? setShownAll : setFinishedShown)((before) => new Set(before).add(line.parent))}
                     {...(line.kind === "more" ? { "data-tree-more": line.count } : { "data-tree-finished": line.count })}
                     className="gap-none text-subtle-foreground"
-                    style={{ paddingLeft: POPOVER_INSET }}
                   >
                     <TreeRails place={places[index]!} />
-                    <span className="flex min-h-(--size-sidebar-line) items-center gap-xs text-caption font-medium">
+                    <TreeChevron name="" open={null} hangs={line.depth > 1} />
+                    <span className="flex items-center gap-xs pl-xxs text-caption font-medium">
                       <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
                       {t(line.kind === "more" ? "agentSessions.tree.more" : "agentSessions.tree.finished", { count: line.count })}
                     </span>
@@ -377,12 +369,10 @@ function TreeItem({
       data-depth={line.depth}
       aria-label={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, reason ?? (childLine ? lineText(t, child, childLine) : statusText(t, child.status_code)), ask && !unavailable ? `${t(`agentSessions.verb.${ask.verb}`)}: ${askWhat(t, ask.verb, ask.what, ask.subject)}` : null, deviceLabel && device !== parentDevice ? deviceLabel : null].filter(Boolean).join(", ")}
       className={cn("items-stretch gap-none py-none", ask && !unavailable && "ring-1 ring-inset ring-foreground", (unavailable || rowDimmed(child)) && "opacity-(--opacity-dimmed)")}
-      style={{ paddingLeft: POPOVER_INSET }}
     >
       <TreeRails place={place} />
-      {line.hasChildren && line.open && line.depth < 2 ? <TreeDeparture at={markCenter(POPOVER_INSET, place)} /> : null}
-      {line.hasChildren ? <TreeFold at={popoverFold(place)}><FoldButton name={child.identity_label} open={line.depth >= 2 ? false : line.open} popup={line.depth >= 2} onClick={onToggle} data-tree-chevron={child.pane_id} /></TreeFold> : null}
-      <span className="flex min-w-0 flex-1 flex-col gap-xxs py-xs">
+      <TreeChevron name={child.identity_label} open={line.hasChildren ? line.open : null} onToggle={onToggle} hangs={line.depth > 1} popup={line.depth >= 2} data-tree-chevron={child.pane_id} />
+      <span className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <StatusMark mark={unavailable ? null : child.mark} human={child.human_turn !== undefined} className={unavailable ? undefined : markTone(child)} />
           <AgentMark kind={child.agent_kind} />

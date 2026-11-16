@@ -521,6 +521,10 @@ pub struct ViewDisplaySnapshot {
     pub comments: usize,
     #[serde(skip_serializing_if = "count_unset")]
     pub not_delivered: usize,
+    /// An agent opened it and the operator has not looked at it since (PRD
+    /// unseen-agent-views B10): its tab wears the 볼 것 mark.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
     /// An outside file's grant, name and viewer (PRD outside-path-in-hide);
     /// absent for every other kind. The window whose desktop host holds the
     /// grant draws the file; every other window draws only its name.
