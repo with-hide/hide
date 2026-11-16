@@ -1,5 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon, EyeIcon } from "lucide-react";
 import type { TFunction } from "i18next";
+import type { ComponentProps, ReactNode } from "react";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
@@ -7,12 +8,12 @@ import type { LineParts } from "../agentRow";
 import { askSubjectText } from "../askSubject";
 import { DeviceChip } from "./device-chip";
 import { HumanTurnCopy, type CopyText } from "./human-turn-copy";
+import { Button } from "./ui/button";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
 // D-37 to D-43): a Needs You row's ask line, the one descendant
-// mark a folded parent wears, the
-// elbow rails and the chevron lane of a tree row, and the tree button. The
-// core decides every value; these only draw it.
+// mark a folded parent wears, the elbow rails of a tree row, its fold and the
+// "N more" line. The core decides every value; these only draw it.
 
 /** What to do, or the verb's own words when no label line or letter says it (B3). */
 export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: string | null | undefined, subject?: AskSubject | null): string {
@@ -108,9 +109,9 @@ export function DescendantMark({ agent }: { agent: AgentRow }) {
 export type TreePlace = { depth: number; last: boolean; rails: boolean[]; chain?: TreeChain };
 
 /**
- * A row below the indent limit keeps the limit's column: `pass` says whether
- * the rail of its ancestor at the limit runs on past it, and its chevron lane
- * takes its parent's rail from above and hands it on down when `on`.
+ * A row below the indent limit stands one column past the limit: `pass` says
+ * whether the rail of its ancestor at the limit runs on past it, and its elbow
+ * takes the shared rail from above and hands it on down when `on`.
  */
 export type TreeChain = { pass: boolean; on: boolean };
 
@@ -138,8 +139,9 @@ export function treePlaces(depths: readonly number[]): TreePlace[] {
 
 /**
  * `treePlaces` for a panel too narrow for every level: a row deeper than
- * `limit` stands in the limit's column and hangs from its parent's chevron
- * lane, so the levels below the limit read as one rail running down.
+ * `limit` stands one step past the limit's column, and every deeper level in
+ * that same column, hanging from one rail that comes down under the limit
+ * row's mark, so the levels below the limit read as one rail running down.
  */
 export function cappedPlaces(depths: readonly number[], limit: number): TreePlace[] {
   return treePlaces(depths).map((place, index) => place.depth <= limit ? place : {
@@ -157,77 +159,166 @@ export function cappedPlaces(depths: readonly number[], limit: number): TreePlac
 export const RAIL_ELBOW = "border-0 border-b-(length:--size-hairline) border-l-(length:--size-hairline) border-solid border-lineage-rail rounded-bl-md";
 
 /**
- * The rails left of a tree row (D-38): a rail down each level whose ancestor
- * has a later sibling, then this row's elbow from its parent's chevron lane.
- * No tint is laid behind an opened subtree.
+ * Where a tree list's marks stand, left of the rails: past one fold column
+ * (`TREE_ROOT_FOLD`), so a top row's fold stands left of its mark and its
+ * children's rails start under that mark, as a 프로젝트 checkout's do.
  */
-export function TreeRails({ place }: { place: TreePlace }) {
+export const TREE_INSET = "calc(var(--size-lineage-chevron) + var(--spacing-xs))";
+
+/** A top row's fold center, in the fold column `TREE_INSET` keeps. */
+export const TREE_ROOT_FOLD = "calc(var(--size-lineage-chevron) / 2)";
+
+/** Where a rail runs in its column: under the middle of the mark the column starts at, so a rail leaves a mark's middle. */
+const RAIL_LEFT = "calc(var(--size-agent-mark) / 2 - var(--size-hairline) / 2)";
+
+/** The middle of an agent row's first line, where its mark stands: the row's top padding and half a sidebar line. */
+export const ROW_MID = "calc(var(--spacing-xs) + var(--size-sidebar-line) / 2)";
+
+/** The middle of a line with no top padding of its own, such as a subagent's. */
+export const LINE_MID = "calc(var(--size-sidebar-line) / 2)";
+
+function Rail() {
+  return <span className="absolute inset-y-0 w-(--size-hairline) bg-lineage-rail" style={{ left: RAIL_LEFT }} />;
+}
+
+/** A row's elbow, its parent's rail turning into the row's mark at `mid`; the last child's bends there and stops. */
+function Elbow({ last, mid }: { last: boolean; mid: string }) {
+  if (last) return <span className={cn("absolute top-0 right-0", RAIL_ELBOW)} style={{ left: RAIL_LEFT, height: `calc(${mid} + var(--size-hairline) / 2)` }} />;
+  return <>
+    <Rail />
+    <span className="absolute right-0 h-(--size-hairline) bg-lineage-rail" style={{ left: RAIL_LEFT, top: `calc(${mid} - var(--size-hairline) / 2)` }} />
+  </>;
+}
+
+/** How many indent columns a row's rails take: its depth, and one more below the indent limit (`cappedPlaces`). */
+function columns(place: TreePlace): number {
+  return place.chain ? place.depth + 1 : place.depth;
+}
+
+/**
+ * The rails left of a tree row (D-38): a rail down each level whose ancestor
+ * has a later sibling, then this row's elbow, the parent's rail coming down
+ * under the middle of the parent's mark and turning into the middle of this
+ * row's mark at `mid`. The row's mark follows the elbow directly, whether or
+ * not the row opens: its fold lies over the row (`TreeFold`). Below the indent
+ * limit the elbow hangs from the one rail the deeper levels share. No tint is
+ * laid behind an opened subtree.
+ */
+export function TreeRails({ place, mid = ROW_MID, first }: { place: TreePlace; mid?: string; first?: string }) {
   if (place.depth === 0) return null;
+  // The first column is `first` wide when a holder sets it (`holderLead`), every other one indent.
+  const column = (index: number, child: ReactNode, data?: Record<`data-${string}`, string>) => (
+    <span key={index} className="relative w-(--size-lineage-indent) shrink-0" style={index === 0 && first ? { width: first } : undefined} {...data}>{child}</span>
+  );
+  const at = place.rails.length;
   return (
     <span aria-hidden="true" className="flex shrink-0 self-stretch" data-tree-rails={place.depth}>
-      {place.rails.map((rail, index) => (
-        <span key={index} className="relative w-(--size-lineage-indent) shrink-0">
-          {rail ? <span className="absolute inset-y-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" /> : null}
-        </span>
-      ))}
-      {place.chain ? (
-        <span className="relative w-(--size-lineage-indent) shrink-0" data-tree-pass={place.chain.pass ? "rail" : "none"}>
-          {place.chain.pass ? <span className="absolute inset-y-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" /> : null}
-        </span>
-      ) : (
-        <span className="relative w-(--size-lineage-indent) shrink-0" data-tree-elbow={place.last ? "last" : "middle"}>
-          {place.last ? <span className={cn("absolute top-0 right-0 left-(--size-lineage-rail-x) h-(--size-lineage-elbow-y)", RAIL_ELBOW)} /> : <>
-            <span className="absolute top-0 bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" />
-            <span className="absolute top-(--size-lineage-elbow-y) right-0 left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
-          </>}
-        </span>
-      )}
+      {place.rails.map((rail, index) => column(index, rail ? <Rail /> : null))}
+      {place.chain ? <>
+        {column(at, place.chain.pass ? <Rail /> : null, { "data-tree-pass": place.chain.pass ? "rail" : "none" })}
+        {column(at + 1, <Elbow last={!place.chain.on} mid={mid} />, { "data-tree-elbow": place.chain.on ? "middle" : "last" })}
+      </> : column(at, <Elbow last={place.last} mid={mid} />, { "data-tree-elbow": place.last ? "last" : "middle" })}
     </span>
   );
 }
 
 /**
- * The chevron lane left of a tree row's mark: a chevron where the row has
- * children, and while it is open a rail leaving it down to the children.
- * A row with none keeps the lane, crossed by its elbow when it hangs from a parent.
+ * The tree's fold button: a chevron, right while folded and down while open,
+ * that answers a press without pressing the row under it. As a popover's
+ * trigger (`popup`) it says it opens a dialog instead of an expanded state.
  */
-export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = false, popup = false, ...data }: { name: string; open: boolean | null; onToggle?: () => void; hangs: boolean; chain?: TreeChain; disabled?: boolean; popup?: boolean } & Record<`data-${string}`, string>) {
-  // The lane spans the row; its chevron sits on line one, below the row's top padding.
+export function FoldButton({ name, open, popup = false, className, onClick, ...rest }: { name: string; open: boolean; popup?: boolean } & Omit<ComponentProps<"button">, "children">) {
   const { t } = useInterfaceTranslation();
-  if (open === null || !onToggle) {
-    return (
-      <span aria-hidden="true" className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
-        {chain ? <>
-          {/* Below the indent limit the parent's rail comes down this lane and turns to the mark. */}
-          {chain.on ? <>
-            <span className="absolute top-0 bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" />
-            <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
-          </> : <span className={cn("absolute top-0 right-xxs left-(--size-lineage-rail-x) h-(--size-lineage-elbow-y)", RAIL_ELBOW)} />}
-        </> : hangs ? <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-none h-(--size-hairline) bg-lineage-rail" /> : null}
-      </span>
-    );
-  }
   const label = t(open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name });
   return (
-    <span className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
-      {chain ? <span aria-hidden="true" className="absolute top-0 left-(--size-lineage-rail-x) h-xs w-(--size-hairline) bg-lineage-rail" /> : null}
-      {open || chain?.on ? <span aria-hidden="true" className="absolute top-(--size-lineage-departure-y) bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" /> : null}
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={label}
-        aria-expanded={popup ? undefined : open}
-        aria-haspopup={popup ? "dialog" : undefined}
-        disabled={disabled}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggle();
-        }}
-        className="relative z-10 mt-xs flex h-(--size-sidebar-line) w-full items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        {...data}
-      >
-        {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
-      </button>
-    </span>
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label={label}
+      aria-expanded={popup ? undefined : open}
+      aria-haspopup={popup ? "dialog" : undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.(event);
+      }}
+      className={cn("flex size-full items-center justify-center rounded-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50", className)}
+      {...rest}
+    >
+      {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+    </button>
+  );
+}
+
+/**
+ * Where a tree row's fold stands, laid over the row instead of in a lane of
+ * its own, so a row's mark keeps its column whether it opens or not and the
+ * rail runs from a parent's mark to its children's (docs/UI_BEHAVIOR.md, the
+ * agent tree): a root's left of its mark, a child's on its own elbow, where
+ * its parent's rail turns to it (`foldOnElbow`). `at` is the fold's center
+ * in the row; the row positions it, so the row is `relative`.
+ */
+export function TreeFold({ at, children }: { at: string; children: ReactNode }) {
+  return <span className="absolute top-xs z-10 h-(--size-sidebar-line) w-(--size-lineage-chevron) -translate-x-1/2" style={{ left: at }}>{children}</span>;
+}
+
+/** How far a row's first `count` columns reach: the first `first` wide when a holder sets it, the rest one indent each. */
+function reach(count: number, first?: string): string {
+  return count > 0 && first ? `${first} + var(--size-lineage-indent) * ${count - 1}` : `var(--size-lineage-indent) * ${count}`;
+}
+
+/** Where a tree row's mark centers: past its inset and its rails' columns. */
+export function markCenter(inset: string, place?: TreePlace, first?: string): string {
+  return `calc(${inset} + ${reach(place ? columns(place) : 0, first)} + var(--size-agent-mark) / 2)`;
+}
+
+/**
+ * An opened row's rail leaving the foot of its mark at `at` (`markCenter`)
+ * down to the row's foot, where its first child's elbow takes it on, so the
+ * rail is seen to come out of the parent's mark. A row below the indent limit
+ * draws none: its children hang from the rail its ancestor at the limit left.
+ * A holder's row (a 프로젝트 checkout, plain folder or named group) draws the
+ * same from its glyph, `mark` high and centered at `mid`, and `reach`es past
+ * its foot across the gap above its list.
+ */
+export function TreeDeparture({ at, mid = ROW_MID, mark = "var(--size-agent-mark)", reach }: { at: string; mid?: string; mark?: string; reach?: string }) {
+  return <span aria-hidden="true" data-tree-departure="" className="pointer-events-none absolute w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${at} - var(--size-hairline) / 2)`, top: `calc(${mid} + ${mark} / 2)`, bottom: reach ? `calc(-1 * ${reach})` : 0 }} />;
+}
+
+/**
+ * A holder's rail passing a line that hangs nothing from it, such as an empty
+ * tab's line, on its way to a later row it does hang (`holderTreeLines`).
+ */
+export function TreeRailPast({ at }: { at: string }) {
+  return <span aria-hidden="true" data-tree-rail-past="" className="pointer-events-none absolute inset-y-0 w-(--size-hairline) bg-lineage-rail" style={{ left: `calc(${at} - var(--size-hairline) / 2)` }} />;
+}
+
+/**
+ * Where a 프로젝트 holder's tree starts (a checkout, a plain folder or a named
+ * group): its rows' rails half a mark left of its glyph's center at `glyph`, so
+ * their first column's rail runs through it, and that first column reaching to
+ * `marks`, the holder's name column, where its roots' marks stand; every column
+ * after it is one indent.
+ */
+export function holderLead(glyph: string, marks: string): { inset: string; first: string } {
+  const inset = `calc(${glyph} - var(--size-agent-mark) / 2)`;
+  return { inset, first: `calc(${marks} - ${inset})` };
+}
+
+/** A tree row's fold center: on its elbow's rail, the middle of the mark above, one column short of the row's mark. */
+export function foldOnElbow(inset: string, place: TreePlace, first?: string): string {
+  return `calc(${inset} + ${reach(columns(place) - 1, first)} + var(--size-agent-mark) / 2)`;
+}
+
+/** The line that stands for a parent's children past the sibling limit (B12): `N개 더`, which opens them in place. */
+export function TreeMoreButton({ count, onShowAll, className, ...data }: { count: number; onShowAll: () => void; className?: string } & Record<`data-${string}`, string>) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <Button variant="text" size="inline" data-tree-more={count} className={cn("min-w-0 flex-1 justify-start py-xs text-caption", className)} onClick={onShowAll} {...data}>
+      {/* An agent row's first line, its chevron on the mark column, so the elbow meets it as it meets a mark. */}
+      <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
+        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+        <span className="min-w-0 truncate">{t("agentSessions.tree.more", { count })}</span>
+      </span>
+    </Button>
   );
 }

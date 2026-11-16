@@ -3,10 +3,11 @@ import type { AgentRow, Checkout, Tab } from "./snapshot";
 import type { AgentGroup } from "./agentLayout";
 
 /**
- * One tab's segment of a checkout's agent list. `glyph` is set for every real tab, which draws its guide whatever it holds or is named;
- * `line` is set when it also draws its tab line, which only a tab holding no agent has: a tab with agents is told by its agents and the guide that gathers them.
+ * One tab's segment of a checkout's agent list: its rows and how many agents its panes hold. The list draws no mark
+ * of a tab; `line` is set only for a real tab holding no agent, which draws one line saying its name, since nothing
+ * else shows it there.
  */
-export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean; line: boolean };
+export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; line: boolean };
 
 /** One collection of a checkout's agent tree: the core's own group, its drawn tab segments and its draft ids. */
 export type SidebarCollection = { group: AgentGroup; segments: SidebarTabGroup[]; drafts: string[] };
@@ -32,10 +33,9 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
     const members = byTab.get(tab) ?? [];
     if (!members.length && !(tab !== null && namedOnStrip(tab))) return [];
     const count = tab ? new Set(tab.panes.filter((pane) => agentPanes.has(pane.id)).map((pane) => pane.id)).size : 0;
-    const glyph = tab !== null && tab.id !== null && tab.sidebar !== undefined;
-    // A tab with agents is told by its agents and the guide that gathers them; only a tab with none says its name, since nothing else shows it.
-    const line = glyph && count === 0;
-    return [{ tab, rows: members, count, glyph, line }];
+    // A tab with agents is told by its rows alone; only a tab with none says its name, since nothing else shows it in the list.
+    const line = tab !== null && tab.id !== null && tab.sidebar !== undefined && count === 0;
+    return [{ tab, rows: members, count, line }];
   });
 }
 
@@ -50,11 +50,21 @@ export function sidebarNamedGroups(checkout: Checkout, segments: readonly Sideba
       const existing = segments.find((segment) => segment.tab?.id === id);
       if (existing) return [existing];
       const tab = checkout.tabs.find((tab) => tab.id === id && !tab.delegated);
-      return tab ? [{ tab, rows: [], count: 0, glyph: true, line: true }] : [];
+      return tab ? [{ tab, rows: [], count: 0, line: true }] : [];
     });
     if (group.id === null) selected.push(...segments.filter((segment) => segment.tab === null || (!collections.groups.some((candidate) => candidate.tabs.includes(segment.tab!.id!)) && !owned.has(segment.tab!.id!))));
     return { group, segments: selected, drafts: group.tabs.filter((id) => collections.drafts.includes(id)) };
   });
+}
+
+/**
+ * Whether an opened checkout's list shows its named groups, each a header its
+ * rows hang from, rather than its rows under the checkout itself: the core
+ * lists a named group beside the ungrouped one (docs/UI_BEHAVIOR.md, Sidebar hierarchy).
+ */
+export function namedGroupsShown(checkout: Checkout, opened: boolean): boolean {
+  const groups = checkout.agent_groups?.groups ?? [];
+  return opened && groups.some((group) => group.id === null) && groups.some((group) => group.id !== null);
 }
 
 /** Up/Down/Home/End traverse only the visible main row controls. */

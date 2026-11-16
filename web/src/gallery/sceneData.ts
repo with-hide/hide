@@ -1,5 +1,5 @@
 import statusAxisScope from "./sidebarStatusAxisScope.json";
-import type { AgentScope } from "../agentScope";
+import type { AgentScope, TaskCardScope } from "../agentScope";
 import { EMPTY_GALLERY_SCOPE, galleryScopes } from "./agentScopes";
 // The Projects sidebar's gallery scene (PRD design-review-workflow D-04,
 // B3, B4): a synthetic snapshot the real sidebar renders, with the content
@@ -486,6 +486,28 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
   return { rest: galleryScopes(rest, `${content}:${devices}`, folds.expandedAgents), agents };
 }
 
+/** The 태스크 list's state for a row, as the core's `tasks::Card` reads it. */
+function sceneTaskState(agent: AgentRow): TaskCardScope["state"] {
+  if (agent.demand === "question" || agent.demand === "approval") return "needs_you";
+  if (agent.activity === "working" || agent.group === "working") return "working";
+  return agent.group === "unread" ? "done" : "resting";
+}
+
+/**
+ * This Mac's 태스크 cards for the sidebar scene: one per root agent the scene
+ * lists, its whole lineage its members, so the 태스크 list draws the same agents
+ * and trees the 프로젝트 list does; `opened` are the rows whose trees are unfolded.
+ */
+export function withSceneTasks(rest: SnapshotRest, agents: readonly AgentRow[], opened: readonly string[]): SnapshotRest {
+  const local = agents.filter((agent) => agent.device_id === undefined || agent.device_id === "local");
+  const lineage = (root: string): string[] => [root, ...local.filter((agent) => agent.lineage_parent_pane_id === root).flatMap((agent) => lineage(agent.pane_id))];
+  const cards: TaskCardScope[] = local.filter((agent) => !agent.lineage_parent_pane_id)
+    .map((agent) => ({ root: agent.pane_id, state: sceneTaskState(agent), members: lineage(agent.pane_id), checkouts: [], recency: String(agent.changed_at_unix_ms ?? 0) }));
+  const tasks = { cards, needs_you: cards.filter((card) => card.state === "needs_you").length, recency: "" };
+  const devices = (rest.navigator?.devices ?? []).map((device) => (device.id === "local" ? { ...device, agent_scope: { ...device.agent_scope, tasks } } : device));
+  return { ...rest, navigator: { ...rest.navigator!, devices }, ui_state: { ...rest.ui_state, sessions_expanded_agent_pane_ids: [...opened] } };
+}
+
 /** The approved 2-1-2 cutout, rendered by the production Sidebar with invented facts. */
 export function sidebarStatusAxisScene(content: SceneContent, folds: SceneFolds, nowMs: number): { rest: SnapshotRest; agents: AgentRow[] } {
   const base = sidebarScene(content, folds, nowMs);
@@ -625,7 +647,8 @@ export function applyEvent(folds: SceneFolds, event: { kind: string; payload: Re
     const expanded = typeof payload.expanded === "boolean" ? payload.expanded : folds.collapsedWorkspaces.includes(id);
     return { ...folds, collapsedWorkspaces: expanded ? folds.collapsedWorkspaces.filter((item) => item !== id) : [...new Set([...folds.collapsedWorkspaces, id])].sort() };
   }
-  if (kind === "agent_tree_toggle") return { ...folds, expandedAgents: toggled(folds.expandedAgents, String(payload.pane_id)) };
+  // The 태스크 list opens a row's tree with its own event; the scene keeps one set of opened rows for both lists.
+  if (kind === "agent_tree_toggle" || kind === "session_tree_toggle") return { ...folds, expandedAgents: toggled(folds.expandedAgents, String(payload.pane_id)) };
   if (kind === "inactive_checkouts_toggle") return { ...folds, inactiveCheckoutsOpen: toggled(folds.inactiveCheckoutsOpen, String(payload.project_path)) };
   if (kind === "inactive_projects_toggle") return { ...folds, inactiveProjectsOpen: !folds.inactiveProjectsOpen };
   if (kind === "focus_device") return { ...folds, frontDevice: String(payload.device_id) };
