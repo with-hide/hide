@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import subprocess
@@ -106,6 +107,18 @@ def download(tag, work):
     return manifest
 
 
+def pi_extension_version(commit):
+    """The version the release's Pi extension tells its helper
+    (`hide_agent_hooks::pi_extension::VERSION` at the release's commit),
+    which the stand-in Pi sends: the helper answers only its own."""
+    source = run("git", "-C", str(ROOT), "show", f"{commit}:hide-agent-hooks/src/pi_extension.rs",
+                 capture=True).stdout
+    found = re.search(r"^pub const VERSION: u32 = (\d+);$", source, re.MULTILINE)
+    if found is None:
+        raise SystemExit(f"no Pi extension version in hide-agent-hooks/src/pi_extension.rs at {commit}")
+    return found.group(1)
+
+
 # The operator's own Claude Code settings, there before Hide's kit adds its
 # hooks: a permission and a Stop hook of another tool, which every later
 # build's install and removal must leave as they are.
@@ -114,11 +127,12 @@ OPERATOR_SETTINGS = json.dumps({
     "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo operator-stop"}]}]}})
 
 
-def setup(tag, work, names):
+def setup(tag, work, names, commit):
     image, network, core, device = names
     for name in ("Dockerfile", "agent.py", "agent.c"):
         shutil.copy(HERE / name, work / name)
     (work / "settings.json").write_text(OPERATOR_SETTINGS)
+    (work / "pi-extension-version").write_text(pi_extension_version(commit))
     docker("build", "-q", "-t", image, str(work))
     docker("network", "create", network)
     key = work / "id_ed25519"
@@ -163,7 +177,7 @@ def generate(tag, out, home_out):
     log = runs / f"release-state-{version}.log"
     try:
         manifest = download(tag, work)
-        as_me = setup(tag, work, names)
+        as_me = setup(tag, work, names, manifest["commit"])
         docker(*as_me[:-1], "-d", core, "sh", "-c", "/opt/hide/hided > /home/me/hided.log 2>&1")
         docker(*as_me, "sh", "-c", "for i in $(seq 30); do /opt/hide/hide status >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1")
         scenario = docker(*as_me, "python3", "-I", "/scripts/release_state/scenario.py", "/home/me/scenario.json",
