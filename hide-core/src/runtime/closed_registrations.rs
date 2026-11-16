@@ -73,6 +73,14 @@ impl Runtime {
         )
     }
 
+    /// Whether a reopened agent's registration `id` waits for a new pane
+    /// that `to` accepts.
+    pub(super) fn reopen_continuation_to(&self, id: &str, to: &dyn Fn(&str) -> bool) -> bool {
+        self.reopen_continuations
+            .iter()
+            .any(|continuation| continuation.registration.id == id && to(&continuation.pane))
+    }
+
     /// Whether Reopen closed holds `actor`'s registration, so a watch on it
     /// is neither read nor ended while it is away.
     pub(super) fn reopen_holds_actor(&self, actor: &crate::delivery::Actor) -> bool {

@@ -449,7 +449,7 @@ impl Runtime {
         // A woken pane is first seen here; the session projection that
         // follows publishes whatever this settles.
         self.settle_dormant_registrations();
-        self.follow_resumed_conductors(device);
+        self.follow_resumed_conductors(device, payload);
         self.follow_session_thread(device, payload);
         ObservedPass(generation)
     }
@@ -884,6 +884,44 @@ impl Runtime {
             .values()
             .filter_map(|record| record.registration.as_ref())
             .any(|registration| registration.actor.same_identity(actor))
+    }
+
+    /// Whether Hide is carrying registration `id` over to `pane` of
+    /// `device`, the pane its conversation came back in: a wake that opened
+    /// that pane, an archive resume that made it or has not made its pane
+    /// yet, Reopen closed waiting for it, or a move the delivery store has
+    /// still to make onto it (`registration_rebinds`). A carry aimed at
+    /// another pane, such as a wake whose tab failed, does not count.
+    pub(super) fn registration_continues(&self, id: &str, device: &str, pane: &str) -> bool {
+        let to = |destination: &str| {
+            crate::address::same_pane(self.node.as_str(), device, destination, pane)
+        };
+        let holds = |registration: Option<&crate::agent_sleep::DormantRegistration>| {
+            registration.is_some_and(|registration| registration.id == id)
+        };
+        let ui = &self.snapshot.ui_state;
+        self.registration_rebinds
+            .get(id)
+            .is_some_and(|rebind| to(&rebind.to.pane_id))
+            || ui.agent_sleep.dormant.values().any(|record| {
+                holds(record.registration.as_ref())
+                    && record.wake_pane_id.as_deref().is_some_and(to)
+            })
+            || ui
+                .session_archive
+                .records
+                .values()
+                .flat_map(|record| &record.members)
+                .any(|member| {
+                    // The archive takes its member over in whichever pane
+                    // shows its conversation, so one still starting may yet.
+                    let resuming = member.resume.in_flight()
+                        || matches!(member.resume, crate::session_archive::Resume::Done { .. });
+                    resuming
+                        && holds(member.registration.as_ref())
+                        && member.resume.made_pane().is_none_or(to)
+                })
+            || self.reopen_continuation_to(id, &to)
     }
 
     /// The registrations the delivery store has still to point at a woken
@@ -2601,9 +2639,21 @@ impl Runtime {
             actor,
         ))
     }
+    /// The machine a registration on `device` names as its own: this
+    /// node's, or the machine id a device's link reported.
+    pub(crate) fn native_machine(&self, device: &str) -> Result<String, String> {
+        if self.node == device {
+            return Ok(self.node.to_string());
+        }
+        self.device_machine_ids
+            .get(device)
+            .cloned()
+            .ok_or_else(|| "machine_identity_unavailable".into())
+    }
+
     pub(crate) fn coordination_context(&self, device: &str) -> Result<CoordinationContext, String> {
         let on_node = self.node == device;
-        let (connector, scope, machine) = if on_node {
+        let (connector, scope) = if on_node {
             let live = self.live.as_ref().ok_or("engine_unavailable")?;
             (
                 live.engine.clone(),
@@ -2611,18 +2661,14 @@ impl Runtime {
                     .to_str()
                     .ok_or("host_scope_unavailable")?
                     .to_owned(),
-                self.node.to_string(),
             )
         } else {
             (
                 self.device_engine(device).ok_or("device_unavailable")?,
                 device.to_owned(),
-                self.device_machine_ids
-                    .get(device)
-                    .cloned()
-                    .ok_or("machine_identity_unavailable")?,
             )
         };
+        let machine = self.native_machine(device)?;
         let node = if on_node {
             Some(self.own_node())
         } else {

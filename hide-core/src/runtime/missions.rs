@@ -705,6 +705,16 @@ pub struct MissionAdmission {
     pub closed: Vec<String>,
 }
 
+/// A hand-over that waited for a carry leaves without being made: its
+/// mission moved again or was taken (and that hand-over took the former
+/// registration), or is no longer in the book (`why`).
+fn log_dropped_handover(mission: &str, wait: &WaitingHandover, why: &str) {
+    crate::diagnostic!(json!({
+        "component": "missions", "kind": "mission.handover_dropped",
+        "mission": mission, "pane": wait.pane, "agent_id": wait.former, "reason": why,
+    }));
+}
+
 /// One wake for a Conductor, made under the lock and sent off it.
 struct Wake {
     mission: String,
@@ -716,6 +726,54 @@ struct Wake {
     /// Sent with `--now`: the Conductor's, taken at its next tool call even
     /// while it works, since every worker and checker waits on it.
     now: bool,
+}
+
+/// A hand-over waiting for a carry of `former` to `pane`, since
+/// `since_unix_ms` (`hand_over`).
+#[derive(Clone, Debug)]
+pub(super) struct WaitingHandover {
+    pub(super) former: String,
+    pub(super) pane: String,
+    pub(super) since_unix_ms: u64,
+}
+
+/// How long a hand-over waits for a carry before it hands over without it:
+/// the hour a woken sleeper gets to bind (`WOKEN_BINDING_LIMIT_MS`), so a
+/// carry that never confirms, such as a wake left unknown or a store move
+/// the store keeps refusing, does not keep the workers from the pane.
+pub(super) const HANDOVER_WAIT_LIMIT_MS: u64 = super::agent_sleep::WOKEN_BINDING_LIMIT_MS;
+
+/// What the move of a mission to the pane its Conductor's conversation came
+/// back in did with the former registration's children (`hand_over`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Handover {
+    /// The pane holds the former registration itself, carried there.
+    Carried,
+    /// The pane's own registration took them.
+    Adopted,
+    /// The pane was registered, and its registration took them.
+    Registered,
+    /// A carry of the former registration to the pane is on its way.
+    Waits,
+    /// The pane could not be registered: its observation names no scope or
+    /// the engine no session.
+    Unregistered,
+    /// There was nothing to hand: no former registration, and none of the
+    /// pane's own to hand the mission's starts to.
+    Nothing,
+}
+
+impl Handover {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Carried => "carried",
+            Self::Adopted => "adopted",
+            Self::Registered => "registered",
+            Self::Waits => "waits",
+            Self::Unregistered => "unregistered",
+            Self::Nothing => "nothing",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -758,6 +816,13 @@ pub(crate) struct MissionRuntime {
     /// already holds them as unconfirmed, so a stop in between never types
     /// one again.
     pub(crate) answers_typing: std::collections::HashSet<String>,
+    /// The moves that found a wake, an archive resume, Reopen closed or a
+    /// store move carrying the former Conductor's registration to the very
+    /// pane the mission moved to, by mission, until the carry is no longer on
+    /// its way or an hour has passed, and the workers are handed over
+    /// (`settle_waiting_handovers`). Memory only, at most one entry per
+    /// mission; a restart forgets it.
+    pub(super) waiting_handovers: HashMap<String, WaitingHandover>,
     /// When each mission's Conductor was first seen missing while its
     /// answer waited; only those missions are kept.
     pub(crate) answer_absent_since: HashMap<String, u64>,
@@ -1960,10 +2025,14 @@ impl Runtime {
         }
         if let Some(id) = taken {
             // A take whose workers cannot be handed over is not made, so
-            // asking it again tries again.
+            // asking it again tries again. The former Conductor's registration
+            // is the ledger's when the mission names none, or the one a wait
+            // for its carry holds.
+            let waiting = self.missions.waiting_handovers.remove(&id);
             let former = before
                 .get(&id)
-                .and_then(|mission| mission.conductor.agent_id.clone());
+                .and_then(|mission| self.registration_of(&mission.conductor))
+                .or_else(|| waiting.as_ref().map(|wait| wait.former.clone()));
             let conductor = self
                 .missions
                 .book
@@ -1974,7 +2043,13 @@ impl Runtime {
             {
                 self.missions.book = before;
                 self.save_missions();
+                if let Some(wait) = waiting {
+                    self.missions.waiting_handovers.insert(id.clone(), wait);
+                }
                 return Err(code);
+            }
+            if let Some(wait) = waiting {
+                log_dropped_handover(&id, &wait, "taken");
             }
             // What waited for a Conductor goes to the one that took it.
             self.flush_mission_wakes();
@@ -2926,9 +3001,11 @@ impl Runtime {
     /// made, and the children's reports and watches reach the Conductor
     /// there now. It is queued before the takeover answers, so it lands
     /// before any command the heir sends next. `hide mission take` registers
-    /// the heir before it asks (`Command::RegisterSelf`); a heir with no
-    /// registration still is handed the mission's workers when it registers
-    /// to start one (`coordination`, the reserve).
+    /// the heir before it asks (`Command::RegisterSelf`), and a conversation
+    /// brought back in a pane with no registration is registered as it moves
+    /// (`adopt_mission_workers_as_heir`); a heir with no registration still
+    /// is handed the mission's workers when it registers to start one
+    /// (`coordination`, the reserve).
     fn adopt_mission_workers(
         &self,
         mission: &str,
@@ -2938,6 +3015,41 @@ impl Runtime {
         let Some(conductor) = conductor else {
             return Ok(());
         };
+        self.post_adoption(
+            mission,
+            crate::coordination::Mutation::AdoptMissionWorkers {
+                mission: mission.to_owned(),
+                conductor: conductor.to_owned(),
+                former: former.map(str::to_owned),
+            },
+        )
+    }
+
+    /// Registers `heir`, the pane a Conductor's conversation came back in
+    /// with no registration of its own, and hands it the children of the
+    /// registration `former` that conducted `mission`, in one change of the
+    /// store queued before any command the pane sends next.
+    fn adopt_mission_workers_as_heir(
+        &self,
+        mission: &str,
+        heir: crate::coordination::AgentRecord,
+        former: &str,
+    ) -> Result<(), String> {
+        self.post_adoption(
+            mission,
+            crate::coordination::Mutation::AdoptMissionWorkersAsHeir {
+                mission: mission.to_owned(),
+                heir: Box::new(heir),
+                former: former.to_owned(),
+            },
+        )
+    }
+
+    fn post_adoption(
+        &self,
+        mission: &str,
+        mutation: crate::coordination::Mutation,
+    ) -> Result<(), String> {
         if self.delivery_client.is_none() {
             // A runtime without a store (a test) has no workers to hand.
             return Ok(());
@@ -2947,11 +3059,7 @@ impl Runtime {
             .post(crate::delivery::worker::Effect::Agents {
                 authority,
                 actor,
-                mutation: Box::new(crate::coordination::Mutation::AdoptMissionWorkers {
-                    mission: mission.to_owned(),
-                    conductor: conductor.to_owned(),
-                    former: former.map(str::to_owned),
-                }),
+                mutation: Box::new(mutation),
             })
             .inspect_err(|code| {
                 crate::diagnostic!(json!({
@@ -2959,6 +3067,86 @@ impl Runtime {
                     "mission": mission, "code": code,
                 }));
             })
+    }
+
+    /// The registration of the agent the core observes in `pane` of
+    /// `device`, in the shape a take or a spawn's parent registers the
+    /// caller (`coordination::executor::registration`), from the session
+    /// the engine published (`payload`) rather than an engine read under
+    /// the lock: none while the observation names no scope or the engine no
+    /// session for it.
+    fn heir_record(
+        &self,
+        device: &str,
+        pane: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+        project: Option<String>,
+    ) -> Option<crate::coordination::AgentRecord> {
+        use crate::coordination::executor::{HostIdentity, Native, native_session, registration};
+        let observation = self.delivery_observations.get(pane)?;
+        observation.actor.require_native_identity().ok()?;
+        let agent = payload
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id.as_deref() == Some(observation.raw_pane_id.as_str()))?;
+        let on_node = device == self.node.as_str();
+        // The engine the agent was observed on: its socket on this node, the
+        // device itself for a device's (`continue_moved_registrations`).
+        let scope = observation
+            .host_scope
+            .clone()
+            .or_else(|| (!on_node).then(|| device.to_owned()))?;
+        let native_machine = self.native_machine(device).ok()?;
+        let native = Native {
+            pane: &observation.raw_pane_id,
+            session: native_session(agent.agent_session.as_ref()).ok()?,
+            terminal_id: observation.terminal_id.clone(),
+            actor: observation.actor.clone(),
+        };
+        let host = HostIdentity {
+            machine: device,
+            on_node,
+            scope: &scope,
+            native_machine: &native_machine,
+        };
+        Some(registration(
+            native,
+            &host,
+            observation.raw_pane_id.clone(),
+            agent.name.clone(),
+            None,
+            project,
+        ))
+    }
+
+    /// The registration `conductor` conducted under: the one the mission
+    /// names, else the latest the ledger, the core's copy in memory, holds
+    /// for its pane and session, ended or not, since its children still name
+    /// it as their parent. A Conductor registers at its first start, after
+    /// it made the mission, so the mission often names none.
+    pub(super) fn registration_of(&self, conductor: &Conductor) -> Option<String> {
+        conductor.agent_id.clone().or_else(|| {
+            self.delivery_ledger
+                .as_ref()
+                .ok()?
+                .agents
+                .iter()
+                .rev()
+                .find(|record| record.actor.same_identity(&conductor.actor))
+                .map(|record| record.id.clone())
+        })
+    }
+
+    /// The live registration `actor` holds, as `conductor_of` names it.
+    fn live_registration(&self, actor: &Actor) -> Option<String> {
+        self.delivery_ledger
+            .as_ref()
+            .ok()?
+            .agents
+            .iter()
+            .rev()
+            .find(|record| !record.ended && record.actor.same_identity(actor))
+            .map(|record| record.id.clone())
     }
 
     fn conductor_of(&self, device: &str, pane: &str, actor: Actor) -> Conductor {
@@ -3094,7 +3282,12 @@ impl Runtime {
     /// or the operator's own resume alike, so the move follows the session
     /// rather than the button that resumed it. A resumed conversation gets
     /// no prompt of its own, so a `resumed` wake tells it to go on.
-    pub(super) fn follow_resumed_conductors(&mut self, device: &str) {
+    pub(super) fn follow_resumed_conductors(
+        &mut self,
+        device: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+    ) {
+        self.settle_waiting_handovers(device, payload, crate::delivery::worker::now());
         let moves: Vec<(String, String, Actor)> = self
             .missions
             .book
@@ -3130,7 +3323,6 @@ impl Runtime {
         let mut moved = false;
         for (id, pane, actor) in moves {
             let mut conductor = self.conductor_of(device, &pane, actor);
-            let agent_id = conductor.agent_id.clone();
             let Some(mission) = self.missions.book.get_mut(&id) else {
                 continue;
             };
@@ -3143,9 +3335,36 @@ impl Runtime {
             }
             let former = std::mem::replace(&mut mission.conductor, conductor);
             mission.updated_at_unix_ms = now;
-            if let Err(code) =
-                self.adopt_mission_workers(&id, agent_id.as_deref(), former.agent_id.as_deref())
-            {
+            // A move made while the last one still waited for its carry
+            // hands over that wait's former registration: the pane it left
+            // was never registered, so the ledger names none for it.
+            let waiting = self.missions.waiting_handovers.remove(&id);
+            let former_registration = self
+                .registration_of(&former)
+                .or_else(|| waiting.as_ref().map(|wait| wait.former.clone()));
+            let handed = self.hand_over(
+                &id,
+                device,
+                &pane,
+                payload,
+                former_registration.as_deref(),
+                (now, true),
+            );
+            if let Some(wait) = waiting {
+                if handed.is_ok() {
+                    log_dropped_handover(&id, &wait, "moved");
+                } else {
+                    self.missions.waiting_handovers.insert(id.clone(), wait);
+                }
+            }
+            if let Ok(outcome) = &handed {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.handover",
+                    "mission": id, "pane": pane, "agent_id": former_registration,
+                    "outcome": outcome.name(),
+                }));
+            }
+            if let Err(code) = handed {
                 // Not moved, so the next sight of the pane tries again.
                 if let Some(mission) = self.missions.book.get_mut(&id) {
                     mission.conductor = former;
@@ -3169,6 +3388,141 @@ impl Runtime {
         if moved {
             self.save_missions();
             self.flush_mission_wakes();
+        }
+    }
+
+    /// Hands the children of `former`, the registration the mission's last
+    /// Conductor conducted under, to `pane` of `device`, where the mission
+    /// moved because its Conductor's conversation came back there (B43):
+    /// to the pane's own registration when it has one; to `former` itself,
+    /// by waiting, while a wake, an archive resume, Reopen closed or a store
+    /// move carries `former` to that very pane, since a registration made
+    /// first would take the pane and the store would refuse the carry; else
+    /// to a registration made for the pane now from the session the engine
+    /// published (`payload`), as a take registers its caller, so its first
+    /// `hide agent end` already holds, the workers of a mission that closes
+    /// later included.
+    fn hand_over(
+        &mut self,
+        mission: &str,
+        device: &str,
+        pane: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+        former: Option<&str>,
+        (now, may_wait): (u64, bool),
+    ) -> Result<Handover, String> {
+        let registered = self
+            .delivery_observations
+            .get(pane)
+            .and_then(|observation| self.live_registration(&observation.actor));
+        let Some(former) = former else {
+            if registered.is_none() {
+                return Ok(Handover::Nothing);
+            }
+            return self
+                .adopt_mission_workers(mission, registered.as_deref(), None)
+                .map(|()| Handover::Adopted);
+        };
+        if let Some(registered) = registered {
+            if registered == former {
+                return Ok(Handover::Carried);
+            }
+            return self
+                .adopt_mission_workers(mission, Some(&registered), Some(former))
+                .map(|()| Handover::Adopted);
+        }
+        if may_wait && self.registration_continues(former, device, pane) {
+            // Leaves when the carry is no longer on its way or an hour has
+            // passed (`settle_waiting_handovers`), or when the mission moves
+            // again or is taken.
+            self.missions.waiting_handovers.insert(
+                mission.to_owned(),
+                WaitingHandover {
+                    former: former.to_owned(),
+                    pane: pane.to_owned(),
+                    since_unix_ms: now,
+                },
+            );
+            return Ok(Handover::Waits);
+        }
+        // The checkout the mission was made in is the registration's project,
+        // as a take's caller registers its own.
+        let project = self
+            .missions
+            .book
+            .get(mission)
+            .map(|mission| mission.checkout_path.clone());
+        match self.heir_record(device, pane, payload, project) {
+            Some(heir) => self
+                .adopt_mission_workers_as_heir(mission, heir, former)
+                .map(|()| Handover::Registered),
+            None => Ok(Handover::Unregistered),
+        }
+    }
+
+    /// A hand-over that waited for a carry to its pane (`hand_over`) is
+    /// made once the carry is no longer on its way: the carried registration
+    /// holds the pane and the children already (`carried`), or the carry
+    /// ended without it and the pane is registered or adopts then; past
+    /// `HANDOVER_WAIT_LIMIT_MS` it is made without the carry, as if the carry
+    /// had ended (`timed_out`). The entry leaves here, also for a mission no
+    /// longer in the book, or when the mission moves again or is taken; a
+    /// mission that closes meanwhile keeps it, so its workers are not left
+    /// behind. One `is_empty` check while nothing waits; otherwise the
+    /// carries are read from the core's own maps, and the ledger only once a
+    /// wait ends. `now` is the pass's clock.
+    pub(super) fn settle_waiting_handovers(
+        &mut self,
+        device: &str,
+        payload: &crate::sidebar::SessionSnapshotPayload,
+        now: u64,
+    ) {
+        if self.missions.waiting_handovers.is_empty() {
+            return;
+        }
+        let ended: Vec<(String, &'static str)> = self
+            .missions
+            .waiting_handovers
+            .iter()
+            .filter_map(|(id, wait)| {
+                let Some(mission) = self.missions.book.get(id) else {
+                    return Some((id.clone(), "mission_gone"));
+                };
+                if mission.device_id != device {
+                    return None;
+                }
+                if !self.registration_continues(&wait.former, device, &wait.pane) {
+                    return Some((id.clone(), "carry_ended"));
+                }
+                (now.saturating_sub(wait.since_unix_ms) >= HANDOVER_WAIT_LIMIT_MS)
+                    .then(|| (id.clone(), "timed_out"))
+            })
+            .collect();
+        for (id, why) in ended {
+            let Some(wait) = self.missions.waiting_handovers.remove(&id) else {
+                continue;
+            };
+            if self.missions.book.get(&id).is_none() {
+                log_dropped_handover(&id, &wait, why);
+                continue;
+            }
+            let outcome = self.hand_over(
+                &id,
+                device,
+                &wait.pane,
+                payload,
+                Some(&wait.former),
+                (now, false),
+            );
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.handover_settled",
+                "mission": id, "pane": wait.pane, "agent_id": wait.former, "reason": why,
+                "outcome": outcome.as_ref().map_or("failed", |outcome| outcome.name()),
+            }));
+            if outcome.is_err() {
+                // Asked again at the next pass.
+                self.missions.waiting_handovers.insert(id, wait);
+            }
         }
     }
 

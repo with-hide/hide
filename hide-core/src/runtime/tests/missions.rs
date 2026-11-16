@@ -490,6 +490,826 @@ fn a_conductors_conversation_resumed_in_another_pane_conducts_its_mission() {
     assert_eq!(events(&runtime), [crate::missions::WakeEvent::Resumed]);
 }
 
+/// A mission whose Conductor, the pane `sender`, registered at its first
+/// start and has a worker of its own, then whose pane closed, with the
+/// delivery store running over the ledger; `seen` shows the conversation in
+/// the pane `recipient`, which has no registration (B43, with-hide/hide#2588:
+/// `hide agent end` from it was refused `parent_authority_required`).
+struct Resumed {
+    fixture: Fixture,
+    client: crate::delivery::worker::Client,
+    kind: &'static str,
+    conductor: Actor,
+    former: String,
+    worker: String,
+    /// The pane the conversation shows in now: `recipient`, until `move_to`.
+    at: std::cell::RefCell<String>,
+}
+
+/// Each pane's lineage is its session's digest, as the store checks of a
+/// registration; the pane the conversation comes back in has the same.
+fn resumed_agent(pane: &str, kind: &str, session: &str) -> Value {
+    json!({"id": pane, "pane_id": pane, "agent": kind, "agent_status": "idle",
+           "state_change_seq": 1,
+           "lineage_session": crate::engine::tokens::session_digest(session),
+           "agent_session": {"kind": "id", "value": session}})
+}
+
+impl Resumed {
+    /// `before` registers the Conductor before it makes the mission, so the
+    /// mission names that registration; a Conductor registers at its first
+    /// start, after `hide mission create`, so it usually does not.
+    fn new(kind: &'static str, before: bool) -> Self {
+        Self::with(kind, before, |_| {})
+    }
+
+    /// As `new`, with `asleep` run while the Conductor's pane still shows,
+    /// before it closes.
+    fn with(kind: &'static str, before: bool, asleep: impl FnOnce(&mut Runtime)) -> Self {
+        let fixture = conducting();
+        let row = || {
+            let mut row = conductor_row();
+            row.agent_kind = kind.into();
+            row
+        };
+        let (client, conductor) = {
+            let mut runtime = fixture.runtime.lock().unwrap();
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+                resumed_agent("sender", kind, "sender-session"),
+            ]}))
+            .unwrap();
+            runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+            runtime.snapshot.navigator.agents = vec![row()];
+            (
+                runtime.delivery_client.clone().unwrap(),
+                runtime.delivery_observations["sender"].actor.clone(),
+            )
+        };
+        let create = |fixture: &Fixture| {
+            let mut runtime = fixture.runtime.lock().unwrap();
+            command(
+                &mut runtime,
+                "sender",
+                json!({"op": "create", "title": "Fix the bug"}),
+            )
+            .unwrap();
+        };
+        if !before {
+            create(&fixture);
+        }
+        let mut resumed = Self {
+            client,
+            kind,
+            conductor: conductor.clone(),
+            former: String::new(),
+            worker: String::new(),
+            at: std::cell::RefCell::new("recipient".into()),
+            fixture,
+        };
+        resumed.former = resumed.register(&conductor, "sender-session", None);
+        let worker = Actor {
+            pane_id: "worker".into(),
+            name: "worker".into(),
+            kind: kind.into(),
+            device_id: crate::node::TEST_NODE.into(),
+            session: crate::engine::tokens::session_digest("worker-session"),
+        };
+        resumed.worker = resumed.register(&worker, "worker-session", Some(resumed.former.clone()));
+        if before {
+            create(&resumed.fixture);
+        }
+        let mut runtime = resumed.fixture.runtime.lock().unwrap();
+        assert_eq!(
+            runtime.missions.book.missions[0].conductor.agent_id,
+            before.then(|| resumed.former.clone())
+        );
+        asleep(&mut runtime);
+        // The Conductor's pane closed.
+        runtime.delivery_observations.remove("sender");
+        runtime.snapshot.navigator.agents.clear();
+        runtime.refresh_missions();
+        drop(runtime);
+        resumed
+    }
+
+    fn submit(
+        &self,
+        actor: &Actor,
+        mutation: crate::coordination::Mutation,
+    ) -> Result<Value, String> {
+        self.client.submit(
+            crate::delivery::worker::Effect::Agents {
+                authority: authority(actor),
+                actor: actor.clone(),
+                mutation: Box::new(mutation),
+            },
+            Duration::from_secs(10),
+        )
+    }
+
+    /// A registration of `actor`, the Conductor's own or, with `parent`,
+    /// one it registers as its child; the terminal its pane runs is `t-<pane>`.
+    fn register(&self, actor: &Actor, session: &str, parent: Option<String>) -> String {
+        let by = if parent.is_some() {
+            &self.conductor
+        } else {
+            actor
+        };
+        let record = crate::coordination::AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: crate::node::TEST_NODE.into(),
+            session: session.into(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent,
+            origin: None,
+            project: Some(PROJECT.into()),
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: Some(format!("t-{}", actor.pane_id)),
+            forked: false,
+        };
+        self.submit(
+            by,
+            crate::coordination::Mutation::Register {
+                record,
+                check: false,
+            },
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// The pane the conversation is shown in closes, and it comes back in
+    /// `pane`, a pane of the fixture's tab beside it.
+    fn move_to(&self, pane: &str) {
+        let mut runtime = self.fixture.runtime.lock().unwrap();
+        let left = self.at.replace(pane.into());
+        runtime.delivery_observations.remove(&left);
+        let tab = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0];
+        if !tab.panes.iter().any(|known| known.id == pane) {
+            let mut beside = tab.panes[0].clone();
+            beside.id = pane.into();
+            tab.panes.push(beside);
+        }
+    }
+
+    /// A pass that shows the conversation in its pane (`at`), its row proven
+    /// (`proven`, which a wake's confirmation waits for) and its pane on
+    /// the terminal `terminal`; what the pass logged on this thread.
+    fn seen(&self, proven: bool, terminal: Option<&str>) -> Vec<Value> {
+        let mut runtime = self.fixture.runtime.lock().unwrap();
+        let mut row = conductor_row();
+        row.agent_kind = self.kind.into();
+        let at = self.at.borrow().clone();
+        row.pane_id = at.clone();
+        if proven {
+            row.row_facts.get_or_insert_with(Default::default);
+        } else {
+            row.row_facts = None;
+        }
+        runtime.snapshot.navigator.agents = vec![row];
+        let panes: Vec<Value> = terminal
+            .map(|terminal| json!({"pane_id": at, "terminal_id": terminal}))
+            .into_iter()
+            .collect();
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({
+            "agents": [resumed_agent(&at, self.kind, "sender-session")],
+            "panes": panes,
+        }))
+        .unwrap();
+        let ((), logged) = crate::diagnostics::capture(|| {
+            runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+            runtime.refresh_missions();
+        });
+        logged
+    }
+
+    /// Whatever the passes so far asked of the store has landed.
+    fn flush(&self) {
+        self.client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                Duration::from_secs(10),
+            )
+            .unwrap();
+    }
+
+    fn heir(&self) -> Actor {
+        self.fixture.runtime.lock().unwrap().delivery_observations[self.at.borrow().as_str()]
+            .actor
+            .clone()
+    }
+
+    /// The live registration of the pane the conversation came back in.
+    fn pane_registration(&self) -> crate::coordination::AgentRecord {
+        let heir = self.heir();
+        self.fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .delivery_state()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|record| !record.ended && record.actor.same_identity(&heir))
+            .cloned()
+            .expect("the pane the conversation came back in is registered")
+    }
+
+    /// Ending the worker from the pane the conversation came back in is its
+    /// parent's own end; the worker's record names that pane's registration.
+    fn ends_the_worker_from_the_pane(&self) {
+        let ended = self.submit(
+            &self.heir(),
+            crate::coordination::Mutation::End {
+                id: self.worker.clone(),
+                actor: None,
+            },
+        );
+        assert!(ended.is_ok(), "{ended:?}");
+        let pane = self.pane_registration();
+        let runtime = self.fixture.runtime.lock().unwrap();
+        let ledger = runtime.delivery_state().unwrap();
+        let child = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == self.worker)
+            .unwrap();
+        assert_eq!(child.parent.as_deref(), Some(pane.id.as_str()));
+        assert!(child.ended);
+        let conductor = &runtime.missions.book.missions[0].conductor.actor;
+        assert!(
+            ledger
+                .agents
+                .iter()
+                .any(|record| record.id == pane.id && record.actor.same_identity(conductor)),
+            "the mission's Conductor conducts under the pane's registration"
+        );
+    }
+}
+
+/// The outcome of the hand-over the pass logged, if it logged one.
+fn handed(logged: &[Value], kind: &str) -> Option<String> {
+    logged
+        .iter()
+        .find(|record| record["kind"] == kind)
+        .and_then(|record| record["outcome"].as_str())
+        .map(str::to_owned)
+}
+
+fn waited(logged: &[Value]) -> bool {
+    handed(logged, "mission.handover").as_deref() == Some("waits")
+}
+
+impl Resumed {
+    /// No hand-over waits for a carry any more.
+    fn none_waits(&self) {
+        assert!(
+            self.fixture
+                .runtime
+                .lock()
+                .unwrap()
+                .missions
+                .waiting_handovers
+                .is_empty()
+        );
+    }
+}
+
+/// The pane the conversation came back in is registered as the mission
+/// moves, before it starts any worker, and its first `hide agent end` of
+/// the former registration's worker holds; a later registration of the same
+/// pane, a take's or a first start's (`Command::RegisterSelf`), is that one.
+#[test]
+fn a_conductors_conversation_resumed_in_a_pane_with_no_registration_takes_its_workers() {
+    for (kind, before) in [("codex", false), ("codex", true), ("opencode", false)] {
+        let resumed = Resumed::new(kind, before);
+        let logged = resumed.seen(true, None);
+        assert_eq!(
+            resumed
+                .fixture
+                .runtime
+                .lock()
+                .unwrap()
+                .snapshot
+                .missions
+                .items[0]
+                .conductor
+                .pane_id,
+            "recipient"
+        );
+        resumed.ends_the_worker_from_the_pane();
+        assert_eq!(
+            handed(&logged, "mission.handover").as_deref(),
+            Some("registered"),
+            "{kind}: nothing carries the registration"
+        );
+        let pane = resumed.pane_registration();
+        assert_ne!(pane.id, resumed.former, "{kind}");
+        assert_eq!(pane.parent, None, "{kind}");
+
+        let heir = resumed.heir();
+        let again = crate::coordination::run(
+            resumed.client.clone(),
+            authority(&heir),
+            heir,
+            crate::coordination::Command::RegisterSelf {
+                project: Some(PROJECT.into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(again["id"], pane.id.as_str(), "{kind}");
+    }
+}
+
+/// A move the store has still to make of the former registration onto the
+/// pane (its terminal now shows there): the move waits for it, and the
+/// carried registration keeps the pane and its worker.
+#[test]
+fn a_resumed_conductors_pane_keeps_its_registration_the_store_moves_there() {
+    let resumed = Resumed::new("codex", false);
+    let logged = resumed.seen(true, Some("t-sender"));
+    assert!(waited(&logged), "{logged:?}");
+    assert_eq!(
+        resumed
+            .fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .delivery_registration_rebinds()[&resumed.former]
+            .to
+            .pane_id,
+        "recipient"
+    );
+    resumed.flush();
+    let mut settled = None;
+    for _ in 0..2 {
+        settled = settled.or(handed(
+            &resumed.seen(true, Some("t-sender")),
+            "mission.handover_settled",
+        ));
+        resumed.flush();
+    }
+    assert_eq!(settled.as_deref(), Some("carried"));
+    resumed.ends_the_worker_from_the_pane();
+    assert_eq!(resumed.pane_registration().id, resumed.former);
+    resumed.none_waits();
+}
+
+/// A wake that opened the pane carries the former registration there once
+/// the pane's row is proven: the move, made on a pass before that, waits,
+/// and the pane keeps the carried registration and its worker. A wake whose
+/// tab is another pane does not hold the move back.
+#[test]
+fn a_resumed_conductors_pane_keeps_the_registration_its_wake_carries() {
+    for (target, carried) in [("recipient", true), ("elsewhere", false)] {
+        let resumed = Resumed::with("codex", false, |runtime| {
+            runtime
+                .snapshot
+                .navigator
+                .agents
+                .iter_mut()
+                .for_each(|agent| {
+                    agent.row_facts.get_or_insert_with(Default::default);
+                });
+            // The engine's order of the fixture's tab, which a sleep's
+            // context names.
+            runtime
+                .engine_workspace_tab_order
+                .insert("w1".into(), vec!["tab".into()]);
+            let agent = runtime.snapshot.navigator.agents[0].clone();
+            let (tab, owner) = runtime.sleep_place("sender").unwrap();
+            let context = runtime.close_context(tab).unwrap();
+            let native_session_id = agent.session_id.clone().unwrap();
+            // The registration a sleep that closes the pane saves for its wake.
+            let registration = runtime.delivery_registration_of("sender");
+            assert!(registration.is_some());
+            runtime
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .admit_dormant(crate::agent_sleep::DormantRecord {
+                    source_reference: None,
+                    phase: crate::agent_sleep::DormantPhase::Starting,
+                    revision: 1,
+                    node_id: runtime.node.as_str().into(),
+                    connection_generation: runtime.live_generation,
+                    old_pane_id: "sender".into(),
+                    old_state_change_seq: agent.state_change_seq,
+                    label_owner: hide_session::label_reference_token(
+                        "codex",
+                        "id",
+                        &native_session_id,
+                    )
+                    .unwrap(),
+                    kind: "codex".into(),
+                    native_session_id,
+                    identity_label: agent.identity_label,
+                    cwd: context.checkout_path.clone(),
+                    context,
+                    close_key: None,
+                    // Its pane closed, and its wake opened `target`.
+                    closed: true,
+                    wake_pane_id: Some(target.into()),
+                    wake_tab_id: None,
+                    factory: None,
+                    since_unix_ms: 1,
+                    transition_started_unix_ms: 1,
+                    reason: None,
+                    registration,
+                    launch: Default::default(),
+                    owner: Some(owner),
+                    profile: None,
+                    cause: None,
+                })
+                .unwrap();
+        });
+        let logged = resumed.seen(false, None);
+        assert_eq!(waited(&logged), carried, "{target}: {logged:?}");
+        resumed.flush();
+        resumed.seen(true, None);
+        resumed.flush();
+        resumed.seen(true, None);
+        resumed.flush();
+        resumed.ends_the_worker_from_the_pane();
+        assert_eq!(
+            resumed.pane_registration().id == resumed.former,
+            carried,
+            "{target}"
+        );
+        resumed.none_waits();
+    }
+}
+
+impl Resumed {
+    /// The pass's payload as `seen` shows it.
+    fn payload(&self) -> SessionSnapshotPayload {
+        let at = self.at.borrow().clone();
+        serde_json::from_value(json!({
+            "agents": [resumed_agent(&at, self.kind, "sender-session")],
+        }))
+        .unwrap()
+    }
+
+    /// The conversation's archive resume, its member at `resume` (the
+    /// saved shape of `session_archive::Resume`), holding the former
+    /// registration.
+    fn archive_resume(&self, resume: Value) {
+        let record: crate::session_archive::ArchiveRecord = serde_json::from_value(json!({
+            "phase": "archived", "revision": 1, "archived_at_unix_ms": 1,
+            "project_root": PROJECT, "project_label": "fixture",
+            "members": [{
+                "machine": crate::node::TEST_NODE, "pane_id": "sender", "kind": "codex",
+                "native_session_id": "sender-session", "checkout_path": PROJECT,
+                "title": "Conductor", "depth": 0, "closed": true,
+                "registration": {"id": self.former, "actor": self.conductor},
+                "resume": resume,
+            }],
+        }))
+        .unwrap();
+        self.fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .insert(crate::session_archive::ArchiveId::new().unwrap(), record);
+    }
+
+    /// Reopen closed resumed the conversation in `pane`: the reopen's own
+    /// step holds the former registration for that pane.
+    fn reopened_in(&self, pane: &str) {
+        use crate::recent_closed::{
+            ClosedAgent, ClosedContext, ClosedItem, ClosedPane, ClosedSplitDirection, PanePlacement,
+        };
+        let registration = crate::agent_sleep::DormantRegistration {
+            id: self.former.clone(),
+            actor: self.conductor.clone(),
+        };
+        let context: ClosedContext = serde_json::from_value(json!({
+            "workspace_id": "workspace", "workspace_label": "Fixture",
+            "workspace_ids_before_close": [], "tab_ids_before_close": [],
+            "pane_ids_before_close": [], "checkout_id": "checkout",
+            "checkout_path": PROJECT, "tab_id": "w1:t1", "tab_label": "Fixture",
+            "tab_index": 0, "agent_area": null,
+        }))
+        .unwrap();
+        let item = ClosedItem::Pane {
+            key: "closed-1".into(),
+            context,
+            pane: ClosedPane {
+                pane_id: "sender".into(),
+                label: None,
+                cwd: PROJECT.into(),
+                agent: Some(ClosedAgent {
+                    kind: "codex".into(),
+                    session_id: Some("sender-session".into()),
+                    registration: Some(Box::new(registration.clone())),
+                    ..Default::default()
+                }),
+            },
+            placement: PanePlacement {
+                neighbor_pane_id: None,
+                parent_path: Vec::new(),
+                direction: ClosedSplitDirection::Right,
+                ratio: 0.5,
+                target_was_first: true,
+            },
+        };
+        self.fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .continue_reopened_registrations(
+                &item,
+                &[crate::recent_closed::reopen::ReopenedAgent {
+                    pane_id: pane.into(),
+                    kind: "codex".into(),
+                    name: pane.into(),
+                    launch: Default::default(),
+                    profile: None,
+                    session_id: Some("sender-session".into()),
+                    registration: Some(registration),
+                }],
+            );
+    }
+
+    /// The move did not wait: the pane was registered at once and takes the
+    /// worker, apart from the former registration.
+    fn registered_at_once(&self, logged: &[Value]) {
+        assert_eq!(
+            handed(logged, "mission.handover").as_deref(),
+            Some("registered"),
+            "{logged:?}"
+        );
+        self.flush();
+        self.ends_the_worker_from_the_pane();
+        assert_ne!(self.pane_registration().id, self.former);
+        self.none_waits();
+    }
+}
+
+/// Reopen closed resumes the conversation in the pane and carries the
+/// former registration there once it sees it: the move waits, and the pane
+/// keeps the carried registration and its worker.
+#[test]
+fn a_resumed_conductors_pane_keeps_the_registration_its_reopen_carries() {
+    let resumed = Resumed::new("codex", false);
+    resumed.reopened_in("recipient");
+    let logged = resumed.seen(true, None);
+    assert!(waited(&logged), "{logged:?}");
+    for _ in 0..2 {
+        resumed.flush();
+        resumed.fixture.runtime.lock().unwrap().advance_reopens();
+        resumed.seen(true, None);
+    }
+    resumed.flush();
+    resumed.ends_the_worker_from_the_pane();
+    assert_eq!(resumed.pane_registration().id, resumed.former);
+    resumed.none_waits();
+}
+
+/// An archive resume still on its way: it takes its member over in the pane
+/// that shows the conversation, so the move waits for it, and the pane keeps
+/// the carried registration and its worker.
+#[test]
+fn a_resumed_conductors_pane_keeps_the_registration_its_archive_resume_carries() {
+    let resumed = Resumed::new("codex", false);
+    resumed
+        .archive_resume(json!({"state": "confirming", "pane_id": "recipient", "since_unix_ms": 1}));
+    let logged = resumed.seen(true, None);
+    assert!(waited(&logged), "{logged:?}");
+    // The archive confirms its member resumed in the pane and carries the
+    // registration there.
+    let mut settled = None;
+    for _ in 0..3 {
+        resumed.flush();
+        resumed
+            .fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .advance_session_archive();
+        resumed.flush();
+        settled = settled.or(handed(
+            &resumed.seen(true, None),
+            "mission.handover_settled",
+        ));
+    }
+    assert_eq!(settled.as_deref(), Some("carried"));
+    resumed.ends_the_worker_from_the_pane();
+    assert_eq!(resumed.pane_registration().id, resumed.former);
+    resumed.none_waits();
+}
+
+/// A carry aimed at another pane than the one the conversation came back
+/// in does not hold the move back, for a store move, Reopen closed and an
+/// archive resume alike (the wake's is in its own test).
+#[test]
+fn a_carry_to_another_pane_does_not_hold_a_resumed_conductors_pane_back() {
+    let resumed = Resumed::new("codex", false);
+    let elsewhere = Actor {
+        pane_id: "elsewhere".into(),
+        ..resumed.conductor.clone()
+    };
+    resumed
+        .fixture
+        .runtime
+        .lock()
+        .unwrap()
+        .registration_rebinds
+        .insert(
+            resumed.former.clone(),
+            crate::coordination::Rebind {
+                from: resumed.conductor.clone(),
+                to: elsewhere,
+                pane: "elsewhere".into(),
+                terminal_id: None,
+            },
+        );
+    resumed.registered_at_once(&resumed.seen(true, None));
+
+    let resumed = Resumed::new("codex", false);
+    resumed.reopened_in("elsewhere");
+    resumed.registered_at_once(&resumed.seen(true, None));
+
+    let resumed = Resumed::new("codex", false);
+    resumed
+        .archive_resume(json!({"state": "confirming", "pane_id": "elsewhere", "since_unix_ms": 1}));
+    resumed.registered_at_once(&resumed.seen(true, None));
+}
+
+/// A carry that ends without bringing the registration to the pane: the
+/// archive resume the move waited for fails. The next pass registers the
+/// pane and hands it the worker, rather than leaving the worker with the
+/// former registration, also when the mission closed while it waited.
+#[test]
+fn a_resumed_conductors_pane_takes_its_workers_when_the_carry_it_waited_for_fails() {
+    for close in [false, true] {
+        let resumed = Resumed::new("codex", false);
+        resumed.archive_resume(
+            json!({"state": "confirming", "pane_id": "recipient", "since_unix_ms": 1}),
+        );
+        assert!(waited(&resumed.seen(true, None)));
+        resumed.flush();
+        if close {
+            let mut runtime = resumed.fixture.runtime.lock().unwrap();
+            command(
+                &mut runtime,
+                "recipient",
+                json!({"op": "close", "end": "cancelled"}),
+            )
+            .unwrap();
+            assert!(!runtime.missions.book.missions[0].status.open());
+        }
+        // The resume fails: the archive no longer carries the registration.
+        for record in resumed
+            .fixture
+            .runtime
+            .lock()
+            .unwrap()
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .values_mut()
+        {
+            record.members[0].resume = crate::session_archive::Resume::Failed {
+                reason: "the start did not resume the conversation".into(),
+                pane_id: Some("recipient".into()),
+            };
+        }
+        let logged = resumed.seen(true, None);
+        assert_eq!(
+            handed(&logged, "mission.handover_settled").as_deref(),
+            Some("registered"),
+            "close {close}"
+        );
+        resumed.flush();
+        resumed.ends_the_worker_from_the_pane();
+        assert_ne!(resumed.pane_registration().id, resumed.former);
+        resumed.none_waits();
+    }
+}
+
+/// A carry that stays on its way, as a wake left unknown does: past the
+/// hour a hand-over waits, the pane is registered and takes the worker,
+/// with the pass's clock moved rather than waited.
+#[test]
+fn a_resumed_conductors_pane_takes_its_workers_when_its_carry_never_lands() {
+    let resumed = Resumed::new("codex", false);
+    resumed
+        .archive_resume(json!({"state": "confirming", "pane_id": "recipient", "since_unix_ms": 1}));
+    assert!(waited(&resumed.seen(true, None)));
+    let since = resumed
+        .fixture
+        .runtime
+        .lock()
+        .unwrap()
+        .missions
+        .waiting_handovers["mission-1"]
+        .since_unix_ms;
+    let settle = |now: u64| {
+        let payload = resumed.payload();
+        let mut runtime = resumed.fixture.runtime.lock().unwrap();
+        let ((), logged) = crate::diagnostics::capture(|| {
+            runtime.settle_waiting_handovers(crate::node::TEST_NODE, &payload, now);
+        });
+        logged
+    };
+    let limit = crate::runtime::missions::HANDOVER_WAIT_LIMIT_MS;
+    assert_eq!(
+        handed(&settle(since + limit - 1), "mission.handover_settled"),
+        None,
+        "it still waits within the hour"
+    );
+    let logged = settle(since + limit);
+    let settled = logged
+        .iter()
+        .find(|record| record["kind"] == "mission.handover_settled")
+        .unwrap();
+    assert_eq!(settled["reason"], "timed_out");
+    assert_eq!(settled["outcome"], "registered");
+    resumed.flush();
+    resumed.ends_the_worker_from_the_pane();
+    assert_ne!(resumed.pane_registration().id, resumed.former);
+    resumed.none_waits();
+}
+
+/// The conversation moves on to a third pane while the hand-over to the
+/// second still waits for its carry: the second pane was never registered,
+/// so the new move hands over the waiting former registration.
+#[test]
+fn a_resumed_conductors_second_pane_takes_the_workers_its_first_waited_for() {
+    let resumed = Resumed::new("codex", false);
+    resumed
+        .archive_resume(json!({"state": "confirming", "pane_id": "recipient", "since_unix_ms": 1}));
+    assert!(waited(&resumed.seen(true, None)));
+    resumed.move_to("third");
+    let logged = resumed.seen(true, None);
+    assert!(
+        logged
+            .iter()
+            .any(|record| record["kind"] == "mission.handover_dropped"
+                && record["reason"] == "moved"),
+        "{logged:?}"
+    );
+    resumed.registered_at_once(&logged);
+}
+
+/// `hide mission take` from another pane hands it the former Conductor's
+/// children, a worker it registered without a start included, also when
+/// the mission does not name the former registration (made before it).
+#[test]
+fn a_take_hands_over_the_children_of_a_registration_the_mission_does_not_name() {
+    let resumed = Resumed::new("codex", false);
+    // The take's pane registers before it asks, as `hide mission take` does.
+    {
+        let mut runtime = resumed.fixture.runtime.lock().unwrap();
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            resumed_agent("recipient", "codex", "recipient-session"),
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    }
+    let taker = resumed.heir();
+    let taker_id = resumed.register(&taker, "recipient-session", None);
+    {
+        let mut runtime = resumed.fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "recipient",
+            json!({"op": "take", "mission": "mission-1"}),
+        )
+        .unwrap();
+    }
+    resumed.flush();
+    let ended = resumed.submit(
+        &taker,
+        crate::coordination::Mutation::End {
+            id: resumed.worker.clone(),
+            actor: None,
+        },
+    );
+    assert!(ended.is_ok(), "{ended:?}");
+    let runtime = resumed.fixture.runtime.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    let child = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == resumed.worker)
+        .unwrap();
+    assert_eq!(child.parent.as_deref(), Some(taker_id.as_str()));
+}
+
 /// 미션 종료 from the map (UI_BEHAVIOR, A mission's map): a Conductor that
 /// holds the mission is asked once, by a letter, and keeps it open to ask
 /// about its pull requests; once no Conductor holds it, the same press

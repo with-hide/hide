@@ -677,11 +677,11 @@ fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Acto
     actor.require_native_identity()?;
     Ok(actor)
 }
-pub(super) struct HostIdentity<'a> {
-    pub(super) machine: &'a str,
-    pub(super) on_node: bool,
-    pub(super) scope: &'a str,
-    pub(super) native_machine: &'a str,
+pub(crate) struct HostIdentity<'a> {
+    pub(crate) machine: &'a str,
+    pub(crate) on_node: bool,
+    pub(crate) scope: &'a str,
+    pub(crate) native_machine: &'a str,
 }
 pub(super) fn record(
     agent: &ProjectedAgent,
@@ -691,32 +691,69 @@ pub(super) fn record(
     parent: Option<String>,
     project: Option<String>,
 ) -> Result<AgentRecord, String> {
-    let session = agent
-        .agent_session
-        .as_ref()
+    let session = native_session(agent.agent_session.as_ref())?;
+    let native = Native {
+        pane: &agent.pane_id,
+        session,
+        terminal_id: Some(agent.terminal_id.clone()),
+        actor: actor_for(agent, host.machine, host.on_node)?,
+    };
+    Ok(registration(native, &host, instance, name, parent, project))
+}
+
+/// The session a registration records for an agent, from the engine's own
+/// reference to it, for every kind: an id, or a session file's path.
+pub(crate) fn native_session(
+    reference: Option<&crate::sidebar::SessionAgentSessionPayload>,
+) -> Result<String, String> {
+    let session = reference
         .ok_or("native_identity_unavailable")?
         .value
         .clone();
     super::kept_session(&session)?;
-    Ok(AgentRecord {
+    Ok(session)
+}
+
+/// What a registration says of the agent the engine shows in a pane: the
+/// engine's own pane id, the agent's session, its terminal and its actor.
+pub(crate) struct Native<'a> {
+    pub(crate) pane: &'a str,
+    pub(crate) session: String,
+    pub(crate) terminal_id: Option<String>,
+    pub(crate) actor: Actor,
+}
+
+/// The registration of `native` on `host`: the one shape every registration
+/// of an engine's agent takes, from the engine's list (`record`) or from the
+/// session the core observes (`Runtime::heir_record`), so a later
+/// registration of the same pane converges on it (`insert_record`).
+pub(crate) fn registration(
+    native: Native<'_>,
+    host: &HostIdentity<'_>,
+    instance: String,
+    name: Option<String>,
+    parent: Option<String>,
+    project: Option<String>,
+) -> AgentRecord {
+    AgentRecord {
         id: String::new(),
         // A pane id is never a name: the engine's fallback identifier for an
         // agent it never named, or a name restating the pane, is none.
-        name: name.filter(|name| *name != agent.pane_id),
+        name: name.filter(|name| name != native.pane),
         machine: host.machine.into(),
         host_scope: host.scope.into(),
         native_machine: host.native_machine.into(),
-        session,
+        session: native.session,
         instance,
-        pane: agent.pane_id.clone(),
+        pane: native.pane.to_owned(),
         parent,
         origin: None,
         project,
-        actor: actor_for(agent, host.machine, host.on_node)?,
+        actor: native.actor,
         ended: false,
-        terminal_id: Some(agent.terminal_id.clone()),
+        terminal_id: native.terminal_id,
         forked: false,
-    })
+    }
 }
 
 pub(crate) fn run(
