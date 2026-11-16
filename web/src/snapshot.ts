@@ -1975,6 +1975,8 @@ export type ViewDisplaySnapshot = {
   /** Its unsent comments, and of those the ones whose letter expired (B14, B29); absent for none. */
   comments?: number;
   not_delivered?: number;
+  /** An agent opened it and the operator has not looked at it since (PRD unseen-agent-views B10); absent once they have. */
+  unseen?: boolean;
   /** An outside file's desktop grant, name and viewer (PRD outside-path-in-hide); absent for every other kind. */
   external?: { grant: string; name: string; kind: import("./host").ExternalKind };
 };

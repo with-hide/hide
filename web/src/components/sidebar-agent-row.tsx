@@ -1,3 +1,4 @@
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { memo, useRef, type KeyboardEvent } from "react";
 import { AgentRowMark } from "../AgentRowMark";
 import { agentClosing, treeCloseProgress } from "../close";
@@ -14,7 +15,7 @@ import { RowLetterMark } from "./letter-mark";
 import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
-import { AskLine, FoldButton, foldOnElbow, markCenter, TreeDeparture, TreeFold, TreeRails, type TreePlace } from "./agent-tree";
+import { AskLine, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
 import { AgentPrHover, PrHoverCard } from "./pr-mark";
 import { pullsStaleness, rowPulls } from "../prMark";
 import type { SessionPull } from "../snapshot";
@@ -66,11 +67,11 @@ export function FoldLane() {
 /** Where a sidebar row sits in a drawn tree, and how its chevron opens its children. */
 export type SidebarTreeSlot = {
   place: TreePlace;
-  /** How wide the row's first rail column is, when its holder sets it (`holderLead`). */
-  first?: string;
   /** Null for a row with no children; a grandchild's chevron opens the popover instead. */
   open: boolean | null;
   onToggle: () => void;
+  /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
+  fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
   popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
 };
@@ -133,7 +134,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   onOpen: (paneId: string) => void;
   /** Opens a PR of the row's mark from its card or list; `external` asks for the default browser. */
   onOpenPullRequest: (pull: SessionPull, external: boolean) => void;
-  /** Where the row's first column starts: a tree row's rails, from its holder's glyph (`holderLead`), another row's mark. */
+  /** Where a root's first column starts. */
   inset: string;
   /** False where the row above already names the row's checkout. */
   branchShown?: boolean;
@@ -257,10 +258,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           onDragStart={(event) => beginAgentDrag(agent, event)}
         />
       </Hint>
-      {tree ? <TreeRails place={tree.place} first={tree.first} /> : null}
-      {tree?.open && !tree.popover && !tree.place.chain ? <TreeDeparture at={markCenter(inset, tree.place, tree.first)} /> : null}
-      {/* A root's chevron lies on its holder's rail, as a child's lies on its parent's: every row hangs from the row above (`holderTreeLines`). */}
-      {tree && tree.open !== null ? <RowChevron agent={agent} tree={tree} open={tree.open} at={foldOnElbow(inset, tree.place, tree.first)} returnFocus={() => main.current?.focus()} /> : null}
+      {tree ? <TreeRails place={tree.place} /> : null}
+      {tree && tree.open !== null && depth > 0 ? <span className="absolute inset-y-0 flex w-(--size-agent-mark)" style={{ left: `calc(${inset} + var(--size-lineage-indent) * ${depth - 1})` }}><RowChevron agent={agent} tree={tree} returnFocus={() => main.current?.focus()} /></span> : null}
       <SessionRowBody
         className={cn(tree && "py-xs")}
         markClassName="pointer-events-none"
@@ -317,25 +316,32 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           </span>
         ) : null}
       </SessionRowBody>
+      {tree && depth === 0 && tree.open !== null ? (
+        // A root's chevron stands left of its mark, as a task's does in the 태스크 list; it sits on its tab's guide, so it masks the guide
+        // with the row's own fill: the sidebar, then the row's hover or selection over it.
+        <span className="absolute top-xs z-20 h-(--size-sidebar-line) w-(--size-lineage-chevron) -translate-x-1/2 bg-sidebar" style={{ left: tree.fold }}>
+          <button type="button" tabIndex={-1} aria-expanded={tree.open} aria-label={t(tree.open ? "agentSessions.tree.collapse" : "agentSessions.tree.expand", { name: agent.identity_label })} data-tree-chevron={agent.pane_id} className={cn("flex size-full items-center justify-center text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring", selected ? "bg-secondary" : "group-hover/row:bg-accent")} onClick={tree.onToggle}>
+            {tree.open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+          </button>
+        </span>
+      ) : null}
       {number !== null ? <Keycap number={number} /> : null}
     </li>
     </EntryContextMenu>
   );
 });
 
-/**
- * A tree row's chevron, on its own elbow, a root's on its holder's rail: it folds the row's children in place, or on
- * a grandchild opens the popover rooted on it (B13). `at` is the elbow's rail.
- */
-function RowChevron({ agent, tree, open, at, returnFocus }: { agent: AgentRow; tree: SidebarTreeSlot; open: boolean; at: string; returnFocus: () => void }) {
+/** A tree row's chevron: it folds the row's children in place, or on a grandchild opens the popover rooted on it (B13). */
+function RowChevron({ agent, tree, returnFocus }: { agent: AgentRow; tree: SidebarTreeSlot; returnFocus: () => void }) {
   const { t } = useInterfaceTranslation();
-  if (!tree.popover) {
-    return <TreeFold at={at}><FoldButton name={agent.identity_label} open={open} onClick={tree.onToggle} data-tree-chevron={agent.pane_id} /></TreeFold>;
+  if (!tree.popover || tree.open === null) {
+    return <TreeChevron name={agent.identity_label} open={tree.open} onToggle={tree.onToggle} hangs={tree.place.depth > 0} data-tree-chevron={agent.pane_id} />;
   }
   const { agents, onOpenChild, onTask, actions } = tree.popover;
   const label = t("agentSessions.tree.expand", { name: agent.identity_label });
   return (
-    <TreeFold at={at}>
+    <span className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
+      <span aria-hidden="true" className="absolute top-(--size-lineage-elbow-y) right-xxs left-none h-(--size-hairline) bg-lineage-rail" />
       <AgentTreePopover
         parent={agent}
         agents={agents}
@@ -345,9 +351,11 @@ function RowChevron({ agent, tree, open, at, returnFocus }: { agent: AgentRow; t
         returnFocus={returnFocus}
         triggerLabel={label}
         trigger={
-          <FoldButton name={agent.identity_label} open={false} popup data-tree-chevron={agent.pane_id} />
+          <button type="button" tabIndex={-1} aria-label={label} aria-haspopup="dialog" data-tree-chevron={agent.pane_id} className="relative z-10 mt-xs flex h-(--size-sidebar-line) w-full items-center justify-center rounded-xs bg-sidebar text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring">
+            <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+          </button>
         }
       />
-    </TreeFold>
+    </span>
   );
 }

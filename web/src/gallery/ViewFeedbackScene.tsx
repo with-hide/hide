@@ -128,7 +128,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
     const display = (id: string, extra: Partial<ViewDisplaySnapshot> & Pick<ViewDisplaySnapshot, "kind" | "label" | "path">): ViewDisplaySnapshot => ({ id, tab_id: null, committed: null, preview: false, state: "open", reason: null, ...(count(id) ? { comments: count(id) } : {}), ...extra });
     const displays = [
       display("d1", { kind: "browser", label: "localhost:5173/login", path: "", url: "http://localhost:5173/login", title: "Owl Notes", load: 1, opener: main }),
-      display("d2", { kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, tab_id: "t2", committed: false, opener: main }),
+      display("d2", { kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, tab_id: "t2", committed: false, opener: main, unseen: true }),
       display("d3", { kind: "file", label: "onboarding.pdf", path: tabs[1]!.path, tab_id: "t3", opener: other }),
       display("d4", { kind: "file", label: "README.md", path: tabs[2]!.path, tab_id: "t4" }),
     ];
@@ -138,7 +138,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
       groups: sent ? [] : [group("local/a1", main, ["d1", "d2"]), group("local/a2", other, ["d3"])],
       opened: [
         { pane_id: "a1", view_id: "d1", kind: "browser", label: "localhost:5173/login", path: "", url: "http://localhost:5173/login", comments: count("d1") },
-        { pane_id: "a1", view_id: "d2", kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, comments: count("d2") },
+        { pane_id: "a1", view_id: "d2", kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, comments: count("d2"), unseen: true },
         { pane_id: "a2", view_id: "d3", kind: "file", label: "onboarding.pdf", path: tabs[1]!.path, comments: count("d3") },
       ],
       ...(sent ? { send: { request_id: "r1", state: "sent" as const, count: 3, to: main.name, pane_id: "a1", at_unix_ms: Date.now() + 3_600_000 } } : {}),

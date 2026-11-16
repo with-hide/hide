@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BoardRow } from "./projectBoard";
 import type { AgentRow } from "./snapshot";
-import { holderTreeLines, sidebarTreeLines, siblingsShown } from "./sidebarTree";
+import { sidebarTreeLines, siblingsShown } from "./sidebarTree";
 
 // The core names the number on the snapshot (`navigator.siblings_shown`); the lines take it as given.
 const SIBLINGS = 5;
@@ -26,24 +26,6 @@ describe("sidebarTreeLines", () => {
     expect(a1.place).toEqual({ depth: 2, last: true, rails: [true] });
     expect(lines[3]!.place.last).toBe(true);
     expect(lines[1]!.place.last).toBe(false);
-  });
-});
-
-describe("holderTreeLines", () => {
-  it("hangs every root of a holder from its rail across the tab segments, bends the last root, and keeps each line with its segment", () => {
-    // Three tabs and an empty one: a's tree, nothing, b alone, then c's tree; past one child a parent folds the rest.
-    const segments = [[row("a", 0), row("a1", 1), row("a2", 1)], [], [row("b", 0)], [row("c", 0), row("c1", 1)]];
-    const lines = holderTreeLines(segments, new Set(), 1, () => false);
-    expect(lines.map(drawn)).toEqual([["a@0", "a1@1", "+1@1"], [], ["b@0"], ["c@0", "c1@1"]]);
-    const places = lines.flat().map((line) => line.place);
-    // A root is one level in, so it has an elbow; only the holder's last root bends there, whatever segment it is in.
-    expect(places[0]).toEqual({ depth: 1, last: false, rails: [] });
-    expect(places[3]).toEqual({ depth: 1, last: false, rails: [] });
-    expect(places[4]).toEqual({ depth: 1, last: true, rails: [] });
-    // A child's first rail is the holder's: it runs past a's subtree toward b, and stops past the last root.
-    expect(places[1]).toEqual({ depth: 2, last: false, rails: [true] });
-    expect(places[2]).toEqual({ depth: 2, last: true, rails: [true] });
-    expect(places[5]).toEqual({ depth: 2, last: true, rails: [false] });
   });
 });
 

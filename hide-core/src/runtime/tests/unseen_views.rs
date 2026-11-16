@@ -895,6 +895,19 @@ fn pane_views(runtime: &Runtime, pane: &str) -> Vec<crate::model::OpenedViewSnap
         .unwrap_or_default()
 }
 
+/// The paths of the tabs the View strip marks 볼 것, in the one area it draws.
+fn unseen_tabs(runtime: &Runtime) -> Vec<String> {
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    let crate::model::ViewNodeSnapshot::Area(area) = &view.layout.root else {
+        panic!("the fixture draws one area");
+    };
+    area.displays
+        .iter()
+        .filter(|display| display.unseen)
+        .map(|display| display.path.clone())
+        .collect()
+}
+
 /// The same file in two areas is one row of the opener's `N views`; while
 /// the tab the operator has not looked at is the second, the row wears its
 /// 볼 것 mark and names that tab, so pressing the row brings it forward.
@@ -970,7 +983,53 @@ fn each_outside_file_an_agent_opens_is_its_own_row_and_keeps_its_unseen_mark() {
         .iter()
         .map(|row| (row.label.as_str(), row.unseen))
         .collect();
-    assert_eq!(listed, [("first.html", false), ("second.html", true)]);
+    assert_eq!(listed, [("second.html", true), ("first.html", false)]);
+}
+
+/// A pane's `N views` lists its Views newest open first, whether or not the
+/// operator has looked at them, and an agent's open again of an older View
+/// brings it back to the top (UI_BEHAVIOR, View openers and comments).
+#[test]
+fn a_panes_views_list_the_newest_open_first_and_an_open_again_leads_it() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let first = open(&mut guard, "recipient", "src/a.ts");
+    open(&mut guard, "recipient", "src/b.ts");
+    let newest = open(&mut guard, "recipient", "src/c.ts");
+    // The operator looks at the oldest, which the session shows first, and
+    // the newest, leaving the one between to look at.
+    keyboard(&mut guard, Some("recipient"));
+    look_at(&mut guard, &newest);
+    keyboard(&mut guard, Some("sender"));
+    let listed = |runtime: &Runtime| -> Vec<(String, bool)> {
+        pane_views(runtime, "recipient")
+            .into_iter()
+            .map(|row| (row.path, row.unseen))
+            .collect()
+    };
+    assert_eq!(
+        listed(&guard),
+        [
+            ("src/c.ts".to_owned(), false),
+            ("src/b.ts".to_owned(), true),
+            ("src/a.ts".to_owned(), false),
+        ]
+    );
+    // The strip of the session that opened them marks the same tab, and
+    // the one it brings forward has been seen.
+    keyboard(&mut guard, Some("recipient"));
+    assert_eq!(unseen_tabs(&guard), ["src/b.ts"]);
+    keyboard(&mut guard, Some("sender"));
+    assert_eq!(open(&mut guard, "recipient", "src/a.ts"), first);
+    assert_eq!(
+        listed(&guard),
+        [
+            ("src/a.ts".to_owned(), true),
+            ("src/c.ts".to_owned(), false),
+            ("src/b.ts".to_owned(), true),
+        ]
+    );
 }
 
 #[test]

@@ -15,6 +15,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { revealHost } from "./host";
 import { CommentCount, FeedbackRow } from "./ViewComments";
+import { StatusMark } from "./components/status-mark";
 import { DisplayEditor, DocumentKeeper, PendingDocumentHeader } from "./Editor";
 import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -206,8 +207,11 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
   const attached = useBrowserStore((s) => display.kind === "browser" && workspace !== undefined && s.attached[hostKey(workspaceKey(workspace), display.id)] === true);
   const state = saving ? t("documents.tabSaving") : dirty ? t("documents.unsaved") : null;
   const comments = display.comments ?? 0;
+  // A View an agent opened that the operator has not looked at leads its tab with the 볼 것 eye (PRD unseen-agent-views B10); a tab only one mark wide shows the eye in its mark's place.
+  const look = display.unseen ? <StatusMark mark="look" data-view-unseen={display.id} /> : null;
   const identity = [
     displayIdentity(display, t),
+    display.unseen ? t("agents.mark.look") : null,
     display.opener ? [
       display.opener.pane_id ? display.opener.name : t("feedback.mark.closed", { name: display.opener.name }),
       t("feedback.mark.opened", { product: agentProductName(display.opener.provider) }),
@@ -250,8 +254,9 @@ export function DisplayTab({ display, workspace, interaction, actions }: { displ
         }
       }}
     >
+      {look && interaction.fit !== "marks" ? <span className="flex size-(--size-icon) shrink-0 items-center justify-center">{look}</span> : null}
       <span className={`relative flex size-(--size-icon) shrink-0 items-center justify-center ${unavailable || elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
-        {interaction.fit === "marks" ? collapsedDisplayMark(display) : displayMark(display)}
+        {interaction.fit === "marks" ? look ?? collapsedDisplayMark(display) : displayMark(display)}
         {interaction.fit === "marks" && (saving || dirty || tabOnly) ? (
           saving ? <LoaderCircleIcon aria-hidden="true" data-view-save-mark="saving" className="absolute size-(--size-icon) animate-spin bg-inherit text-muted-foreground" />
             : <span aria-hidden="true" data-view-save-mark={tabOnly ? "tab-only" : "dirty"} className="absolute right-0 top-0 size-(--size-tab-status-dot) rounded-full bg-warning" />

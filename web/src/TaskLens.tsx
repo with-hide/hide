@@ -10,7 +10,7 @@ import { agentProductName } from "./agentAdapters";
 import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { AskLine, askParts, DecisionViewsCount, FoldButton, foldOnElbow, markCenter, TREE_INSET, TREE_ROOT_FOLD, TreeDeparture, TreeFold, TreeMoreButton, TreeRails, type TreePlace } from "./components/agent-tree";
+import { AskLine, askParts, DecisionViewsCount, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { SubagentTreeRow } from "./components/subagent-row";
 import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
@@ -29,6 +29,7 @@ import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/en
 import { PartsMark } from "./components/pr-mark";
 import { archivedProject, archivedRows, archiveOffer } from "./archive";
 import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
+import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
 import { hideAiWords, homeTurnLine } from "./hideAiOrigin";
@@ -36,8 +37,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
 import { allAgents as everyPaneAgent, agentsByPane } from "./paneAgents";
-import { prMarkParts, rowPulls } from "./prMark";
-import { conductedBy } from "./missions";
+import { rowPulls } from "./prMark";
 import { machineName } from "./screenMachine";
 import { checkoutPathOfPane, sessionTreeLines } from "./sessionTree";
 import { sessionOfAgent } from "./sessionWork";
@@ -55,8 +55,7 @@ import { toolProjectChoice, toolTaskList } from "./toolCells";
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
 /** A mission row's mark stands on a task row's mark column, past the chevron's lane. */
-/** Where a task row's mark stands (`TREE_INSET`); a mission row that stands among the tasks keeps the same column. */
-const TASK_INSET = TREE_INSET;
+const MISSION_INSET = "calc(var(--size-lineage-chevron) + var(--spacing-xs))";
 /** A row's second line by the task's state: a question and a block are the operator's turn, both in the warning colour (B8; status-marks B32). */
 const LINE_TONE: Partial<Record<TaskState, string>> = { needs_you: "text-warning", blocked: "text-warning" };
 
@@ -312,7 +311,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
           {view === "project" ? <BandHead state={band.state} /> : null}
           <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? groupLabel(band.state, tool, t) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
             {band.rows.map((row) => (row.kind === "mission"
-              ? <SidebarMissionRow key={`mission:${row.ask.mission.id}`} ask={row.ask} inset={TASK_INSET} actions={actions} place={showProject} data-task-focus="row" />
+              ? <SidebarMissionRow key={`mission:${row.ask.mission.id}`} ask={row.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
               : rows([row.tree])[0]))}
           </ul>
         </Fragment>
@@ -457,8 +456,8 @@ function TaskTree({ entry, lines, byPane, opened, selected, number, showProject,
     <TaskRow entry={entry} open={openOf(agent)} selected={selected === agent.pane_id} number={number} showProject={showProject} disabled={disabled} actions={actions} />
     {lines.slice(1).map((line) => {
       if (line.kind === "more") return <TreeMoreRow key={`more:${line.parent}`} line={line} onShowAll={onShowAll} />;
-      if (line.kind === "subagent") return <SubagentTreeRow key={`subagent:${line.parent}:${line.subagent.id}`} line={line} style={{ paddingLeft: TASK_INSET }} />;
-      if (line.kind === "subagents-more") return <SubagentTreeRow key={`subagents-more:${line.parent}`} line={line} style={{ paddingLeft: TASK_INSET }} />;
+      if (line.kind === "subagent") return <SubagentTreeRow key={`subagent:${line.parent}:${line.subagent.id}`} line={line} />;
+      if (line.kind === "subagents-more") return <SubagentTreeRow key={`subagents-more:${line.parent}`} line={line} />;
       const child = line.row.agent;
       const parent = (child.lineage_parent_pane_id ? byPane.get(child.lineage_parent_pane_id) : undefined) ?? agent;
       return <ChildRow key={child.pane_id} parent={parent} child={child} depth={line.row.depth} place={line.place} open={openOf(child)} selected={selected === child.pane_id} disabled={disabled} actions={actions} workspace={entry.project?.id ?? null} />;
@@ -479,16 +478,6 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   // The core refuses to resolve work that runs or waits, or an approval prompt (`sessions::resolve_refusal`), so the menu does not offer it.
   const resolvable = !agent.resolved && agent.activity !== "working" && agent.group !== "working" && agent.demand !== "approval";
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
-  const pulls = rowPulls(agent);
-  const conducts = useShellStore((s) => conductedBy(s.rest, agent) !== null);
-  const toolList = useContext(InToolCell);
-  // The PR mark and the mission chip end the second line while the row has one, so the title keeps the first;
-  // a row with no second line keeps them before its time (operator decision 2026-11-17).
-  const lineShown = Boolean(taskLineParts(t, entry) || (showProject && project) || (!toolList && agent.tool));
-  const chips = prMarkParts(pulls) || conducts ? <>
-    <AgentPrMark agent={agent} pulls={pulls} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
-    <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
-  </> : null;
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
   // wears a hollow `!` and is dimmed; the mark says it was read, so no word repeats it (needs-you-cleanup B10).
@@ -503,10 +492,9 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
-      data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} style={{ paddingLeft: TASK_INSET }} onClick={go}>
-      {open ? <TreeDeparture at={markCenter(TASK_INSET)} /> : null}
-      {open !== null ? <TreeFold at={TREE_ROOT_FOLD}><FoldButton name={agent.identity_label} open={open} onClick={toggle} disabled={disabled} data-task-chevron={agent.pane_id} /></TreeFold> : null}
-      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs">
+      data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} onClick={go}>
+      <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
             title={[agent.identity_label, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
@@ -520,10 +508,11 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
           {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
-          {lineShown ? null : chips}
+          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
           <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} read={read} chips={lineShown ? chips : null} actions={actions} />
+        <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -571,8 +560,9 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   return (
     <EntryContextMenu asChild label={label} title={root.title} items={items} onSelect={select} data-archived-context={row.id}>
       <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
-        data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} style={{ paddingLeft: TASK_INSET }} onClick={record}>
-        <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs">
+        data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} onClick={record}>
+        <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
+        <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
           <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), row.starred ? t("taskLens.revisit.starred") : null, state].filter(Boolean).join(", ")}
               title={[root.title, agentProductName(root.agent_kind), root.last_line].filter(Boolean).join("\n")}
@@ -735,13 +725,14 @@ function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, r
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
  */
-function SecondLine({ entry, showProject, read = false, chips, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; chips: ReactNode; actions: Actions }) {
+function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
   const toolList = useContext(InToolCell);
   const { agent, card, project } = entry;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
-  const parts = taskLineParts(t, entry);
+  const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
+  const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
   // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
   const tool = toolList ? undefined : agent.tool;
   if (!parts && !(showProject && project) && !tool) return null;
@@ -754,20 +745,10 @@ function SecondLine({ entry, showProject, read = false, chips, actions }: { entr
         {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
         {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
         {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
-        <LineChips>{chips}</LineChips>
       </div>
       {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
     </>
   );
-}
-
-/** What a task row's second line says: its ask, a Hide AI home's turn, or its agent's line; a resting row with nothing unfinished says nothing. */
-function taskLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], { agent, card }: TaskEntry): LineParts | null {
-  const ask = card.state === "needs_you" ? agent.state.ask : null;
-  const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
-  if (ask) return askParts(t, ask);
-  if (turn) return { lead: null, text: homeTurnLine(t, turn), tail: null };
-  return card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
 }
 
 /**
@@ -778,12 +759,6 @@ function taskLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], { age
  * children still working); work in progress says its sentence.
  */
 function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
-  const parts = agentLineOf(t, agent);
-  // Parts that say nothing are no line: the row keeps one line and its marks stay on it.
-  return parts && (parts.lead || parts.text || parts.tail) ? parts : null;
-}
-
-function agentLineOf(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
   const own = stateLine(agent);
   if (own === null) return null;
   // A row whose move is to look says the View, as the sidebar's does (`sidebarLine`): an external tool's
@@ -816,17 +791,12 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
   const toggle = () => actions.toggleSessionTree(child.pane_id);
   const menu = useTaskMenu(child, record, go, false, disabled, actions, false);
   const quiet = !child.state.title_emphasized && !(selected && child.state.selection_emphasizes_title);
-  const pulls = rowPulls(child);
-  // As on a task's row, the PR mark ends the second line while the row has one, and stands before the time otherwise.
-  const lineShown = Boolean(child.human_turn) || childLineParts(t, child) !== null;
-  const chips = prMarkParts(pulls) ? <AgentPrMark agent={child} pulls={pulls} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} /> : null;
   return (
-    <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
-      data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} style={{ paddingLeft: TASK_INSET }} onClick={go}>
+    <li className={cn("group/task group/turn flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
+      data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeRails place={place} />
-      {open && !place.chain ? <TreeDeparture at={markCenter(TASK_INSET, place)} /> : null}
-      {open !== null ? <TreeFold at={foldOnElbow(TASK_INSET, place)}><FoldButton name={child.identity_label} open={open} onClick={toggle} disabled={disabled} data-task-chevron={child.pane_id} /></TreeFold> : null}
-      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs">
+      <TreeChevron name={child.identity_label} open={open} onToggle={toggle} hangs chain={place.chain} disabled={disabled} data-task-chevron={child.pane_id} />
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
             aria-label={[child.identity_label, forkLabel(t, child), agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
@@ -839,50 +809,43 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          {lineShown ? null : chips}
+          <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
-        <ChildLine child={child} chips={lineShown ? chips : null} actions={actions} />
+        <ChildLine child={child} actions={actions} />
         {child.state.branch_badge ? <BranchLine agent={child} branch={child.state.branch_badge} /> : null}
       </div>
     </li>
   );
 }
 
-function ChildLine({ child, chips, actions }: { child: AgentRow; chips: ReactNode; actions: Actions }) {
+function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown());
   // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
   if (child.human_turn) {
     return <>
-      <div className={cn(indent, "flex min-w-0 items-center gap-xs text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /><LineChips>{chips}</LineChips></div>
+      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /></div>
       <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
     </>;
   }
   const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
-  const parts = childLineParts(t, child);
+  const parts: LineParts | null = ask ? askParts(t, ask) : agentLineParts(t, child);
   if (!parts) return null;
-  return <div className={cn(indent, "flex min-w-0 items-center gap-xs text-micro", ask ? "text-warning" : "text-subtle-foreground")} data-task-line={ask ? "ask" : "label"}><RowLineText parts={parts} className="min-w-0 flex-1" title={partsTitle(parts)} /><LineChips>{chips}</LineChips></div>;
-}
-
-/** What a child row's second line says: its ask while it asks, else its agent's line. */
-function childLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], child: AgentRow): LineParts | null {
-  const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
-  return ask ? askParts(t, ask) : agentLineParts(t, child);
-}
-
-/** A task row's PR mark and mission chip at the end of its second line, on the right edge whatever the line says before them. */
-function LineChips({ children }: { children: ReactNode }) {
-  if (!children) return null;
-  return <span className="ml-auto flex shrink-0 items-center gap-xs self-center text-caption" data-task-chips="">{children}</span>;
+  return <div className={cn(indent, "flex min-w-0 text-micro", ask ? "text-warning" : "text-subtle-foreground")} data-task-line={ask ? "ask" : "label"}><RowLineText parts={parts} className="min-w-0 flex-1" title={partsTitle(parts)} /></div>;
 }
 
 /** Past five siblings, the rest wait behind one line at their depth (B10). */
 function TreeMoreRow({ line, onShowAll }: { line: Extract<SidebarTreeLine, { kind: "more" }>; onShowAll: (parent: string) => void }) {
+  const { t } = useInterfaceTranslation();
   return (
-    <li className="flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent" style={{ paddingLeft: TASK_INSET }}>
+    <li className="flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent">
       <TreeRails place={line.place} />
-      <TreeMoreButton count={line.count} onShowAll={() => onShowAll(line.parent)} data-task-focus="tree-more" />
+      <TreeChevron name="" open={null} hangs chain={line.place.chain} />
+      <Button variant="text" size="inline" data-task-focus="tree-more" data-tree-more={line.count} onClick={() => onShowAll(line.parent)}
+        className="min-w-0 flex-1 justify-start py-xs pl-xs text-micro">
+        <span className="min-w-0 truncate">{t("agentSessions.tree.more", { count: line.count })}</span>
+      </Button>
     </li>
   );
 }

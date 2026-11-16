@@ -2,6 +2,8 @@ import type { Catalog, Catalogs } from "../schema";
 
 export const shellEnglish = {
   "sidebar.tabNumber": "Tab {{number}}",
+  "sidebar.tabAgents_one": "{{name}}, {{count}} agent",
+  "sidebar.tabAgents_other": "{{name}}, {{count}} agents",
   "sidebar.resolvedHint": "Resolved · {{label}}",
   "shell.openingLastWorkspace": "Opening your last Workspace…",
   "shell.openTimeout": "It did not come forward in time; nothing changed.",
@@ -160,6 +162,8 @@ export const shellEnglish = {
 
 const ko = {
   "sidebar.tabNumber": "탭 {{number}}",
+  "sidebar.tabAgents_one": "{{name}}, 에이전트 {{count}}개",
+  "sidebar.tabAgents_other": "{{name}}, 에이전트 {{count}}개",
   "sidebar.resolvedHint": "해결됨 · {{label}}",
   "shell.openingLastWorkspace": "마지막 작업공간 여는 중…",
   "shell.openTimeout": "시간 안에 열리지 않았어요. 바뀐 것은 없어요.",
@@ -318,6 +322,8 @@ const ko = {
 
 const zhCN = {
   "sidebar.tabNumber": "标签页 {{number}}",
+  "sidebar.tabAgents_one": "{{name}}，{{count}} 个智能体",
+  "sidebar.tabAgents_other": "{{name}}，{{count}} 个智能体",
   "sidebar.resolvedHint": "已解决 · {{label}}",
   "shell.openingLastWorkspace": "正在打开上次的工作区…",
   "shell.openTimeout": "未能在限定时间内打开，未作任何更改。",
@@ -476,6 +482,8 @@ const zhCN = {
 
 const ja = {
   "sidebar.tabNumber": "タブ {{number}}",
+  "sidebar.tabAgents_one": "{{name}}、エージェント {{count}}件",
+  "sidebar.tabAgents_other": "{{name}}、エージェント {{count}}件",
   "sidebar.resolvedHint": "解決済み · {{label}}",
   "shell.openingLastWorkspace": "最後に使用したワークスペースを開いています…",
   "shell.openTimeout": "時間内に開けませんでした。変更はありません。",

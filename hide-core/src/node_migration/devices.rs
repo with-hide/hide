@@ -1633,9 +1633,9 @@ mod tests {
         let mut display =
             view.layout
                 .new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
-        display.opened_by(opener(ALIAS, "t1"));
-        display.opened_by(opener(NODE, "t2"));
-        display.opened_by(opener(ALIAS, "t3"));
+        display.opened_by(opener(ALIAS, "t1"), 0);
+        display.opened_by(opener(NODE, "t2"), 0);
+        display.opened_by(opener(ALIAS, "t3"), 0);
         view.layout.insert("a1", display, 0).unwrap();
         crate::workspace_views::save(&state.join(WORKSPACE_VIEWS), &views).unwrap();
 

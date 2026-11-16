@@ -257,6 +257,11 @@ pub struct Display {
     /// such a View is in every session's strip (D-10).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub operator: bool,
+    /// The layout stamp of the last open of a session in `openers`, the same
+    /// session's again included: a pane's `N views` lists its Views newest
+    /// first by it. 0 for a View stored before opens were stamped.
+    #[serde(default)]
+    pub opened_stamp: u64,
     /// What an agent opened here that the operator has not looked at yet
     /// (PRD unseen-agent-views D-07, D-19); absent once they have, and on a
     /// View stored before this was kept (D-27).
@@ -278,9 +283,11 @@ impl Display {
         self.kind == DisplayKind::Browser && self.url.is_none()
     }
 
-    /// Records `opener` as the session that opened this View last: its mark,
-    /// and one of the sessions whose strip shows it (D-26).
-    pub fn opened_by(&mut self, opener: crate::view_feedback::Opener) {
+    /// Records `opener` as the session that opened this View last, at the
+    /// layout's `stamp`: its mark, and one of the sessions whose strip shows
+    /// it (D-26).
+    pub fn opened_by(&mut self, opener: crate::view_feedback::Opener, stamp: u64) {
+        self.opened_stamp = stamp;
         // One session once: its terminal, or its native session found again
         // in another pane (D-10).
         self.openers.retain(|known| {
@@ -521,6 +528,7 @@ impl Layout {
             opener: None,
             openers: Vec::new(),
             operator: false,
+            opened_stamp: 0,
             unseen: None,
             external: None,
         }
