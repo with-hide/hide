@@ -4457,87 +4457,13 @@ impl Runtime {
                 Some(("checkout_purpose.token_failed", detail)),
             ),
         };
-        if visible_purpose.is_some()
-            && target
-                .as_ref()
-                .is_some_and(|target| target.remote_target_id.is_none())
-            && let Some(path) = self
-                .snapshot
-                .navigator
-                .workspaces
-                .iter()
-                .flat_map(|workspace| workspace.checkouts.iter())
-                .find(|checkout| {
-                    target
-                        .as_ref()
-                        .is_some_and(|target| checkout.id == target.checkout_id)
-                })
-                .map(|checkout| checkout.path.clone())
-        {
-            let normalized = workspace::comparison_by_names(Path::new(&path));
-            self.unconfirmed_created_purposes.remove(&normalized);
-        }
-        if let Some((purpose, token_written)) = visible_purpose {
-            let next = (!purpose.is_empty()).then_some(crate::model::CheckoutPurposeSnapshot {
-                text: purpose,
-                origin: if token_written {
-                    crate::model::CheckoutPurposeOrigin::Token
-                } else {
-                    crate::model::CheckoutPurposeOrigin::BranchDescription
-                },
-            });
-            match target
-                .as_ref()
-                .and_then(|target| target.remote_target_id.as_deref())
-            {
-                Some(remote_target_id) => {
-                    if let Some(session) = self
-                        .snapshot
-                        .status
-                        .remote
-                        .iter_mut()
-                        .find(|status| status.target_id == remote_target_id)
-                        .and_then(|status| status.session.as_mut())
-                    {
-                        if let Some(checkout) = session
-                            .workspaces
-                            .iter_mut()
-                            .flat_map(|workspace| workspace.checkouts.iter_mut())
-                            .find(|checkout| {
-                                target
-                                    .as_ref()
-                                    .is_some_and(|target| checkout.id == target.checkout_id)
-                            })
-                        {
-                            checkout.purpose = next;
-                        }
-                        crate::agent_state::sync_checkout_agent_summaries(
-                            &mut session.workspaces,
-                            &session.agents,
-                        );
-                    }
-                }
-                None => {
-                    if let Some(checkout) = self
-                        .snapshot
-                        .navigator
-                        .workspaces
-                        .iter_mut()
-                        .flat_map(|workspace| workspace.checkouts.iter_mut())
-                        .find(|checkout| {
-                            target
-                                .as_ref()
-                                .is_some_and(|target| checkout.id == target.checkout_id)
-                        })
-                    {
-                        checkout.purpose = next;
-                    }
-                    crate::sidebar::sync_checkout_purposes(
-                        &mut self.snapshot.navigator.workspaces,
-                        &self.snapshot.navigator.agents,
-                    );
-                }
-            }
+        if let (Some((purpose, token_written)), Some(target)) = (visible_purpose, target.as_ref()) {
+            self.show_purpose(
+                &target.checkout_id,
+                target.remote_target_id.as_deref(),
+                purpose,
+                token_written,
+            );
         }
         let operation = self
             .snapshot
@@ -4554,6 +4480,96 @@ impl Runtime {
             self.refresh_worktrees();
         }
         true
+    }
+
+    /// A purpose `hide workspace purpose` saved on the checkout `checkout_id`
+    /// (of the device `remote_target_id`, or this machine's), shown at once
+    /// and announced; the worktree rows reread its branch description.
+    pub(crate) fn show_checkout_purpose(
+        &mut self,
+        checkout_id: &str,
+        remote_target_id: Option<&str>,
+        purpose: String,
+        token_written: bool,
+    ) {
+        self.show_purpose(checkout_id, remote_target_id, purpose, token_written);
+        self.refresh_worktrees();
+        if let Some(context) = &self.worker_context {
+            context.notifier.notify();
+        }
+    }
+
+    /// The purpose a write saved, on its checkout's row: the engine's token
+    /// when it was written, the branch description otherwise.
+    fn show_purpose(
+        &mut self,
+        checkout_id: &str,
+        remote_target_id: Option<&str>,
+        purpose: String,
+        token_written: bool,
+    ) {
+        if remote_target_id.is_none()
+            && let Some(path) = self
+                .snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .flat_map(|workspace| workspace.checkouts.iter())
+                .find(|checkout| checkout.id == checkout_id)
+                .map(|checkout| checkout.path.clone())
+        {
+            let normalized = workspace::comparison_by_names(Path::new(&path));
+            self.unconfirmed_created_purposes.remove(&normalized);
+        }
+        let next = (!purpose.is_empty()).then_some(crate::model::CheckoutPurposeSnapshot {
+            text: purpose,
+            origin: if token_written {
+                crate::model::CheckoutPurposeOrigin::Token
+            } else {
+                crate::model::CheckoutPurposeOrigin::BranchDescription
+            },
+        });
+        match remote_target_id {
+            Some(remote_target_id) => {
+                if let Some(session) = self
+                    .snapshot
+                    .status
+                    .remote
+                    .iter_mut()
+                    .find(|status| status.target_id == remote_target_id)
+                    .and_then(|status| status.session.as_mut())
+                {
+                    if let Some(checkout) = session
+                        .workspaces
+                        .iter_mut()
+                        .flat_map(|workspace| workspace.checkouts.iter_mut())
+                        .find(|checkout| checkout.id == checkout_id)
+                    {
+                        checkout.purpose = next;
+                    }
+                    crate::agent_state::sync_checkout_agent_summaries(
+                        &mut session.workspaces,
+                        &session.agents,
+                    );
+                }
+            }
+            None => {
+                if let Some(checkout) = self
+                    .snapshot
+                    .navigator
+                    .workspaces
+                    .iter_mut()
+                    .flat_map(|workspace| workspace.checkouts.iter_mut())
+                    .find(|checkout| checkout.id == checkout_id)
+                {
+                    checkout.purpose = next;
+                }
+                crate::sidebar::sync_checkout_purposes(
+                    &mut self.snapshot.navigator.workspaces,
+                    &self.snapshot.navigator.agents,
+                );
+            }
+        }
     }
 
     pub(super) fn fail_purpose_operation(

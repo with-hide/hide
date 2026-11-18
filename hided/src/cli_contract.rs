@@ -973,6 +973,7 @@ pub const COMMANDS: &[Spec] = &[
             "purpose_invalid",
             "purpose_too_long",
             "purpose_no_workspace",
+            "purpose_checkout_unlisted",
         ],
     },
     // The delete dialog's removal: --force accepts every loss the deletion

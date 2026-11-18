@@ -116,12 +116,14 @@ impl Runtime {
                     },
                 )
             }
-            PaneCommand::Purpose { text } => (
+            PaneCommand::Purpose { text, checkout } => (
                 device.to_owned(),
-                Step::Purpose {
-                    workspace: self.purpose_workspace(device, &context.checkout_id)?,
-                    text: text.trim().to_owned(),
-                },
+                self.purpose_step(
+                    device,
+                    &context.checkout_id,
+                    checkout.as_deref(),
+                    text.trim().to_owned(),
+                )?,
             ),
         };
         Ok(Prepared {
@@ -188,34 +190,82 @@ impl Runtime {
         Ok(first)
     }
 
-    /// The engine workspace that holds the purpose of the caller's checkout:
-    /// a device checkout's owner workspace, this machine's authoritative
-    /// session space, as the checkout row's Set purpose writes it.
-    fn purpose_workspace(&self, device: &str, checkout_id: &str) -> Result<String, String> {
-        let find = |workspaces: &[crate::model::WorkspaceSnapshot]| {
-            workspaces.iter().find_map(|workspace| {
-                workspace
-                    .checkouts
-                    .iter()
-                    .find(|checkout| checkout.id == checkout_id)
-                    .map(|checkout| (workspace.clone(), checkout.clone()))
-            })
-        };
-        let found = if self.node == device {
-            find(&self.snapshot.navigator.workspaces).and_then(|(workspace, checkout)| {
-                authoritative_session_space(&self.last_session_spaces, &workspace, &checkout.path)
-                    .map(|space| space.id.clone())
-            })
+    /// The checkout row's Set purpose for the checkout the command ran in:
+    /// `folder`, the root of the Git checkout it ran in, names another
+    /// checkout of the caller's project, so a worktree the caller made is the
+    /// one that shows it, never the caller's own (refused while Hide lists no
+    /// checkout there); none names the caller's own. A device checkout's
+    /// purpose goes to its owner workspace, this machine's to its
+    /// authoritative session space and its branch description, as the row
+    /// writes them.
+    fn purpose_step(
+        &self,
+        device: &str,
+        checkout_id: &str,
+        folder: Option<&str>,
+        purpose: String,
+    ) -> Result<Step, String> {
+        let local = self.node == device;
+        let workspaces = if local {
+            self.snapshot.navigator.workspaces.as_slice()
         } else {
             self.snapshot
                 .status
                 .remote
                 .iter()
-                .filter(|remote| remote.target_id == device)
-                .find_map(|remote| find(&remote.session.as_ref()?.workspaces))
-                .and_then(|(_, checkout)| checkout.owner_workspace_id)
+                .find(|remote| remote.target_id == device)
+                .and_then(|remote| remote.session.as_ref())
+                .map_or(&[][..], |session| session.workspaces.as_slice())
         };
-        found.ok_or_else(|| "purpose_no_workspace".to_owned())
+        let (workspace, own) = workspaces
+            .iter()
+            .find_map(|workspace| {
+                let checkout = workspace
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.id == checkout_id)?;
+                Some((workspace, checkout))
+            })
+            .ok_or("purpose_no_workspace")?;
+        let names = |path: &str| crate::workspace::comparison_by_names(std::path::Path::new(path));
+        let checkout = match folder.map(names) {
+            Some(folder) if folder != names(&own.path) => workspace
+                .checkouts
+                .iter()
+                .find(|checkout| names(&checkout.path) == folder)
+                .ok_or("purpose_checkout_unlisted")?,
+            _ => own,
+        };
+        let (branch, session_workspace_id) = if local {
+            (
+                checkout.branch.clone(),
+                authoritative_session_space(&self.last_session_spaces, workspace, &checkout.path)
+                    .map(|space| space.id.clone()),
+            )
+        } else {
+            (None, checkout.owner_workspace_id.clone())
+        };
+        if branch.is_none() && session_workspace_id.is_none() {
+            return Err("purpose_no_workspace".into());
+        }
+        let git = if local {
+            Some(self.live.as_ref().ok_or("engine_unavailable")?.node.clone())
+        } else {
+            None
+        };
+        Ok(Step::Purpose {
+            request: crate::worktree_control::PurposeTaskRequest {
+                id: 0,
+                checkout_id: checkout.id.clone(),
+                repository_root: workspace.path.clone(),
+                branch,
+                session_workspace_id,
+                purpose,
+            },
+            path: checkout.path.clone(),
+            git,
+            remote_target_id: (!local).then(|| device.to_owned()),
+        })
     }
 }
 
@@ -1112,19 +1162,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_purpose_is_written_on_the_checkouts_engine_workspace_and_refused_without_one() {
-        let (mut runtime, context, _root, _fake) = fixture(false);
-        let purpose = || PaneCommand::Purpose {
-            text: "  fix the bell  ".into(),
-        };
-        assert_eq!(
-            runtime
-                .prepare_pane_command(NODE, "sender", &context, purpose())
-                .err(),
-            Some("purpose_no_workspace".into())
-        );
-        runtime.snapshot.navigator.workspaces[0].session_workspace_ids = vec!["w4".into()];
+    /// The fixture's checkout with an engine workspace `w4` that holds its
+    /// purpose, and a second worktree of its project, `/checkouts/fixture-wt`
+    /// on branch `wt`, that no tab has opened.
+    fn with_worktree(runtime: &mut Runtime) {
+        let workspace = &mut runtime.snapshot.navigator.workspaces[0];
+        workspace.session_workspace_ids = vec!["w4".into()];
+        workspace.checkouts.push(crate::model::CheckoutSnapshot {
+            id: "worktree".into(),
+            workspace_id: "workspace".into(),
+            path: "/checkouts/fixture-wt".into(),
+            branch: Some("wt".into()),
+            exists: true,
+            ..Default::default()
+        });
         runtime.last_session_spaces = vec![crate::workspace::SessionSpace {
             id: "w4".into(),
             label: "fixture".into(),
@@ -1133,16 +1184,146 @@ mod tests {
             checkout: None,
             owner_mark: None,
         }];
+    }
+
+    fn purpose(text: &str, checkout: Option<&str>) -> PaneCommand {
+        PaneCommand::Purpose {
+            text: text.into(),
+            checkout: checkout.map(str::to_owned),
+        }
+    }
+
+    /// What a purpose resolved to: the write and the checkout's folder.
+    fn purpose_target(
+        runtime: &Runtime,
+        context: &Context,
+        command: PaneCommand,
+    ) -> Result<(crate::worktree_control::PurposeTaskRequest, String), String> {
         match runtime
-            .prepare_pane_command(NODE, "sender", &context, purpose())
-            .unwrap()
+            .prepare_pane_command(NODE, "sender", context, command)?
             .step
         {
-            Step::Purpose { workspace, text } => {
-                assert_eq!((workspace.as_str(), text.as_str()), ("w4", "fix the bell"));
-            }
+            Step::Purpose { request, path, .. } => Ok((request, path)),
             _ => panic!("a purpose"),
         }
+    }
+
+    /// The write for the checkout `checkout_id` on `branch` whose token is
+    /// in `workspace`.
+    fn write(
+        checkout_id: &str,
+        branch: Option<&str>,
+        workspace: Option<&str>,
+    ) -> crate::worktree_control::PurposeTaskRequest {
+        crate::worktree_control::PurposeTaskRequest {
+            id: 0,
+            checkout_id: checkout_id.into(),
+            repository_root: "/checkouts/fixture".into(),
+            branch: branch.map(str::to_owned),
+            session_workspace_id: workspace.map(str::to_owned),
+            purpose: "fix the bell".into(),
+        }
+    }
+
+    #[test]
+    fn a_purpose_is_written_on_the_checkouts_engine_workspace_and_refused_without_one() {
+        let (mut runtime, context, _root, _fake) = fixture(false);
+        assert_eq!(
+            purpose_target(&runtime, &context, purpose("  fix the bell  ", None)).err(),
+            Some("purpose_no_workspace".into())
+        );
+        with_worktree(&mut runtime);
+        assert_eq!(
+            purpose_target(&runtime, &context, purpose("  fix the bell  ", None)),
+            Ok((
+                write("checkout", None, Some("w4")),
+                "/checkouts/fixture".into()
+            ))
+        );
+        // Run in the caller's own checkout, the folder names it too.
+        assert_eq!(
+            purpose_target(
+                &runtime,
+                &context,
+                purpose("fix the bell", Some("/checkouts/fixture/"))
+            )
+            .map(|(request, _)| request.checkout_id),
+            Ok("checkout".into())
+        );
+    }
+
+    /// The bug this guards: run from the root checkout's pane after
+    /// `cd <worktree>`, the purpose landed on the root checkout.
+    #[test]
+    fn a_purpose_run_in_another_worktree_of_the_project_names_that_worktree() {
+        let (mut runtime, context, _root, _fake) = fixture(false);
+        with_worktree(&mut runtime);
+        assert_eq!(
+            purpose_target(
+                &runtime,
+                &context,
+                purpose("fix the bell", Some("/checkouts/fixture-wt"))
+            ),
+            Ok((
+                write("worktree", Some("wt"), None),
+                "/checkouts/fixture-wt".into()
+            )),
+            "its branch description holds it until a tab opens there"
+        );
+        for unlisted in ["/checkouts/fresh", "/checkouts/fixture/nested-wt"] {
+            assert_eq!(
+                purpose_target(&runtime, &context, purpose("fix", Some(unlisted))).err(),
+                Some("purpose_checkout_unlisted".into()),
+                "{unlisted} is never the caller's own checkout"
+            );
+        }
+    }
+
+    /// The write the command makes shows on the row at once, and an empty
+    /// purpose clears the token it wrote.
+    #[test]
+    fn a_purpose_shows_on_its_row_and_an_empty_one_clears_it() {
+        let written = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = written.clone();
+        let (runtime, context, _root, _fake) = fixture_answering(false, move |method, params| {
+            assert_eq!(method, "report_workspace_token");
+            seen.lock().unwrap().push(params.clone());
+            crate::engine::fake::reply(())
+        });
+        let runtime = Arc::new(std::sync::Mutex::new(runtime));
+        with_worktree(&mut runtime.lock().unwrap());
+        let run = |text: &str| {
+            let mut prepared = runtime
+                .lock()
+                .unwrap()
+                .prepare_pane_command(NODE, "sender", &context, purpose(text, None))
+                .unwrap();
+            prepared.runtime = Arc::downgrade(&runtime);
+            prepared.run()
+        };
+        let shown = || {
+            runtime.lock().unwrap().snapshot.navigator.workspaces[0].checkouts[0]
+                .purpose
+                .as_ref()
+                .map(|purpose| purpose.text.clone())
+        };
+        assert_eq!(
+            run("fix the bell"),
+            Ok(json!({"checkout": "/checkouts/fixture", "purpose": "fix the bell"}))
+        );
+        assert_eq!(shown(), Some("fix the bell".into()));
+        assert_eq!(
+            run(""),
+            Ok(json!({"checkout": "/checkouts/fixture", "purpose": ""}))
+        );
+        assert_eq!(shown(), None);
+        assert_eq!(
+            *written.lock().unwrap(),
+            vec![
+                json!({"workspace": "w4", "token": "purpose", "value": "fix the bell"}),
+                json!({"workspace": "w4", "token": "purpose", "value": null}),
+            ]
+        );
     }
 
     #[test]

@@ -2502,6 +2502,39 @@ impl GitCommands for EngineOnly {
     }
 }
 
+/// `hide workspace purpose`'s write: the one the checkout row's Set purpose
+/// makes, on the caller's task, with this machine's node for its Git or none
+/// for a device checkout. Whether the engine's token was written; a branch
+/// description that failed after the token was written is logged, since the
+/// purpose shows.
+pub(crate) fn write_checkout_purpose(
+    engine: &dyn Engine,
+    node: Option<&dyn crate::node_access::NodeLink>,
+    request: &PurposeTaskRequest,
+) -> Result<bool, String> {
+    let outcome = match node {
+        Some(node) => write_purpose(engine, &NodeGit(node), request),
+        None => write_purpose(engine, &EngineOnly, request),
+    }?;
+    match outcome {
+        PurposeTaskOutcome::Saved { token_written, .. } => Ok(token_written),
+        PurposeTaskOutcome::GitFailed {
+            token_written: true,
+            detail,
+            ..
+        } => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "checkout_purpose",
+                "kind": "checkout_purpose.git_failed_saved",
+                "checkout_id": request.checkout_id,
+                "message": detail,
+            }));
+            Ok(true)
+        }
+        PurposeTaskOutcome::GitFailed { detail, .. } => Err(detail),
+    }
+}
+
 fn write_purpose(
     engine: &dyn Engine,
     git: &dyn GitCommands,
