@@ -1319,6 +1319,15 @@ async fn screen_loop(
 }
 
 /// What a refused delivery or agent command asks of its caller.
+/// `invalid_agent_name`'s next action, naming the engine's limit
+/// (`hide_core::AGENT_NAME_LIMIT`).
+static INVALID_AGENT_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "The --name was refused: an agent name is 1 to {} characters of lowercase letters, digits, - and _, starting with a lowercase letter; spawn again with a name that fits",
+        hide_core::AGENT_NAME_LIMIT
+    )
+});
+
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     match hide_core::coordination::split_refusal(code).0 {
         // A spawn that hands a plan step, or a letter that would wake a
@@ -1449,10 +1458,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "A mission node's worker starts on its brief: spawn again with --brief-file <path> (or --brief <text>) holding what the node is to do"
         }
         "invalid_brief" => "The brief must be text of at most 16 KiB that is not blank",
-        // `hide_core::AGENT_NAME_LIMIT` is the limit this names.
-        "invalid_agent_name" => {
-            "The --name was refused: an agent name is 1 to 32 characters of lowercase letters, digits, - and _, starting with a lowercase letter; spawn again with a name that fits"
-        }
+        "invalid_agent_name" => INVALID_AGENT_NAME.as_str(),
         "brief_not_submitted" => {
             "The agent started but did not take its brief within 30 seconds, and nothing was typed; error.spawn.cause says why: question (its screen asks a question; answer it in its pane), not_ready, unread, or agent_ended. Then run the same command again with the same intent, which submits the brief, starting the agent once more only if it ended"
         }

@@ -1381,6 +1381,31 @@ fn spawn(
             )?;
         }
     }
+    // A mission's spawn that may still make its worktree is judged against
+    // the mission's project before anything is reserved, so a refused one
+    // leaves nothing behind and the same intent with the project's folder
+    // goes through (with-hide/hide#2634); the destination it finds is the
+    // one the worktree starts from. An attempt whose worktree is recorded
+    // already is past the judgment.
+    let judged = match (branch, mission.as_deref()) {
+        (Some(_), Some(admission))
+            if admission.project.is_some()
+                && !earlier.as_ref().is_some_and(|record| record.path.is_some()) =>
+        {
+            let device = machine.as_deref().unwrap_or(&actor.device_id);
+            let node = context(client, device)
+                .map_err(|reason| {
+                    if machine.is_some() {
+                        "machine_unavailable".to_owned()
+                    } else {
+                        reason
+                    }
+                })?
+                .node;
+            Some(mission_destination(node.as_deref(), repo, Some(admission))?)
+        }
+        _ => None,
+    };
     // The item an admission judged is the one that starts; a spawn none
     // judged picks here, once, before its hook is judged, and keeps that
     // same request through node resolution. Completed retries need no
@@ -1501,10 +1526,6 @@ fn spawn(
     // command continues once it answers again.
     let (spawn_id, on_device) = (reserved.id.clone(), reserved.machine.is_some());
     // A worktree spawn of a mission is judged against its project first.
-    let destination = match branch {
-        Some(_) => mission_destination(node.as_deref(), repo, mission.as_deref())?,
-        None => None,
-    };
     let placed = (|| -> Result<Value, String> {
         if reserved.pane.is_none() {
             // An engine that names a pane before it runs anything there (the
@@ -1693,7 +1714,10 @@ fn spawn(
                 // branch the repository's own folder has out. A device whose
                 // helper is not connected leaves the start to the engine: the
                 // destination as named, or the folder's own HEAD.
-                let destination = destination.clone();
+                let destination = match &judged {
+                    Some(destination) => destination.clone(),
+                    None => mission_destination(node.as_deref(), repo, mission.as_deref())?,
+                };
                 let start = match node.as_deref() {
                     Some(node) => {
                         crate::worktree_control::new_branch_start(node, repo, destination)
@@ -2780,6 +2804,16 @@ mod tests {
                 destination(&repo, &admission(true)),
                 Ok(Some("hide/base".into())),
                 "{repo}"
+            );
+        }
+        // A link to the project's folder is the project too.
+        #[cfg(unix)]
+        {
+            let link = folder.path().join("project-link");
+            std::os::unix::fs::symlink(&project, &link).unwrap();
+            assert_eq!(
+                destination(link.to_str().unwrap(), &admission(true)),
+                Ok(Some("hide/base".into()))
             );
         }
         let refused = destination(&wire(&other), &admission(true)).unwrap_err();

@@ -382,12 +382,17 @@ pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
 }
 
 /// A spawn's `--repo` and `--path` as this machine spells the folders they
-/// name, as `hide diff open` sends its path: the core relates a folder to the
-/// projects it lists by that one spelling, so `C:\repo`, `c:/repo` or
-/// `repo/.` would name the folder to Git and no project to the core, and a
-/// mission's worker would start from the folder's own branch instead of the
-/// mission's destination (with-hide/hide#2634). A path on the device
-/// `--machine` names is that device's to spell and goes as given.
+/// name, as `hide diff open` sends its path. Whether a mission's spawn is in
+/// the mission's project is read from Git on the machine whatever the
+/// spelling (with-hide/hide#2634), but the rest of a spawn reads the text:
+/// the project row a plain folder is found by (`Runtime::spawn_place`), the
+/// caller's own registration's project, a `--beside` spawn's match with the
+/// caller's checkout, and the reserved intent, which is the same spawn only
+/// with the same `--repo`. So `C:\repo`, `c:/repo` and `repo/.` go out as the
+/// one spelling the core lists the folder by. A path on the device
+/// `--machine` names is that device's to spell and goes as given, the
+/// caller's own device id included, since only a call to the core says
+/// which id is this machine's.
 fn with_wire_paths(mut command: Delivery) -> Result<Delivery, String> {
     if let Delivery::Agents {
         command:
