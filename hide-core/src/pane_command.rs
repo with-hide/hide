@@ -70,8 +70,15 @@ pub enum PaneCommand {
     /// `hide pane open --beside [--focus] -- <command>`: the words after
     /// `--`, joined by spaces into the line the new pane's shell runs.
     Open { command: String, focus: bool },
-    /// `hide workspace purpose <text>`.
-    Purpose { text: String },
+    /// `hide workspace purpose <text>`: an empty text clears the purpose.
+    Purpose {
+        text: String,
+        /// The root of the Git checkout the command ran in, spelled as its
+        /// machine spells paths; none outside one, or from an older CLI,
+        /// names the caller's own checkout.
+        #[serde(default)]
+        checkout: Option<String>,
+    },
 }
 
 impl PaneCommand {
@@ -154,9 +161,9 @@ impl PaneCommand {
                 }
                 Ok(())
             }
-            Self::Purpose { text } => {
+            Self::Purpose { text, .. } => {
                 let text = text.trim();
-                if text.is_empty() || text.chars().any(char::is_control) {
+                if text.chars().any(char::is_control) {
                     return Err("purpose_invalid");
                 }
                 if text.chars().count() > PURPOSE_CHARS {
@@ -227,6 +234,9 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "Run hide workspace info and retry from the checkout you are in"
         }
         "purpose_no_workspace" => "Open the checkout in Hide and retry",
+        "purpose_checkout_unlisted" => {
+            "Hide lists this folder in no checkout of your pane's project yet; retry once its row shows in the sidebar, or run the command from a pane opened in it"
+        }
         "pane_open_unconfirmed" => {
             "Run hide ps to see whether the pane opened before you open another"
         }
@@ -275,6 +285,9 @@ pub struct PaneOpened {
 /// `hide workspace purpose`: the purpose the checkout now shows.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PurposeSet {
+    /// The folder of the checkout that shows it.
+    pub checkout: String,
+    /// The purpose, empty once cleared.
     pub purpose: String,
 }
 
@@ -318,9 +331,14 @@ pub(crate) enum Step {
         command: String,
         focus: bool,
     },
+    /// The checkout row's Set purpose write (`worktree_control::write_purpose`)
+    /// for the checkout at `path`: with this machine's node for its Git, or
+    /// none for a device checkout, which keeps its purpose in the engine only.
     Purpose {
-        workspace: String,
-        text: String,
+        request: crate::worktree_control::PurposeTaskRequest,
+        path: String,
+        git: Option<std::sync::Arc<dyn crate::node_access::NodeLink>>,
+        remote_target_id: Option<String>,
     },
 }
 
@@ -465,13 +483,43 @@ impl Prepared {
                     focused: focus,
                 })
             }
-            Step::Purpose { workspace, text } => {
-                engine
-                    .report_workspace_token(wait, &workspace, "purpose", Some(&text))
-                    .map_err(|error| {
-                        failed("purpose", &workspace, &error, "purpose_unavailable")
-                    })?;
-                serde_json::to_value(PurposeSet { purpose: text })
+            Step::Purpose {
+                request,
+                path,
+                git,
+                remote_target_id,
+            } => {
+                let outcome = crate::worktree_control::write_checkout_purpose(
+                    engine,
+                    git.as_deref(),
+                    &request,
+                );
+                let purpose = request.purpose.clone();
+                let token_written = match outcome {
+                    Ok(token_written) => token_written,
+                    Err(detail) => {
+                        crate::diagnostic!(
+                            json!({"component":"pane_command","kind":"pane_command.failed",
+                            "step":"purpose","checkout_id":request.checkout_id,"message":detail})
+                        );
+                        return Err("purpose_unavailable".to_owned());
+                    }
+                };
+                if let Some(runtime) = runtime.upgrade() {
+                    runtime
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .show_checkout_purpose(
+                            &request.checkout_id,
+                            remote_target_id.as_deref(),
+                            purpose.clone(),
+                            token_written,
+                        );
+                }
+                serde_json::to_value(PurposeSet {
+                    checkout: path,
+                    purpose,
+                })
             }
         };
         value.map_err(|_| "result_encoding_failed".to_owned())
@@ -727,8 +775,16 @@ mod tests {
             send("x".repeat(16 * 1024 + 1)).check(),
             Err("text_too_long")
         );
-        let purpose = |text: String| PaneCommand::Purpose { text };
+        let purpose = |text: String| PaneCommand::Purpose {
+            text,
+            checkout: None,
+        };
         assert_eq!(purpose("가".repeat(40)).check(), Ok(()));
+        assert_eq!(
+            purpose("  ".into()).check(),
+            Ok(()),
+            "an empty purpose clears it"
+        );
         assert_eq!(purpose("가".repeat(41)).check(), Err("purpose_too_long"));
         assert_eq!(purpose("one\ntwo".into()).check(), Err("purpose_invalid"));
         let open = |command: String| PaneCommand::Open {
