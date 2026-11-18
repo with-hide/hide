@@ -46,6 +46,9 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // `hide-peer` does not link the core, so the core's diagnostic log is
+    // handed to it here, once, for every role this process may run.
+    hide_peer::log::set_sink(hide_core::diagnostics::emit);
     let result = run(role);
     // Before every exit below, so the records queued last reach the log.
     hide_core::diagnostics::drain();

@@ -31,4 +31,13 @@ platforms = [
 [final-excludes]
 # The relay protocol also builds for browsers; the native workspace feature
 # union includes OS-only crates which cannot enter that WASM module.
-workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol"]
+workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol", "hide-peer-protocol"]
+
+# The iroh transport is left out of the traversal: what iroh and noq turn on
+# in the crates everything shares (tokio-util, hyper, tower, rustls) would
+# otherwise become every member's build, and crates only iroh uses would be
+# listed here (PRD device-connect-iroh, Technical structure).
+# `scripts/check-iroh-stays-behind-the-seam.py` holds the other half: no
+# other member depends on those crates.
+[traversal-excludes]
+workspace-members = ["hide-peer-iroh"]

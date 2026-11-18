@@ -600,6 +600,68 @@ pub fn device_node_state(home: &Path) -> PathBuf {
     hide_home(home).join("device-node")
 }
 
+/// The folder a state folder keeps its connections to other Hide machines
+/// in (PRD device-connect-iroh D-52): the machine key, the grants this
+/// machine gives, the hosts it is a guest of, and its inboxes.
+pub fn peers(state_dir: &Path) -> PathBuf {
+    state_dir.join("peers")
+}
+
+/// The machine key: one per state folder, private, never in a keychain, so
+/// an isolated state folder is another machine.
+pub fn machine_key(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("machine.key")
+}
+
+/// Who may run work on this machine.
+pub fn peer_grants(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("grants.json")
+}
+
+/// The hosts this machine is a guest of, and where to find them.
+pub fn peer_known(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("known.json")
+}
+
+/// This machine's durable record of the events of the host named by the
+/// first 16 hex characters of its key (D-66).
+pub fn peer_inbox(state_dir: &Path, host: &str) -> PathBuf {
+    peers(state_dir).join("inbox").join(host)
+}
+
+/// The folder of the guest named by the first 16 hex characters of its key
+/// (D-77): `<state>/g/<key>/`. The names are short because every endpoint
+/// the guest's node binds below it has to fit a Unix socket path; the
+/// contract (`hide_peer_protocol::launch`) states the bound and owns the
+/// names.
+pub fn guest_dir(state_dir: &Path, guest: &str) -> PathBuf {
+    state_dir
+        .join(hide_peer_protocol::launch::GUESTS_DIR)
+        .join(guest)
+}
+
+/// The file in a guest's folder that holds its whole key.
+pub fn guest_key(state_dir: &Path, guest: &str) -> PathBuf {
+    guest_dir(state_dir, guest).join(hide_peer_protocol::launch::KEY_FILE)
+}
+
+/// What the host build alone writes for a guest.
+pub fn guest_host_side(state_dir: &Path, guest: &str) -> PathBuf {
+    guest_dir(state_dir, guest).join(hide_peer_protocol::launch::HOST_SIDE)
+}
+
+/// The guest's panes as the host last saw them, so they show after the host
+/// restarts with the guest away (D-31).
+pub fn guest_panes(state_dir: &Path, guest: &str) -> PathBuf {
+    guest_host_side(state_dir, guest).join(hide_peer_protocol::panes::FILE)
+}
+
+/// The state folder of the guest's node, a process of the guest's own
+/// build. The host build never reads inside it.
+pub fn guest_node_side(state_dir: &Path, guest: &str) -> PathBuf {
+    guest_dir(state_dir, guest).join(hide_peer_protocol::launch::NODE_SIDE)
+}
+
 /// The folder a state folder's holders listen and log in, one socket and
 /// one log per pane.
 pub fn holder_panes(state_dir: &Path) -> PathBuf {

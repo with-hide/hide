@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use hide_node::ssh::{OpenError, RemoteHost};
 
-use crate::link_mux::Mux;
+use hide_peer::mux::Mux;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::{JoinHandle, JoinSet};

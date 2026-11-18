@@ -636,7 +636,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
     let _ = stream.set_read_timeout(None);
     // The connection ends when `served` drops: on a failure below, or once
     // the core is done with the link.
-    let (served, stream) = match crate::link_mux::serve(stream) {
+    let (served, stream) = match hide_peer::mux::serve(stream) {
         Ok(served) => served,
         Err(error) => {
             service.grants.revoke(&relay_token);
