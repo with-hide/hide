@@ -2106,6 +2106,10 @@ fn a_failed_wake_says_why_and_can_be_retried_fresh() {
     assert_eq!(row(&runtime)["sleep"]["state"], "waking");
 }
 
+/// An agent that came back counts as looked at then, so the conversation it
+/// resumes, as old as the sleep, does not make it due again at once
+/// (with-hide/hide#2627: the look a wake stamped was dropped with the pane's
+/// stamp when the agent came back).
 #[test]
 fn a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again() {
     let (mut runtime, _) = asleep();
@@ -2118,6 +2122,13 @@ fn a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again() {
         serde_json::json!({"pane_id": SLEEPER})
     )));
     assert_eq!(row(&runtime)["sleep"]["state"], "waking");
+    runtime.ingest_agent_wake(
+        SLEEPER,
+        crate::agent_sleep::WakeMode::Resume,
+        crate::agent_sleep_engine::WakeOutcome::Started,
+    );
+    runtime.ingest_session(Ok(session(Some(9))));
+    assert!(row(&runtime).get("sleep").is_none(), "the agent is back");
     assert!(seen(&runtime) >= before);
 }
 

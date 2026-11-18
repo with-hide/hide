@@ -296,6 +296,7 @@ impl Runtime {
             return false;
         };
         let mut budget = ends_left(&self.snapshot.ui_state.agent_sleep);
+        let letters = self.letter_waits();
         let mut on_screen: HashMap<Option<String>, HashSet<String>> = HashMap::new();
         let mut changed = false;
         let mut kept = Vec::new();
@@ -325,7 +326,7 @@ impl Runtime {
                     None => {}
                 }
             }
-            let verdict = self.mission_sleep_verdict(&actor, &mut on_screen);
+            let verdict = self.mission_sleep_verdict(&actor, &letters, &mut on_screen);
             match verdict {
                 Verdict::Keep => kept.push(mark),
                 Verdict::Drop(why) => {
@@ -353,10 +354,11 @@ impl Runtime {
 
     /// Whether the agent `actor` registers may be put to sleep now for its
     /// mark (D-18): the pane menu's rules, off the operator's screen, the
-    /// same session still in its pane.
+    /// same session still in its pane, and no letter waiting for it.
     fn mission_sleep_verdict(
         &self,
         actor: &crate::delivery::Actor,
+        letters: &crate::agent_sleep::LetterWaits,
         on_screen: &mut HashMap<Option<String>, HashSet<String>>,
     ) -> Verdict {
         if actor.code_owned() {
@@ -406,6 +408,11 @@ impl Runtime {
         // report wakes no one. A root's row already reads that as working
         // (`children_moving`); a delegated row's does not.
         if agent.descendant_counts.working > 0 {
+            return Verdict::Keep;
+        }
+        // A letter to it would wait for a wake its own sleep put off
+        // (with-hide/hide#2627).
+        if letters.holds(agent) {
             return Verdict::Keep;
         }
         let shown = on_screen

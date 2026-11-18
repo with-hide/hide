@@ -10,7 +10,9 @@ use crate::agent_sleep_engine::WakeOutcome;
 use crate::coordination::AgentRecord;
 use crate::delivery::Actor;
 use crate::delivery::ledger::{Ledger, State};
+use crate::memory_pressure::PressureReading;
 use crate::workspace_control::Query;
+use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
 
 const CHECKOUT: &str = "/private/tmp/hide-mission-worker-sleep";
 const TABS: [&str; 2] = ["w-order:t1", "w-order:t2"];
@@ -549,6 +551,103 @@ fn the_store_reads_a_sleeper_with_its_session() {
     assert_eq!(sleeper.session, actor(WORKER).session);
     assert_eq!(sleeper.device_id, crate::node::TEST_NODE);
     assert_eq!(sleeper.since, 1_000);
+}
+
+/// The machine's memory pressure at `level`, read at `now`.
+fn pressure(runtime: &mut Runtime, level: MemoryPressure, now: u64) {
+    runtime.ingest_memory_pressure(
+        None,
+        PressureReading {
+            answer: Ok(PressureAnswer {
+                level,
+                source: PressureSource::System,
+            }),
+            read_at_unix_ms: now,
+        },
+    );
+}
+
+/// with-hide/hide#2627: a worker a `request` woke stays awake under memory
+/// pressure until the letter reaches it, though the conversation it resumed
+/// ended long before its sleep. In order: the wake, a pressure minute, the
+/// doorbell. Once the letter is taken in, pressure takes the worker again,
+/// half an hour after it came back.
+#[test]
+fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it() {
+    const MINUTE: u64 = 60 * 1000;
+    let mut runtime = sleepers(&[WORKER]);
+    let id = letter(&mut runtime, WORKER, "request");
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, WakeOutcome::Started);
+    // The resumed conversation's last reply came 51 minutes before the wake.
+    let mut back = session("w-order:t1", Some("idle"));
+    let worker = back
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+        .unwrap();
+    worker.facts = Some(crate::request_view::RowFacts {
+        native_session_id: Some(native(WORKER)),
+        last_reply_at_unix_ms: Some(unix_milliseconds() - 51 * MINUTE),
+        ..Default::default()
+    });
+    show(&mut runtime, back);
+    let woke = unix_milliseconds();
+    assert_eq!(phase(&runtime, WORKER), None, "the worker is back");
+
+    // The pressure minute, ten seconds after the wake.
+    let minute = woke + 10_000;
+    pressure(&mut runtime, MemoryPressure::Warning, minute);
+    runtime.tick_agent_sleep(minute);
+    assert_eq!(
+        phase(&runtime, WORKER),
+        None,
+        "a letter waits for it: pressure leaves it awake"
+    );
+
+    // The doorbell, once its quiet period has passed, may ring the letter.
+    let ledger = runtime.delivery_state().unwrap();
+    let waiting = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == id)
+        .unwrap();
+    assert_eq!(waiting.state, State::Pending);
+    let bell = woke + crate::delivery::INPUT_QUIET_MS + 1_000;
+    assert!(
+        runtime
+            .delivery_bell_verdict(
+                &actor(WORKER),
+                crate::delivery::doorbell::Patience::of(waiting),
+                bell,
+            )
+            .is_ok(),
+        "the worker's pane takes the letter's bell"
+    );
+
+    // The letter is taken in: nothing holds the worker but its idle time,
+    // which counts from the wake, not from its conversation's last line.
+    let mut taken = (*ledger).clone();
+    taken
+        .letters
+        .iter_mut()
+        .find(|letter| letter.id == id)
+        .unwrap()
+        .state = State::Delivered;
+    runtime.publish_delivery(Arc::new(taken), true);
+    let later = woke + 10 * MINUTE;
+    pressure(&mut runtime, MemoryPressure::Warning, later);
+    runtime.tick_agent_sleep(later);
+    assert_eq!(phase(&runtime, WORKER), None, "ten minutes after its wake");
+    let last = woke + 31 * MINUTE;
+    pressure(&mut runtime, MemoryPressure::Warning, last);
+    runtime.tick_agent_sleep(last);
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Ending),
+        "half an hour after its wake"
+    );
 }
 
 fn mission(status: &str) -> crate::missions::Mission {
