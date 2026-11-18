@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // A notice in the window's corner (docs/UI_BEHAVIOR.md, Notices): an info one
-// leaves after its time unless the operator holds it, an important one stays.
+// leaves after its time, held while the operator is inside it; an important one stays.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -44,14 +44,14 @@ it("leaves after its time when nothing holds it", () => {
   expect(shown()).toBeNull();
 });
 
-it("stays while the keyboard is inside it, and counts its whole time again once it leaves", () => {
+it("holds its count while the keyboard is inside it, and goes on from where it stopped once it leaves", () => {
   show("info", TOAST_INFO_MS);
-  wait(TOAST_INFO_MS - 1);
+  wait(TOAST_INFO_MS - 1000);
   act(() => container.querySelector("button")?.focus());
   wait(TOAST_INFO_MS * 2);
   expect(shown()).not.toBeNull();
   act(() => container.querySelector("button")?.blur());
-  wait(TOAST_INFO_MS - 1);
+  wait(999);
   expect(shown()).not.toBeNull();
   wait(1);
   expect(shown()).toBeNull();

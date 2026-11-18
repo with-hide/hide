@@ -29,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Separator } from "../components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { Slider } from "../components/ui/slider";
-import { Toast } from "../components/ui/toast";
+import { Toast, TOAST_INFO_MS } from "../components/ui/toast";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
@@ -345,11 +345,11 @@ const renderers: Renderers = {
   },
 };
 
-/** A notice at the corner stack's width; the gallery holds it, so it never leaves on its own. */
+/** A notice at the corner stack's width; its dismiss does nothing, so the gallery keeps it after its countdown. */
 function GalleryToast({ level, actions, children }: { level: "info" | "important"; actions?: ReactNode; children: ReactNode }) {
   return (
     <div className="w-(--size-toast-w)">
-      <Toast level={level} actions={actions} onDismiss={() => {}} dismissLabel="Dismiss">
+      <Toast level={level} actions={actions} timeout={level === "info" ? TOAST_INFO_MS : undefined} onDismiss={() => {}} dismissLabel="Dismiss">
         {children}
       </Toast>
     </div>

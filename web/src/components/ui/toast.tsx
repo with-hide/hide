@@ -12,7 +12,7 @@ import { Hint } from "./tooltip";
 export type ToastLevel = "info" | "important";
 
 /** How long an info notice stays while nothing holds it. */
-export const TOAST_INFO_MS = 5000;
+export const TOAST_INFO_MS = 10_000;
 
 /**
  * The window's corner where notices stand, newest nearest the corner. It takes
@@ -36,7 +36,11 @@ type ToastProps = Omit<ComponentProps<"div">, "role"> & {
   /** Draws the close button; also what `timeout` calls. */
   onDismiss?: () => void;
   dismissLabel?: string;
-  /** Leaves after this many ms; the pointer or the keyboard inside it holds it, and the count starts again when they leave. */
+  /**
+   * Leaves after this many ms, which a bar along its foot counts down; the
+   * pointer or the keyboard inside it holds the count, which goes on from
+   * where it stopped once they leave.
+   */
   timeout?: number;
 };
 
@@ -44,13 +48,18 @@ type ToastProps = Omit<ComponentProps<"div">, "role"> & {
 export function Toast({ level, actions, onDismiss, dismissLabel, timeout, className, children, ...props }: ToastProps) {
   const [held, setHeld] = useState(false);
   const dismiss = useRef(onDismiss);
+  const left = useRef(timeout ?? 0);
   useEffect(() => {
     dismiss.current = onDismiss;
   }, [onDismiss]);
   useEffect(() => {
     if (timeout === undefined || held) return undefined;
-    const timer = window.setTimeout(() => dismiss.current?.(), timeout);
-    return () => window.clearTimeout(timer);
+    const began = Date.now();
+    const timer = window.setTimeout(() => dismiss.current?.(), left.current);
+    return () => {
+      window.clearTimeout(timer);
+      left.current = Math.max(0, left.current - (Date.now() - began));
+    };
   }, [timeout, held]);
   return (
     <div
@@ -63,7 +72,7 @@ export function Toast({ level, actions, onDismiss, dismissLabel, timeout, classN
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHeld(false);
       }}
       className={cn(
-        "pointer-events-auto flex items-start gap-sm rounded-md border bg-popover py-sm pl-md pr-xs text-caption text-popover-foreground shadow-overlay",
+        "pointer-events-auto relative flex items-start gap-sm overflow-hidden rounded-md border bg-popover py-sm pl-md pr-xs text-caption text-popover-foreground shadow-overlay",
         level === "important" ? "border-warning" : "border-border",
         className,
       )}
@@ -80,6 +89,14 @@ export function Toast({ level, actions, onDismiss, dismissLabel, timeout, classN
             <XIcon />
           </Button>
         </Hint>
+      ) : null}
+      {timeout !== undefined ? (
+        <div
+          aria-hidden="true"
+          data-toast-countdown="true"
+          className="toast-countdown absolute inset-x-0 bottom-0 h-xxs origin-left bg-muted-foreground"
+          style={{ animationDuration: `${timeout}ms`, animationPlayState: held ? "paused" : "running" }}
+        />
       ) : null}
     </div>
   );
