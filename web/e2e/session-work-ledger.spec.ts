@@ -69,11 +69,12 @@ test("@platform a native session's record groups its requests by goal flow and k
     await expect(flows).toHaveCount(1, { timeout: 45_000 });
     await expect(flows.first().locator("[data-record-flow-name]")).toHaveText(FIRST_GOAL);
     await expect(record.locator("[data-record-request]").first()).toContainText("기록 화면 구현 요청", { timeout: 45_000 });
-    await expect(record.locator("[data-record-artifact]")).toHaveText(["세션 기록 화면 시안"]);
     // The record reads the session's one list, the one its row's mark draws (status-model, One list per session):
     // this session's PR, #32 its pane holds on the checkout's branch (the fixture opens every PR on main), and its
     // child's in its own group; the two merged ones fold (B18, B19).
     await expect(record.locator('[data-record-prs="3"]')).toBeVisible({ timeout: 45_000 });
+    // The issue the turn printed is a 결과물 row, from the same GitHub read as the PRs rather than Hide AI's words (D-40).
+    await expect(record.locator('[data-record-issue="41"]')).toBeVisible();
     await expect(root.locator("[data-agent-pr]")).toHaveAttribute("aria-label", /^PR 3 · /);
     await record.locator('[data-record-settled="2"]').click();
     await expect(record.locator('[data-record-pr-group="own"] [data-record-pr-row="31"]')).toBeVisible();
@@ -139,10 +140,10 @@ test("@platform a native session's record groups its requests by goal flow and k
     await page.locator('[data-settings-tab="hideAi"]').click();
     await page.locator('[data-ai-agent-summary="true"]').click();
     await page.keyboard.press("Escape");
-    // Summaries off: every request as sent in time order, no flow, ask or artifact (B28).
+    // Summaries off: every request as sent in time order, no flow or ask; the issue, GitHub's fact, stays (B28).
     await expect(record.locator("[data-record-flow]")).toHaveCount(0);
     await expect(record.locator("[data-record-asks]")).toHaveCount(0);
-    await expect(record.locator("[data-record-artifacts]")).toHaveCount(0);
+    await expect(record.locator('[data-record-issue="41"]')).toBeVisible();
     await expect(record.locator("[data-record-raw-requests] [data-record-request]")).toHaveCount(2);
     await expect(record.locator('[data-record-prs="3"]')).toBeVisible();
     await expect(record.getByRole("heading", { level: 2 })).toContainText("Claude");
@@ -200,7 +201,7 @@ test("a report letter is a dim line in the record and the question it wakes wait
     // The child's report wakes the parent, which ends asking; the envelope
     // names the child by its agent name, as delivery writes it.
     const question = "앱을 다시 설치할지 정하세요";
-    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: question, work: { missed: [{ kind: "ask", text: question }], resolved: [], artifacts: [] } };
+    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: question, work: { missed: [{ kind: "ask", text: question }], resolved: [] } };
     fs.appendFileSync(path.join(claudeProjects(engine), "e2e", `${session}.jsonl`), [
       { type: "user", sessionId: session, timestamp: new Date(at + 5_000).toISOString(), origin: { kind: "human" }, message: { role: "user", content: `Hide letter letter-1 from two (claude) [report]\n끝났어요\n${labelMarker(letter)}` } },
       { type: "assistant", sessionId: session, timestamp: new Date(at + 6_000).toISOString(), message: { role: "assistant", content: [{ type: "text", text: labelMarker(letter) }] } },

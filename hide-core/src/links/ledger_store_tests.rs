@@ -2284,7 +2284,7 @@ fn flow(store: &mut LinkStore, goal: &str, at_unix_ms: u64, change: FlowChange) 
         .unwrap();
 }
 
-fn turn(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, artifacts: &[&str]) {
+fn turn(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str) {
     store
         .apply_ledger_update(&LedgerUpdate::TurnEnd {
             session: session(),
@@ -2296,10 +2296,7 @@ fn turn(store: &mut LinkStore, offset: u64, end: LabelEnd, line: &str, artifacts
             asks_answered: Some(crate::links::ledger::AsksAnswered::Operator),
             line: line.into(),
             turn_witness: None,
-            judgment: TurnJudgment {
-                artifacts: artifacts.iter().map(|name| (*name).into()).collect(),
-                ..Default::default()
-            },
+            judgment: TurnJudgment::default(),
         })
         .unwrap();
 }
@@ -2324,18 +2321,12 @@ fn requests_fall_into_the_flow_open_when_sent_and_a_past_flow_keeps_its_result()
     let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
     request(&mut store, 1, "기록 화면 시안 만들어줘");
     flow(&mut store, "기록 화면 시안", 1_000, FlowChange::New);
-    turn(
-        &mut store,
-        1,
-        LabelEnd::Done,
-        "시안 두 장 완성",
-        &["기록 화면 시안"],
-    );
+    turn(&mut store, 1, LabelEnd::Done, "시안 두 장 완성");
     request(&mut store, 2, "이걸로 PRD 써줘");
     flow(&mut store, "기록 PRD", 2_000, FlowChange::New);
     request(&mut store, 3, "결정 표도 넣어줘");
     flow(&mut store, "기록 화면 PRD 작성", 3_000, FlowChange::Rename);
-    turn(&mut store, 3, LabelEnd::Working, "PRD 쓰는 중", &[]);
+    turn(&mut store, 3, LabelEnd::Working, "PRD 쓰는 중");
     let record = store.ledger_record(&session()).unwrap();
     assert_eq!(
         record
@@ -2361,7 +2352,6 @@ fn requests_fall_into_the_flow_open_when_sent_and_a_past_flow_keeps_its_result()
         (LabelEnd::Done, "시안 두 장 완성")
     );
     assert_eq!(record.title, "기록 화면 PRD 작성");
-    assert_eq!(record.artifacts, ["기록 화면 시안"]);
     // The same goal again opens nothing.
     flow(&mut store, "기록 화면 PRD 작성", 4_000, FlowChange::New);
     assert_eq!(store.ledger_record(&session()).unwrap().flows.len(), 2);
@@ -2375,20 +2365,14 @@ fn a_limited_turn_leaves_the_last_real_state_on_top_with_a_badge() {
     let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
     request(&mut store, 1, "검수 리포트 정리해줘");
     chapter(&mut store);
-    turn(&mut store, 1, LabelEnd::Limited, "사용 한도 도달", &[]);
+    turn(&mut store, 1, LabelEnd::Limited, "사용 한도 도달");
     let status = store.ledger_record(&session()).unwrap().status.unwrap();
     assert_eq!(status.end, LabelEnd::Blocked);
     assert_eq!(status.limited.as_deref(), Some("사용 한도 도달"));
     request(&mut store, 2, "계속");
-    turn(
-        &mut store,
-        2,
-        LabelEnd::Question,
-        "1번과 2번 중 고르기",
-        &[],
-    );
+    turn(&mut store, 2, LabelEnd::Question, "1번과 2번 중 고르기");
     request(&mut store, 3, "1번");
-    turn(&mut store, 3, LabelEnd::Limited, "주간 한도 도달", &[]);
+    turn(&mut store, 3, LabelEnd::Limited, "주간 한도 도달");
     let record = store.ledger_record(&session()).unwrap();
     let status = record.status.unwrap();
     assert_eq!(
@@ -2409,7 +2393,7 @@ fn a_limited_turn_leaves_the_last_real_state_on_top_with_a_badge() {
     ));
     // Once a real turn follows, the badge goes.
     request(&mut store, 4, "다시");
-    turn(&mut store, 4, LabelEnd::Done, "끝", &[]);
+    turn(&mut store, 4, LabelEnd::Done, "끝");
     let status = store.ledger_record(&session()).unwrap().status.unwrap();
     assert_eq!((status.end, status.limited), (LabelEnd::Done, None));
 }
@@ -2870,37 +2854,6 @@ fn the_operators_reply_closes_earlier_asks_and_a_repeated_ask_is_one_line() {
         })
         .unwrap();
     assert!(asks(&store).is_empty());
-}
-
-/// B22: an END reads the session's recorded outputs, newest first, so the
-/// same board keeps its name.
-#[test]
-fn a_ledger_context_carries_the_recorded_artifacts_newest_first() {
-    let directory = tempfile::tempdir().unwrap();
-    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
-    request(&mut store, 1, "보드 그려줘");
-    chapter(&mut store);
-    end(
-        &mut store,
-        1,
-        TurnJudgment {
-            artifacts: vec!["Overview 보드".into()],
-            ..Default::default()
-        },
-    );
-    request(&mut store, 2, "PRD 써줘");
-    end(
-        &mut store,
-        2,
-        TurnJudgment {
-            artifacts: vec!["Overview PRD".into(), "Overview 보드".into()],
-            ..Default::default()
-        },
-    );
-    assert_eq!(
-        store.ledger_context(&session()).unwrap().artifacts,
-        ["Overview PRD", "Overview 보드"]
-    );
 }
 
 /// B12: a question the operator put away stays away when a turn a letter

@@ -275,7 +275,7 @@ export function overviewWorld(now: number): OverviewWorld {
   } as SnapshotRest;
 
   const request = (offset: number, text: string, ago: number, summary: string | null = null) => ({ offset, text, at_unix_ms: now - ago, author: "operator" as const, images: 0, summary, answers: null, letter_from: null, count: 1, goal_command: false });
-  const blank = { asks: [], folded_asks: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
+  const blank = { asks: [], folded_asks: [], omitted_requests: 0, outputs: [], pr_groups: [], children: [] };
   const child = (pane: string, title: string): SessionRecord => ({
     ...blank,
     session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle",
@@ -302,7 +302,6 @@ export function overviewWorld(now: number): OverviewWorld {
     }],
     outputs: [output],
     pr_groups: [{ child: null, name: "사이드바 가독성 개선", pulls: [listedPull(output.number, output.title, "pending", null, output.url)] }],
-    artifacts: ["사이드바 가독성 점검표"],
     children: [child("h-a1c1", "컴포넌트 구조 정리"), child("h-a1c2", "한글 가독성 확인")],
   };
   // The device's open missed work, which the backlog's `놓친 일 N` gathers (scene state backlog-missed opens it), a question the session ended without an answer to among it.

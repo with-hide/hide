@@ -798,8 +798,7 @@ fn strip_code_fences(text: &str) -> String {
 }
 
 /// The ledger's side of an END request: the open missed lines, the
-/// operator's open questions among them, which a turn may resolve, and the
-/// outputs already recorded, so the same one keeps its name.
+/// operator's open questions among them, which a turn may resolve.
 pub(crate) fn work_context(ledger: &crate::links::ledger::LedgerContext) -> String {
     let missed = serde_json::json!(
         ledger
@@ -809,10 +808,7 @@ pub(crate) fn work_context(ledger: &crate::links::ledger::LedgerContext) -> Stri
             .collect::<Vec<_>>()
     )
     .to_string();
-    let artifacts = serde_json::json!(ledger.artifacts).to_string();
-    redact(&format!(
-        "\n<open-missed>{missed}</open-missed>\n<recorded-artifacts>{artifacts}</recorded-artifacts>"
-    ))
+    redact(&format!("\n<open-missed>{missed}</open-missed>"))
 }
 
 /// The turn's own answer, its assistant messages after its newest request,

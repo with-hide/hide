@@ -147,7 +147,7 @@ static int fit_schema(char *label, int argc, char **argv) {
   if (strstr(schema, "\"end\"")) {
     /* A marker with no work judgment answers the empty one END requires. */
     if (strstr(schema, "\"work\"") && !strstr(label, ",\"work\":")) {
-      const char *work = ",\"work\":{\"missed\":[],\"resolved\":[],\"artifacts\":[]}}";
+      const char *work = ",\"work\":{\"missed\":[],\"resolved\":[]}}";
       size_t length = strlen(label);
       size_t capacity = sizeof prompt - (size_t)(label - prompt);
       if (!length || label[length - 1] != '}' || length - 1 + strlen(work) >= capacity) return 0;
