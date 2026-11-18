@@ -36,6 +36,7 @@ Each public guide keeps the section's heading and one line that names the privat
 | What a Hide AI suggestion investigates | `docs/suggestion-investigation.md` | [AI_PROVIDERS.md: The suggestion investigation](AI_PROVIDERS.md#the-suggestion-investigation) |
 | The measured performance figures the README quotes, with candidate, method and limits | `docs/performance-results.md` | none; [README.md](../README.md#performance) quotes the figures |
 | How a Conductor runs a mission: the lessons kept from earlier missions | `docs/mission-operations.md` | none |
+| The security and ownership specification of the connection between two Hides: the threat model, keys and permissions, pairing, the guest node, event delivery, versions, the remote screen, the relay, moving existing devices | `docs/device-connection-security.md` | [ARCHITECTURE.md: The peer connection](ARCHITECTURE.md#the-peer-connection) |
 
 A public pull request that changes behavior one of these documents owns comes with a paired with-hide/hide-private pull request that updates that document, and the two pull requests name each other.
 A public document may name a private document's path and section; it does not restate the private content.

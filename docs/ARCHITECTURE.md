@@ -3137,6 +3137,7 @@ Each label worker asks the node of the machine that runs its engine for the lock
 
 Two machines that each run Hide keep one connection between them, and three crates hold it.
 No daemon opens one yet: in this build the crates, their contract file and their tests exist, and the only part that runs in a daemon is the link multiplexer below.
+The security and ownership specification this connection is built to (the threat model, pairing, who owns a guest's work, the relay's limits) is with-hide/hide-private's `docs/device-connection-security.md`; this section is the runtime contract the code keeps.
 
 | Crate | What it holds | What it may link |
 |---|---|---|
