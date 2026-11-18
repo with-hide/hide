@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use hide_agent_adapter::definition::{Catalog, Definition, Source};
+use hide_agent_hooks::hook_request::ExecProcess;
 use hide_node_link::holders::{
     ForegroundProgram, PaneFacts, RuleSet, ScreenRead, ScreenRules, ScreenState,
 };
@@ -366,6 +367,11 @@ pub(super) struct Live {
     /// The sequence its current stop finished work at, while it rests after
     /// working.
     pub(super) completion: Option<u64>,
+    /// The processes from the sender of the last hook report of its session
+    /// up to the pane's shell, as the kernel named them; none until a report
+    /// came with them. What a report of another session is judged by
+    /// ([`runs_inside`]).
+    pub(super) reporter: Option<Vec<ExecProcess>>,
 }
 
 impl PaneAgent {
@@ -634,6 +640,31 @@ pub(super) struct Applied {
     /// The agent a restore resumed, which these facts ended before its start
     /// settled ([`PaneAgent::resume_missed`]); the pane is a shell now.
     pub(super) resume_missed: Option<PaneAgent>,
+    /// A hook report named another session from inside the pane's agent
+    /// ([`runs_inside`]), which the agent keeps its own session past.
+    pub(super) ran_inside: bool,
+}
+
+/// Whether a hook report whose sender has `lineage` comes from a program the
+/// agent ran whose own hook's sender had `owner`, each the processes from a
+/// sender up to the pane's shell. The deepest process the two share is the
+/// agent itself while it runs: its own hooks, whichever session they name
+/// (a `/clear`, a resume, a new session of the same process), sit as deep
+/// below it as the earlier one did, and an agent it ran (`claude -p` from
+/// its tool's shell) sits deeper, below that program. Once the agent has
+/// ended the shared process is above where it ran, and an agent started in
+/// its place sits as deep as it did.
+pub(super) fn runs_inside(owner: &[ExecProcess], lineage: &[ExecProcess]) -> bool {
+    owner
+        .iter()
+        .enumerate()
+        .find_map(|(depth, process)| {
+            lineage
+                .iter()
+                .position(|other| other == process)
+                .map(|at| at > depth)
+        })
+        .unwrap_or(false)
 }
 
 /// Whether `facts` leave room for an agent the pane's foreground does not

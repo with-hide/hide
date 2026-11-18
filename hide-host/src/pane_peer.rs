@@ -28,3 +28,21 @@ pub fn process_start(pid: i32) -> Option<u64> {
 pub fn process_cwd(pid: i32) -> Option<PathBuf> {
     process::cwd_of(u32::try_from(pid).ok()?).ok()
 }
+
+/// The processes from `pid` up to the pane's shell `shell_pid`, both
+/// included, each kept apart from a later process given its pid: the
+/// lineage a hook's report is judged by, so a session an agent's own hook
+/// names is told from one an agent it ran names (`Engine::hook_session`).
+/// `None` when the system cannot show it.
+pub fn lineage(
+    pid: i32,
+    shell_pid: i32,
+) -> Option<Vec<hide_agent_hooks::hook_request::ExecProcess>> {
+    let lineage = process::lineage(u32::try_from(pid).ok()?, u32::try_from(shell_pid).ok()?)?;
+    Some(
+        lineage
+            .into_iter()
+            .map(|(pid, started)| hide_agent_hooks::hook_request::ExecProcess { pid, started })
+            .collect(),
+    )
+}

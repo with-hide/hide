@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Instant;
 
-use hide_agent_hooks::hook_request::ExecSeen;
+use hide_agent_hooks::hook_request::{ExecProcess, ExecSeen};
 use hide_node_link::NodeLink;
 use hide_node_link::holders::{
     HolderError, HolderKey, HolderRenewal, HolderScroll, HolderStart, PaneFacts, PaneHolders,
@@ -1715,7 +1715,13 @@ impl<'g> Engine for OwnEngine<'g> {
         self.changed();
     }
 
-    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
+    fn hook_session(
+        &self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+        lineage: Option<&[ExecProcess]>,
+    ) -> Answer<bool> {
         self.check()?;
         let catalog = self.shared.definitions.get();
         let definition =
@@ -1723,9 +1729,19 @@ impl<'g> Engine for OwnEngine<'g> {
                 code: "unknown_agent".to_owned(),
                 message: format!("no agent definition names {kind}"),
             })?;
-        let applied = self
-            .topology()
-            .hook_session(pane, &definition.id, session, &catalog)?;
+        let applied =
+            self.topology()
+                .hook_session(pane, &definition.id, session, lineage, &catalog)?;
+        if applied.ran_inside {
+            // An agent the pane's agent ran (`claude -p` from its tool's
+            // shell) inherits the pane's environment, so its hook speaks
+            // from the pane; its session is its own, never the pane's.
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_hooks", "kind": "hook_session.ran_inside",
+                "pane": pane, "agent": definition.id,
+            }));
+            return Ok(false);
+        }
         if applied.rules_for.is_some() {
             self.give_rules(pane);
         }
@@ -5324,7 +5340,9 @@ mod tests {
                     "the start keeps its claim"
                 );
             }
-            engine.hook_session(&pane, "claude-code", "s-1").unwrap();
+            engine
+                .hook_session(&pane, "claude-code", "s-1", None)
+                .unwrap();
             assert!(
                 engine
                     .topology()
@@ -5654,7 +5672,7 @@ mod tests {
             .create_workspace(WAIT, "/other", "other", false, Env::new())
             .unwrap();
         engine
-            .hook_session(&pane, "claude", "before-start")
+            .hook_session(&pane, "claude", "before-start", None)
             .unwrap();
         let start = engine
             .prepare_start(launch(&pane, "worker", "claude", &[]))
@@ -5700,7 +5718,9 @@ mod tests {
             .prepare_start(launch(&pane, "old", "claude", &[]))
             .unwrap();
         engine.start_agent(WAIT, &old).unwrap();
-        engine.hook_session(&pane, "claude", "old-session").unwrap();
+        engine
+            .hook_session(&pane, "claude", "old-session", None)
+            .unwrap();
         holders.say(
             &pane,
             &running("claude", hide_node_link::holders::ScreenState::Working),
@@ -5760,7 +5780,9 @@ mod tests {
                     matches!(engine.start_agent(WAIT, &reuse), Err(EngineError::Refused { code, .. }) if code == "agent_name_taken")
                 );
                 if outcome == "hook" {
-                    engine.hook_session(&pane, "codex", "confirmed").unwrap();
+                    engine
+                        .hook_session(&pane, "codex", "confirmed", None)
+                        .unwrap();
                     engine.start_agent(WAIT, &reuse).unwrap();
                 }
                 finish
@@ -5858,7 +5880,7 @@ mod tests {
                 admitted.recv_timeout(Duration::from_secs(5)).unwrap();
                 if observation == "hook" {
                     engine
-                        .hook_session(&pane, "claude", "same-session")
+                        .hook_session(&pane, "claude", "same-session", None)
                         .unwrap();
                     let duplicate = engine
                         .prepare_start(launch(&pane, "second", "codex", &[]))
@@ -6003,17 +6025,25 @@ mod tests {
                 .create_workspace(WAIT, "/w", "w", true, Env::new())
                 .unwrap();
             if report_first {
-                engine.hook_session(&pane, "claude-code", "first").unwrap();
-                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+                engine
+                    .hook_session(&pane, "claude-code", "first", None)
+                    .unwrap();
+                engine
+                    .hook_session(&pane, "claude-code", "latest", None)
+                    .unwrap();
                 assert!(engine.agents(WAIT).unwrap().is_empty());
             }
             holders.say(&pane, &running("claude", ScreenState::Working));
             if !report_first {
-                engine.hook_session(&pane, "claude-code", "latest").unwrap();
+                engine
+                    .hook_session(&pane, "claude-code", "latest", None)
+                    .unwrap();
             }
             let session = || engine.agents(WAIT).unwrap()[0].agent_session.clone();
             assert_eq!(session().unwrap().value, "latest");
-            engine.hook_session(&pane, "gemini", "nested").unwrap();
+            engine
+                .hook_session(&pane, "gemini", "nested", None)
+                .unwrap();
             assert_eq!(session().unwrap().value, "latest");
             holders.say(&pane, &PaneFacts::default());
             holders.say(&pane, &running("claude", ScreenState::Working));
@@ -6023,7 +6053,7 @@ mod tests {
             );
             holders.say(&pane, &PaneFacts::default());
             engine
-                .hook_session(&pane, "gemini", "early-other-kind")
+                .hook_session(&pane, "gemini", "early-other-kind", None)
                 .unwrap();
             holders.say(&pane, &running("claude", ScreenState::Working));
             assert!(
@@ -6037,10 +6067,84 @@ mod tests {
                 "a discarded report cannot reach a later agent"
             );
             holders.say(&pane, &PaneFacts::default());
-            engine.hook_session(&pane, "claude", "closing").unwrap();
+            engine
+                .hook_session(&pane, "claude", "closing", None)
+                .unwrap();
             engine.close_pane(WAIT, &pane).unwrap();
-            assert!(engine.hook_session(&pane, "claude", "too-late").is_err());
+            assert!(
+                engine
+                    .hook_session(&pane, "claude", "too-late", None)
+                    .is_err()
+            );
         }
+    }
+
+    /// An agent the pane's agent runs (`claude -p` from its tool's shell)
+    /// inherits the pane's environment, so its hook reports from the pane:
+    /// its session never becomes the pane's, while every session the pane's
+    /// own agent names (a `/clear`, a new session of the same process, a
+    /// resume in a new one) still does (with-hide/hide#2617).
+    #[test]
+    fn a_session_an_agent_the_pane_s_agent_ran_names_never_replaces_the_pane_s() {
+        use hide_node_link::holders::ScreenState;
+        let holders = Arc::new(Holders::default());
+        let engine = OwnEngine::new(Arc::clone(&holders) as Arc<dyn PaneHolders>);
+        let (_, _, pane) = engine
+            .create_workspace(WAIT, "/w", "w", true, Env::new())
+            .unwrap();
+        holders.say(&pane, &running("claude", ScreenState::Working));
+        // The pane's shell is 10 and its agent 20, which starts each hook
+        // through a shell of its own; its tool's shell is 30, which runs
+        // `claude -p` as 31.
+        let lineage = |pids: &[u32]| -> Vec<ExecProcess> {
+            pids.iter()
+                .map(|&pid| ExecProcess {
+                    pid,
+                    started: u64::from(pid),
+                })
+                .collect()
+        };
+        let report = |session: &str, pids: &[u32]| {
+            engine
+                .hook_session(&pane, "claude", session, Some(&lineage(pids)))
+                .unwrap()
+        };
+        let session = || {
+            engine.agents(WAIT).unwrap()[0]
+                .agent_session
+                .clone()
+                .unwrap()
+                .value
+        };
+        report("worker", &[22, 21, 20, 10]);
+        assert_eq!(session(), "worker");
+        report("one-shot", &[33, 32, 31, 30, 20, 10]);
+        assert_eq!(
+            session(),
+            "worker",
+            "a run of the agent's is not the pane's agent"
+        );
+        report("worker", &[25, 24, 20, 10]);
+        report("cleared", &[27, 26, 20, 10]);
+        assert_eq!(session(), "cleared", "the agent's own new session moves it");
+        report("one-shot-2", &[37, 36, 35, 34, 20, 10]);
+        assert_eq!(session(), "cleared");
+        report("resumed", &[42, 41, 40, 10]);
+        assert_eq!(
+            session(),
+            "resumed",
+            "an agent started where the ended one ran is the pane's"
+        );
+        report("one-shot-3", &[46, 45, 44, 43, 40, 10]);
+        assert_eq!(session(), "resumed");
+        engine
+            .hook_session(&pane, "claude", "untraced", None)
+            .unwrap();
+        assert_eq!(
+            session(),
+            "untraced",
+            "a report whose sender the kernel could not trace is taken as before"
+        );
     }
 
     /// with-hide/hide-private#696: an agent typed into a shell under a
@@ -6076,12 +6180,12 @@ mod tests {
                 // The shell at its prompt.
                 holders.say(&pane, &PaneFacts::default());
                 if report_first {
-                    engine.hook_session(&pane, kind, "s-1").unwrap();
+                    engine.hook_session(&pane, kind, "s-1", None).unwrap();
                     assert!(engine.agents(WAIT).unwrap().is_empty(), "{case}");
                 }
                 holders.say(&pane, &facts);
                 if !report_first {
-                    engine.hook_session(&pane, kind, "s-1").unwrap();
+                    engine.hook_session(&pane, kind, "s-1", None).unwrap();
                 }
                 let agents = engine.agents(WAIT).unwrap();
                 assert_eq!(agents.len(), 1, "{case}");
@@ -6115,7 +6219,9 @@ mod tests {
             .create_workspace(WAIT, "/w", "w", true, Env::new())
             .unwrap();
         holders.say(&pane, &running("gemini", ScreenState::Idle));
-        engine.hook_session(&pane, "claude-code", "s-1").unwrap();
+        engine
+            .hook_session(&pane, "claude-code", "s-1", None)
+            .unwrap();
         let agents = engine.agents(WAIT).unwrap();
         assert_eq!(agents[0].agent.as_deref(), Some("gemini"));
         assert!(agents[0].agent_session.is_none());
@@ -6155,7 +6261,9 @@ mod tests {
                 refused: None,
             };
             facts.record(&pane, &report, 0).unwrap();
-            engine.hook_session(&pane, "claude-code", "s-1").unwrap();
+            engine
+                .hook_session(&pane, "claude-code", "s-1", None)
+                .unwrap();
             let mut published = engine.session(WAIT).unwrap().project();
             let tokens = facts.lay(&mut published, str::to_owned, |_| true);
             assert!(tokens.contains_key(&pane), "{tokens:?}");
@@ -6238,7 +6346,7 @@ mod tests {
         ];
         for (pane, kind, program, session) in &typed {
             first_holders.say(pane, &running(program, ScreenState::Working));
-            first.hook_session(pane, kind, session).unwrap();
+            first.hook_session(pane, kind, session, None).unwrap();
             // Its turn was running when the daemon went down.
             apply(
                 &home(&place),
@@ -7004,9 +7112,9 @@ mod tests {
         );
         assert_eq!(holders.typed(&resting), "", "nothing is typed into it");
 
-        assert!(next.hook_session(&working, "claude", "s-1").unwrap());
+        assert!(next.hook_session(&working, "claude", "s-1", None).unwrap());
         assert!(
-            !next.hook_session(&working, "claude", "s-1").unwrap(),
+            !next.hook_session(&working, "claude", "s-1", None).unwrap(),
             "owed once"
         );
     }

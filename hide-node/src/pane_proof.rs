@@ -15,7 +15,7 @@ use hide_platform::fs::private;
 pub use hide_agent_hooks::hook_request::{
     RecordRefusal, bootstrap_socket_record, recorded_socket_path,
 };
-pub use hide_host::pane_peer::{PaneIdentity, descends_from, process_start};
+pub use hide_host::pane_peer::{PaneIdentity, descends_from, lineage, process_start};
 
 /// The listener a pane's process asks for a capability on, or a node asks
 /// its core on: a Unix socket or a named pipe, whose system reports the

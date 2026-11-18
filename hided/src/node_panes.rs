@@ -326,6 +326,7 @@ impl PaneEvents for Events {
                 one_shot,
                 hook,
                 executor,
+                lineage,
             } => panes.proof(
                 node,
                 link,
@@ -334,6 +335,7 @@ impl PaneEvents for Events {
                     pane_id,
                     identity,
                     executor,
+                    lineage,
                 },
                 one_shot,
                 hook,
@@ -390,11 +392,14 @@ impl PaneEvents for Events {
 enum Proof {
     /// The caller descends from the shell of `pane_id`; `executor` is the
     /// caller's process as the node's kernel names it when it sent a
-    /// start's report (`HookCommand::AgentExec`).
+    /// start's report (`HookCommand::AgentExec`), and `lineage` the
+    /// processes from it up to that shell when it sent a status report
+    /// (`HookCommand::Status`).
     Pane {
         pane_id: String,
         identity: PaneIdentity,
         executor: Option<ExecProcess>,
+        lineage: Option<Vec<ExecProcess>>,
     },
     /// The caller is in no pane, and its working directory is `path`.
     Checkout { path: String, nonce: String },
@@ -413,9 +418,11 @@ fn answer_hook(
     hook: HookRequest,
     received: std::time::Instant,
 ) -> ProofAnswer {
-    let executor = match &proof {
-        Proof::Pane { executor, .. } => *executor,
-        Proof::Checkout { .. } => None,
+    let (executor, lineage) = match &proof {
+        Proof::Pane {
+            executor, lineage, ..
+        } => (*executor, lineage.clone()),
+        Proof::Checkout { .. } => (None, None),
     };
     let attested = match &proof {
         Proof::Pane {
@@ -468,6 +475,7 @@ fn answer_hook(
             &cap,
             &hook,
             executor,
+            lineage,
             state
                 .desktop_renderers
                 .load(std::sync::atomic::Ordering::SeqCst)
@@ -729,6 +737,7 @@ mod tests {
                         one_shot: false,
                         hook: None,
                         executor: None,
+                        lineage: None,
                     },
                 );
             })

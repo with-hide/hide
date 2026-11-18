@@ -1313,6 +1313,34 @@ pub fn descends_from(pid: u32, ancestor: u32) -> bool {
     false
 }
 
+/// The processes from `pid` up to `ancestor`, both included, each with when
+/// it started ([`start_time`]), by the walk [`descends_from`] makes. `None`
+/// when that walk would answer `false`, when a process on it is gone before
+/// its start is read, or when a parent reads as having started after its
+/// child, which means its pid now names a later process: a lineage that
+/// cannot be shown is not claimed.
+pub fn lineage(pid: u32, ancestor: u32) -> Option<Vec<(u32, u64)>> {
+    let mut current = (pid, start_time(pid).ok()?);
+    let mut lineage = Vec::new();
+    for _ in 0..=MAX_DEPTH {
+        lineage.push(current);
+        if current.0 == ancestor {
+            return Some(lineage);
+        }
+        if current.0 <= 1 {
+            return None;
+        }
+        let parent = parent_of(current.0)
+            .ok()
+            .filter(|parent| *parent != current.0)?;
+        let started = start_time(parent)
+            .ok()
+            .filter(|started| *started <= current.1)?;
+        current = (parent, started);
+    }
+    None
+}
+
 /// When `pid` started, as a number only comparable with another start time of
 /// the same system. `NotFound` when `pid` does not exist, which is never
 /// while [`is_alive`] still counts it: a process this no longer answers for

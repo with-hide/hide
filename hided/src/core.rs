@@ -116,6 +116,7 @@ enum Command {
         device_id: String,
         pane_id: String,
         report: hide_node_link::panes::HookStatusReport,
+        lineage: Option<Vec<hide_agent_hooks::hook_request::ExecProcess>>,
         reply: Sender<Result<(), &'static str>>,
     },
     AgentExec {
@@ -606,6 +607,7 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         report: hide_node_link::panes::HookStatusReport,
+        lineage: Option<Vec<hide_agent_hooks::hook_request::ExecProcess>>,
     ) -> Result<(), &'static str> {
         let (reply, result) = mpsc::channel();
         self.commands
@@ -613,6 +615,7 @@ impl CoreHandle {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
                 report,
+                lineage,
                 reply,
             })
             .map_err(|_| "hook_status_unavailable")?;
@@ -1669,9 +1672,11 @@ fn owner_loop(
                 device_id,
                 pane_id,
                 report,
+                lineage,
                 reply,
             } => {
-                let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
+                let _ =
+                    reply.send(core.hook_status(&device_id, &pane_id, &report, lineage.as_deref()));
             }
             Command::AgentExec {
                 device_id,
