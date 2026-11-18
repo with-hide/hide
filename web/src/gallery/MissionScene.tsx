@@ -127,7 +127,15 @@ function plan(state: string, now: number): MissionNode[] {
     // Each worker and checker the core bound, so the result tiles count them.
     const reviewed = (who: MissionWorker, id: string, state: MissionCriterion["state"] = "pass") => line("review", "review", state, { checkers: [checker(who, state, id)] });
     return [
-      node("cause", `${no(1487)} 원인 조사`, { kind: "general", preset: "research", delivery: null, worker: opus("xhigh"), agent_id: "agent-cause", ...done(300, 40), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
+      // Its 결과 (issue 2637): the worker's report line as the conclusion, the two documents it opened, one closed since, and a summary under every line.
+      node("cause", `${no(1487)} 원인 조사`, { kind: "general", preset: "research", delivery: null, worker: opus("xhigh"), agent_id: "agent-cause", ...done(300, 40), reported: "reopen 때 셀 초기화가 attach보다 먼저 돌아서 화면이 비어 보였고, 순서를 바꾸면 50번 모두 셀이 남는다", views: [
+        { device_id: "local", checkout_path: "/repo", display_id: "d-cause-1", view: "cause-1", kind: "file", label: "results.md", by: "worker" },
+        { device_id: "local", checkout_path: "/repo", display_id: "d-cause-2", view: "cause-2", kind: "file", label: "spec.md", closed: true, by: "worker" },
+      ], ...finish(
+        own(1, "원인을 재현 단계와 함께 적는다", "pass", { summary: "v1.2.8과 main 두 빌드로 reopen을 50번씩 돌려 둘 다 같은 순서로 재현했어요" }),
+        own(2, "고칠 곳을 한 곳으로 좁힌다", "pass", { summary: "attach 전에 셀을 지우는 한 줄이 원인이에요" }),
+        own(3, "실제 세션 50개로 확인", "skipped", { summary: "기록된 세션 31개로 확인했고 나머지는 못 돌렸어요", skip: { reason: "기록된 세션이 31개뿐" } }),
+      ) }),
       node("api", "API 추가", { worker: astra("high"), agent_id: "agent-api", ...done(300, 120), pr: 1503, pr_state: "merged", landing: MERGED, stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), reviewed(opus("high"), "reviewer-api"), ci("pass")) }),
       node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), agent_id: "agent-1481", ...done(290, 60), branch: "fix-1481", stage: 4, landing: inMain("4f1c9a27be03"), ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass")) }),
       node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), agent_id: "agent-1487", ...done(250, 90), pr: 1506, pr_state: "merged", landing: MERGED, stage: 4, attempts: 2, ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ci("pass")) }),
