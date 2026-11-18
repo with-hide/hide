@@ -1,0 +1,29 @@
+#!/usr/sbin/nft -f
+# Loaded and removed by hide-iroh-relay-limits.service. It owns this one table
+# and touches no other rule. The first two lines make loading it a replace.
+table inet hide_iroh_relay
+delete table inet hide_iroh_relay
+
+table inet hide_iroh_relay {
+	# Read by the meter (iroh-relay-meter.py): new connections, and the bytes
+	# the relay sends, which leave the machine once more through Caddy.
+	counter connections {
+	}
+	counter sent {
+	}
+
+	chain input {
+		type filter hook input priority filter; policy accept;
+		# Caddy opens one loopback connection per relay client. iroh-relay has
+		# no accept rate or connection cap of its own.
+		iif "lo" tcp dport 3443 ct state new limit rate over 10/second burst 30 packets reject with tcp reset
+		iif "lo" tcp dport 3443 ct state new ct count over 2048 reject with tcp reset
+		iif "lo" tcp dport 3443 ct state new counter name "connections"
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+		oif "lo" tcp sport 3443 counter name "sent"
+		udp sport 7842 counter name "sent"
+	}
+}
