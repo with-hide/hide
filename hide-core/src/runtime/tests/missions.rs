@@ -11661,6 +11661,47 @@ fn refused_close(runtime: &mut Runtime, now: u64) {
     );
 }
 
+/// with-hide/hide#2618: a health pass runs whenever any of its inputs
+/// moves, a busy delivery ledger about once a second, and each one tried
+/// the refused close again and logged it. The gate reads only the book and
+/// GitHub's answer, so the close waits for one of them to move.
+#[test]
+fn a_refused_close_is_tried_again_only_once_the_book_or_github_moved() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    let refusals = |runtime: &mut Runtime, at: u64| {
+        // Another input of the pass moved, as a new delivery ledger does.
+        runtime.missions.health_made = Default::default();
+        let ((), logged) = crate::diagnostics::capture(|| {
+            runtime.drive_mission_health(at);
+        });
+        logged
+            .iter()
+            .filter(|record| record["kind"] == "mission.hide_close_refused")
+            .count()
+    };
+    let ((), logged) = crate::diagnostics::capture(|| refused_close(&mut runtime, now));
+    assert_eq!(
+        logged
+            .iter()
+            .filter(|record| record["kind"] == "mission.hide_close_refused")
+            .count(),
+        1
+    );
+    for at in 1..=3 {
+        assert_eq!(refusals(&mut runtime, now + at), 0, "pass {at}");
+    }
+    runtime.missions.github_edit += 1;
+    assert_eq!(
+        refusals(&mut runtime, now + 4),
+        1,
+        "a new GitHub answer is judged"
+    );
+    assert_eq!(refusals(&mut runtime, now + 5), 0);
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+}
+
 /// with-hide/hide#2518: the Conductor skips the line Hide's close was
 /// refused on and closes the mission as done itself. The close that passes
 /// answers the refused close, whoever makes it, so nothing of it is left on

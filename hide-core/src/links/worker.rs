@@ -1071,6 +1071,11 @@ fn next_wait(state: &State) -> Duration {
 }
 
 fn log_write(code: &str, what: &str) {
+    // A full file is the store's to report, once per crossing
+    // (`store.full`), after it found nothing left to drop.
+    if code == "links_store_full" {
+        return;
+    }
     crate::diagnostic!(serde_json::json!({
         "component": "links", "kind": "store.write_failed", "what": what, "code": code,
     }));

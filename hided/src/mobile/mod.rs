@@ -2544,6 +2544,7 @@ impl Mobile {
                         if **current == catalog {
                             false
                         } else {
+                            catalog.report_cap(current);
                             *current = Arc::new(catalog);
                             true
                         }

@@ -93,7 +93,17 @@ pub enum Opened {
 pub struct LinkStore {
     connection: Connection,
     issue_capacity: RefCell<CapacityCrossings>,
+    /// Whether the store reported that a write found it full with nothing
+    /// left to drop; cleared by the next write that fits, so a store that
+    /// stays full logs one line, not one per write.
+    full_reported: bool,
 }
+
+/// The code of a write that found the file at its page cap.
+const STORE_FULL: &str = "links_store_full";
+
+/// How many sessions one step of making room drops before it measures again.
+const ROOM_BATCH: usize = 64;
 
 /// The keys whose capacity diagnostic is already reported. A key enters once
 /// when its count crosses the cap and leaves when it falls back under, so a
@@ -128,7 +138,7 @@ enum OpenFailure {
 /// A failure's code: what a caller words or logs, never a path or content.
 pub fn code(error: &rusqlite::Error) -> &'static str {
     match error.sqlite_error_code() {
-        Some(ErrorCode::DiskFull) => "links_store_full",
+        Some(ErrorCode::DiskFull) => STORE_FULL,
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => "links_store_busy",
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => "links_store_corrupt",
         _ => "links_store_failed",
@@ -258,6 +268,7 @@ impl LinkStore {
         Ok(Self {
             connection,
             issue_capacity: RefCell::default(),
+            full_reported: false,
         })
     }
 
@@ -283,6 +294,7 @@ impl LinkStore {
         Ok(Self {
             connection,
             issue_capacity: RefCell::default(),
+            full_reported: false,
         })
     }
 
@@ -494,6 +506,10 @@ impl LinkStore {
     /// A project as the runtime knows it now: its repository, worktrees, and
     /// the pull requests GitHub answered with their issues (D-27, D-35).
     pub fn apply_project(&mut self, project: &ProjectFacts, now: u64) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_project(project, now))
+    }
+
+    fn try_apply_project(&mut self, project: &ProjectFacts, now: u64) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let repo = match project.repository.as_deref() {
             Some(name) => Some(name_repo(&tx, name, project.repository_id.as_deref())?),
@@ -662,6 +678,16 @@ impl LinkStore {
     /// Only a current project observation may certify a native birth, and
     /// that birth must precede the node read that witnessed it.
     pub fn apply_answer_observed(
+        &mut self,
+        device: &str,
+        answer: &ReadAnswer,
+        stamp: &str,
+        origin_before: Option<u64>,
+    ) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_answer(device, answer, stamp, origin_before))
+    }
+
+    fn try_apply_answer(
         &mut self,
         device: &str,
         answer: &ReadAnswer,
@@ -942,6 +968,14 @@ impl LinkStore {
         panes: &[PaneFact],
         now: u64,
     ) -> Result<Vec<SessionIdentity>, String> {
+        self.with_room(|store| store.try_apply_panes(panes, now))
+    }
+
+    fn try_apply_panes(
+        &mut self,
+        panes: &[PaneFact],
+        now: u64,
+    ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut first = Vec::new();
         for pane in panes {
@@ -1023,6 +1057,13 @@ impl LinkStore {
         &mut self,
         parents: &[ParentFact],
     ) -> Result<Vec<SessionIdentity>, String> {
+        self.with_room(|store| store.try_apply_parents(parents))
+    }
+
+    fn try_apply_parents(
+        &mut self,
+        parents: &[ParentFact],
+    ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut children = Vec::with_capacity(parents.len());
         for parent in parents {
@@ -1058,6 +1099,10 @@ impl LinkStore {
     /// pr-review-status D-11, D-17). The first time a session is seen
     /// reviewing a pull request stands; a fact handed again changes nothing.
     pub fn apply_reviews(&mut self, reviews: &[ReviewFact], now: u64) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_reviews(reviews, now))
+    }
+
+    fn try_apply_reviews(&mut self, reviews: &[ReviewFact], now: u64) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
         for review in reviews {
             let id = session_name(&tx, &review.device_id, &review.agent, &review.session_id)?;
@@ -1251,6 +1296,100 @@ impl LinkStore {
             }
         }
         Ok(expired)
+    }
+
+    /// Runs one write; when it finds the file at its page cap, drops the
+    /// oldest ended sessions' records and runs it once more. Only a write
+    /// that still finds no room fails, with `links_store_full`, reported
+    /// once until a write fits again (principle 15).
+    pub(super) fn with_room<T>(
+        &mut self,
+        mut write: impl FnMut(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let result = match write(self) {
+            Err(code) if code == STORE_FULL => match self.make_room() {
+                Ok(0) => Err(code),
+                Ok(_) => write(self),
+                Err(code) => Err(code),
+            },
+            result => result,
+        };
+        match &result {
+            Err(code) if code == STORE_FULL => {
+                if !std::mem::replace(&mut self.full_reported, true) {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "links", "kind": "store.full", "code": STORE_FULL,
+                    }));
+                }
+            }
+            Ok(_) => self.full_reported = false,
+            Err(_) => {}
+        }
+        result
+    }
+
+    /// The pages the file's rows take, the free ones left by a delete aside.
+    fn used_pages(&self) -> Result<u32, String> {
+        let pages: u32 = self
+            .connection
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .map_err(failed)?;
+        let free: u32 = self
+            .connection
+            .pragma_query_value(None, "freelist_count", |row| row.get(0))
+            .map_err(failed)?;
+        Ok(pages.saturating_sub(free))
+    }
+
+    /// Drops whole sessions, oldest end first and `ROOM_BATCH` at a time,
+    /// until the rows take at most seven eighths of the page cap, so one
+    /// making of room lasts many writes, or no session with an end
+    /// is left. A session's end is its last activity, which a pane carrying
+    /// it moves to now every minute, so a running session goes last; one with
+    /// no time at all is never dropped. Answers how many sessions it dropped.
+    pub(super) fn make_room(&mut self) -> Result<usize, String> {
+        let cap: u32 = self
+            .connection
+            .pragma_query_value(None, "max_page_count", |row| row.get(0))
+            .map_err(failed)?;
+        let target = cap / 8 * 7;
+        let before = self.used_pages()?;
+        let mut dropped = 0;
+        let mut used = before;
+        while used > target {
+            let oldest = {
+                let mut statement = self
+                    .connection
+                    .prepare_cached(
+                        "SELECT device, agent, id FROM sessions WHERE ended_at IS NOT NULL \
+                         ORDER BY ended_at, device, agent, id LIMIT ?1",
+                    )
+                    .map_err(failed)?;
+                statement
+                    .query_map([ROOM_BATCH as i64], |row| {
+                        Ok(SessionKey {
+                            device: row.get(0)?,
+                            agent: row.get(1)?,
+                            id: row.get(2)?,
+                        })
+                    })
+                    .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+                    .map_err(failed)?
+            };
+            if oldest.is_empty() {
+                break;
+            }
+            self.remove_sessions(&oldest)?;
+            dropped += oldest.len();
+            used = self.used_pages()?;
+        }
+        if dropped > 0 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "links", "kind": "store.room_made", "sessions": dropped,
+                "pages_before": before, "pages_after": used,
+            }));
+        }
+        Ok(dropped)
     }
 
     fn remove_sessions(&mut self, gone: &[SessionKey]) -> Result<(), String> {

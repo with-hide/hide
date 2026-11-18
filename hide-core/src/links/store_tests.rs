@@ -1948,6 +1948,131 @@ fn a_capacity_crossing_is_reported_once_until_the_count_falls_back_under() {
     );
 }
 
+fn pane(id: &str) -> PaneFact {
+    PaneFact {
+        device_id: DEVICE.to_owned(),
+        agent: "claude".to_owned(),
+        session_id: id.to_owned(),
+        cwd: ROOT.to_owned(),
+        branch: Some(format!("work/{id}")),
+    }
+}
+
+fn held(store: &LinkStore, id: &str) -> bool {
+    store
+        .session(&SessionKey {
+            device: DEVICE.to_owned(),
+            agent: "claude".to_owned(),
+            id: id.to_owned(),
+        })
+        .unwrap()
+        .is_some()
+}
+
+/// Caps a store a few dozen pages above what it holds now, so a test fills
+/// it with a few thousand rows where the real cap takes 64 MiB.
+fn cap_near(store: &LinkStore) {
+    let pages: u32 = store
+        .connection
+        .pragma_query_value(None, "page_count", |row| row.get(0))
+        .unwrap();
+    store
+        .connection
+        .pragma_update(None, "max_page_count", pages + 48)
+        .unwrap();
+}
+
+/// A store at its page cap drops its oldest ended sessions and keeps
+/// writing, where it once refused every write for good (with-hide/hide#2618).
+#[test]
+fn a_full_store_drops_its_oldest_ended_sessions_and_the_write_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    store
+        .connection
+        .execute(
+            "INSERT INTO sessions(device,agent,id,cwd) VALUES(?1,'claude','timeless',?2)",
+            [DEVICE, ROOT],
+        )
+        .unwrap();
+    cap_near(&store);
+    let ((), records) = crate::diagnostics::capture(|| {
+        for index in 0..4_000u64 {
+            store
+                .apply_panes(&[pane(&format!("s{index:04}"))], T0 + index * MIN)
+                .unwrap_or_else(|code| panic!("write {index} failed: {code}"));
+        }
+    });
+    assert!(!held(&store, "s0000"), "the oldest session made room");
+    assert!(held(&store, "s3999"), "the write that found the cap landed");
+    assert!(
+        held(&store, "timeless"),
+        "a session with no time is never dropped"
+    );
+    let made = records
+        .iter()
+        .filter(|record| record["kind"] == "store.room_made")
+        .count();
+    assert!(made >= 1, "{records:?}");
+    assert!(
+        made < 4_000 / 64,
+        "each making of room frees an eighth of the cap, not one batch: {made}"
+    );
+    let kept = rows(&store, "sessions");
+    let oldest_kept: i64 = store
+        .connection
+        .query_row(
+            "SELECT min(ended_at) FROM sessions WHERE ended_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        oldest_kept as u64,
+        T0 + (4_000 - (kept as u64 - 1)) * MIN,
+        "only the oldest went, newest kept"
+    );
+    assert_eq!(
+        rows(&store, "session_branches"),
+        kept - 1,
+        "a dropped session takes its rows with it"
+    );
+}
+
+/// With nothing left to drop the write fails, and the full store is
+/// reported once, not once per write.
+#[test]
+fn a_full_store_with_nothing_to_drop_refuses_and_reports_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    cap_near(&store);
+    let mut index = 0;
+    while store
+        .connection
+        .execute(
+            "INSERT INTO sessions(device,agent,id,cwd) VALUES(?1,'claude',?2,?3)",
+            params![DEVICE, format!("timeless-{index:05}"), ROOT],
+        )
+        .is_ok()
+    {
+        index += 1;
+    }
+    let ((), records) = crate::diagnostics::capture(|| {
+        for attempt in 0..3 {
+            assert_eq!(
+                store.apply_panes(&[pane(&format!("new-{attempt}"))], T0),
+                Err("links_store_full".to_owned())
+            );
+        }
+    });
+    let full = records
+        .iter()
+        .filter(|record| record["kind"] == "store.full")
+        .count();
+    assert_eq!(full, 1, "{records:?}");
+    assert!(held(&store, "timeless-00000"));
+}
+
 /// A pre-check's session reads as the pull request's agent review, over its
 /// work on the branch, and keeps that role in a store reopened after the
 /// upgrade that added it (PRD pr-review-status B14, D-17).

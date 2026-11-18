@@ -1403,6 +1403,12 @@ impl Runtime {
         if self.missions.outside.destination_lost(id) {
             return false;
         }
+        // The gate reads only the book and GitHub's answer: with neither
+        // moved since it refused, it would refuse again.
+        let judged_on = (self.missions.book_edit, self.missions.github_edit);
+        if self.missions.close_refused_at.get(id) == Some(&judged_on) {
+            return false;
+        }
         let report = mission.report.is_none().then(|| closing_report(mission));
         let key = close_key(mission);
         let wake_key = key.clone();
@@ -1443,7 +1449,10 @@ impl Runtime {
             },
         );
         match closed {
-            Ok(_) => true,
+            Ok(_) => {
+                self.missions.close_refused_at.remove(id);
+                true
+            }
             Err(code) => {
                 let Some(mission) = self.missions.book.get_mut(id) else {
                     return false;
@@ -1470,15 +1479,19 @@ impl Runtime {
                     "component": "missions", "kind": "mission.hide_close_refused",
                     "mission": id, "code": code,
                 }));
-                let Some(key) = key else {
-                    return false;
-                };
-                let raised = raise(mission, &key, AttentionReason::CloseRefused, None, now);
-                if raised.is_empty() {
-                    return false;
+                let raised = key
+                    .map(|key| raise(mission, &key, AttentionReason::CloseRefused, None, now))
+                    .unwrap_or_default();
+                let changed = !raised.is_empty();
+                if changed {
+                    self.record_mission_events(id, raised);
                 }
-                self.record_mission_events(id, raised);
-                true
+                // Stamped after its own raise, which edits the book.
+                self.missions.close_refused_at.insert(
+                    id.to_owned(),
+                    (self.missions.book_edit, self.missions.github_edit),
+                );
+                changed
             }
         }
     }

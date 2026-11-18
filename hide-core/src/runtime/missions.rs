@@ -793,6 +793,11 @@ pub(crate) struct MissionRuntime {
     pub(crate) book_edit: u64,
     /// Counts the GitHub answers and the pull request lists replaced since.
     pub(super) github_edit: u64,
+    /// The book and GitHub edits each mission's last refused close was
+    /// judged on: its answer rests on nothing else, so the close is tried
+    /// again only once one of them moved, not on every health pass while
+    /// the refusal stands. Memory only, and only missions the book holds.
+    pub(super) close_refused_at: HashMap<String, (u64, u64)>,
     /// What the published missions were made from, so a snapshot read whose
     /// inputs did not move makes nothing (docs/PERFORMANCE_TESTING.md).
     views: ViewsMadeFrom,
