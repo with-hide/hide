@@ -1948,6 +1948,273 @@ fn a_capacity_crossing_is_reported_once_until_the_count_falls_back_under() {
     );
 }
 
+fn pane(id: &str) -> PaneFact {
+    PaneFact {
+        device_id: DEVICE.to_owned(),
+        agent: "claude".to_owned(),
+        session_id: id.to_owned(),
+        cwd: ROOT.to_owned(),
+        branch: Some(format!("work/{id}")),
+    }
+}
+
+fn held(store: &LinkStore, id: &str) -> bool {
+    store
+        .session(&SessionKey {
+            device: DEVICE.to_owned(),
+            agent: "claude".to_owned(),
+            id: id.to_owned(),
+        })
+        .unwrap()
+        .is_some()
+}
+
+/// Caps a store a few dozen pages above what it holds now, so a test fills
+/// it with a few thousand rows where the real cap takes 64 MiB.
+fn cap_near(store: &LinkStore) {
+    let pages: u32 = store
+        .connection
+        .pragma_query_value(None, "page_count", |row| row.get(0))
+        .unwrap();
+    store
+        .connection
+        .pragma_update(None, "max_page_count", pages + 48)
+        .unwrap();
+}
+
+/// Fills the store to its cap with ended sessions of `/nowhere`, one a
+/// minute from `from`, each with a branch row; `carried` marks them as a
+/// pane once carried them. Answers how many it wrote.
+fn fill_ended(store: &LinkStore, prefix: &str, from: u64, carried: bool) -> u64 {
+    let mut index: u64 = 0;
+    loop {
+        let at = (from + index * MIN) as i64;
+        let id = format!("{prefix}-{index:05}");
+        let written = store.connection.execute(
+            "INSERT INTO sessions(device,agent,id,cwd,ended_at,pane_first_at) \
+             VALUES(?1,'claude',?2,'/nowhere',?3,?4)",
+            params![DEVICE, id, at, carried.then_some(at)],
+        );
+        let branch = written.and_then(|_| {
+            store.connection.execute(
+                "INSERT INTO session_branches(device,agent,id,file,branch,first_at,last_at) \
+                 VALUES(?1,'claude',?2,'pane','main',?3,?3)",
+                params![DEVICE, id, at],
+            )
+        });
+        if branch.is_err() {
+            let _ = store.connection.execute(
+                "DELETE FROM sessions WHERE device=?1 AND agent='claude' AND id=?2",
+                params![DEVICE, id],
+            );
+            return index;
+        }
+        index += 1;
+    }
+}
+
+/// What the worker hands once the runtime told it every pane and archive
+/// member: `carried` panes and `held` archive members.
+fn in_use(carried: &[&str], held: &[&str]) -> InUse {
+    InUse {
+        carried: Some(std::sync::Arc::new(
+            carried.iter().map(|id| pane(id)).collect(),
+        )),
+        archived: Some(std::sync::Arc::new(ArchiveFacts {
+            retention: Vec::new(),
+            held: held.iter().map(|id| session(id)).collect(),
+        })),
+    }
+}
+
+/// A store at its page cap drops its oldest ended sessions and keeps
+/// writing, where it once refused every write for good (with-hide/hide#2618).
+#[test]
+fn a_full_store_drops_its_oldest_ended_sessions_and_the_write_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    store
+        .connection
+        .execute(
+            "INSERT INTO sessions(device,agent,id,cwd) VALUES(?1,'claude','timeless',?2)",
+            [DEVICE, ROOT],
+        )
+        .unwrap();
+    cap_near(&store);
+    let filled = fill_ended(&store, "old", T0, false);
+    store.set_in_use(in_use(&["new"], &[]));
+    let ((), records) = crate::diagnostics::capture(|| {
+        store
+            .apply_panes(&[pane("new")], T0 + 10_000 * MIN)
+            .unwrap();
+    });
+    assert!(held(&store, "new"), "the write that found the cap landed");
+    assert!(!held(&store, "old-00000"), "the oldest session made room");
+    assert!(
+        held(&store, &format!("old-{:05}", filled - 1)),
+        "the newest stays"
+    );
+    assert!(
+        held(&store, "timeless"),
+        "a session with no time is never dropped"
+    );
+    assert!(store.take_evicted(), "the worker learns that sessions went");
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["kind"] == "store.room_made")
+            .count(),
+        1,
+        "{records:?}"
+    );
+    let kept_old: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM sessions WHERE id LIKE 'old-%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let oldest_kept: i64 = store
+        .connection
+        .query_row(
+            "SELECT min(ended_at) FROM sessions WHERE id LIKE 'old-%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        oldest_kept as u64,
+        T0 + (filled - kept_old as u64) * MIN,
+        "only the oldest went"
+    );
+    assert_eq!(
+        rows(&store, "session_branches"),
+        kept_old + 1,
+        "a dropped session takes its rows with it"
+    );
+}
+
+/// Making room keeps what is in use whatever its age: a session a pane
+/// carries now, one an archive record holds, and one on an open pull
+/// request; the older ended sessions go instead.
+#[test]
+fn making_room_keeps_live_archived_and_open_pull_request_sessions() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    store
+        .apply_project(&project(vec![pr(7, "feat/x", T0 - MIN, None)]), T0)
+        .unwrap();
+    let path = claude_file(
+        home.path(),
+        "on-pr",
+        ROOT,
+        "cli",
+        &[Turn {
+            at: T0,
+            branch: "feat/x",
+            text: "요청",
+        }],
+        None,
+    );
+    ingest(&mut store, home.path(), &path);
+    for id in ["live", "archived"] {
+        store
+            .connection
+            .execute(
+                "INSERT INTO sessions(device,agent,id,cwd,ended_at) VALUES(?1,'claude',?2,?3,?4)",
+                params![DEVICE, id, ROOT, T0 as i64],
+            )
+            .unwrap();
+    }
+    cap_near(&store);
+    fill_ended(&store, "old", T0 + MIN, false);
+    store.set_in_use(in_use(&["live", "new"], &["archived"]));
+    store
+        .apply_panes(&[pane("new")], T0 + 10_000 * MIN)
+        .unwrap();
+    assert!(!held(&store, "old-00000"), "room was made");
+    for id in ["live", "archived", "on-pr", "new"] {
+        assert!(held(&store, id), "{id} is kept");
+    }
+}
+
+/// Until the runtime has handed the panes, every session a pane ever
+/// carried is kept: an older full store whose sessions all were carried
+/// refuses the move to this machine's id rather than drop one a pane may
+/// still hold, while one of sessions no pane carried makes room.
+#[test]
+fn before_the_panes_are_handed_a_carried_session_is_never_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    cap_near(&store);
+    fill_ended(&store, "carried", T0, true);
+    let sessions = rows(&store, "sessions");
+    assert_eq!(
+        store.convert_device(DEVICE, "node-1"),
+        Err("links_store_full".to_owned())
+    );
+    assert_eq!(rows(&store, "sessions"), sessions, "nothing was dropped");
+    assert!(!store.take_evicted());
+}
+
+/// A store an older build filled to its cap under the device name `local`
+/// still moves to this machine's id: the move makes room like any write,
+/// where it once failed and hided refused to start (with-hide/hide#2618).
+#[test]
+fn a_full_store_still_moves_its_sessions_to_this_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    cap_near(&store);
+    let index = fill_ended(&store, "old", T0, false);
+    store.convert_device(DEVICE, "node-1").unwrap();
+    let moved: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM sessions WHERE device='node-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(moved, rows(&store, "sessions"), "every kept session moved");
+    assert!(moved > 0 && (moved as u64) < index, "the oldest made room");
+}
+
+/// With nothing left to drop the write fails, and the full store is
+/// reported once, not once per write.
+#[test]
+fn a_full_store_with_nothing_to_drop_refuses_and_reports_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    cap_near(&store);
+    let mut index = 0;
+    while store
+        .connection
+        .execute(
+            "INSERT INTO sessions(device,agent,id,cwd) VALUES(?1,'claude',?2,?3)",
+            params![DEVICE, format!("timeless-{index:05}"), ROOT],
+        )
+        .is_ok()
+    {
+        index += 1;
+    }
+    let ((), records) = crate::diagnostics::capture(|| {
+        for attempt in 0..3 {
+            assert_eq!(
+                store.apply_panes(&[pane(&format!("new-{attempt}"))], T0),
+                Err("links_store_full".to_owned())
+            );
+        }
+    });
+    let full = records
+        .iter()
+        .filter(|record| record["kind"] == "store.full")
+        .count();
+    assert_eq!(full, 1, "{records:?}");
+    assert!(held(&store, "timeless-00000"));
+}
+
 /// A pre-check's session reads as the pull request's agent review, over its
 /// work on the branch, and keeps that role in a store reopened after the
 /// upgrade that added it (PRD pr-review-status B14, D-17).
@@ -2140,6 +2407,52 @@ fn publish_and_compare(
     publish_summaries(store, &mut full, &everything);
     assert_eq!(*sink.0.borrow(), *everything.0.borrow(), "{what}");
     recomputed
+}
+
+/// A write for one project that makes room can remove another project's
+/// session: the worker then reads every summary again, so the app's
+/// pull request stops counting the session the library's write removed
+/// (with-hide/hide#2618).
+#[test]
+fn a_write_that_makes_room_refreshes_another_projects_summary() {
+    use crate::links::worker::{State, took_evicted};
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = open(directory.path());
+    let mut scoped = State::new();
+    let sink = Published::default();
+    scoped.projects = std::sync::Arc::new(scoped_projects(Some(T0 + 15 * MIN)));
+    for facts in scoped.projects.iter() {
+        store.apply_project(facts, T0).unwrap();
+    }
+    store.refresh_ledger_outputs().unwrap();
+    // A session in the app's second worktree made PR 1, merged since.
+    let mut facts = chunk("s1", "/work/app-feat", T0 + 9 * MIN);
+    facts.spans = vec![span("feat", T0 + 9 * MIN)];
+    facts.prs = vec![mark("acme/app", 1, T0 + 10 * MIN, true)];
+    read_facts(&mut store, &mut scoped, "/f/s1.jsonl", facts);
+    scoped.changed_all();
+    publish_and_compare(&store, &mut scoped, &sink, "before");
+    assert_eq!(sink.0.borrow()["ws"].prs.get(&1), Some(&1));
+
+    cap_near(&store);
+    fill_ended(&store, "old", T0 + 60 * MIN, false);
+    store.set_in_use(in_use(&[], &[]));
+    // A request long enough to need pages the full file no longer has.
+    let mut facts = chunk("s2", "/work/lib", T0 + 20_000 * MIN);
+    facts.last_request = Some((T0 + 20_000 * MIN, "요청 ".repeat(4_000)));
+    read_facts(&mut store, &mut scoped, "/f/s2.jsonl", facts);
+    assert!(
+        !held(&store, "s1"),
+        "the library's write made room with the app's session"
+    );
+    took_evicted(&mut store, &mut scoped);
+    publish_and_compare(
+        &store,
+        &mut scoped,
+        &sink,
+        "after the library's write made room",
+    );
+    assert_eq!(sink.0.borrow()["ws"].prs.get(&1), None);
 }
 
 /// A summary pass over the projects a change can move publishes exactly what

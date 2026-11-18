@@ -1225,8 +1225,8 @@ pub struct Runtime {
     registration_rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
     /// Archive deletes whose record lines the link worker is removing.
     archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
-    /// The archived sessions last handed to the link worker's retention.
-    archive_retention_sent: Arc<Vec<crate::links::store::ArchivedSession>>,
+    /// What the session archive last handed the link worker.
+    archive_retention_sent: Arc<crate::links::store::ArchiveFacts>,
     /// What the link record keeps of sessions, from its project summaries:
     /// who started whom and the pull requests each made, so a row's list
     /// gathers its ended descendants' (`agent_state::work::family`). Made

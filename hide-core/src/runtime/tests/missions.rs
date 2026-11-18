@@ -11661,6 +11661,45 @@ fn refused_close(runtime: &mut Runtime, now: u64) {
     );
 }
 
+/// with-hide/hide#2618: a health pass runs whenever any of its inputs
+/// moves, a busy delivery ledger about once a second, and each one logged
+/// the refused close again. The close is still judged on every pass, so a
+/// fact outside the book and GitHub's answer, the checkout's head, closes
+/// it; the refusal is logged once, with its raise.
+#[test]
+fn a_refused_close_is_logged_once_and_closes_when_its_checkout_head_comes_back() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    let refusals = |logged: &[serde_json::Value]| {
+        logged
+            .iter()
+            .filter(|record| record["kind"] == "mission.hide_close_refused")
+            .count()
+    };
+    let ((), logged) = crate::diagnostics::capture(|| refused_close(&mut runtime, now));
+    assert_eq!(refusals(&logged), 1);
+    for at in 1..=3 {
+        // Another input of the pass moved, as a new delivery ledger does.
+        runtime.missions.health_made = Default::default();
+        let ((), logged) = crate::diagnostics::capture(|| {
+            runtime.drive_mission_health(now + at);
+        });
+        assert_eq!(refusals(&logged), 0, "pass {at}");
+        assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    }
+    let edits = (runtime.missions.book_edit, runtime.missions.github_edit);
+    checkout_at(&mut runtime, HEAD);
+    assert_eq!(
+        (runtime.missions.book_edit, runtime.missions.github_edit),
+        edits,
+        "only the checkout moved"
+    );
+    runtime.missions.health_made = Default::default();
+    runtime.drive_mission_health(now + 4);
+    assert_ne!(mission_status(&runtime), MissionStatus::Running);
+}
+
 /// with-hide/hide#2518: the Conductor skips the line Hide's close was
 /// refused on and closes the mission as done itself. The close that passes
 /// answers the refused close, whoever makes it, so nothing of it is left on

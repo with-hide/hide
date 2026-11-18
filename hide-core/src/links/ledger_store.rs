@@ -626,13 +626,17 @@ impl LinkStore {
     }
 
     pub fn ledger_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
+        self.with_room(|store| store.try_ledger_call(call.clone()))
+    }
+
+    fn try_ledger_call(&mut self, call: LedgerCall) -> Result<LedgerAnswer, String> {
         if let LedgerCall::SaveMetadata {
             session,
             metadata,
             at_unix_ms,
         } = call
         {
-            self.apply_ledger_update(&LedgerUpdate::Metadata {
+            self.try_apply_ledger_update(&LedgerUpdate::Metadata {
                 session: session.clone(),
                 native_title: metadata.native_title,
                 manual_title: metadata.manual_title,
@@ -941,6 +945,10 @@ impl LinkStore {
     }
 
     pub fn apply_ledger_update(&mut self, update: &LedgerUpdate) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_ledger_update(update))
+    }
+
+    fn try_apply_ledger_update(&mut self, update: &LedgerUpdate) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
         match update {
             LedgerUpdate::Plan { session, plan } => {
@@ -2631,9 +2639,11 @@ impl LinkStore {
 
     /// Apply verified PR creation sightings after each project refresh.
     pub fn refresh_ledger_outputs(&mut self) -> Result<(), String> {
-        let tx = self.connection.transaction().map_err(failed)?;
-        refresh_outputs(&tx)?;
-        tx.commit().map_err(failed)
+        self.with_room(|store| {
+            let tx = store.connection.transaction().map_err(failed)?;
+            refresh_outputs(&tx)?;
+            tx.commit().map_err(failed)
+        })
     }
 }
 

@@ -15,7 +15,8 @@ use super::ledger::{
     SessionSearchPresence,
 };
 use super::store::{
-    ArchivedSession, CapacityCrossings, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks,
+    ArchiveFacts, ArchivedSession, CapacityCrossings, InUse, IssueLinks, LinkStore, LocalFiles,
+    Opened, PrLinks,
 };
 use super::summary_scope::{Dirty, Placement};
 use super::{
@@ -124,7 +125,7 @@ struct Mailbox {
     )>,
     calls_pending: usize,
     /// The sessions the archive holds, newest set only.
-    archived: Option<Arc<Vec<ArchivedSession>>>,
+    archived: Option<Arc<ArchiveFacts>>,
     deletes: VecDeque<(String, Vec<SessionIdentity>)>,
 }
 
@@ -356,8 +357,9 @@ impl LinkClient {
         self.post(|mailbox| mailbox.reviews = Some(reviews));
     }
 
-    /// The sessions the archive holds now, which retention also answers for.
-    pub fn archived(&self, archived: Arc<Vec<ArchivedSession>>) {
+    /// What the session archive holds now: retention answers for its closed
+    /// members, and making room keeps every member it holds.
+    pub fn archived(&self, archived: Arc<ArchiveFacts>) {
         self.post(|mailbox| mailbox.archived = Some(archived));
     }
 
@@ -465,6 +467,9 @@ pub(in crate::links) struct State {
     /// not refreshed yet.
     outputs_owed: bool,
     panes: Arc<Vec<PaneFact>>,
+    /// Whether the runtime handed the panes in this process; until then
+    /// making room keeps every session a pane ever carried.
+    panes_handed: bool,
     /// Parents posted but not yet written.
     parents: Option<Arc<Vec<ParentFact>>>,
     /// Pre-check sessions posted but not yet written.
@@ -497,8 +502,9 @@ pub(in crate::links) struct State {
     listed: Option<Instant>,
     panes_at: Option<Instant>,
     pruned: Option<Instant>,
-    /// The sessions the archive holds, for retention.
-    archived: Arc<Vec<ArchivedSession>>,
+    /// What the archive holds, for retention and making room; `None` until
+    /// the runtime handed it in this process.
+    archived: Option<Arc<ArchiveFacts>>,
 }
 
 impl State {
@@ -532,7 +538,17 @@ impl State {
             listed: None,
             panes_at: None,
             pruned: None,
-            archived: Arc::default(),
+            archived: None,
+            panes_handed: false,
+        }
+    }
+
+    /// What is in use now, which making room keeps: what the runtime handed,
+    /// `None` for what it has not handed yet in this process.
+    fn in_use(&self) -> InUse {
+        InUse {
+            carried: self.panes_handed.then(|| Arc::clone(&self.panes)),
+            archived: self.archived.clone(),
         }
     }
 
@@ -713,7 +729,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         let calls = std::mem::take(&mut mailbox.calls);
         let deletes = std::mem::take(&mut mailbox.deletes);
         if let Some(archived) = mailbox.archived.take() {
-            state.archived = archived;
+            state.archived = Some(archived);
         }
         let contexts = if store.is_ok() {
             let count = mailbox.contexts.len().min(16);
@@ -762,6 +778,7 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         if let Some(panes) = panes {
             state.panes = panes;
             state.panes_at = None;
+            state.panes_handed = true;
         }
         if let Some(parents) = parents {
             state.parents = Some(parents);
@@ -797,6 +814,8 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
                 continue;
             }
         };
+        // Before any write that can make room, a reopened store included.
+        store.set_in_use(state.in_use());
         for (request, sessions) in deletes {
             let result = store.delete_sessions(&sessions);
             if let Err(code) = &result {
@@ -996,10 +1015,15 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
             sink.filling(filling);
         }
         if state.pruned.is_none_or(|at| at.elapsed() >= PRUNE_EVERY) {
-            prune(store, own, paths, &state.archived, sink);
+            let retention = state
+                .archived
+                .as_ref()
+                .map_or(&[][..], |archived| &archived.retention[..]);
+            prune(store, own, paths, retention, sink);
             state.pruned = Some(Instant::now());
             state.changed_all();
         }
+        took_evicted(store, &mut state);
         if state
             .dirty_at
             .is_some_and(|at| at.elapsed() >= SUMMARY_AFTER)
@@ -1070,7 +1094,22 @@ fn next_wait(state: &State) -> Duration {
     wait
 }
 
+/// After a pass of writes and before the summaries are published: sessions
+/// a write's making room removed can belong to any project, so every
+/// summary, pull request cache, panel and record is read again, as after a
+/// prune.
+pub(in crate::links) fn took_evicted(store: &mut LinkStore, state: &mut State) {
+    if store.take_evicted() {
+        state.changed_all();
+    }
+}
+
 fn log_write(code: &str, what: &str) {
+    // A full file is the store's to report, once per crossing
+    // (`store.full`), after it found nothing left to drop.
+    if code == "links_store_full" {
+        return;
+    }
     crate::diagnostic!(serde_json::json!({
         "component": "links", "kind": "store.write_failed", "what": what, "code": code,
     }));

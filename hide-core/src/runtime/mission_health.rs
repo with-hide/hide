@@ -1466,10 +1466,6 @@ impl Runtime {
                     .find(|node| named.contains(&node.key.as_str()))
                     .or(mission.nodes.last())
                     .map(|node| node.key.clone());
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.hide_close_refused",
-                    "mission": id, "code": code,
-                }));
                 let Some(key) = key else {
                     return false;
                 };
@@ -1477,6 +1473,14 @@ impl Runtime {
                 if raised.is_empty() {
                     return false;
                 }
+                // The close is judged on every pass, which runs whenever any
+                // of its inputs moved (a busy delivery ledger about once a
+                // second); the refusal is logged with the raise that marks
+                // it, once until it settles (with-hide/hide#2618).
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.hide_close_refused",
+                    "mission": id, "code": code,
+                }));
                 self.record_mission_events(id, raised);
                 true
             }

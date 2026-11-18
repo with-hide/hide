@@ -21,7 +21,7 @@ use rusqlite::{
 };
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -93,7 +93,50 @@ pub enum Opened {
 pub struct LinkStore {
     connection: Connection,
     issue_capacity: RefCell<CapacityCrossings>,
+    /// Whether the store reported that a write found it full with nothing
+    /// left to drop; cleared by the next write that fits, so a store that
+    /// stays full logs one line, not one per write.
+    full_reported: bool,
+    /// What the worker last said is in use, which making room never drops.
+    in_use: InUse,
+    /// Whether making room removed sessions since the worker last took it:
+    /// their projects' summaries no longer hold.
+    evicted: bool,
 }
+
+/// The sessions in use that making room never drops, as the worker last
+/// handed them. `None` is not handed yet in this process; until both are,
+/// every session a pane ever carried is kept instead (an archive's members
+/// were carried by panes too).
+#[derive(Clone, Debug, Default)]
+pub struct InUse {
+    /// The sessions Hide panes carry now.
+    pub carried: Option<std::sync::Arc<Vec<PaneFact>>>,
+    /// The sessions a session archive record still holds.
+    pub archived: Option<std::sync::Arc<ArchiveFacts>>,
+}
+
+/// What the session archive tells the link record: the closed members its
+/// retention answers for, and every member a record still holds, in any
+/// phase, which making room keeps.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArchiveFacts {
+    pub retention: Vec<ArchivedSession>,
+    pub held: Vec<SessionIdentity>,
+}
+
+/// A session's pull request lines (`LinkStore::pr_reach`).
+#[derive(Default)]
+struct PrReach {
+    open: bool,
+    latest_end: Option<u64>,
+}
+
+/// The code of a write that found the file at its page cap.
+const STORE_FULL: &str = "links_store_full";
+
+/// How many sessions one step of making room drops before it measures again.
+const ROOM_BATCH: usize = 64;
 
 /// The keys whose capacity diagnostic is already reported. A key enters once
 /// when its count crosses the cap and leaves when it falls back under, so a
@@ -128,7 +171,7 @@ enum OpenFailure {
 /// A failure's code: what a caller words or logs, never a path or content.
 pub fn code(error: &rusqlite::Error) -> &'static str {
     match error.sqlite_error_code() {
-        Some(ErrorCode::DiskFull) => "links_store_full",
+        Some(ErrorCode::DiskFull) => STORE_FULL,
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => "links_store_busy",
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => "links_store_corrupt",
         _ => "links_store_failed",
@@ -137,6 +180,15 @@ pub fn code(error: &rusqlite::Error) -> &'static str {
 
 fn failed(error: rusqlite::Error) -> String {
     code(&error).to_owned()
+}
+
+/// A device move's failure, worded with what it moved, except a full file:
+/// that one keeps its code, so the move makes room and runs again.
+fn moving(error: rusqlite::Error, what: &str) -> String {
+    match code(&error) {
+        STORE_FULL => STORE_FULL.to_owned(),
+        _ => format!("{what} failed: {error}"),
+    }
 }
 
 fn classify(error: rusqlite::Error) -> OpenFailure {
@@ -258,6 +310,9 @@ impl LinkStore {
         Ok(Self {
             connection,
             issue_capacity: RefCell::default(),
+            full_reported: false,
+            in_use: InUse::default(),
+            evicted: false,
         })
     }
 
@@ -283,6 +338,9 @@ impl LinkStore {
         Ok(Self {
             connection,
             issue_capacity: RefCell::default(),
+            full_reported: false,
+            in_use: InUse::default(),
+            evicted: false,
         })
     }
 
@@ -342,6 +400,10 @@ impl LinkStore {
     /// root (PRD core-host-node B2). A row the move would land on fails the
     /// whole move. Returns how many projects moved.
     pub fn convert_device(&mut self, from: &str, to: &str) -> Result<usize, String> {
+        self.with_room(|store| store.try_convert_device(from, to))
+    }
+
+    fn try_convert_device(&mut self, from: &str, to: &str) -> Result<usize, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let projects = {
             let mut statement = tx
@@ -361,13 +423,13 @@ impl LinkStore {
                 "UPDATE projects SET key=?1, device=?2 WHERE key=?3",
                 params![new, to, old],
             )
-            .map_err(|error| format!("moving project {old} to {new} failed: {error}"))?;
+            .map_err(|error| moving(error, &format!("moving project {old} to {new}")))?;
             for table in ["prs", "worktrees", "ledger_project_connections"] {
                 tx.execute(
                     &format!("UPDATE {table} SET project=?1 WHERE project=?2"),
                     params![new, old],
                 )
-                .map_err(|error| format!("moving {table} of {old} to {new} failed: {error}"))?;
+                .map_err(|error| moving(error, &format!("moving {table} of {old} to {new}")))?;
             }
         }
         // Every other table that names a device, read from the schema so a
@@ -391,7 +453,7 @@ impl LinkStore {
                 &format!("UPDATE \"{table}\" SET device=?1 WHERE device=?2"),
                 [to, from],
             )
-            .map_err(|error| format!("moving {table} to {to} failed: {error}"))?;
+            .map_err(|error| moving(error, &format!("moving {table} to {to}")))?;
         }
         tx.execute(
             "UPDATE session_parents SET parent_device=?1 WHERE parent_device=?2",
@@ -407,6 +469,10 @@ impl LinkStore {
     /// that pointed at `old` follows it to `new`. Answers how many aliases
     /// changed; ids already recorded count none.
     pub fn alias_retention(&mut self, pairs: &[(String, String)]) -> Result<usize, String> {
+        self.with_room(|store| store.try_alias_retention(pairs))
+    }
+
+    fn try_alias_retention(&mut self, pairs: &[(String, String)]) -> Result<usize, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut moved = 0;
         for (old, new) in pairs.iter().filter(|(old, new)| old != new) {
@@ -494,6 +560,10 @@ impl LinkStore {
     /// A project as the runtime knows it now: its repository, worktrees, and
     /// the pull requests GitHub answered with their issues (D-27, D-35).
     pub fn apply_project(&mut self, project: &ProjectFacts, now: u64) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_project(project, now))
+    }
+
+    fn try_apply_project(&mut self, project: &ProjectFacts, now: u64) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let repo = match project.repository.as_deref() {
             Some(name) => Some(name_repo(&tx, name, project.repository_id.as_deref())?),
@@ -662,6 +732,16 @@ impl LinkStore {
     /// Only a current project observation may certify a native birth, and
     /// that birth must precede the node read that witnessed it.
     pub fn apply_answer_observed(
+        &mut self,
+        device: &str,
+        answer: &ReadAnswer,
+        stamp: &str,
+        origin_before: Option<u64>,
+    ) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_answer(device, answer, stamp, origin_before))
+    }
+
+    fn try_apply_answer(
         &mut self,
         device: &str,
         answer: &ReadAnswer,
@@ -942,6 +1022,14 @@ impl LinkStore {
         panes: &[PaneFact],
         now: u64,
     ) -> Result<Vec<SessionIdentity>, String> {
+        self.with_room(|store| store.try_apply_panes(panes, now))
+    }
+
+    fn try_apply_panes(
+        &mut self,
+        panes: &[PaneFact],
+        now: u64,
+    ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut first = Vec::new();
         for pane in panes {
@@ -1023,6 +1111,13 @@ impl LinkStore {
         &mut self,
         parents: &[ParentFact],
     ) -> Result<Vec<SessionIdentity>, String> {
+        self.with_room(|store| store.try_apply_parents(parents))
+    }
+
+    fn try_apply_parents(
+        &mut self,
+        parents: &[ParentFact],
+    ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut children = Vec::with_capacity(parents.len());
         for parent in parents {
@@ -1058,6 +1153,10 @@ impl LinkStore {
     /// pr-review-status D-11, D-17). The first time a session is seen
     /// reviewing a pull request stands; a fact handed again changes nothing.
     pub fn apply_reviews(&mut self, reviews: &[ReviewFact], now: u64) -> Result<(), String> {
+        self.with_room(|store| store.try_apply_reviews(reviews, now))
+    }
+
+    fn try_apply_reviews(&mut self, reviews: &[ReviewFact], now: u64) -> Result<(), String> {
         let tx = self.connection.transaction().map_err(failed)?;
         for review in reviews {
             let id = session_name(&tx, &review.device_id, &review.agent, &review.session_id)?;
@@ -1076,6 +1175,37 @@ impl LinkStore {
             .map_err(failed)?;
         }
         tx.commit().map_err(failed)
+    }
+
+    /// Per session on a line of a project's pull request: whether one of
+    /// them is still open, and the latest end among the closed ones.
+    fn pr_reach(&self, projects: &[ProjectRow]) -> Result<HashMap<SessionKey, PrReach>, String> {
+        let mut reach: HashMap<SessionKey, PrReach> = HashMap::new();
+        for project in projects {
+            let pass = self.pass_of(project)?;
+            for pr in self.candidate_prs(&project.key)? {
+                let end = pr.end();
+                for line in self.pr_lines_in(&pass, &pr, None)? {
+                    for id in &line.ids {
+                        let held = reach
+                            .entry(SessionKey {
+                                device: line.device_id.clone(),
+                                agent: line.agent.clone(),
+                                id: id.clone(),
+                            })
+                            .or_default();
+                        match end {
+                            None => held.open = true,
+                            Some(end) => {
+                                held.latest_end =
+                                    Some(held.latest_end.map_or(end, |at| at.max(end)))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(reach)
     }
 
     /// Removes the sessions their project's Copied history no longer keeps
@@ -1114,26 +1244,7 @@ impl LinkStore {
                 owner.insert(session.key.clone(), index);
             }
         }
-        // Per project, the latest end among the pull requests each session
-        // is on; one still open counts as now.
-        let mut latest: HashMap<SessionKey, u64> = HashMap::new();
-        for project in &projects {
-            let pass = self.pass_of(project)?;
-            for pr in self.candidate_prs(&project.key)? {
-                let end = pr.end().unwrap_or(now);
-                for line in self.pr_lines_in(&pass, &pr, None)? {
-                    for id in &line.ids {
-                        let key = SessionKey {
-                            device: line.device_id.clone(),
-                            agent: line.agent.clone(),
-                            id: id.clone(),
-                        };
-                        let held = latest.entry(key).or_insert(end);
-                        *held = (*held).max(end);
-                    }
-                }
-            }
-        }
+        let reach = self.pr_reach(&projects)?;
         let policy = |session: &SessionRow| {
             owner
                 .get(&session.key)
@@ -1173,7 +1284,9 @@ impl LinkStore {
                 let cutoff = now.saturating_sub(u64::from(policy) * DAY_MS);
                 ended >= cutoff
                     || (now.saturating_sub(ended) < OPEN_EXCEPTION_MS
-                        && latest.get(&session.key).is_some_and(|end| *end >= cutoff))
+                        && reach.get(&session.key).is_some_and(|reach| {
+                            reach.open || reach.latest_end.is_some_and(|end| end >= cutoff)
+                        }))
             };
             if !keep {
                 gone.push(session.key.clone());
@@ -1251,6 +1364,174 @@ impl LinkStore {
             }
         }
         Ok(expired)
+    }
+
+    /// Runs one write; when it finds the file at its page cap, drops the
+    /// oldest ended sessions' records and runs it once more. Only a write
+    /// that still finds no room fails, with `links_store_full`, reported
+    /// once until a write fits again (principle 15).
+    pub(super) fn with_room<T>(
+        &mut self,
+        mut write: impl FnMut(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let result = match write(self) {
+            Err(code) if code == STORE_FULL => match self.make_room() {
+                Ok(0) => Err(code),
+                Ok(_) => write(self),
+                Err(code) => Err(code),
+            },
+            result => result,
+        };
+        match &result {
+            Err(code) if code == STORE_FULL => {
+                if !std::mem::replace(&mut self.full_reported, true) {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "links", "kind": "store.full", "code": STORE_FULL,
+                    }));
+                }
+            }
+            Ok(_) => self.full_reported = false,
+            Err(_) => {}
+        }
+        result
+    }
+
+    /// The pages the file's rows take, the free ones left by a delete aside.
+    fn used_pages(&self) -> Result<u32, String> {
+        let pages: u32 = self
+            .connection
+            .pragma_query_value(None, "page_count", |row| row.get(0))
+            .map_err(failed)?;
+        let free: u32 = self
+            .connection
+            .pragma_query_value(None, "freelist_count", |row| row.get(0))
+            .map_err(failed)?;
+        Ok(pages.saturating_sub(free))
+    }
+
+    /// Hands the store what is in use now; the worker does this before
+    /// every pass of writes, a reopened store included.
+    pub fn set_in_use(&mut self, in_use: InUse) {
+        self.in_use = in_use;
+    }
+
+    /// Whether making room removed sessions since the last call.
+    pub fn take_evicted(&mut self) -> bool {
+        std::mem::take(&mut self.evicted)
+    }
+
+    /// The sessions making room keeps: those `in_use` names (every session
+    /// a pane ever carried while it names none), those on a pull request
+    /// still open, and, by the query that lists the rest, those with no
+    /// time. An error here is the caller's: nothing is dropped on a guess.
+    fn kept(&self) -> Result<HashSet<SessionKey>, String> {
+        let mut kept: HashSet<SessionKey> = self
+            .pr_reach(&self.projects()?)?
+            .into_iter()
+            .filter(|(_, reach)| reach.open)
+            .map(|(key, _)| key)
+            .collect();
+        let key = |device: &str, agent: &str, id: &str| SessionKey {
+            device: device.to_owned(),
+            agent: agent.to_owned(),
+            id: id.to_owned(),
+        };
+        if let Some(carried) = &self.in_use.carried {
+            kept.extend(
+                carried
+                    .iter()
+                    .map(|pane| key(&pane.device_id, &pane.agent, &pane.session_id)),
+            );
+        }
+        if let Some(archived) = &self.in_use.archived {
+            kept.extend(
+                archived
+                    .held
+                    .iter()
+                    .map(|held| key(&held.device_id, &held.agent, &held.session_id)),
+            );
+        }
+        if self.in_use.carried.is_none() || self.in_use.archived.is_none() {
+            let mut statement = self
+                .connection
+                .prepare_cached(
+                    "SELECT device, agent, id FROM sessions WHERE pane_first_at IS NOT NULL",
+                )
+                .map_err(failed)?;
+            let carried = statement
+                .query_map([], |row| {
+                    Ok(key(
+                        &row.get::<_, String>(0)?,
+                        &row.get::<_, String>(1)?,
+                        &row.get::<_, String>(2)?,
+                    ))
+                })
+                .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+                .map_err(failed)?;
+            kept.extend(carried);
+        }
+        Ok(kept)
+    }
+
+    /// Drops whole sessions that are not kept (`kept`), oldest end first
+    /// and `ROOM_BATCH` at a time, until the rows take at most seven eighths
+    /// of the page cap, so one making of room lasts many writes, or none is
+    /// left to drop. A session's end is its last activity, not a proof it
+    /// ended, which is why what is in use is named rather than inferred.
+    /// Answers how many sessions it dropped.
+    pub(super) fn make_room(&mut self) -> Result<usize, String> {
+        let cap: u32 = self
+            .connection
+            .pragma_query_value(None, "max_page_count", |row| row.get(0))
+            .map_err(failed)?;
+        let target = cap / 8 * 7;
+        let before = self.used_pages()?;
+        if before <= target {
+            return Ok(0);
+        }
+        let kept = self.kept()?;
+        let droppable = {
+            let mut statement = self
+                .connection
+                .prepare_cached(
+                    "SELECT device, agent, id FROM sessions WHERE ended_at IS NOT NULL \
+                     ORDER BY ended_at, device, agent, id",
+                )
+                .map_err(failed)?;
+            statement
+                .query_map([], |row| {
+                    Ok(SessionKey {
+                        device: row.get(0)?,
+                        agent: row.get(1)?,
+                        id: row.get(2)?,
+                    })
+                })
+                .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+                .map_err(failed)?
+                .into_iter()
+                .filter(|key| !kept.contains(key))
+                .collect::<Vec<_>>()
+        };
+        let mut dropped = 0;
+        let mut used = before;
+        for batch in droppable.chunks(ROOM_BATCH) {
+            if used <= target {
+                break;
+            }
+            // Marked first: a removal that fails after its commit, at the
+            // checkpoint, has still removed.
+            self.evicted = true;
+            self.remove_sessions(batch)?;
+            dropped += batch.len();
+            used = self.used_pages()?;
+        }
+        if dropped > 0 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "links", "kind": "store.room_made", "sessions": dropped,
+                "pages_before": before, "pages_after": used,
+            }));
+        }
+        Ok(dropped)
     }
 
     fn remove_sessions(&mut self, gone: &[SessionKey]) -> Result<(), String> {

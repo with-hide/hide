@@ -68,6 +68,8 @@ pub struct Catalog {
     kinds: Vec<Value>,
     remembered: Value,
     routes: HashMap<String, Route>,
+    /// Whether places past `MAX_TARGETS` were left out.
+    capped: bool,
 }
 
 fn str_of<'a>(value: &'a Value, field: &str) -> &'a str {
@@ -82,6 +84,17 @@ fn array_of(value: Option<&Value>) -> &[Value] {
 }
 
 impl Catalog {
+    /// Reports the cap when `self` first leaves places out after `before`
+    /// did not: the catalog is built again on every snapshot change, and a
+    /// steady over-cap list logs one line, not one per build.
+    pub fn report_cap(&self, before: &Self) {
+        if self.capped && !before.capped {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
+            }));
+        }
+    }
+
     /// The catalog of a merged `rest` section; `node` is the core's own
     /// machine.
     pub fn of(rest: &Value, node: &str) -> Self {
@@ -157,9 +170,7 @@ impl Catalog {
         let route_device = (!local).then(|| device_id.to_owned());
         let push = |catalog: &mut Self, id: String, place: String, path: String| {
             if catalog.targets.len() >= MAX_TARGETS {
-                hide_core::diagnostic!(json!({
-                    "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
-                }));
+                catalog.capped = true;
                 return;
             }
             if catalog.routes.contains_key(&id) {
