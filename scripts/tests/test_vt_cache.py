@@ -46,6 +46,7 @@ USERS = {
     ('perf.yml', 'measure'): False,
     ('web-e2e.yml', 'build'): False,
     ('web-e2e.yml', 'e2e'): False,
+    ('device-helpers.yml', 'build'): False,
 }
 
 # `scripts/verify-cargo.sh` modes that always prepare hide-vt's inputs, and
@@ -60,20 +61,31 @@ def selects_vt(arguments):
     return any(a in VT_FLAGS or (b, a) in VT_PAIRS for b, a in zip([''] + arguments, arguments))
 
 
-def builds_vt(run, env):
-    """Whether a step's script prepares hide-vt's inputs, with the job's variables put in."""
-    text = re.sub(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', lambda m: str(env.get(m.group(1), m.group(0))), run).replace('\\\n', ' ')
+def invokes_vt(text):
+    """Whether a script's lines prepare hide-vt's inputs, directly or through `verify-cargo.sh`."""
     for line in text.splitlines():
         if 'prepare-vt-inputs.py' in line:
             return True
-        found = re.search(r'verify-cargo\.sh\s+(\S+)(.*)', line)
+        found = re.search(r'verify-cargo\.sh\W+(\S+)(.*)', line)
         if not found:
             continue
         mode, rest = found.groups()
-        arguments = [word.strip('\'"') for word in re.split(r'\|\||&&|;', rest)[0].split()]
-        if mode in ALWAYS_VT or (mode in SCOPED and selects_vt(arguments)):
+        arguments = [word.strip('\'",[]()') for word in re.split(r'\|\||&&|;', rest)[0].replace(',', ' ').split()]
+        if mode.strip('\'",') in ALWAYS_VT or (mode.strip('\'",') in SCOPED and selects_vt(arguments)):
             return True
     return False
+
+
+# Commands that build hide-vt inside a script rather than in the step's own
+# `verify-cargo.sh` call: the device helpers' build builds the pane holder for
+# its target (`desktop/scripts/device-helpers.mjs`, `build` only).
+WRAPPERS = (re.compile(r'desktop/scripts/device-helpers\.mjs\s+build\b'),)
+
+
+def builds_vt(run, env):
+    """Whether a step builds hide-vt, with the job's variables put in."""
+    text = re.sub(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', lambda m: str(env.get(m.group(1), m.group(0))), run).replace('\\\n', ' ')
+    return invokes_vt(text) or any(wrapper.search(text) for wrapper in WRAPPERS)
 
 
 class VtCache(unittest.TestCase):
