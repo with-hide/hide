@@ -1318,7 +1318,6 @@ async fn screen_loop(
     client_gone(&state, connection, renderer, desktop);
 }
 
-/// What a refused delivery or agent command asks of its caller.
 /// `invalid_agent_name`'s next action, naming the engine's limit
 /// (`hide_core::AGENT_NAME_LIMIT`).
 static INVALID_AGENT_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -1328,6 +1327,7 @@ static INVALID_AGENT_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::ne
     )
 });
 
+/// What a refused delivery or agent command asks of its caller.
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     match hide_core::coordination::split_refusal(code).0 {
         // A spawn that hands a plan step, or a letter that would wake a
