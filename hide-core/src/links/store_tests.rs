@@ -2437,12 +2437,10 @@ fn a_write_that_makes_room_refreshes_another_projects_summary() {
     cap_near(&store);
     fill_ended(&store, "old", T0 + 60 * MIN, false);
     store.set_in_use(in_use(&[], &[]));
-    read_facts(
-        &mut store,
-        &mut scoped,
-        "/f/s2.jsonl",
-        chunk("s2", "/work/lib", T0 + 20_000 * MIN),
-    );
+    // A request long enough to need pages the full file no longer has.
+    let mut facts = chunk("s2", "/work/lib", T0 + 20_000 * MIN);
+    facts.last_request = Some((T0 + 20_000 * MIN, "요청 ".repeat(4_000)));
+    read_facts(&mut store, &mut scoped, "/f/s2.jsonl", facts);
     assert!(
         !held(&store, "s1"),
         "the library's write made room with the app's session"
