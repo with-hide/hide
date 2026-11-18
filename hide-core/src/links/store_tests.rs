@@ -2039,6 +2039,43 @@ fn a_full_store_drops_its_oldest_ended_sessions_and_the_write_succeeds() {
     );
 }
 
+/// A store an older build filled to its cap under the device name `local`
+/// still moves to this machine's id: the move makes room like any write,
+/// where it once failed and hided refused to start (with-hide/hide#2618).
+#[test]
+fn a_full_store_still_moves_its_sessions_to_this_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = open(dir.path());
+    cap_near(&store);
+    let mut index: u64 = 0;
+    while store
+        .connection
+        .execute(
+            "INSERT INTO sessions(device,agent,id,cwd,ended_at) VALUES(?1,'claude',?2,?3,?4)",
+            params![
+                DEVICE,
+                format!("old-{index:05}"),
+                ROOT,
+                (T0 + index * MIN) as i64
+            ],
+        )
+        .is_ok()
+    {
+        index += 1;
+    }
+    store.convert_device(DEVICE, "node-1").unwrap();
+    let moved: i64 = store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM sessions WHERE device='node-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(moved, rows(&store, "sessions"), "every kept session moved");
+    assert!(moved > 0 && (moved as u64) < index, "the oldest made room");
+}
+
 /// With nothing left to drop the write fails, and the full store is
 /// reported once, not once per write.
 #[test]

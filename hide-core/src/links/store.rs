@@ -149,6 +149,15 @@ fn failed(error: rusqlite::Error) -> String {
     code(&error).to_owned()
 }
 
+/// A device move's failure, worded with what it moved, except a full file:
+/// that one keeps its code, so the move makes room and runs again.
+fn moving(error: rusqlite::Error, what: &str) -> String {
+    match code(&error) {
+        STORE_FULL => STORE_FULL.to_owned(),
+        _ => format!("{what} failed: {error}"),
+    }
+}
+
 fn classify(error: rusqlite::Error) -> OpenFailure {
     match error.sqlite_error_code() {
         Some(ErrorCode::DatabaseCorrupt | ErrorCode::NotADatabase) => OpenFailure::Corrupt,
@@ -354,6 +363,10 @@ impl LinkStore {
     /// root (PRD core-host-node B2). A row the move would land on fails the
     /// whole move. Returns how many projects moved.
     pub fn convert_device(&mut self, from: &str, to: &str) -> Result<usize, String> {
+        self.with_room(|store| store.try_convert_device(from, to))
+    }
+
+    fn try_convert_device(&mut self, from: &str, to: &str) -> Result<usize, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let projects = {
             let mut statement = tx
@@ -373,13 +386,13 @@ impl LinkStore {
                 "UPDATE projects SET key=?1, device=?2 WHERE key=?3",
                 params![new, to, old],
             )
-            .map_err(|error| format!("moving project {old} to {new} failed: {error}"))?;
+            .map_err(|error| moving(error, &format!("moving project {old} to {new}")))?;
             for table in ["prs", "worktrees", "ledger_project_connections"] {
                 tx.execute(
                     &format!("UPDATE {table} SET project=?1 WHERE project=?2"),
                     params![new, old],
                 )
-                .map_err(|error| format!("moving {table} of {old} to {new} failed: {error}"))?;
+                .map_err(|error| moving(error, &format!("moving {table} of {old} to {new}")))?;
             }
         }
         // Every other table that names a device, read from the schema so a
@@ -403,7 +416,7 @@ impl LinkStore {
                 &format!("UPDATE \"{table}\" SET device=?1 WHERE device=?2"),
                 [to, from],
             )
-            .map_err(|error| format!("moving {table} to {to} failed: {error}"))?;
+            .map_err(|error| moving(error, &format!("moving {table} to {to}")))?;
         }
         tx.execute(
             "UPDATE session_parents SET parent_device=?1 WHERE parent_device=?2",
@@ -419,6 +432,10 @@ impl LinkStore {
     /// that pointed at `old` follows it to `new`. Answers how many aliases
     /// changed; ids already recorded count none.
     pub fn alias_retention(&mut self, pairs: &[(String, String)]) -> Result<usize, String> {
+        self.with_room(|store| store.try_alias_retention(pairs))
+    }
+
+    fn try_alias_retention(&mut self, pairs: &[(String, String)]) -> Result<usize, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         let mut moved = 0;
         for (old, new) in pairs.iter().filter(|(old, new)| old != new) {
