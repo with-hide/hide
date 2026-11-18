@@ -22,7 +22,7 @@ vi.hoisted(() => {
  */
 function Board() {
   const missing = useShellStore((s) => (s.rest as { missing?: string } | null)?.missing);
-  const asked = useUiStore((s) => s.notice?.text);
+  const asked = useUiStore((s) => s.notices[0]?.text);
   if (missing) throw new Error(`Agent scope references a missing row: ${missing}`);
   if (asked) throw new Error(`No row for ${asked}`);
   return <p data-part="board">board</p>;
@@ -39,7 +39,7 @@ beforeEach(() => {
   // React reports every error a boundary catches; this file asserts what the page shows instead.
   vi.spyOn(console, "error").mockImplementation(() => {});
   useShellStore.setState({ rest: null, diagnostics: [], diagnosticsDropped: 0 });
-  useUiStore.setState({ notice: null });
+  useUiStore.setState({ notices: [] });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -77,9 +77,9 @@ it("draws the part again on the next snapshot that it can draw", () => {
 });
 
 it("draws the part again on a change of the page's own state too", () => {
-  act(() => useUiStore.setState({ notice: { text: "wN1:p2", refreshable: false } }));
+  act(() => useUiStore.setState({ notices: [{ id: 1, level: "info", text: "wN1:p2", refreshable: false }] }));
   expect(shown("[data-part=failed]")).toBe("failed");
-  act(() => useUiStore.setState({ notice: null }));
+  act(() => useUiStore.setState({ notices: [] }));
   expect(shown("[data-part=board]")).toBe("board");
 });
 

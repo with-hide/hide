@@ -275,7 +275,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const context = remoteContext(rest());
     if (!context) return null;
     if (!remoteConnected(context)) {
-      ui().setNotice({ text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
+      ui().showNotice({ level: "info", text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
       return null;
     }
     return { targetId: context.device.id, view: remoteView(context.session, rest()?.workspace_view), agents: context.session?.agents ?? [] };
@@ -344,7 +344,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const consequence = closeScope(rest(), panes.map((p) => p.id));
     const decision = closeDecision(consequence);
     if (decision.action === "status_unknown") {
-      ui().setNotice({ text: statusUnknownNotice(decision.label, translate), refreshable: true });
+      ui().showNotice({ level: "important", text: statusUnknownNotice(decision.label, translate), refreshable: true });
       return;
     }
     // An agent with live descendants outside what closes asks the subtree
@@ -1049,7 +1049,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const document = state.documents[tab.id] ?? null;
     const carries = documentCloseCarries({ draft: latestDraft(tab.id), document, dirty: tab.dirty });
     if (carries.kind === "unloaded" && last) {
-      ui().setNotice({
+      ui().showNotice({
+        level: "important",
         text: translate("shell.unloadedChanges", { name: tab.label }),
         refreshable: false,
         dontSave: { workspace: frame.workspace, displayId },
@@ -1068,7 +1069,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * close was asked on. A copy stored in this browser stays a recovery item.
    */
   const closeViewWithoutSaving = (target: { workspace: ViewWorkspace; displayId: string }) => {
-    ui().setNotice(null);
+    ui().dismissNotices((notice) => notice.dontSave?.displayId === target.displayId);
     const frame = frameNow();
     if (frame && workspaceKey(frame.workspace) === workspaceKey(target.workspace)) followViewClose(frame, target.displayId);
     if (dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(target.workspace, { action: "close", display_id: target.displayId, discard: true }) }) === false) stopCloseFocus?.();
@@ -2763,7 +2764,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (!tab?.id) return diagnostic(`close_tab: no tab holds ${paneId}`);
       if (targetId && status?.state !== "connected") {
         const label = machineName(rest()?.navigator?.devices, targetId, translate);
-        ui().setNotice({ text: translate("shell.deviceNotConnected", { device: label, command: translate("shell.command.closeTab") }), refreshable: false });
+        ui().showNotice({ level: "info", text: translate("shell.deviceNotConnected", { device: label, command: translate("shell.command.closeTab") }), refreshable: false });
         return;
       }
       requestClose("tab", tab.id, tab.panes, targetId);
@@ -3120,7 +3121,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     refreshStatus() {
-      ui().setNotice(null);
+      ui().dismissNotices((notice) => notice.refreshable);
       dispatch({ schema_version: 2, kind: "refresh_status", payload: {} });
     },
 

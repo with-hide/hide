@@ -9,6 +9,7 @@ import { useState } from "react";
 import type { Actions } from "./actions";
 import { adoptNodeDrafts, allBuffers, deleteBufferId, flushBuffer, identity, recoveryBuffers, tabBufferKey, type StoredBuffer } from "./buffers";
 import { Button } from "./components/ui/button";
+import { Toast } from "./components/ui/toast";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Hint } from "./components/ui/tooltip";
 import { frontDeviceId } from "./devices";
@@ -90,16 +91,17 @@ export function DraftRecoveryLine({ actions }: { actions: Actions }) {
   if (count === 0) return null;
   return (
     <>
-      <div role="status" data-draft-recovery={count} className="flex items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-warning">
-        <Hint label={t("documents.recovery", { count })}>
-          <span className="min-w-0 flex-1 truncate">
-            {t("documents.recovery", { count })}
-          </span>
-        </Hint>
-        <button type="button" className="text-foreground underline" data-draft-recovery-review="true" onClick={() => setOpen(true)}>
-          {t("documents.reviewDrafts")}
-        </button>
-      </div>
+      <Toast
+        level="important"
+        data-draft-recovery={count}
+        actions={
+          <Button variant="text" size="inline" data-draft-recovery-review="true" onClick={() => setOpen(true)}>
+            {t("documents.reviewDrafts")}
+          </Button>
+        }
+      >
+        {t("documents.recovery", { count })}
+      </Toast>
       {open ? <DraftRecoverySheet actions={actions} onClose={() => setOpen(false)} /> : null}
     </>
   );

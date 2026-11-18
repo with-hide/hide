@@ -359,3 +359,28 @@ html[data-view-drag="row-resize"] * {
 @layer components {
   svg.lucide.fill-current { scale: 0.85; }
 }
+
+/*
+ * An info notice's countdown (`components/ui/toast.tsx`): the bar along its
+ * foot shrinks to nothing over the notice's time and the notice leaves when it
+ * is gone; the component pauses it while the notice is held. With reduced
+ * motion the bar stands still and the notice still leaves on time.
+ */
+.toast-countdown {
+  animation-name: toast-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes toast-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast-countdown {
+    animation-name: none;
+  }
+}

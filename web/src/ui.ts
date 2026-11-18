@@ -1,8 +1,9 @@
 // Shell-local UI state the core does not own: which overlay is open, the
-// pending close confirmation, and the one-line notice. Everything the core
+// pending close confirmation, and the notices in the window's corner. Everything the core
 // owns (focus, tabs, layout, sidebar visibility) stays in `store.ts`.
 
 import { create } from "zustand";
+import type { ToastLevel } from "./components/ui/toast";
 import type { ProjectSettingsTarget } from "./projectSettings";
 import type { Filter as DiskFilter } from "./diskCleanup";
 import type { Relation } from "./lineage";
@@ -156,15 +157,41 @@ export type HideAiTab = "suggestions" | "memory";
 export type Overlay = "none" | "shortcuts" | "find" | "add_project" | "file_palette" | "diff_palette" | "search" | "settings" | "project_settings";
 
 /**
- * A notice the operator can act on: `refreshable` offers `refresh_status`
- * (activity unknown), and `dontSave` offers closing a view whose document
- * holds unsaved work this page cannot save, without saving it (S7 B5).
+ * A notice the operator can act on, shown in the window's corner: an `info`
+ * one leaves on its own, an `important` one stays until it is dismissed or
+ * its cause clears. `refreshable` offers `refresh_status` (activity unknown),
+ * and `dontSave` offers closing a view whose document holds unsaved work this
+ * page cannot save, without saving it (S7 B5). A notice with the same `key`,
+ * or with no key and the same text, replaces the one shown.
  */
 export type Notice = {
+  level: ToastLevel;
   text: string;
   refreshable: boolean;
   dontSave?: { workspace: ViewWorkspace; displayId: string };
+  key?: string;
 };
+
+export type ShownNotice = Notice & { id: number };
+
+/** The most notices the corner holds; past it the oldest info notice leaves first, then the oldest of any. */
+export const NOTICE_LIMIT = 3;
+
+let noticeSeq = 0;
+
+function sameNotice(a: Notice, b: Notice) {
+  return a.key !== undefined || b.key !== undefined ? a.key === b.key : a.text === b.text;
+}
+
+/** `notices` with `notice` shown newest, within `NOTICE_LIMIT`. */
+export function withNotice(notices: readonly ShownNotice[], notice: Notice): ShownNotice[] {
+  const next = [...notices.filter((shown) => !sameNotice(shown, notice)), { ...notice, id: ++noticeSeq }];
+  while (next.length > NOTICE_LIMIT) {
+    const info = next.findIndex((shown) => shown.level === "info");
+    next.splice(info >= 0 && info < next.length - 1 ? info : 0, 1);
+  }
+  return next;
+}
 
 /** A project or checkout management dialog, named by the row that opened it. */
 export type WorkspaceDialog =
@@ -341,8 +368,8 @@ type UiStore = {
   /** The archived session whose delete waits for its confirmation (B28). */
   pendingArchiveDelete: { id: string } | null;
   cycle: Cycle | null;
-  /** A notice the operator can act on. */
-  notice: Notice | null;
+  /** The notices in the window's corner, oldest first. */
+  notices: ShownNotice[];
   /** The management dialog a sidebar menu opened, or null. */
   workspaceDialog: WorkspaceDialog | null;
   /** The device Add a project opens on, set by the surface that opened it (the start panel's empty device); null follows the focused device. */
@@ -424,7 +451,10 @@ type UiStore = {
   setPendingViewsClose: (pending: PendingViewsClose | null) => void;
   setPendingArchiveDelete: (pending: { id: string } | null) => void;
   setCycle: (cycle: Cycle | null) => void;
-  setNotice: (notice: Notice | null) => void;
+  showNotice: (notice: Notice) => void;
+  dismissNotice: (id: number) => void;
+  /** Dismisses every notice `match` accepts, or every notice. */
+  dismissNotices: (match?: (notice: ShownNotice) => boolean) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
   setAddProjectDevice: (device: string | null) => void;
   setPlanPane: (paneId: string | null) => void;
@@ -507,7 +537,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   pendingViewsClose: null,
   pendingArchiveDelete: null,
   cycle: null,
-  notice: null,
+  notices: [],
   workspaceDialog: null,
   addProjectDevice: null,
   planPane: null,
@@ -594,7 +624,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),
   setPendingArchiveDelete: (pendingArchiveDelete) => set({ pendingArchiveDelete }),
   setCycle: (cycle) => set({ cycle }),
-  setNotice: (notice) => set({ notice }),
+  showNotice: (notice) => set((state) => ({ notices: withNotice(state.notices, notice) })),
+  dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((notice) => notice.id !== id) })),
+  dismissNotices: (match) => set((state) => ({ notices: match ? state.notices.filter((notice) => !match(notice)) : [] })),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),
   setAddProjectDevice: (addProjectDevice) => set({ addProjectDevice }),
   setPlanPane: (planPane) => set({ planPane }),
