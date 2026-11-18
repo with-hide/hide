@@ -3648,6 +3648,7 @@ mod tests {
                     cap: 1,
                     destination: None,
                     closed: Vec::new(),
+                    ..Default::default()
                 }));
             }
             Mutation::Reserve {
@@ -3840,6 +3841,7 @@ mod tests {
                     cap: 2,
                     destination: None,
                     closed: Vec::new(),
+                    ..Default::default()
                 }));
             }
             spawn
@@ -4028,6 +4030,7 @@ mod tests {
                     cap: 2,
                     destination: None,
                     closed: Vec::new(),
+                    ..Default::default()
                 }));
             }
             spawn

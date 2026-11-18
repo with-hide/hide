@@ -150,7 +150,7 @@ pub struct ForkRequest {
 /// The engine's own rule for an agent name, quoted from the error it answers with:
 /// it must start with a lowercase letter and carry only lowercase letters,
 /// digits, `-` or `_`, in 1 to 32 characters.
-const MAX_NAME_CHARACTERS: usize = 32;
+pub const MAX_NAME_CHARACTERS: usize = 32;
 
 pub(crate) fn valid_agent_name(name: &str) -> bool {
     (1..=MAX_NAME_CHARACTERS).contains(&name.len())

@@ -5330,4 +5330,45 @@ mod tests {
             Some("HEAD".into())
         );
     }
+
+    /// with-hide/hide#2634, as reported: a mission's destination that only
+    /// this folder has, while the folder has another branch out at another
+    /// commit. The new branch starts at the destination's commit, not at the
+    /// folder's; with no destination it starts at the folder's own.
+    #[test]
+    fn a_local_only_destination_starts_the_branch_while_the_folder_has_another_out() {
+        let folder = tempfile::tempdir().unwrap();
+        let (clone, _, _) = clone_behind_origin(folder.path());
+        let host = OwnHost(hide_host::serve::Env::standalone(None));
+        let root = clone.to_str().unwrap();
+        git_in(&clone, &["switch", "-q", "-c", "hide/base"]);
+        let destination = commit_in(&clone, "destination");
+        git_in(&clone, &["switch", "-q", "-c", "fix/followups", "main"]);
+        let folders = commit_in(&clone, "conductor");
+        assert_ne!(destination, folders);
+        let start_commit = |start: Option<String>| {
+            let start = start.unwrap_or_else(|| "HEAD".into());
+            let place = folder
+                .path()
+                .join(format!("worker-{}", start.replace('/', "-")));
+            git_in(
+                &clone,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    &format!("worker/{start}"),
+                    place.to_str().unwrap(),
+                    &start,
+                ],
+            );
+            git_in(&place, &["rev-parse", "HEAD"])
+        };
+        assert_eq!(
+            start_commit(new_branch_start(&host, root, Some("hide/base".into()))),
+            destination
+        );
+        assert_eq!(start_commit(new_branch_start(&host, root, None)), folders);
+    }
 }

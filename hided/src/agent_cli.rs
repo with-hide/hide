@@ -372,12 +372,42 @@ pub fn with_brief(mut command: Delivery, brief: String) -> Delivery {
 }
 
 pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
+    let command = with_wire_paths(command)?;
     let result = (|| {
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;
         let hint = env.pane_id.clone();
         crate::workspace_cli::request_delivery(&mut credential, command, hint.as_deref())
     })();
     print_answer(result)
+}
+
+/// A spawn's `--repo` and `--path` as this machine spells the folders they
+/// name, as `hide diff open` sends its path: the core relates a folder to the
+/// projects it lists by that one spelling, so `C:\repo`, `c:/repo` or
+/// `repo/.` would name the folder to Git and no project to the core, and a
+/// mission's worker would start from the folder's own branch instead of the
+/// mission's destination (with-hide/hide#2634). A path on the device
+/// `--machine` names is that device's to spell and goes as given.
+fn with_wire_paths(mut command: Delivery) -> Result<Delivery, String> {
+    if let Delivery::Agents {
+        command:
+            Command::Spawn {
+                machine: None,
+                repo,
+                path,
+                ..
+            },
+    } = &mut command
+    {
+        for (flag, slot) in [("--repo", repo), ("--path", path)] {
+            if let Some(given) = slot.as_mut() {
+                let spelled = crate::cli::absolute_caller_path(given)
+                    .map_err(|_| format!("{flag} {given} names no folder this machine can read"))?;
+                *given = spelled;
+            }
+        }
+    }
+    Ok(command)
 }
 
 pub(crate) fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String> {
@@ -441,6 +471,62 @@ mod tests {
     }
     fn line(args: &[&str]) -> Result<Delivery, String> {
         parsed(args).map(|parsed| parsed.command)
+    }
+    /// with-hide/hide#2634: a mission's worker started with the project's
+    /// folder spelled another way (`C:\repo` for `C:/repo` on Windows, a
+    /// trailing `.`, macOS's `/var` for `/private/var`) is sent in the one
+    /// spelling the core lists the project by, so its admission carries the
+    /// mission's destination; a device's paths go as typed.
+    #[test]
+    fn a_spawn_sends_its_repo_and_path_as_this_machine_spells_the_folders() {
+        use std::path::MAIN_SEPARATOR as SEP;
+        let folder = tempfile::tempdir().unwrap();
+        let repo = folder.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let wire = |path: &std::path::Path| {
+            hide_platform::path::to_wire(&hide_platform::fs::identity::canonical(path).unwrap())
+                .unwrap()
+        };
+        let typed_repo = format!("{}{SEP}.", repo.display());
+        let typed_path = format!("{}{SEP}..{SEP}repo.worktrees{SEP}topic", repo.display());
+        let spawn = |machine: Option<&str>| {
+            let mut args = vec![
+                "spawn",
+                "--name",
+                "worker",
+                "--intent",
+                "one",
+                "--kind",
+                "codex",
+                "--repo",
+                &typed_repo,
+                "--branch",
+                "topic",
+                "--path",
+                &typed_path,
+            ];
+            if let Some(machine) = machine {
+                args.extend(["--machine", machine]);
+            }
+            let Delivery::Agents {
+                command: Command::Spawn { repo, path, .. },
+            } = with_wire_paths(line(&args).unwrap()).unwrap()
+            else {
+                panic!("spawn")
+            };
+            (repo, path)
+        };
+        assert_eq!(
+            spawn(None),
+            (
+                Some(wire(&repo)),
+                Some(format!("{}/repo.worktrees/topic", wire(folder.path())))
+            )
+        );
+        assert_eq!(
+            spawn(Some("device-1")),
+            (Some(typed_repo.clone()), Some(typed_path.clone()))
+        );
     }
     fn parsed(args: &[&str]) -> Result<Parsed, String> {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();

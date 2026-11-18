@@ -1026,6 +1026,61 @@ fn register_code_owned(
 /// How long the device's node may take to answer one of the spawn's checks.
 const TARGET_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// The destination a mission's spawn starts a new branch from, judged
+/// before anything is made (PRD mission-destination D-04): the mission's
+/// destination when the spawn's repository is the mission's project, read
+/// on the repository's machine and compared by the Git directory every
+/// worktree of it shares, so a path spelled another way, a link to the
+/// folder or a worktree of it is the project (with-hide/hide#2634). A node's
+/// worker sent to another repository is refused with the two folders named,
+/// never started from that repository's own branch; any other spawn of the
+/// Conductor's there starts as one outside the mission does.
+fn mission_destination(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    repo: &str,
+    admission: Option<&crate::runtime::missions::MissionAdmission>,
+) -> Result<Option<String>, String> {
+    use crate::node_access::{LinkError, call_as};
+    use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
+    let Some(admission) = admission else {
+        return Ok(None);
+    };
+    let Some(project) = admission.project.as_deref() else {
+        return Ok(admission.destination.clone());
+    };
+    let node = node.ok_or("machine_unavailable")?;
+    let repository = |path: &str| {
+        call_as::<Option<RepositoryDirs>>(
+            node,
+            Call::Repository {
+                path: path.to_owned(),
+            },
+            TARGET_CHECK_TIMEOUT,
+        )
+        .map_err(|error| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "mission_repository_unread",
+                "mission": admission.mission, "cause": error.to_string(),
+            }));
+            match error {
+                LinkError::Refused(_) => "repository_unavailable".to_owned(),
+                _ => "machine_unavailable".to_owned(),
+            }
+        })
+    };
+    let spawned = repository(repo)?.ok_or("repository_unavailable")?;
+    if repository(project)?.is_some_and(|own| own.common_dir == spawned.common_dir) {
+        return Ok(admission.destination.clone());
+    }
+    if admission.node_worker {
+        return Err(super::refusal(
+            "mission_other_repository",
+            &format!("{repo} is not a checkout of the mission's project {project}"),
+        ));
+    }
+    Ok(None)
+}
+
 /// Judges a device that is not the caller's before anything is made there:
 /// the id names a device, the device takes work now, `repo` (when this
 /// attempt still has to make the checkout) is a repository there, and the
@@ -1445,6 +1500,11 @@ fn spawn(
     // resumable: the caller is told the device is unavailable, and the same
     // command continues once it answers again.
     let (spawn_id, on_device) = (reserved.id.clone(), reserved.machine.is_some());
+    // A worktree spawn of a mission is judged against its project first.
+    let destination = match branch {
+        Some(_) => mission_destination(node.as_deref(), repo, mission.as_deref())?,
+        None => None,
+    };
     let placed = (|| -> Result<Value, String> {
         if reserved.pane.is_none() {
             // An engine that names a pane before it runs anything there (the
@@ -1633,9 +1693,7 @@ fn spawn(
                 // branch the repository's own folder has out. A device whose
                 // helper is not connected leaves the start to the engine: the
                 // destination as named, or the folder's own HEAD.
-                let destination = mission
-                    .as_ref()
-                    .and_then(|admission| admission.destination.clone());
+                let destination = destination.clone();
                 let start = match node.as_deref() {
                     Some(node) => {
                         crate::worktree_control::new_branch_start(node, repo, destination)
@@ -2635,6 +2693,114 @@ fn overridden_later(kind: &str, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The host's own git answering for real repositories on this machine.
+    struct OwnHost(hide_host::serve::Env);
+    impl crate::node_access::NodeLink for OwnHost {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            hide_host::serve::handle_in(call, &self.0)
+                .map(crate::node_access::LinkAnswer::Parsed)
+                .map_err(crate::node_access::LinkError::Refused)
+        }
+    }
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    }
+
+    /// A repository at `dir` with one commit on `main`.
+    fn repository(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        git_in(dir, &["init", "-q", "-b", "main"]);
+        git_in(dir, &["config", "user.name", "Fixture"]);
+        git_in(dir, &["config", "user.email", "fixture@example.invalid"]);
+        git_in(dir, &["config", "commit.gpgsign", "false"]);
+        git_in(dir, &["commit", "-q", "--allow-empty", "-m", "a"]);
+    }
+
+    /// with-hide/hide#2634: a mission's spawn on its own machine starts from
+    /// the destination whenever its repository is the mission's project,
+    /// however the folder is named (another spelling, a worktree of it); a
+    /// node's worker sent to another repository is refused with both folders
+    /// named, and the Conductor's other spawns there start without the
+    /// destination. A worker on another machine carries the destination as
+    /// its admission named it.
+    #[test]
+    fn a_missions_spawn_takes_its_destination_in_any_checkout_of_its_project_only() {
+        use crate::runtime::missions::MissionAdmission;
+        let folder = tempfile::tempdir().unwrap();
+        let project = folder.path().join("project");
+        let other = folder.path().join("other");
+        repository(&project);
+        repository(&other);
+        let linked = folder.path().join("project-topic");
+        git_in(
+            &project,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "topic",
+                linked.to_str().unwrap(),
+            ],
+        );
+        let host = OwnHost(hide_host::serve::Env::standalone(None));
+        let wire = |path: &std::path::Path| {
+            hide_platform::path::to_wire(&hide_platform::fs::identity::canonical(path).unwrap())
+                .unwrap()
+        };
+        let admission = |node_worker: bool| MissionAdmission {
+            mission: "mission-1".into(),
+            destination: Some("hide/base".into()),
+            project: Some(wire(&project)),
+            node_worker,
+            ..Default::default()
+        };
+        let destination = |repo: &str, admission: &MissionAdmission| {
+            super::mission_destination(Some(&host), repo, Some(admission))
+        };
+        let sep = std::path::MAIN_SEPARATOR;
+        for repo in [
+            wire(&project),
+            format!("{}{sep}.", project.display()),
+            project.to_str().unwrap().to_owned(),
+            wire(&linked),
+        ] {
+            assert_eq!(
+                destination(&repo, &admission(true)),
+                Ok(Some("hide/base".into())),
+                "{repo}"
+            );
+        }
+        let refused = destination(&wire(&other), &admission(true)).unwrap_err();
+        assert!(refused.starts_with("mission_other_repository"), "{refused}");
+        assert!(refused.contains(&wire(&other)), "{refused}");
+        assert!(refused.contains(&wire(&project)), "{refused}");
+        assert_eq!(destination(&wire(&other), &admission(false)), Ok(None));
+        let elsewhere = MissionAdmission {
+            project: None,
+            ..admission(true)
+        };
+        assert_eq!(
+            destination("/on/the/device", &elsewhere),
+            Ok(Some("hide/base".into()))
+        );
+        assert_eq!(
+            super::mission_destination(Some(&host), "/r", None),
+            Ok(None)
+        );
+    }
+
     /// A start typed again for a spawn whose brief rode its first start
     /// carries the saved words, whatever the adapter or the machine would
     /// decide now; a record an earlier build saved

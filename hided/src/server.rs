@@ -1449,6 +1449,10 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "A mission node's worker starts on its brief: spawn again with --brief-file <path> (or --brief <text>) holding what the node is to do"
         }
         "invalid_brief" => "The brief must be text of at most 16 KiB that is not blank",
+        // `hide_core::AGENT_NAME_LIMIT` is the limit this names.
+        "invalid_agent_name" => {
+            "The --name was refused: an agent name is 1 to 32 characters of lowercase letters, digits, - and _, starting with a lowercase letter; spawn again with a name that fits"
+        }
         "brief_not_submitted" => {
             "The agent started but did not take its brief within 30 seconds, and nothing was typed; error.spawn.cause says why: question (its screen asks a question; answer it in its pane), not_ready, unread, or agent_ended. Then run the same command again with the same intent, which submits the brief, starting the agent once more only if it ended"
         }
@@ -1457,6 +1461,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         }
         "mission_machine_node_refused" => {
             "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers; leave out --machine, or name the project's machine, for this node's worker"
+        }
+        "mission_other_repository" => {
+            "A mission node's worker works in the mission's project only, and --repo names another repository (the detail names both); spawn again with --repo naming the mission's project folder or a worktree of it"
         }
         "mission_machine_unavailable" => {
             "That machine is not connected; reconnect it in Settings > Devices and run the same command again, or leave out --machine to start the worker on the project's machine"
@@ -5700,6 +5707,20 @@ mod tests {
             delivery_next_action("caller_identity_conflict"),
             "Check the current agent pane and retry the same intent"
         );
+    }
+
+    /// with-hide/hide#2634: a spawn refused for its agent name says the name
+    /// is the problem and the limit it broke, so the caller shortens the name
+    /// instead of retrying the same one.
+    #[test]
+    fn a_spawn_refused_for_its_name_names_the_name_and_its_limit() {
+        let next = delivery_next_action("invalid_agent_name");
+        assert!(next.contains("--name"), "{next}");
+        assert!(
+            next.contains(&format!("1 to {} characters", hide_core::AGENT_NAME_LIMIT)),
+            "{next}"
+        );
+        assert!(!next.contains("retry the same intent"), "{next}");
     }
 
     /// A device range is accepted only as the range asked for: same offset
