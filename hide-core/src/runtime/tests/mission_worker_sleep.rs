@@ -702,6 +702,52 @@ fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
     }
 }
 
+/// A bell at rest names every letter waiting for its recipient (` · and 1
+/// more`), and the doorbell rings only the oldest: a letter queued before
+/// another letter's bell was typed into the pane holds its recipient no
+/// more, while one queued after that bell still does.
+#[test]
+fn a_bell_for_an_older_letter_ends_the_hold_of_the_letters_it_names() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    let [report, request] = <[String; 2]>::try_from(letters_from(
+        &mut runtime,
+        &[(LEAD, WORKER, "report"), (LEAD, WORKER, "request")],
+    ))
+    .unwrap();
+    let worker = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == WORKER)
+        .cloned()
+        .unwrap();
+    let queued = runtime
+        .delivery_state()
+        .unwrap()
+        .letters
+        .iter()
+        .find(|letter| letter.id == request)
+        .unwrap()
+        .created_at_unix_ms;
+    let holds = |runtime: &Runtime| {
+        crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap()).holds(&worker)
+    };
+    assert!(holds(&runtime), "both letters wait");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(queued);
+    });
+    assert!(!holds(&runtime), "the report's bell names the request");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.bell_typed_at_unix_ms = Some(queued - 1);
+    });
+    assert!(
+        holds(&runtime),
+        "a bell typed before the request was queued"
+    );
+}
+
 fn mission(status: &str) -> crate::missions::Mission {
     serde_json::from_value(serde_json::json!({
         "id": "mission-1", "title": "Fix the bug", "project": CHECKOUT,

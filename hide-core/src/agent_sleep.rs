@@ -81,22 +81,21 @@ impl Awake<'_> {
 /// in the pane since is not held by a letter to the one before. No automatic
 /// sleep takes one: a letter wakes its recipient once, so one that woke it
 /// would wait for a wake that never comes (with-hide/hide#2627). The hold
-/// ends when the letter reaches the conversation (its bell typed, or handed
-/// to a prompt hook), is taken in, expires or is cancelled
-/// (`delivery::ledger::Letter::yet_to_reach`). The pane id alone names the
+/// ends when a bell names the letter in the conversation (its own, or one
+/// typed for that recipient after it was queued), a prompt hook is handed
+/// it, or it is taken in, expires or is cancelled
+/// (`delivery::ledger::Ledger::unannounced`). The pane id alone names the
 /// machine, as the sleep records' keys do: another machine's panes are
 /// address-scoped (`crate::address`), so no device id is kept beside it.
 #[derive(Clone, Debug, Default)]
 pub struct LetterWaits(HashMap<String, HashSet<Option<String>>>);
 
 impl LetterWaits {
-    /// The waits `ledger` holds: each letter yet to reach its recipient's
-    /// conversation, by its recipient.
+    /// The waits `ledger` holds: each letter no bell has named to its
+    /// recipient yet, by its recipient.
     pub(crate) fn of(ledger: &crate::delivery::ledger::Ledger) -> Self {
         ledger
-            .letters
-            .iter()
-            .filter(|letter| letter.yet_to_reach())
+            .unannounced()
             .map(|letter| {
                 (
                     letter.recipient.pane_id.as_str(),

@@ -268,6 +268,37 @@ impl Ledger {
                 && letter.sender.session.as_deref() == session
         })
     }
+    /// The pending letters no bell has named to their recipient yet: none of
+    /// their own was typed, no prompt hook was handed them, and no bell was
+    /// typed into the same recipient's pane since they were queued. A bell at
+    /// rest names every letter waiting for its recipient (` · and N more`,
+    /// `doorbell::Hold::Announced`), so a letter it counted is in that
+    /// conversation though only the oldest one was rung.
+    pub(crate) fn unannounced(&self) -> impl Iterator<Item = &Letter> {
+        // The recipient as `agent_sleep::LetterWaits` keys it: its pane and
+        // the session the letter addresses.
+        fn recipient(letter: &Letter) -> (&str, Option<&str>) {
+            (
+                &letter.recipient.pane_id,
+                letter.recipient.session.as_deref(),
+            )
+        }
+        let mut last_bell = BTreeMap::new();
+        for letter in &self.letters {
+            if let Some(typed) = letter.bell_typed_at_unix_ms {
+                let last: &mut u64 = last_bell.entry(recipient(letter)).or_default();
+                *last = (*last).max(typed);
+            }
+        }
+        self.letters.iter().filter(move |letter| {
+            letter.state == State::Pending
+                && !letter.bell_sent
+                && !letter.handed
+                && last_bell
+                    .get(&recipient(letter))
+                    .is_none_or(|typed| *typed < letter.created_at_unix_ms)
+        })
+    }
 }
 
 impl Letter {
@@ -280,14 +311,6 @@ impl Letter {
         matches!(self.kind.as_str(), "request" | "block")
             || (self.sender.operator_owned()
                 && crate::coordination::human_turn::is_done_intent(&self.intent))
-    }
-
-    /// Whether the letter has yet to reach its recipient's conversation: it
-    /// is pending, no bell of it was typed into the pane, and no prompt hook
-    /// was handed it. A rung or handed letter is in that conversation, and
-    /// it wakes its recipient no more (`Sleeper::pausing`).
-    pub(crate) fn yet_to_reach(&self) -> bool {
-        self.state == State::Pending && !self.bell_sent && !self.handed
     }
 
     pub fn open(&self) -> bool {
