@@ -107,6 +107,15 @@ impl Capability {
         self.access_level
     }
 
+    /// The shell a pane-bound credential was proved against; none for any
+    /// other binding.
+    fn pane_shell(&self) -> Option<i32> {
+        match &self.binding {
+            Binding::Pane { shell_pid, .. } => Some(*shell_pid),
+            Binding::Checkout | Binding::Desk { .. } | Binding::Access { .. } => None,
+        }
+    }
+
     /// Only a pane-bound credential carries an attested terminal identity.
     pub(crate) fn pane_terminal(&self) -> Option<&str> {
         match &self.binding {
@@ -1342,7 +1351,17 @@ fn answer_bootstrap(
                 ),
                 _ => None,
             };
-            let mut answer = crate::hook_request::answer(core, &cap, hook, executor, desktop);
+            // A status report is judged by the processes between the
+            // connection's process and the pane's shell
+            // (`Engine::hook_session`).
+            let lineage = match (&hook.command, cap.pane_shell()) {
+                (hide_node_link::panes::HookCommand::Status { .. }, Some(shell)) => {
+                    hide_node::pane_proof::lineage(peer, shell)
+                }
+                _ => None,
+            };
+            let mut answer =
+                crate::hook_request::answer(core, &cap, hook, executor, lineage, desktop);
             install::stamp(&mut answer, own_install());
             if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
                 return Err("response_too_large");

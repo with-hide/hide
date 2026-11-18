@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use hide_agent_adapter::definition::Catalog;
+use hide_agent_hooks::hook_request::ExecProcess;
 use hide_node_link::holders::PaneFacts;
 use serde_json::Value;
 
@@ -2111,24 +2112,45 @@ impl Topology {
     }
 
     /// The session the `kind` agent's own hook reported from `pane`: the
-    /// session of the agent the pane runs, never of another kind's. With no
-    /// agent known in the pane it is the record of the program that holds
-    /// the terminal, laid on with the pane's last facts as a report that
-    /// waited for its program is ([`Self::apply_facts`]); while the shell
-    /// holds the terminal only its latest report waits.
+    /// session of the agent the pane runs, never of another kind's, nor of
+    /// an agent it ran ([`agents::runs_inside`], judged by `lineage`, the
+    /// processes from the report's sender up to the pane's shell, when the
+    /// kernel named them). With no agent known in the pane it is the record
+    /// of the program that holds the terminal, laid on with the pane's last
+    /// facts as a report that waited for its program is
+    /// ([`Self::apply_facts`]); while the shell holds the terminal only its
+    /// latest report waits.
     pub(super) fn hook_session(
         &mut self,
         pane: &str,
         kind: &str,
         session: &str,
+        lineage: Option<&[ExecProcess]>,
         catalog: &Catalog,
     ) -> Result<agents::Applied, EngineError> {
         let held = self.pane_mut(pane)?;
         match held.agent.as_ref() {
-            Some(agent) if agent.kind == kind => Ok(agents::Applied {
-                changed: self.set_agent_session(pane, kind, session)?,
-                ..agents::Applied::default()
-            }),
+            Some(agent) if agent.kind == kind => {
+                if agent.session.as_deref() != Some(session)
+                    && let (Some(owner), Some(lineage)) = (agent.live.reporter.as_deref(), lineage)
+                    && agents::runs_inside(owner, lineage)
+                {
+                    return Ok(agents::Applied {
+                        ran_inside: true,
+                        ..agents::Applied::default()
+                    });
+                }
+                let changed = self.set_agent_session(pane, kind, session)?;
+                if let Some(lineage) = lineage
+                    && let Some(agent) = self.pane_mut(pane)?.agent.as_mut()
+                {
+                    agent.live.reporter = Some(lineage.to_vec());
+                }
+                Ok(agents::Applied {
+                    changed,
+                    ..agents::Applied::default()
+                })
+            }
             Some(_) => Ok(agents::Applied::default()),
             None => {
                 held.pending_session = Some((kind.to_owned(), session.to_owned()));

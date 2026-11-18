@@ -197,7 +197,17 @@ pub(crate) trait Engine: Send + Sync {
     /// conversation. Answers true once for the first session of an agent
     /// the engine resumed after its turn was cut off under it (PRD
     /// engine-bundle-4-herdr-removal D-22), which the core then tells.
-    fn hook_session(&self, _pane: &str, _kind: &str, _session: &str) -> Answer<bool> {
+    /// `lineage` is the processes from the report's sender up to the pane's
+    /// shell, as the pane's kernel named them: a session an agent the
+    /// pane's agent ran names (`claude -p` from its tool's shell, which
+    /// inherits the pane's environment) is not the pane's.
+    fn hook_session(
+        &self,
+        _pane: &str,
+        _kind: &str,
+        _session: &str,
+        _lineage: Option<&[hide_agent_hooks::hook_request::ExecProcess]>,
+    ) -> Answer<bool> {
         Ok(false)
     }
 

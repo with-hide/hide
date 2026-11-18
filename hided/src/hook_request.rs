@@ -79,12 +79,16 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
 /// `executor` is the process that sent an `AgentExec`, as the kernel of
 /// the pane's machine says it is that attempt's executor
 /// (`hide_agent_hooks::hook_request::executor_process`); none for every
-/// other command.
+/// other command. `lineage` is the processes from the one that sent a
+/// `Status` up to the pane's shell, as that kernel names them
+/// (`hide_host::pane_peer::lineage`); none for every other command and
+/// when the system could not show them.
 pub(crate) fn answer(
     core: &CoreHandle,
     cap: &Capability,
     request: &HookRequest,
     executor: Option<ExecProcess>,
+    lineage: Option<Vec<ExecProcess>>,
     desktop: bool,
 ) -> Value {
     let result = match &request.command {
@@ -125,7 +129,7 @@ pub(crate) fn answer(
             hide_core::delivery::Command::Confirm { ids: ids.clone() },
             None,
         ),
-        HookCommand::Status { report } => status(core, cap, report),
+        HookCommand::Status { report } => status(core, cap, report, lineage),
         HookCommand::AgentExec { attempt, event } => {
             agent_exec(core, cap, attempt, event.clone(), executor)
         }
@@ -181,10 +185,18 @@ fn status(
     core: &CoreHandle,
     cap: &Capability,
     report: &hide_node_link::panes::HookStatusReport,
+    lineage: Option<Vec<ExecProcess>>,
 ) -> Result<Value, Failure> {
     cap.pane_terminal()
         .ok_or("agent_pane_required")
-        .and_then(|_| core.hook_status(&cap.context.device_id, &cap.pane_id, report.clone()))
+        .and_then(|_| {
+            core.hook_status(
+                &cap.context.device_id,
+                &cap.pane_id,
+                report.clone(),
+                lineage,
+            )
+        })
         .map(|()| json!({"recorded": true}))
         .map_err(|reason| {
             hide_core::diagnostic!(json!({

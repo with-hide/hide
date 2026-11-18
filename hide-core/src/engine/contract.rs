@@ -1548,7 +1548,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
         until(&format!("{kind} runs"), || runs(kind) == "\n");
         // Its hook names the conversation and says its turn was running.
         first
-            .hook_session(pane, kind, session)
+            .hook_session(pane, kind, session, None)
             .expect("the hook's session is taken");
         apply(
             &home,
@@ -1687,7 +1687,7 @@ fn an_own_engine_claude_slept_with_its_hooked_conversation_wakes_resuming_it() {
 
     // Its hook says which conversation it runs; the session projects it.
     engine
-        .hook_session(&pane, "claude", SESSION)
+        .hook_session(&pane, "claude", SESSION, None)
         .expect("the hook's session is taken");
     let listed = engine.agents(WAIT).unwrap();
     let session = listed[0]

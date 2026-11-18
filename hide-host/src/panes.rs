@@ -524,6 +524,15 @@ impl Panes {
                 )?),
                 _ => None,
             };
+            // A status report is judged by the processes between its
+            // sender and the pane's shell (`Engine::hook_session`).
+            let lineage = match (&proved, request.hook.as_ref().map(|hook| &hook.command)) {
+                (
+                    Proved::Pane(identity),
+                    Some(hide_node_link::panes::HookCommand::Status { .. }),
+                ) => pane_peer::lineage(peer, identity.shell_pid),
+                _ => None,
+            };
             self.sweep_references(output)
                 .map_err(|_| "bridge_unavailable")?;
             let id = self.next.fetch_add(1, Ordering::Relaxed);
@@ -538,6 +547,7 @@ impl Panes {
                     one_shot: request.one_shot,
                     hook: request.hook.clone(),
                     executor,
+                    lineage,
                 },
                 Proved::Checkout(path) => NodeEvent::CheckoutProof {
                     request: id,

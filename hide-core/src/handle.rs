@@ -904,13 +904,16 @@ impl Core {
     }
 
     /// What the agent hook in `caller`'s pane on `device` reported
-    /// (`HookCommand::Status`). A short admission that records it in memory;
-    /// the coordinator it wakes publishes what changed.
+    /// (`HookCommand::Status`), with the processes from its sender up to the
+    /// pane's shell when that machine's kernel could name them. A short
+    /// admission that records it in memory; the coordinator it wakes
+    /// publishes what changed.
     pub fn hook_status(
         &self,
         device: &str,
         caller: &str,
         report: &hide_node_link::panes::HookStatusReport,
+        lineage: Option<&[hide_agent_hooks::hook_request::ExecProcess]>,
     ) -> Result<(), &'static str> {
         if !check_owner_thread(self, "hook.status") {
             return Err("hook_status_unavailable");
@@ -922,7 +925,7 @@ impl Core {
         };
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
-            match engine.hook_session(&pane, &report.runtime, session) {
+            match engine.hook_session(&pane, &report.runtime, session, lineage) {
                 Ok(false) => {}
                 // An agent resumed after its turn was cut off is owed one
                 // letter (PRD engine-bundle-4-herdr-removal D-22).

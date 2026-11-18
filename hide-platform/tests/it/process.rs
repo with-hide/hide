@@ -20,9 +20,9 @@ use hide_platform::process::{
     CaptureFailureKind, FOREIGN_PANE_IDENTITY, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS,
     OwnedChild, OwnerWatch, RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cpu_time, cwd_of,
     descendants, descends_from, detach, group_members, image_of, is_alive,
-    is_foreign_pane_identity, kill_tree, measure_tree, name_of, observed_cwd_of, parent_of,
-    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
-    start_time, terminate, terminate_group,
+    is_foreign_pane_identity, kill_tree, lineage, measure_tree, name_of, observed_cwd_of,
+    parent_of, restrict_to_login_environment, run_to_end, run_to_end_tied, running,
+    set_output_aside, start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -2930,6 +2930,25 @@ fn a_tree_descends_from_its_root_and_not_the_other_way() {
     assert!(!descends_from(own, pid));
     assert!(!descends_from(pid, grandchild));
     assert!(!descends_from(pid, u32::MAX));
+}
+
+#[test]
+fn a_lineage_runs_from_a_process_up_to_its_ancestor_with_each_start() {
+    let _serial = serial();
+    let (child, grandchild) = owned_tree();
+    let (own, pid) = (std::process::id(), child.id());
+    let start = |pid| start_time(pid).unwrap();
+    assert_eq!(
+        lineage(grandchild, own),
+        Some(vec![
+            (grandchild, start(grandchild)),
+            (pid, start(pid)),
+            (own, start(own)),
+        ])
+    );
+    assert_eq!(lineage(pid, pid), Some(vec![(pid, start(pid))]));
+    assert_eq!(lineage(own, pid), None, "an ancestor is no descendant");
+    assert_eq!(lineage(pid, grandchild), None);
 }
 
 // A group outlives its leader, and a pid that led one still names it, which is

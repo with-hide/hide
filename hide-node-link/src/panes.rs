@@ -114,6 +114,13 @@ pub enum NodeEvent {
         /// every other request.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         executor: Option<ExecProcess>,
+        /// For a `hook` that is `HookCommand::Status`, the processes from the
+        /// one that sent it up to the pane's shell, as the node's kernel
+        /// names them (`hide_host::pane_peer::lineage`); none for every
+        /// other request, from a node built before it, and when the system
+        /// could not show them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lineage: Option<Vec<ExecProcess>>,
     },
     /// A process that is in no pane the node can prove asked for a
     /// credential, and the node's kernel says its working directory is

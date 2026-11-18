@@ -339,7 +339,13 @@ impl<'g> Engine for FakeEngine<'g> {
             .and_then(|definition| definition.executables.first().cloned())
     }
 
-    fn hook_session(&self, pane: &str, kind: &str, session: &str) -> Answer<bool> {
+    fn hook_session(
+        &self,
+        pane: &str,
+        kind: &str,
+        session: &str,
+        _lineage: Option<&[hide_agent_hooks::hook_request::ExecProcess]>,
+    ) -> Answer<bool> {
         self.ask(
             "hook_session",
             json!({"pane": pane, "kind": kind, "session": session}),
