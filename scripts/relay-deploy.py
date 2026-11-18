@@ -15,18 +15,20 @@ import tempfile
 
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "deploy" / "relay"
-UNITS = ("hide-relay.service", "hide-relay-proxy.service", "hide-relay-logs.service",
-         "hide-relay-retention.service", "hide-relay-retention.timer",
-         "hide-iroh-relay.service", "hide-iroh-relay-limits.service",
-         "hide-iroh-relay-meter.service", "hide-iroh-relay-meter.timer")
-SERVICES = UNITS[:3]
-# The device relay beside the phone relay: the meter starts and stops the relay
-# itself (by its monthly limit and Caddy's certificate), so only the limits
-# and the meter's timer are started here.
-DEVICE_UNITS = UNITS[5:]
-TIMERS = ("hide-relay-retention.timer", "hide-iroh-relay-meter.timer")
+# The phone relay, its proxy (shared with the device relay) and its collector.
+SERVICES = ("hide-relay.service", "hide-relay-proxy.service", "hide-relay-logs.service")
+RETENTION = ("hide-relay-retention.service", "hide-relay-retention.timer")
+# The device relay beside the phone relay. The meter starts and stops the relay
+# itself (by its monthly limit and Caddy's certificate), so an installation
+# starts only the limits, one meter pass and the meter's timer.
+DEVICE_RELAY = "hide-iroh-relay.service"
+DEVICE_LIMITS = "hide-iroh-relay-limits.service"
+DEVICE_METER = "hide-iroh-relay-meter.service"
+DEVICE_TIMER = "hide-iroh-relay-meter.timer"
+DEVICE_UNITS = (DEVICE_RELAY, DEVICE_LIMITS, DEVICE_METER, DEVICE_TIMER)
+UNITS = SERVICES + RETENTION + DEVICE_UNITS
 # Everything an installation stops before switching releases.
-STOPPED = SERVICES + DEVICE_UNITS[:3] + TIMERS
+STOPPED = SERVICES + DEVICE_UNITS + ("hide-relay-retention.timer",)
 BINARIES = ("hide-relay", "iroh-relay")
 DEVICE_HOST = "device-relay.withhide.dev"
 METER_STATE = "var/lib/hide-iroh-relay-meter"
@@ -241,26 +243,46 @@ def sync_directory(path):
         os.close(descriptor)
 
 
-def verify_release(release):
+def verify_inventory(release):
+    """A release is exactly the files its own inventory lists, unchanged.
+
+    This is all a previous release is checked against when it is restored: it
+    was staged by an older script, from older templates and pins.
+    """
     regular(release / "inventory.json", 16384)
     inventory = json.loads((release / "inventory.json").read_text())
-    expected = {p.name for p in TEMPLATES.iterdir()} | set(BINARIES) | {"source.json", "inputs.json"}
-    if set(inventory) != expected or {p.name for p in release.iterdir()} != expected | {"inventory.json"}:
+    if {p.name for p in release.iterdir()} != set(inventory) | {"inventory.json"}:
         raise ValueError("unexpected release file set")
     for name, checksum in inventory.items():
         regular(release / name, 64 * 1024 * 1024 if name in BINARIES else 16384)
         if digest(release / name) != checksum:
             raise ValueError("staged release changed: " + name)
+    return inventory
+
+
+def verify_release(release):
+    """A release this script staged: its inventory, its file set and its inputs."""
+    inventory = verify_inventory(release)
+    if set(inventory) != {p.name for p in TEMPLATES.iterdir()} | set(BINARIES) | {"source.json", "inputs.json"}:
+        raise ValueError("unexpected release file set")
     values = json.loads((release / "inputs.json").read_text())
     checked_values(values)
     verify_artifact(release, values)
     return values
 
 
-def activate(root, command):
+def activate(root, command, device_required=True):
+    """Start the release current points at: the phone relay, then the device relay.
+
+    A release staged before the device relay existed has no device units, and
+    starts only the phone relay. The device relay never holds the phone relay
+    back: it starts after the phone relay is healthy and enabled. When it does
+    not come up, its units are stopped; an installation then fails (and is rolled
+    back), while a recovery keeps the phone relay running and returns the reason.
+    """
     command("systemctl", "daemon-reload")
     command("systemctl", "restart", "systemd-journald@hide-relay.service")
-    for service in SERVICES + DEVICE_UNITS[1:3]:
+    for service in SERVICES:
         # Inactive units may already have been released from systemd's memory;
         # reset-failed only applies to retained failures (including start limits).
         state = command("systemctl", "show", "--property=ActiveState", "--value", service)
@@ -279,11 +301,29 @@ def activate(root, command):
         raise RuntimeError("HTTPS relay health did not return the expected 200 response")
     for service in SERVICES:
         command("systemctl", "is-active", "--quiet", service)
-    # The device relay: its limits, then one meter pass, which starts the relay
-    # once Caddy holds its certificate; the timer repeats that pass every minute.
-    command("systemctl", "start", "hide-iroh-relay-limits.service")
-    command("systemctl", "start", "hide-iroh-relay-meter.service")
-    command("systemctl", "start", "hide-iroh-relay-meter.timer")
+    command("systemctl", "enable", *SERVICES, "hide-relay-retention.timer")
+    command("systemctl", "start", "hide-relay-retention.timer", "hide-relay-retention.service")
+    if not (root / "opt/hide-relay/current" / DEVICE_RELAY).exists():
+        return None
+    try:
+        start_device_relay(root, command)
+    except RuntimeError as failure:
+        stop(command, DEVICE_UNITS)
+        if device_required:
+            raise
+        return f"device relay stopped: {failure}"
+    return None
+
+
+def start_device_relay(root, command):
+    for service in (DEVICE_LIMITS, DEVICE_METER):
+        if command("systemctl", "show", "--property=ActiveState", "--value", service) == b"failed\n":
+            command("systemctl", "reset-failed", service)
+    # Its limits, then one meter pass, which starts the relay once Caddy holds
+    # its certificate; the timer repeats that pass every minute.
+    command("systemctl", "start", DEVICE_LIMITS)
+    command("systemctl", "start", DEVICE_METER)
+    command("systemctl", "start", DEVICE_TIMER)
     # A relay its monthly limit stopped stays stopped; Caddy answers 503 then.
     if not (root / METER_STATE / "stopped").exists():
         response = command("curl", "--silent", "--max-time", "10", "--max-filesize", "32",
@@ -292,8 +332,7 @@ def activate(root, command):
                            "--output", "/dev/null", "--write-out", "%{http_code}", f"https://{DEVICE_HOST}/ping")
         if response != b"200":
             raise RuntimeError("HTTPS device relay probe did not return 200")
-    command("systemctl", "enable", *SERVICES, *TIMERS)
-    command("systemctl", "start", "hide-relay-retention.timer", "hide-relay-retention.service")
+    command("systemctl", "enable", DEVICE_TIMER)
 
 
 def recover(root, command=run):
@@ -310,17 +349,19 @@ def recover(root, command=run):
         # the new units. Make the published unit files visible before cleanup.
         command("systemctl", "daemon-reload")
         stop(command, STOPPED)
+    problem = None
     if previous:
-        verify_release(base / previous)
+        verify_inventory(base / previous)
         atomic_link(current, previous)
         sync_directory(base)
-        activate(root, command)
+        problem = activate(root, command, device_required=False)
     elif current.is_symlink():
-        command("systemctl", "disable", *SERVICES, *TIMERS)
+        command("systemctl", "disable", *SERVICES, "hide-relay-retention.timer", DEVICE_TIMER)
         current.unlink()
         command("systemctl", "daemon-reload")
     pending.unlink()
     sync_directory(base)
+    return problem
 
 
 def install(release, root=Path("/"), command=run):
@@ -391,10 +432,11 @@ def install(release, root=Path("/"), command=run):
         activate(root, command)
     except Exception as failure:
         try:
-            recover(root, command)
+            problem = recover(root, command)
         except Exception as rollback:
             raise RuntimeError(f"installation failed ({failure}); recovery incomplete ({rollback}), run recover") from rollback
-        raise RuntimeError(f"installation failed ({failure}); previous state restored") from failure
+        restored = "previous state restored" + (f", but {problem}" if problem else "")
+        raise RuntimeError(f"installation failed ({failure}); {restored}") from failure
     pending.unlink()
     sync_directory(base)
 
@@ -426,7 +468,9 @@ def main():
         with open("/run/lock/hide-relay-install.lock", "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.action == "recover":
-                recover(Path("/"))
+                problem = recover(Path("/"))
+                if problem:
+                    print("relay deployment: phone relay restored; " + problem, file=sys.stderr)
             else:
                 install(args.release)
     print("relay deployment: " + args.action + " succeeded")
