@@ -635,6 +635,14 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
+      - name: A mission worker starts at its destination however its folder is spelled
+        # A mission spawn's `--repo` is judged as the mission's project by the
+        # Git directory both read, so Windows' `C:\repo` for the `C:/repo`
+        # Hide lists still starts the worker at the destination, and the CLI
+        # sends the folder in the one spelling (with-hide/hide#2634).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-core) & kind(lib) & (test(=coordination::executor::tests::a_missions_spawn_takes_its_destination_in_any_checkout_of_its_project_only) | test(=runtime::tests::mission_worker_item::a_node_worker_starts_at_its_local_only_destination_in_any_spelling_of_the_project) | test(=worktree_control::tests::a_local_only_destination_starts_the_branch_while_the_folder_has_another_out))) | (package(hided) & kind(lib) & (test(=agent_cli::tests::a_spawn_sends_its_repo_and_path_as_this_machine_spells_the_folders) | test(=server::tests::a_spawn_refused_for_its_name_names_the_name_and_its_limit)))'
       - name: Letters and agent sleep on the state folder's durable files
         # The ledger opens from a real state folder, making a missing chain
         # through the platform's directory flushes, and a letter goes from
