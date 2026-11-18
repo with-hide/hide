@@ -569,9 +569,9 @@ fn pressure(runtime: &mut Runtime, level: MemoryPressure, now: u64) {
 
 /// with-hide/hide#2627: a worker a `request` woke stays awake under memory
 /// pressure until the letter reaches it, though the conversation it resumed
-/// ended long before its sleep. In order: the wake, a pressure minute, the
-/// doorbell. Once the letter is taken in, pressure takes the worker again,
-/// half an hour after it came back.
+/// ended long before its sleep. In order: the wake, a pressure minute, a
+/// later one while the doorbell still holds the letter, then the doorbell.
+/// Once the letter is taken in, the next pressure minute takes the worker.
 #[test]
 fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it() {
     const MINUTE: u64 = 60 * 1000;
@@ -595,39 +595,48 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
     show(&mut runtime, back);
     let woke = unix_milliseconds();
     assert_eq!(phase(&runtime, WORKER), None, "the worker is back");
+    let tick = |runtime: &mut Runtime, at: u64| {
+        pressure(runtime, MemoryPressure::Warning, at);
+        runtime.tick_agent_sleep(at);
+        phase(runtime, WORKER)
+    };
 
-    // The pressure minute, ten seconds after the wake.
-    let minute = woke + 10_000;
-    pressure(&mut runtime, MemoryPressure::Warning, minute);
-    runtime.tick_agent_sleep(minute);
-    assert_eq!(
-        phase(&runtime, WORKER),
-        None,
-        "a letter waits for it: pressure leaves it awake"
-    );
-
-    // The doorbell, once its quiet period has passed, may ring the letter.
+    // The pressure minute, ten seconds after the wake: its idle time starts
+    // at the wake, and a letter waits for it.
+    assert_eq!(tick(&mut runtime, woke + 10_000), None, "ten seconds on");
+    // Half an hour on, its session read has not settled the resumed turn,
+    // so the doorbell still holds the letter; the letter alone keeps it awake.
+    let held = woke + 31 * MINUTE;
     let ledger = runtime.delivery_state().unwrap();
     let waiting = ledger
         .letters
         .iter()
         .find(|letter| letter.id == id)
         .unwrap();
-    assert_eq!(waiting.state, State::Pending);
-    let bell = woke + crate::delivery::INPUT_QUIET_MS + 1_000;
-    assert!(
+    let patience = crate::delivery::doorbell::Patience::of(waiting);
+    assert_eq!(
         runtime
-            .delivery_bell_verdict(
-                &actor(WORKER),
-                crate::delivery::doorbell::Patience::of(waiting),
-                bell,
-            )
-            .is_ok(),
+            .delivery_bell_verdict(&actor(WORKER), patience, held)
+            .err(),
+        Some(crate::delivery::doorbell::Hold::SessionUnread)
+    );
+    assert_eq!(tick(&mut runtime, held), None, "a letter waits for it");
+
+    // The doorbell: the read settles the turn, and the pane takes the bell.
+    runtime
+        .delivery_observations
+        .get_mut(WORKER)
+        .unwrap()
+        .reads(hide_session::turns::Waiting::Nothing);
+    assert_eq!(
+        runtime
+            .delivery_bell_verdict(&actor(WORKER), patience, held + MINUTE / 2)
+            .err(),
+        None,
         "the worker's pane takes the letter's bell"
     );
 
-    // The letter is taken in: nothing holds the worker but its idle time,
-    // which counts from the wake, not from its conversation's last line.
+    // The letter is taken in: nothing holds the worker but its idle time.
     let mut taken = (*ledger).clone();
     taken
         .letters
@@ -636,17 +645,10 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
         .unwrap()
         .state = State::Delivered;
     runtime.publish_delivery(Arc::new(taken), true);
-    let later = woke + 10 * MINUTE;
-    pressure(&mut runtime, MemoryPressure::Warning, later);
-    runtime.tick_agent_sleep(later);
-    assert_eq!(phase(&runtime, WORKER), None, "ten minutes after its wake");
-    let last = woke + 31 * MINUTE;
-    pressure(&mut runtime, MemoryPressure::Warning, last);
-    runtime.tick_agent_sleep(last);
     assert_eq!(
-        phase(&runtime, WORKER),
+        tick(&mut runtime, held + MINUTE),
         Some(SleepPhase::Ending),
-        "half an hour after its wake"
+        "the next pressure minute takes it"
     );
 }
 
