@@ -554,6 +554,7 @@ jobs:
       TEST_TARGETS: >-
         -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p hide-core -p hide-ai
         -p hide-agent-adapter -p hide-desk -p hide-shell -p hide-session
+        -p hide-peer -p hide-peer-protocol -p hide-peer-iroh
         --lib --bin hide-agent-hooks --test it
     steps:
       - name: Keep line endings as committed
@@ -596,6 +597,15 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
+      - name: The peer connection's key and grant files, its loopback transport and two iroh endpoints
+        # hide-peer saves the machine key, the grants and the event inbox
+        # through the platform layer's private files, and hide-peer-iroh
+        # binds real UDP sockets on loopback: what the Linux Rust lane proves
+        # of them it proves for Linux (docs/ARCHITECTURE.md, The peer
+        # connection).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-peer) | package(hide-peer-protocol) | package(hide-peer-iroh)'
       - name: Every kit location follows the home the platform names
         # The kit finds its home in USERPROFILE, never in the HOME OpenSSH sets
         # beside it (hide-host/src/kit.rs).
