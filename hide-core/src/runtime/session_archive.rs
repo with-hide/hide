@@ -1885,28 +1885,40 @@ impl Runtime {
             }
             rows
         };
-        // The link record's retention answers for these sessions too.
-        let held = archive
-            .records
-            .values()
-            .flat_map(|record| {
-                record.held().filter(|member| member.closed).map(|member| {
-                    crate::links::store::ArchivedSession {
-                        session: crate::links::ledger::SessionIdentity {
-                            device_id: member.machine.clone(),
-                            agent: super::links::session_agent(&member.kind)
-                                .unwrap_or(member.kind.as_str())
-                                .to_owned(),
-                            session_id: member.native_session_id.clone(),
-                        },
-                        project_root: record.project_root.clone(),
-                        archived_at_unix_ms: record.archived_at_unix_ms,
-                    }
+        let identity = |member: &crate::session_archive::ArchivedMember| {
+            crate::links::ledger::SessionIdentity {
+                device_id: member.machine.clone(),
+                agent: super::links::session_agent(&member.kind)
+                    .unwrap_or(member.kind.as_str())
+                    .to_owned(),
+                session_id: member.native_session_id.clone(),
+            }
+        };
+        let facts = crate::links::store::ArchiveFacts {
+            // The link record's retention answers for the closed members too.
+            retention: archive
+                .records
+                .values()
+                .flat_map(|record| {
+                    record.held().filter(|member| member.closed).map(|member| {
+                        crate::links::store::ArchivedSession {
+                            session: identity(member),
+                            project_root: record.project_root.clone(),
+                            archived_at_unix_ms: record.archived_at_unix_ms,
+                        }
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
-        if held != *self.archive_retention_sent {
-            self.archive_retention_sent = Arc::new(held);
+                .collect(),
+            // Every member a record still holds, saving, closing or resuming
+            // included, is kept when the link record makes room.
+            held: archive
+                .records
+                .values()
+                .flat_map(|record| record.held().map(identity))
+                .collect(),
+        };
+        if facts != *self.archive_retention_sent {
+            self.archive_retention_sent = Arc::new(facts);
             if let Some(client) = self.links_work.client.as_ref() {
                 client.archived(Arc::clone(&self.archive_retention_sent));
             }

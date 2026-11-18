@@ -211,6 +211,11 @@ pub(crate) fn spawn_worker(
     let mut guard = runtime.lock().map_err(|_| "runtime lock poisoned")?;
     guard.links_work.client = Some(worker.client());
     guard.feed_links();
+    // The first panes are handed even when empty or unchanged: until the
+    // worker has them it keeps every session a pane ever carried.
+    if let Some(client) = guard.links_work.client.as_ref() {
+        client.panes(Arc::clone(&guard.links_work.panes));
+    }
     // The archive's sessions reach retention once the worker is there.
     guard.resend_archive_retention();
     guard.restore_pending_backlog();

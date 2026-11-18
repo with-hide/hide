@@ -1403,12 +1403,6 @@ impl Runtime {
         if self.missions.outside.destination_lost(id) {
             return false;
         }
-        // The gate reads only the book and GitHub's answer: with neither
-        // moved since it refused, it would refuse again.
-        let judged_on = (self.missions.book_edit, self.missions.github_edit);
-        if self.missions.close_refused_at.get(id) == Some(&judged_on) {
-            return false;
-        }
         let report = mission.report.is_none().then(|| closing_report(mission));
         let key = close_key(mission);
         let wake_key = key.clone();
@@ -1449,10 +1443,7 @@ impl Runtime {
             },
         );
         match closed {
-            Ok(_) => {
-                self.missions.close_refused_at.remove(id);
-                true
-            }
+            Ok(_) => true,
             Err(code) => {
                 let Some(mission) = self.missions.book.get_mut(id) else {
                     return false;
@@ -1475,23 +1466,23 @@ impl Runtime {
                     .find(|node| named.contains(&node.key.as_str()))
                     .or(mission.nodes.last())
                     .map(|node| node.key.clone());
+                let Some(key) = key else {
+                    return false;
+                };
+                let raised = raise(mission, &key, AttentionReason::CloseRefused, None, now);
+                if raised.is_empty() {
+                    return false;
+                }
+                // The close is judged on every pass, which runs whenever any
+                // of its inputs moved (a busy delivery ledger about once a
+                // second); the refusal is logged with the raise that marks
+                // it, once until it settles (with-hide/hide#2618).
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.hide_close_refused",
                     "mission": id, "code": code,
                 }));
-                let raised = key
-                    .map(|key| raise(mission, &key, AttentionReason::CloseRefused, None, now))
-                    .unwrap_or_default();
-                let changed = !raised.is_empty();
-                if changed {
-                    self.record_mission_events(id, raised);
-                }
-                // Stamped after its own raise, which edits the book.
-                self.missions.close_refused_at.insert(
-                    id.to_owned(),
-                    (self.missions.book_edit, self.missions.github_edit),
-                );
-                changed
+                self.record_mission_events(id, raised);
+                true
             }
         }
     }

@@ -21,7 +21,7 @@ use rusqlite::{
 };
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -97,6 +97,39 @@ pub struct LinkStore {
     /// left to drop; cleared by the next write that fits, so a store that
     /// stays full logs one line, not one per write.
     full_reported: bool,
+    /// What the worker last said is in use, which making room never drops.
+    in_use: InUse,
+    /// Whether making room removed sessions since the worker last took it:
+    /// their projects' summaries no longer hold.
+    evicted: bool,
+}
+
+/// The sessions in use that making room never drops, as the worker last
+/// handed them. `None` is not handed yet in this process; until both are,
+/// every session a pane ever carried is kept instead (an archive's members
+/// were carried by panes too).
+#[derive(Clone, Debug, Default)]
+pub struct InUse {
+    /// The sessions Hide panes carry now.
+    pub carried: Option<std::sync::Arc<Vec<PaneFact>>>,
+    /// The sessions a session archive record still holds.
+    pub archived: Option<std::sync::Arc<ArchiveFacts>>,
+}
+
+/// What the session archive tells the link record: the closed members its
+/// retention answers for, and every member a record still holds, in any
+/// phase, which making room keeps.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArchiveFacts {
+    pub retention: Vec<ArchivedSession>,
+    pub held: Vec<SessionIdentity>,
+}
+
+/// A session's pull request lines (`LinkStore::pr_reach`).
+#[derive(Default)]
+struct PrReach {
+    open: bool,
+    latest_end: Option<u64>,
 }
 
 /// The code of a write that found the file at its page cap.
@@ -278,6 +311,8 @@ impl LinkStore {
             connection,
             issue_capacity: RefCell::default(),
             full_reported: false,
+            in_use: InUse::default(),
+            evicted: false,
         })
     }
 
@@ -304,6 +339,8 @@ impl LinkStore {
             connection,
             issue_capacity: RefCell::default(),
             full_reported: false,
+            in_use: InUse::default(),
+            evicted: false,
         })
     }
 
@@ -1140,6 +1177,37 @@ impl LinkStore {
         tx.commit().map_err(failed)
     }
 
+    /// Per session on a line of a project's pull request: whether one of
+    /// them is still open, and the latest end among the closed ones.
+    fn pr_reach(&self, projects: &[ProjectRow]) -> Result<HashMap<SessionKey, PrReach>, String> {
+        let mut reach: HashMap<SessionKey, PrReach> = HashMap::new();
+        for project in projects {
+            let pass = self.pass_of(project)?;
+            for pr in self.candidate_prs(&project.key)? {
+                let end = pr.end();
+                for line in self.pr_lines_in(&pass, &pr, None)? {
+                    for id in &line.ids {
+                        let held = reach
+                            .entry(SessionKey {
+                                device: line.device_id.clone(),
+                                agent: line.agent.clone(),
+                                id: id.clone(),
+                            })
+                            .or_default();
+                        match end {
+                            None => held.open = true,
+                            Some(end) => {
+                                held.latest_end =
+                                    Some(held.latest_end.map_or(end, |at| at.max(end)))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(reach)
+    }
+
     /// Removes the sessions their project's Copied history no longer keeps
     /// (D-18, D-25, B33). `days` answers a project key's policy (0 is Off,
     /// None the default 90); `file_exists` says whether a local file is
@@ -1176,26 +1244,7 @@ impl LinkStore {
                 owner.insert(session.key.clone(), index);
             }
         }
-        // Per project, the latest end among the pull requests each session
-        // is on; one still open counts as now.
-        let mut latest: HashMap<SessionKey, u64> = HashMap::new();
-        for project in &projects {
-            let pass = self.pass_of(project)?;
-            for pr in self.candidate_prs(&project.key)? {
-                let end = pr.end().unwrap_or(now);
-                for line in self.pr_lines_in(&pass, &pr, None)? {
-                    for id in &line.ids {
-                        let key = SessionKey {
-                            device: line.device_id.clone(),
-                            agent: line.agent.clone(),
-                            id: id.clone(),
-                        };
-                        let held = latest.entry(key).or_insert(end);
-                        *held = (*held).max(end);
-                    }
-                }
-            }
-        }
+        let reach = self.pr_reach(&projects)?;
         let policy = |session: &SessionRow| {
             owner
                 .get(&session.key)
@@ -1235,7 +1284,9 @@ impl LinkStore {
                 let cutoff = now.saturating_sub(u64::from(policy) * DAY_MS);
                 ended >= cutoff
                     || (now.saturating_sub(ended) < OPEN_EXCEPTION_MS
-                        && latest.get(&session.key).is_some_and(|end| *end >= cutoff))
+                        && reach.get(&session.key).is_some_and(|reach| {
+                            reach.open || reach.latest_end.is_some_and(|end| end >= cutoff)
+                        }))
             };
             if !keep {
                 gone.push(session.key.clone());
@@ -1358,12 +1409,76 @@ impl LinkStore {
         Ok(pages.saturating_sub(free))
     }
 
-    /// Drops whole sessions, oldest end first and `ROOM_BATCH` at a time,
-    /// until the rows take at most seven eighths of the page cap, so one
-    /// making of room lasts many writes, or no session with an end
-    /// is left. A session's end is its last activity, which a pane carrying
-    /// it moves to now every minute, so a running session goes last; one with
-    /// no time at all is never dropped. Answers how many sessions it dropped.
+    /// Hands the store what is in use now; the worker does this before
+    /// every pass of writes, a reopened store included.
+    pub fn set_in_use(&mut self, in_use: InUse) {
+        self.in_use = in_use;
+    }
+
+    /// Whether making room removed sessions since the last call.
+    pub fn take_evicted(&mut self) -> bool {
+        std::mem::take(&mut self.evicted)
+    }
+
+    /// The sessions making room keeps: those `in_use` names (every session
+    /// a pane ever carried while it names none), those on a pull request
+    /// still open, and, by the query that lists the rest, those with no
+    /// time. An error here is the caller's: nothing is dropped on a guess.
+    fn kept(&self) -> Result<HashSet<SessionKey>, String> {
+        let mut kept: HashSet<SessionKey> = self
+            .pr_reach(&self.projects()?)?
+            .into_iter()
+            .filter(|(_, reach)| reach.open)
+            .map(|(key, _)| key)
+            .collect();
+        let key = |device: &str, agent: &str, id: &str| SessionKey {
+            device: device.to_owned(),
+            agent: agent.to_owned(),
+            id: id.to_owned(),
+        };
+        if let Some(carried) = &self.in_use.carried {
+            kept.extend(
+                carried
+                    .iter()
+                    .map(|pane| key(&pane.device_id, &pane.agent, &pane.session_id)),
+            );
+        }
+        if let Some(archived) = &self.in_use.archived {
+            kept.extend(
+                archived
+                    .held
+                    .iter()
+                    .map(|held| key(&held.device_id, &held.agent, &held.session_id)),
+            );
+        }
+        if self.in_use.carried.is_none() || self.in_use.archived.is_none() {
+            let mut statement = self
+                .connection
+                .prepare_cached(
+                    "SELECT device, agent, id FROM sessions WHERE pane_first_at IS NOT NULL",
+                )
+                .map_err(failed)?;
+            let carried = statement
+                .query_map([], |row| {
+                    Ok(key(
+                        &row.get::<_, String>(0)?,
+                        &row.get::<_, String>(1)?,
+                        &row.get::<_, String>(2)?,
+                    ))
+                })
+                .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+                .map_err(failed)?;
+            kept.extend(carried);
+        }
+        Ok(kept)
+    }
+
+    /// Drops whole sessions that are not kept (`kept`), oldest end first
+    /// and `ROOM_BATCH` at a time, until the rows take at most seven eighths
+    /// of the page cap, so one making of room lasts many writes, or none is
+    /// left to drop. A session's end is its last activity, not a proof it
+    /// ended, which is why what is in use is named rather than inferred.
+    /// Answers how many sessions it dropped.
     pub(super) fn make_room(&mut self) -> Result<usize, String> {
         let cap: u32 = self
             .connection
@@ -1371,33 +1486,43 @@ impl LinkStore {
             .map_err(failed)?;
         let target = cap / 8 * 7;
         let before = self.used_pages()?;
+        if before <= target {
+            return Ok(0);
+        }
+        let kept = self.kept()?;
+        let droppable = {
+            let mut statement = self
+                .connection
+                .prepare_cached(
+                    "SELECT device, agent, id FROM sessions WHERE ended_at IS NOT NULL \
+                     ORDER BY ended_at, device, agent, id",
+                )
+                .map_err(failed)?;
+            statement
+                .query_map([], |row| {
+                    Ok(SessionKey {
+                        device: row.get(0)?,
+                        agent: row.get(1)?,
+                        id: row.get(2)?,
+                    })
+                })
+                .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
+                .map_err(failed)?
+                .into_iter()
+                .filter(|key| !kept.contains(key))
+                .collect::<Vec<_>>()
+        };
         let mut dropped = 0;
         let mut used = before;
-        while used > target {
-            let oldest = {
-                let mut statement = self
-                    .connection
-                    .prepare_cached(
-                        "SELECT device, agent, id FROM sessions WHERE ended_at IS NOT NULL \
-                         ORDER BY ended_at, device, agent, id LIMIT ?1",
-                    )
-                    .map_err(failed)?;
-                statement
-                    .query_map([ROOM_BATCH as i64], |row| {
-                        Ok(SessionKey {
-                            device: row.get(0)?,
-                            agent: row.get(1)?,
-                            id: row.get(2)?,
-                        })
-                    })
-                    .and_then(Iterator::collect::<rusqlite::Result<Vec<_>>>)
-                    .map_err(failed)?
-            };
-            if oldest.is_empty() {
+        for batch in droppable.chunks(ROOM_BATCH) {
+            if used <= target {
                 break;
             }
-            self.remove_sessions(&oldest)?;
-            dropped += oldest.len();
+            // Marked first: a removal that fails after its commit, at the
+            // checkpoint, has still removed.
+            self.evicted = true;
+            self.remove_sessions(batch)?;
+            dropped += batch.len();
             used = self.used_pages()?;
         }
         if dropped > 0 {
