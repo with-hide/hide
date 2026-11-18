@@ -398,7 +398,13 @@ mod tests {
 
     #[test]
     fn a_guest_endpoint_fits_a_macos_socket_path_for_a_16_byte_account() {
-        let state = std::path::Path::new("/Users/sixteen-bytename/.hide/state");
+        // The state folder of a macOS account whose name is 16 bytes.
+        let state = std::path::Path::new("/")
+            .join("Users")
+            .join("a".repeat(16))
+            .join(".hide")
+            .join("state");
+        let state = state.as_path();
         let longest = launch::longest_endpoint(state);
         assert_eq!(
             longest.as_os_str().len(),

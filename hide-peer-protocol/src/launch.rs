@@ -39,8 +39,8 @@ pub const NODE_SOCKET_TAIL: usize = 47;
 
 /// The most bytes any guest endpoint takes below the host's state folder:
 /// `/g/<16 hex>/n` and [`NODE_SOCKET_TAIL`]. With macOS's 103 byte socket
-/// path it leaves room for an account name of 16 bytes
-/// (`/Users/<name>/.hide/state`). The host checks it before it starts a
+/// path it leaves room for an account name of 16 bytes, the state folder
+/// being `.hide/state` in that account's home. The host checks it before it starts a
 /// node and refuses with the reason instead (D-77 (3)).
 pub const LONGEST_SOCKET_TAIL: usize =
     1 + GUESTS_DIR.len() + 1 + crate::key::SHORT_KEY_CHARS + 1 + NODE_SIDE.len() + NODE_SOCKET_TAIL;
