@@ -76,28 +76,27 @@ impl Awake<'_> {
     }
 }
 
-/// The agents a letter waits to be delivered to, each by its pane and the
-/// session the letter addresses (the digest `delivery::Actor` keeps), so an
-/// agent started in the pane since is not held by a letter to the one before.
-/// No automatic sleep takes one: a letter that woke it would wait again
-/// while it slept, and one rung no more would wait for a wake that never
-/// comes (with-hide/hide#2627). The hold ends with the letter's wait: handed
-/// over, taken in, expired or cancelled. The pane id alone names the machine,
-/// as the sleep records' keys do: another machine's panes are address-scoped
-/// (`crate::address`), so no device id is kept beside it.
+/// The agents a letter has yet to reach, each by its pane and the session the
+/// letter addresses (the digest `delivery::Actor` keeps), so an agent started
+/// in the pane since is not held by a letter to the one before. No automatic
+/// sleep takes one: a letter wakes its recipient once, so one that woke it
+/// would wait for a wake that never comes (with-hide/hide#2627). The hold
+/// ends when the letter reaches the conversation (its bell typed, or handed
+/// to a prompt hook), is taken in, expires or is cancelled
+/// (`delivery::ledger::Letter::yet_to_reach`). The pane id alone names the
+/// machine, as the sleep records' keys do: another machine's panes are
+/// address-scoped (`crate::address`), so no device id is kept beside it.
 #[derive(Clone, Debug, Default)]
 pub struct LetterWaits(HashMap<String, HashSet<Option<String>>>);
 
 impl LetterWaits {
-    /// The waits `ledger` holds: each pending letter not yet handed over to a
-    /// prompt hook, by its recipient.
+    /// The waits `ledger` holds: each letter yet to reach its recipient's
+    /// conversation, by its recipient.
     pub(crate) fn of(ledger: &crate::delivery::ledger::Ledger) -> Self {
         ledger
             .letters
             .iter()
-            .filter(|letter| {
-                letter.state == crate::delivery::ledger::State::Pending && !letter.handed
-            })
+            .filter(|letter| letter.yet_to_reach())
             .map(|letter| {
                 (
                     letter.recipient.pane_id.as_str(),

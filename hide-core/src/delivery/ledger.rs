@@ -282,6 +282,14 @@ impl Letter {
                 && crate::coordination::human_turn::is_done_intent(&self.intent))
     }
 
+    /// Whether the letter has yet to reach its recipient's conversation: it
+    /// is pending, no bell of it was typed into the pane, and no prompt hook
+    /// was handed it. A rung or handed letter is in that conversation, and
+    /// it wakes its recipient no more (`Sleeper::pausing`).
+    pub(crate) fn yet_to_reach(&self) -> bool {
+        self.state == State::Pending && !self.bell_sent && !self.handed
+    }
+
     pub fn open(&self) -> bool {
         self.awaiting_intake() || self.waiting_answer
     }
