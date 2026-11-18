@@ -613,6 +613,8 @@ Unregistered test conventions keep their folder's existing lanes, and a mixed ch
 Registered desktop unit tests are not package inputs even when a broad input pattern such as `updater*` names them.
 `NamedPaths` compares the narrowed files with the desktop Vitest configuration and checks that both retained jobs execute both unit suites.
 `Cargo.lock` stays among them: every member but `hide-platform` depends on `workspace-hack`, which holds nearly every third-party crate, so a lock change reaches every crate and no narrower plan can be read from it.
+A pull request that changes `Cargo.lock`, `deny.toml` or `scripts/install-cargo-deny.sh` also has its Rust lane check every crate's license and the advisory database (the plan's `deny` output, `DENY_PATHS`), as the nightly does; main's push run leaves that check out ([BUILD.md: Licenses and advisories](BUILD.md#licenses-and-advisories)).
+`contracts/peer-link.json` plans what a source file of `hide-peer-protocol` plans, because that crate includes it (`PEER_LINK_CONTRACT`).
 
 A pull request whose last green run still stands reuses it: the plan names `policy` alone, and its summary names the run it reuses.
 A push that merges main to resolve a conflict in a guide, or that only edits documentation, is the case it is for.

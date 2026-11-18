@@ -629,7 +629,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         return;
     }
     // From here the stream carries the node's link and its screens'
-    // streams (`link_mux`); nothing of the handshake is left unread, since
+    // streams (`hide_peer::mux`); nothing of the handshake is left unread, since
     // the node writes nothing more until it reads the acceptance.
     drop(reader);
     drop(writer);

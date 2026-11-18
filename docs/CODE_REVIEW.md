@@ -80,5 +80,6 @@ When one piece of work lands as a series, such as a mission's nodes or a stack, 
 
 - `AGENTS.md` routes every reviewer here.
 - The file list in a pull request's folded `Risky files` block (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
+  `contracts/peer-link.json` belongs in that block whenever it changes: a machine of another build reads it, and a field or message an older reader misreads cannot be taken back once two machines are paired ([contracts/README.md](../contracts/README.md#peer-link)).
 - The folded `Tests` block of a pull request that adds or changes a test (layer, what the test catches, repeat result, waits) is where a reviewer starts perspective 6; the reviewer checks each line against the diff rather than taking it as written.
 - `docs/TESTING.md`, `docs/VERIFICATION.md` and `docs/PERFORMANCE_TESTING.md` own the detail behind perspectives 5 and 6.
