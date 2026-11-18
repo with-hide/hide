@@ -81,6 +81,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # macOS's one saver of the workspace set: the one macOS lane of every main
       # push that builds the daemon (docs/BUILD.md, "CI's Rust caches"). The
       # shards build the same thing; the first saves it. Windows's saver is

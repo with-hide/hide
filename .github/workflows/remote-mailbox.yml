@@ -68,11 +68,13 @@ jobs:
           set: workspace
           save: false
       # hide-vt's Zig inputs and caches, which the vt lane saves: the pane
-      # holder every pane runs in links hide-vt.
+      # holder every pane runs in links hide-vt. The vt lane has no Linux arm64
+      # leg, so this lane's arm64 run on main is that system's one saver, and
+      # every other run reads what it saved (#2631).
       - uses: ./.github/actions/vt-cache
         timeout-minutes: 5
         with:
-          save: false
+          save: ${{ github.ref == 'refs/heads/main' && runner.arch == 'ARM64' }}
       - name: Install zsh and the SSH server
         # The fixture starts every pane's shell from SHELL=/bin/zsh, which the
         # Linux image lacks, and a device's tests run against the system's

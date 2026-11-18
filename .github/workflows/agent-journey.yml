@@ -121,6 +121,12 @@ jobs:
         timeout-minutes: 5
         with:
           ref: ${{ inputs.source-sha || github.sha }}
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
@@ -237,7 +243,7 @@ jobs:
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
     # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
     # the job's cap is its steps' caps summed.
-    timeout-minutes: 181
+    timeout-minutes: 186
     strategy:
       fail-fast: false
       matrix:
@@ -261,6 +267,12 @@ jobs:
         with:
           ref: ${{ inputs.source-sha || github.sha }}
           persist-credentials: false
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
         with:
