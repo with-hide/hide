@@ -694,7 +694,11 @@ fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
             letter.handed = handed;
         });
         let waits = crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap());
-        assert_eq!(waits.holds(&worker), holds, "{state:?}, rung {rung}, handed {handed}");
+        assert_eq!(
+            waits.holds(&worker),
+            holds,
+            "{state:?}, rung {rung}, handed {handed}"
+        );
     }
 }
 
