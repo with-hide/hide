@@ -1660,7 +1660,7 @@
       "integration": true,
       "guidance_memory": true,
       "letter": true,
-      "letter_busy": false,
+      "letter_busy": true,
       "scene_rest_draft": true,
       "scene_interrupted": true,
       "scene_session_picker": true,
@@ -1681,8 +1681,10 @@
       "usage": true,
       "profile": false
     },
-    "letter": "next_prompt",
-    "busy_letter": [],
+    "letter": "bell",
+    "busy_letter": [
+      "bell_hook"
+    ],
     "scenes": [
       {
         "scene": "rest",
@@ -1885,7 +1887,7 @@
     ],
     "wake": "pane",
     "title": "automatic",
-    "request_budget": 21,
+    "request_budget": 27,
     "fake_home": {
       "status": "exception",
       "auto_update": {

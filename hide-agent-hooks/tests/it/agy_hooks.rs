@@ -355,6 +355,36 @@ fn a_prompts_first_model_call_injects_the_panes_letter_and_then_confirms_it() {
     assert_eq!(machine.inbox_calls().len(), 4);
 }
 
+/// The core takes a bell's turn by the digest of the prompt the hook runs
+/// for, so agy's prompt hook names it: without it a bell typed into agy's
+/// empty prompt reads as the operator's own prompt and its letters stay
+/// queued (#2580). The prompt is agy's `lastUserInput`.
+#[test]
+fn a_prompts_first_model_call_names_its_prompt_by_digest() {
+    let machine = Machine::new();
+
+    let run = machine.run(
+        "UserPromptSubmit",
+        &json!({
+            "conversationId": CONVERSATION,
+            "invocationNum": 0,
+            "lastUserInput": "please run the tests",
+        }),
+        Some(PANE),
+    );
+
+    assert!(run.status_ok, "{}", run.diagnostics);
+    // SHA-256 of `please run the tests`, from Python hashlib.
+    assert_eq!(
+        machine.inbox_calls()[0],
+        format!(
+            "inbox --hook --prompt-digest \
+             d5f5d18e68c6739345b7f53abb632b17c1c3663c1aebedc5a7d23987ec1ae706 \
+             --session {CONVERSATION}"
+        )
+    );
+}
+
 #[test]
 fn a_subagent_is_given_no_guidance_and_takes_no_letter_of_the_panes() {
     let machine = Machine::new();

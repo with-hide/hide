@@ -2273,10 +2273,21 @@ mod tests {
         }
 
         fn with_submission_error(flags: Value, submission_error: Option<&'static str>) -> Self {
+            Self::build("codex", flags, submission_error)
+        }
+
+        /// A recipient of agent `kind` (its engine name), showing `screen`.
+        fn of_kind(kind: &'static str, screen: &str) -> Self {
+            let bell = Self::build(kind, json!({}), None);
+            *bell.screen.lock().unwrap() = screen.to_owned();
+            bell
+        }
+
+        fn build(kind: &'static str, flags: Value, submission_error: Option<&'static str>) -> Self {
             use crate::delivery::Command;
-            use crate::runtime::delivery::tests::{authority, fixture, recipient_at_rest};
+            use crate::runtime::delivery::tests::{authority, fixture_of, recipient_at_rest};
             let root = tempfile::tempdir().unwrap();
-            let (runtime, sender, _, path) = fixture(root.path());
+            let (runtime, sender, _, path) = fixture_of(root.path(), kind);
             let flags = Arc::new(Mutex::new(flags));
             let answer = Arc::clone(&flags);
             let screen = Arc::new(Mutex::new(CODEX_EMPTY.to_owned()));
@@ -2347,9 +2358,9 @@ mod tests {
                         let mut agent = json!({
                             "pane_id": "recipient", "terminal_id": "terminal",
                             "workspace_id": "w1", "tab_id": "w1:t1", "focused": false,
-                            "revision": 1, "name": "recipient", "agent": "codex",
+                            "revision": 1, "name": "recipient", "agent": kind,
                             "agent_status": "idle", "state_change_seq": 2,
-                            "agent_session": {"source": "hook", "agent": "codex",
+                            "agent_session": {"source": "hook", "agent": kind,
                                 "kind": "id", "value": "recipient-native"},
                         });
                         for (key, value) in answer.lock().unwrap().as_object().unwrap() {
@@ -2361,8 +2372,12 @@ mod tests {
                     other => panic!("unexpected {other}"),
                 }
             });
-            let recipient =
-                recipient_at_rest(&mut runtime.lock().unwrap(), "recipient-native", &fake);
+            let recipient = recipient_at_rest(
+                &mut runtime.lock().unwrap(),
+                "recipient-native",
+                &fake,
+                kind,
+            );
             let (worker, client) = crate::delivery::worker::Worker::store(
                 Arc::downgrade(&runtime),
                 crate::handle::ChangeNotifier::noop(),
@@ -4679,6 +4694,95 @@ mod tests {
     }
 
     const CODEX_DRAFT: &str = "\x1b[0m\x1b[1m› \x1b[0mhello 안녕하세요\r\n\r\n  footer\r\n";
+
+    /// Antigravity 1.5.11's screens as an isolated Hide read them
+    /// (`hide-agent-adapter`'s `tests/fixtures/composer`, 2026-11-19).
+    const AGY_EMPTY: &str =
+        include_str!("../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-0-empty.ansi");
+    const AGY_MODE_HINT: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-plan-hint.ansi"
+    );
+    const AGY_TRUST: &str =
+        include_str!("../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-trust.ansi");
+    const AGY_PERMISSION: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-permission.ansi"
+    );
+    const AGY_QUESTION: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-question.ansi"
+    );
+    const AGY_SESSION_PICKER: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-session-picker.ansi"
+    );
+
+    /// with-hide/hide#2580: an Antigravity agent resting at its empty prompt,
+    /// with no mode or with a mode's hint standing in its composer, is rung
+    /// for an ordinary letter, as Claude Code is: its composer is read right
+    /// before the bell, and the line is typed once.
+    #[test]
+    fn an_antigravity_agent_at_its_empty_prompt_is_rung_without_force() {
+        for screen in [AGY_EMPTY, AGY_MODE_HINT] {
+            let bell = Bell::of_kind("agy", screen);
+            let mut doorbell = Doorbell::default();
+            bell.pass(&mut doorbell, now());
+            assert_eq!(bell.typed().len(), 1, "the letter's bell is typed");
+            assert_eq!(bell.reads(), 1, "its composer is read right before");
+            assert_eq!(bell.attempts(), 1);
+        }
+    }
+
+    /// with-hide/hide#2580: an Antigravity agent showing the folder-trust
+    /// question, a permission question, its own question or its session
+    /// picker is never typed into. Read `blocked`, as the engine reads the
+    /// trust and permission questions, the turn holds the letter before the
+    /// screen is read; read `idle`, as the engine read some of agy's
+    /// questions on 1.5.6, the composer read right before the bell finds no
+    /// empty prompt and holds it.
+    #[test]
+    fn an_antigravity_agent_showing_a_question_or_a_picker_is_never_rung() {
+        for (name, screen) in [
+            ("trust", AGY_TRUST),
+            ("permission", AGY_PERMISSION),
+            ("question", AGY_QUESTION),
+            ("session picker", AGY_SESSION_PICKER),
+        ] {
+            for status in ["idle", "blocked"] {
+                let bell = Bell::of_kind("agy", screen);
+                if status == "blocked" {
+                    crate::runtime::delivery::tests::state_moved(
+                        &mut bell.runtime.lock().unwrap(),
+                        "recipient",
+                        "blocked",
+                        0,
+                    );
+                    *bell.flags.lock().unwrap() =
+                        json!({"agent_status": "blocked", "state_change_seq": 4});
+                }
+                let mut doorbell = Doorbell::default();
+                let start = now();
+                let mut reasons = Vec::new();
+                for at in [start, start + RETRY_LIMIT_MS, start + 2 * RETRY_LIMIT_MS] {
+                    reasons.extend(
+                        held(&bell.pass(&mut doorbell, at))
+                            .into_iter()
+                            .map(str::to_owned),
+                    );
+                }
+                assert!(bell.typed().is_empty(), "{name}, {status}: nothing typed");
+                assert_eq!(bell.attempts(), 0, "{name}, {status}: no bell spent");
+                if status == "blocked" {
+                    assert_eq!(bell.reads(), 0, "{name}: held before any screen read");
+                } else {
+                    assert!(bell.reads() >= 1, "{name}: the composer was read");
+                    assert!(
+                        reasons
+                            .iter()
+                            .all(|reason| reason == "composer_unconfirmed"),
+                        "{name}: {reasons:?}"
+                    );
+                }
+            }
+        }
+    }
 
     fn kinds_of(records: &[Value]) -> Vec<String> {
         records

@@ -2788,6 +2788,14 @@ pub(crate) mod tests {
     pub(crate) fn fixture(
         root: &std::path::Path,
     ) -> (Arc<Mutex<Runtime>>, Actor, Observation, PathBuf) {
+        fixture_of(root, "codex")
+    }
+
+    /// The fixture with a recipient of agent `kind`; the sender is Codex.
+    pub(crate) fn fixture_of(
+        root: &std::path::Path,
+        kind: &str,
+    ) -> (Arc<Mutex<Runtime>>, Actor, Observation, PathBuf) {
         let state = root.join("state");
         hide_platform::fs::private::create_dir_all(&state).unwrap();
         let options: CoreOptions = serde_json::from_value(json!({
@@ -2808,7 +2816,7 @@ pub(crate) mod tests {
         );
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
-            {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
+            {"id":"recipient","pane_id":"recipient","agent":kind,"agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
         ]})).unwrap();
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
         runtime.snapshot.status.engine.state = "connected".into();
@@ -2895,7 +2903,7 @@ pub(crate) mod tests {
             .delivery_observation(&Actor {
                 pane_id: "recipient".into(),
                 name: "recipient".into(),
-                kind: "codex".into(),
+                kind: kind.into(),
                 device_id: crate::node::TEST_NODE.into(),
                 session: Some("recipient-session".into()),
             })
@@ -2964,14 +2972,16 @@ pub(crate) mod tests {
             .insert(crate::session_archive::ArchiveId::new().unwrap(), record);
     }
 
+    /// A recipient of agent `kind` resting at its prompt.
     pub(crate) fn recipient_at_rest(
         runtime: &mut Runtime,
         native: &str,
         fake: &std::sync::Arc<crate::engine::fake::FakeEngine<'static>>,
+        kind: &str,
     ) -> Observation {
         let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
             {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
-            {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle","state_change_seq":2,
+            {"id":"recipient","pane_id":"recipient","agent":kind,"agent_status":"idle","state_change_seq":2,
              "lineage_session":crate::engine::tokens::session_digest(native)},
         ]})).unwrap();
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);

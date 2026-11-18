@@ -839,7 +839,7 @@ Prove it on the real agent first, before any code, and pin what you measure with
 - Measure the hook failure matrix for the agent: a missing helper, a helper that is not executable, a crash, a non-zero exit, empty or malformed output, and a timeout.
   agy refuses the tool call on every one of them but an empty answer with exit 0 (measured 2026-10-16 and 2026-10-17), so each case has a test that the installed command still answers (`guidance::tests::agys_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_cannot_run_or_fails`).
 - Measure how the engine's screen rules read the agent's permission and folder-trust prompts before relying on Needs You or the bell.
-  On 2026-10-16 a probe outside the app read agy's permission question as `idle`, and the running app then showed Herdr 0.9.3 reading it as an approval; measure in the app, and its folder-trust question is still unmeasured, which is why agy has no bell.
+  On 2026-10-16 a probe outside the app read agy's permission question as `idle`, and the running app then showed Herdr 0.9.3 reading it as an approval; measure in the app; the folder-trust question read `blocked` on agy 1.5.6 (2026-11-12) and `idle`, its start still pending, on 1.5.11 (2026-11-19), and agy's bell types only into a screen its composer declaration reads as agy's empty prompt ([delivery.md](delivery.md#a-screen-that-must-read-as-agys-empty-prompt)).
 - Record the agent version every fact was proven on.
   agy moved from 1.3.6 to 1.4.0 on 2026-10-16, during the work, so every fact proven on 1.3.6 had to be proven again on 1.4.0.
 
@@ -1030,8 +1030,8 @@ Hide therefore adds the exact path of a worktree it made to that list before it 
 Hide AI's own folder for agy is trusted the same way ([AI_PROVIDERS.md](AI_PROVIDERS.md#antigravity)), and switching agy off removes it too.
 
 agy's tool-permission question reaches Needs You as an approval: Herdr 0.9.3 reported the pane as waiting on an approval while it is open (seen in the app on 2026-10-16; an earlier probe outside the app had read it as idle).
-Its folder-trust question has not been measured, and agy has no bell (D-06): an Enter from the bell into a dialog the screen rules read as idle would answer that dialog, and a letter that arrives meanwhile reaches agy on its next prompt through `PreInvocation`, or, once its wait is over, on the turn's next model call through the same hook.
-The bell is turned on for agy once the engine's screen rules are shown to read the folder-trust question as blocked too, and this paragraph goes ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+agy is rung at rest since with-hide/hide#2580 (the operator's decision of 2026-11-19): the bell types only once the composer read right before it shows agy's empty prompt, its composer between the rules with nothing under them but the status line, which no question, picker or dialog of agy's leaves on screen ([delivery.md](delivery.md#a-screen-that-must-read-as-agys-empty-prompt)).
+Its `PreInvocation` hook names the prompt by the digest of the event's `lastUserInput`, so the core tells the bell's turn, which takes the letters, from the operator's own prompt, which is told only how many wait; while it works, a letter goes on the turn's next model call through the same hook.
 Claude Code's hook needs no silencing inside agy, because agy reads neither `CLAUDE.md` nor `~/.claude` hooks (D-22).
 
 ### Installed means the program is found

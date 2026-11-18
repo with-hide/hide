@@ -148,7 +148,7 @@ Whether the pane takes input now is apart from the turn, and a row shown at rest
 
 The engine's `blocked` status holds every permission or selection menu it reports that way.
 For a menu it reports as idle or done, a bell target also needs Hide's draft record or a native session wait to hold the bell.
-Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below.
+Claude Code and Codex can be rung at rest and while working; Grok can be rung only at rest, with Hide's draft guard and the native-session wait guard below; Antigravity can be rung only at rest, and only when the composer read right before the bell shows its empty prompt (below).
 Enabling another target needs its menus measured on the pinned CLI, with the unsafe and unknown cells named in its pull request.
 Every screen a bell can meet is a scene each agent declares, with the door the journey opens it through and the finding a survey recorded ([VERIFICATION.md](VERIFICATION.md#agent-scenes)); every finding is unknown until a survey closes it, and `bell` is still declared by hand, so no declaration changes until a finding does.
 The adapter declaration is a reviewed product decision, never changed by a measurement.
@@ -178,6 +178,30 @@ Grok's three hooks did the same on both versions:
 | Folder-trust question at start, before Grok has a session | `idle`, ready | Its Enter trusted the folder; the missing native session holds the bell today (`session_changed`) | 1.0.52, 1.0.62 |
 
 Cursor's letters at rest are read through `hide inbox`; Grok's rest bell opens a turn that takes them at a tool call or turn end, and while they work their own tool hook hands due letters over ([Letters while the agent works](#letters-while-the-agent-works)).
+
+#### A screen that must read as agy's empty prompt
+
+Antigravity is a target at rest (with-hide/hide#2580, the operator's decision of 2026-11-19), and the bell types into it only when the screen read right before the bell ([Reading the composer](#reading-the-composer)) shows agy's empty prompt: the `>` line between its two rules with nothing typed, at most its mode hint in palette grey, and nothing under the bottom rule but its status line.
+Every bell already reads the composer of a kind that declares one right before it types (`clear_to_type`), so this guard is the composer declaration's, not a second check: a screen that is not that prompt holds the letter as `composer_unconfirmed` (or `draft` for text) until the prompt is back, and, as for every bell target, a prompt the operator submits meanwhile is told only how many letters wait, never given them.
+A kind with tool letters is never rung while it works, so a letter due during a turn goes at its next model call through `PreInvocation`.
+agy's prompt hook names the prompt it runs for by the digest of the event's `lastUserInput` (agy 1.4.8 and later send it; the transcript's last prompt for one that does not), so the core hands the bell's turn its letters ([Recognizing the bell](#recognizing-the-bell)); before the bell, the hook sent no digest and every prompt took the letters.
+What each screen agy shows does with the line, measured in an isolated Hide with the installed agy and the journey's fake model:
+
+| Scene | Engine read | What the composer read says | What the line did | Seen on |
+|---|---|---|---|---|
+| At rest, no mode | `idle` | empty | Submitted as one prompt; its hook took the letter | 1.5.11 |
+| At rest with a mode hint (`Accept-edits mode: …`, `Plan mode: …`) | `idle` | empty: the hint is palette grey, typed text is the default colour | Submitted as one prompt | 1.5.11 |
+| Text in the composer | `idle` | `not_empty` | Held as a draft | 1.5.6, 1.5.11 |
+| A turn running | `working` | not read | Held; the turn's next model call takes the letter | 1.5.6, 1.5.11 |
+| Interrupted with Esc | `working` until the next prompt | not read | Held; the engine reads no rest after an Esc | 1.5.6, 1.5.11 |
+| `/` command list, `?` shortcuts | `idle` | `not_found` (`open_under`) | Held | 1.5.6, 1.5.11 |
+| `/resume` session picker, `/model` picker | `idle` | `not_found` (`open_under`) | Held; 1.5.6, before the declaration read what lies under the composer, typed the line into the picker's search | 1.5.11 |
+| Permission question (`Requesting permission for: …`), ask question | `working` on 1.5.11; `blocked`, or `idle` for some questions, on 1.5.6 | `not_found` (`open_under`) | Held, nothing typed: a kind with tool letters is not rung while the engine reads it working, and the composer read refuses it too | 1.5.6, 1.5.11 |
+| Folder-trust question at start | `idle` with its start still pending on 1.5.11 (`not_ready`), `blocked` on 1.5.6 | `not_found` (`no_rule`) | Held, nothing typed in 75 s | 1.5.6, 1.5.11 |
+| First start (theme choice) | unknown | `not_found` (`no_rule`) | Held | 1.5.6 |
+
+agy's auto mode, whose hint `Auto mode: edits & safe commands auto-approved (shift+tab to cycle)` the report showed, is offered only to an account that has it, so the fake-model journey could not show it; agy draws every mode's hint on the same line in the same grey, and the declaration reads any grey text there as a hint.
+A plan waiting for approval and the update notice could not be shown with the fake model; a question, a picker or a dialog drawn under the composer or in place of its rules is not agy's empty prompt whatever its words, and only a screen that draws one above an intact prompt would reach the bell, which closes with a capture of each.
 OpenCode, Pi and omp are not targets either, though Hide's plugin and extension give them a prompt hook: on 2026-10-07 OpenCode's previous-session picker read `done`, and a bell's Enter there opened another session, and Pi's and omp's resume pickers read `done` too.
 Their letters ride their next prompt instead (below), or a tool result while they work, and a bell is reconsidered only in the change that would flip an adapter declaration, once the live-check tool has found a bell harmless in every scene that agent does not read as `blocked`.
 Measured under Herdr 0.9.1, a built-in slash picker such as `/model` or `/resume` read as `done`, not `blocked`, for both targets, and a bell typed into an open picker was accepted by it.
@@ -202,7 +226,7 @@ How it reaches the agent follows the kind, and one letter takes one path and is 
   While letters a script handed over wait for their receipt, the host's write and then Hide's confirmation, the script asks nothing, so a letter is never written twice; a write that never comes is forgotten after ten minutes, and the letter then rides the next ask.
 - Grok and Cursor take them through their own `PreToolUse` and `preToolUse` hook: a call that runs is answered with the letters as the hook's added context (`hookSpecificOutput.additionalContext`, which Grok's guide says reaches the model with the batch's tool results; `additional_context` beside `"permission": "allow"` for Cursor), and confirmed once that answer is printed.
   Every tool call reaches the hook, since neither entry carries a matcher (Grok `hide-guidance@7`, Cursor `hide-guidance@6`; an omitted matcher matches everything in Grok's guide, and Cursor's is optional), so a `--now` letter goes at the next call whatever its tool; a refused call carries none.
-- Antigravity takes them through its `PreInvocation` hook, which agy runs before every model call of a turn: a call after the prompt's first is the gap after a tool, and Hide answers it with the letters due as an injected system message (`injectSteps`, as the prompt's letters go), confirmed once printed; agy has no bell, so this and the next prompt are its two paths.
+- Antigravity takes them through its `PreInvocation` hook, which agy runs before every model call of a turn: a call after the prompt's first is the gap after a tool, and Hide answers it with the letters due as an injected system message (`injectSteps`, as the prompt's letters go), confirmed once printed; at rest its bell opens a turn whose prompt hook takes them ([A screen that must read as agy's empty prompt](#a-screen-that-must-read-as-agys-empty-prompt)).
 
 The ask (`Command::Pull { point: Tool }`, node protocol 47) names the pane's own native session and is refused with `session_mismatch` for any other, since it hands letters over; it submits nothing, so a draft in the composer stays a draft (D-09).
 Grok also asks at its root session's `Stop`, as `hide inbox --hook --session <id> --turn-end` does.
@@ -455,7 +479,7 @@ Each read is logged as `composer.read` with the pane, agent, version, verdict an
 Each agent's adapter declares where its composer sits and what an empty one shows (`hide_agent_adapter::composer`, the `composer` field of each row in `declarations.rs`), and one parser judges every agent.
 Empty is a positive signature only: nothing at all, or the agent's known placeholder in its known style; never "anything faint", since Grok draws a paste in grey.
 A screen with no composer where the declaration puts it is `not_found`.
-A screen not read empty names the step that stopped it (`composer::Miss`): `no_rule` or `no_top_rule` (no rule, or none above the bottom one), `no_region` (no box, bar or marked line), `no_marker`, `no_trailer`, `placeholder_style` (a placeholder's text in another style, which for Claude Code is any text not dim) or `not_placeholder` (text that is no placeholder).
+A screen not read empty names the step that stopped it (`composer::Miss`): `no_rule` or `no_top_rule` (no rule, or none above the bottom one), `no_region` (no box, bar or marked line), `no_marker`, `no_trailer`, `open_under` (more rows under the composer than the agent draws there at rest, which only an agent that declares them is read for: a list, a picker or a question is open under it and takes the keys), `placeholder_style` (a placeholder's text in another style, which for Claude Code is any text not dim) or `not_placeholder` (text that is no placeholder).
 
 | Agent | Composer | Empty |
 | --- | --- | --- |
@@ -465,7 +489,7 @@ A screen not read empty names the step that stopped it (`composer::Miss`): `no_r
 | OpenCode | the lines inside the `┃` bar above its `╹` foot, less the agent and model line | only the (128,128,128) `Ask anything…` placeholder; typed text is (238,238,238) and a paste an orange chip |
 | Pi | the lines between the last two `─` rules | the rules adjacent |
 | omp | the `╰─` line | nothing, or the `⇧⇥ to change thinking effort` hint; a paste shows `📄 #1` |
-| Antigravity | the `>` line between the last two `─` rules | nothing after the marker |
+| Antigravity | the `>` line between the last two `─` rules, with at most its status line under the bottom rule | nothing after the marker, or only text in palette grey (colour 8): the mode hint shift+tab cycles, whose words change with the mode; typed text and the paste mark are drawn in the default colour |
 
 A paste of many lines that an agent keeps as one mark is declared with the mark's words and how it counts the lines (`Composer::pasted`, `PasteMark`), so a brief Hide typed is read as still in the composer when the composer shows that mark alone with the brief's count: Claude Code `[Pasted text #1 +11 lines]` for twelve lines (it counts line breaks), Antigravity `[Pasted text #1 +12 lines]`, OpenCode `[Pasted ~12 lines]`, Pi `[paste #1 +12 lines]` and Grok `[Pasted: 12 lines]` (they count lines), from the same captures.
 Codex shows a paste as its text, and omp's `📄 #1` carries no count that ties it to the text, so neither declares one.
@@ -475,7 +499,8 @@ A rule above the composer may carry a label: Claude Code 2.1.314 draws a session
 So a top rule is either a line of `─` alone or a label between a space and a closing run of `─`, every `─` of it drawn in the bottom rule's own colour (a palette or 24-bit one), which typed text never is; what lies between the rules is judged as before.
 Measured on 2026-10-30 under Herdr 0.9.5 at 60 columns, the six steps above and the empty composer after a turn, for a named and an unnamed session, plus the coloured and cut names (`claude-2.1.314-*` captures); agy 1.4.11 draws nothing in its rule after `/rename`, and Pi 1.0.4 writes in its top rule only while it works or when a draft overflows (`↑ 3 more`), never over an empty composer at rest.
 Grok's predicted next prompt and its Windows marker were measured on 2026-10-22 with Grok 1.0.52, the pinned version, after a turn ended (the earlier captures had none), on its own and with `GROK_FORCE_LEGACY_CONSOLE=1`, the console a Windows pane gets; its source draws the suggestion with `ghost_text_style`, dim and italic, on every system.
-Only Claude Code and Codex are rung, so only their drafts are released today; the other declarations serve the agent journey's `composer` cell and a bell target added later.
+Agy 1.5.11's mode hints and the lists it draws under its composer were captured on 2026-11-19 in an isolated Hide at 80 columns (`agy-1.5.11-*` captures).
+Claude Code, Codex, Grok and Antigravity are rung, so only their drafts are released; the other declarations serve the agent journey's `composer` cell and a bell target added later.
 Antigravity's declaration also clears the composer of an agy fork's pane before Hide types `/fork` there ([UI_BEHAVIOR.md](UI_BEHAVIOR.md), Antigravity's Fork): it is read for any agy version, since a screen it cannot confirm empty is typed into as before and logged as `fork.composer_unconfirmed`, so a declaration that no longer matches agy never stops a fork.
 [INSTALL.md](INSTALL.md#what-each-system-supports) records what has not been measured (narrow panes, the light theme, Windows and Linux).
 

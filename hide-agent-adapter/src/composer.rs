@@ -21,6 +21,13 @@ pub struct Composer {
     /// Lines of the agent's own chrome at the end of the region, such as
     /// OpenCode's agent and model line, which are never content.
     pub trailer: usize,
+    /// How many rows that show anything the agent draws under its composer
+    /// while nothing is open there, such as Antigravity's status line. A
+    /// picker, a list or a dialog drawn under the composer takes the keys
+    /// typed while it is open, so a screen with more rows there has no
+    /// composer to type into; `None` where what lies under it was not
+    /// measured, and is not read.
+    pub under: Option<usize>,
     /// What may stand in an empty composer besides spaces. Every line that
     /// is not blank must be one of these for the composer to read empty.
     pub empty: &'static [Placeholder],
@@ -130,6 +137,10 @@ pub enum Style {
     Italic,
     /// This exact 24-bit foreground colour.
     Rgb(u8, u8, u8),
+    /// This entry of the terminal's palette as the foreground: 0-15 for the
+    /// basic and bright colours (SGR 30-37 and 90-97, or 38;5;n), up to 255
+    /// for the 256-colour palette.
+    Palette(u8),
 }
 
 /// A foreground colour the terminal was told to draw with.
@@ -178,6 +189,9 @@ pub enum Miss {
     NoMarker,
     /// The composer has fewer lines than the agent's own chrome under it.
     NoTrailer,
+    /// More rows under the composer than the agent draws there at rest: a
+    /// picker, a list or a dialog is open under it.
+    OpenUnder,
     /// A line shows a placeholder's text with a cell in another style.
     PlaceholderStyle,
     /// A line shows text that is none of the placeholders.
@@ -185,12 +199,13 @@ pub enum Miss {
 }
 
 impl Miss {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::NoRule,
         Self::NoTopRule,
         Self::NoRegion,
         Self::NoMarker,
         Self::NoTrailer,
+        Self::OpenUnder,
         Self::PlaceholderStyle,
         Self::NotPlaceholder,
     ];
@@ -209,6 +224,7 @@ impl Miss {
             Self::NoRegion => "no_region",
             Self::NoMarker => "no_marker",
             Self::NoTrailer => "no_trailer",
+            Self::OpenUnder => "open_under",
             Self::PlaceholderStyle => "placeholder_style",
             Self::NotPlaceholder => "not_placeholder",
         }
@@ -297,7 +313,12 @@ impl Composer {
     /// chrome under it taken off.
     fn content(&self, screen: &str) -> Result<Vec<Cells>, Miss> {
         let lines: Vec<Cells> = screen.split('\n').map(cells).collect();
-        let mut region = self.region(&lines)?;
+        let (mut region, end) = self.region(&lines)?;
+        if let Some(limit) = self.under
+            && lines[end..].iter().filter(|line| !blank(line)).count() > limit
+        {
+            return Err(Miss::OpenUnder);
+        }
         if !self.marker.is_empty() {
             let first = region.first_mut().ok_or(Miss::NoMarker)?;
             let start = first.iter().take_while(|(c, _)| c.is_whitespace()).count();
@@ -319,7 +340,9 @@ impl Composer {
         Ok(region)
     }
 
-    fn region(&self, lines: &[Cells]) -> Result<Vec<Cells>, Miss> {
+    /// The composer's lines and the index of the first row under it, past
+    /// its closing rule or border.
+    fn region(&self, lines: &[Cells]) -> Result<(Vec<Cells>, usize), Miss> {
         let marked = |line: &Cells| {
             let text = visible(line);
             let text = text.trim_start();
@@ -337,7 +360,7 @@ impl Composer {
                     .iter()
                     .rposition(|line| rule(line) || labelled_rule(line, pen))
                     .ok_or(Miss::NoTopRule)?;
-                Ok(lines[top + 1..bottom].to_vec())
+                Ok((lines[top + 1..bottom].to_vec(), bottom + 1))
             }
             Region::Box { open, close, side } => {
                 boxed(lines, open, close, side).ok_or(Miss::NoRegion)
@@ -349,11 +372,11 @@ impl Composer {
                     .iter()
                     .position(blank)
                     .map_or(lines.len(), |offset| top + 1 + offset);
-                Ok(lines[top..end].to_vec())
+                Ok((lines[top..end].to_vec(), end))
             }
             Region::Line => {
                 let line = lines.iter().rposition(marked).ok_or(Miss::NoRegion)?;
-                Ok(vec![lines[line].clone()])
+                Ok((vec![lines[line].clone()], line + 1))
             }
         }
     }
@@ -361,30 +384,32 @@ impl Composer {
 
 /// The lines between the last line beginning with `close` and the line
 /// beginning with `open` above it, stripped of the `side` border.
-fn boxed(lines: &[Cells], open: char, close: char, side: char) -> Option<Vec<Cells>> {
+fn boxed(lines: &[Cells], open: char, close: char, side: char) -> Option<(Vec<Cells>, usize)> {
     let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
     let top = lines[..bottom]
         .iter()
         .rposition(|line| starts_with(line, open))?;
-    lines[top + 1..bottom]
+    let inner = lines[top + 1..bottom]
         .iter()
         .map(|line| strip_side(line, side, true))
-        .collect()
+        .collect::<Option<_>>()?;
+    Some((inner, bottom + 1))
 }
 
 /// The lines beginning with `side` directly above the last line beginning
 /// with `close`, stripped of that border.
-fn barred(lines: &[Cells], side: char, close: char) -> Option<Vec<Cells>> {
+fn barred(lines: &[Cells], side: char, close: char) -> Option<(Vec<Cells>, usize)> {
     let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
     let top = lines[..bottom]
         .iter()
         .rposition(|line| !starts_with(line, side))
         .map_or(0, |index| index + 1);
     (top < bottom).then_some(())?;
-    lines[top..bottom]
+    let inner = lines[top..bottom]
         .iter()
         .map(|line| strip_side(line, side, false))
-        .collect()
+        .collect::<Option<_>>()?;
+    Some((inner, bottom + 1))
 }
 
 /// Whether a row of a screen read with styling (as [`Composer::judge`]
@@ -406,6 +431,7 @@ impl Placeholder {
                     Style::Dim => pen.dim,
                     Style::Italic => pen.italic,
                     Style::Rgb(r, g, b) => pen.fg == Some(Colour::Rgb(r, g, b)),
+                    Style::Palette(index) => pen.fg == Some(Colour::Index(index)),
                 })
     }
 

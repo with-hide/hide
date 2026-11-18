@@ -88,6 +88,9 @@ pub struct Event {
     /// conversation and empty in each of a subagent's, which only its
     /// parent's message started. `None` from an agy that sends no such field.
     pub prompted: Option<bool>,
+    /// That prompt's text, with agy's `<USER_REQUEST>` wrapper taken off
+    /// ([`request_text`]); `None` when the event carries none.
+    pub prompt: Option<String>,
 }
 
 impl Event {
@@ -109,7 +112,14 @@ impl Event {
         Self {
             conversation: input.conversation_id.filter(|id| valid_conversation(id)),
             invocation: input.invocation_num,
-            prompted: input.last_user_input.map(|input| !input.is_empty()),
+            prompted: input
+                .last_user_input
+                .as_ref()
+                .map(|input| !input.is_empty()),
+            prompt: input
+                .last_user_input
+                .map(|input| request_text(&input))
+                .filter(|prompt| !prompt.is_empty()),
         }
     }
 }
@@ -351,6 +361,28 @@ mod tests {
         // agy 1.5.9 sends a subagent's every event an empty one.
         assert_eq!(read(json!("")), Some(false));
         // An agy older than the field says nothing either way.
+        assert_eq!(read(Value::Null), None);
+    }
+
+    /// The prompt hook names the prompt it runs for by its digest, so the
+    /// core knows a bell's turn from the operator's own (with-hide/hide#2580).
+    #[test]
+    fn an_event_carries_the_prompt_it_runs_for() {
+        let read = |input: Value| {
+            Event::read(
+                json!({"conversationId": PARENT, "invocationNum": 0, "lastUserInput": input})
+                    .to_string()
+                    .as_bytes(),
+                false,
+            )
+            .prompt
+        };
+        assert_eq!(read(json!("Fix the test")).as_deref(), Some("Fix the test"));
+        assert_eq!(
+            read(json!("<USER_REQUEST>\nFix the test\n</USER_REQUEST>")).as_deref(),
+            Some("Fix the test")
+        );
+        assert_eq!(read(json!("")), None);
         assert_eq!(read(Value::Null), None);
     }
 
