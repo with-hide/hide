@@ -117,17 +117,17 @@ process.stderr.write("unsupported fixture gh arguments\\n");process.exit(1);
   return { env, calls, contexts, issue, repositoryUnavailable, repositoryGate, clock: setClock };
 }
 
-/** What the first turn of the fixture's work is labelled: the goal, a request, its pull request and issue, one missed line and one artifact. */
+/** What the first turn of the fixture's work is labelled: the goal, a request, its pull request and issue, and one missed line. */
 function firstWork(fixture: Pick<EngineServer, "root">, at: number, goal: string): FixtureLabel {
   return {
     task: goal, at, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/31", "https://github.com/acme/repo/issues/41"],
-    request: "기록 화면 구현 요청", work: { missed: [{ kind: "follow_up", text: MISSED }], resolved: [], artifacts: ["세션 기록 화면 시안"] },
+    request: "기록 화면 구현 요청", work: { missed: [{ kind: "follow_up", text: MISSED }], resolved: [] },
   };
 }
 
 /** What the first work's delegated child is labelled: its own goal and the pull request it printed. */
 function childWork(fixture: Pick<EngineServer, "root">, at: number): FixtureLabel {
-  return { task: CHILD_GOAL, at: at + 200, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"], work: { missed: [], resolved: [], artifacts: [] } };
+  return { task: CHILD_GOAL, at: at + 200, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"], work: { missed: [], resolved: [] } };
 }
 
 /**
@@ -188,5 +188,5 @@ export async function reseedWork(fixture: AgentFixture, daemon: Pick<Daemon, "or
 
 export function nextWork(at: number): FixtureLabel {
   return { task: NEXT_GOAL, at, end: "unfinished", request: "이슈와 검색 검증 요청", toolOutputs: ["https://github.com/acme/repo/pull/32"],
-    work: { missed: [{ kind: "problem", text: "다른 저장소의 이슈 템플릿이 비어 있어 따로 고쳐야 합니다" }, { kind: "ask", text: "좁은 열 줄바꿈 기준을 정해 주세요" }], resolved: [], artifacts: [] } };
+    work: { missed: [{ kind: "problem", text: "다른 저장소의 이슈 템플릿이 비어 있어 따로 고쳐야 합니다" }, { kind: "ask", text: "좁은 열 줄바꿈 기준을 정해 주세요" }], resolved: [] } };
 }

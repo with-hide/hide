@@ -68,7 +68,7 @@ impl Scripted {
         };
         self.answers.lock().unwrap().push_back(json!({
             "goal": goal, "goal_update": "replace", "line": line, "end": end,
-            "work": {"missed": [], "resolved": [], "artifacts": []},
+            "work": {"missed": [], "resolved": []},
         }));
     }
 
@@ -1852,7 +1852,7 @@ fn a_short_turn_with_a_new_job_renames_the_pane_and_a_follow_up_does_not() {
     harness.input.record("w1:p1", turn_at(4) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "README 파일 위치 확인 작업", "goal_update": "keep", "line": "README.md였음", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     observe(&mut worker, &agent(&path, "working", 9));
     settle(&mut worker, &woken);
@@ -1891,7 +1891,7 @@ fn a_vague_goal_can_be_refined_at_the_end_without_losing_its_assignment() {
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "에이전트 그래프 필터와 프로젝트 접기", "goal_update": "refine",
         "line": "필터와 접기를 반영함", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let idle = agent(&path, "idle", 2);
     observe(&mut worker, &idle);
@@ -1914,7 +1914,7 @@ fn a_vague_goal_can_be_refined_at_the_end_without_losing_its_assignment() {
         harness.backend.answers.lock().unwrap().push_back(json!({
             "goal": "에이전트 그래프 필터와 프로젝트 접기", "goal_update": "keep",
             "line": reply, "end": "done",
-            "work": {"missed": [], "resolved": [], "artifacts": []},
+            "work": {"missed": [], "resolved": []},
         }));
         observe(&mut worker, &agent(&path, "idle", seq));
         settle(&mut worker, &woken);
@@ -1978,7 +1978,7 @@ fn historical_requests_are_not_backfilled_as_the_current_assignments_evidence() 
     harness.session("a", "native-a", &turns);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "Bastion IP 등록 및 회신", "goal_update": "keep", "line": "IP 등록 완료 회신", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let (mut worker, woken, _) = harness.worker(harness.store());
     let idle = agent(&path, "idle", 2);
@@ -2014,7 +2014,7 @@ fn another_agents_follow_up_cannot_refine_the_operators_goal() {
     );
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "자식이 제안한 다른 작업 이름", "goal_update": "refine", "line": "보고 확인", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let idle = agent(&path, "idle", 8);
     observe(&mut worker, &idle);
@@ -2033,7 +2033,7 @@ fn an_end_moves_the_goal_of_an_operator_turn_and_never_of_a_turn_no_operator_sub
     let renaming = |goal: &str| {
         json!({
             "goal": goal, "goal_update": "replace", "line": "끝냄", "end": "done",
-            "work": {"missed": [], "resolved": [], "artifacts": []},
+            "work": {"missed": [], "resolved": []},
         })
     };
     let mut harness = Harness::new();
@@ -2680,7 +2680,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
         let mut answer = json!({"goal": null, "goal_update": "keep", "closed_result": "", "requests": [], "line": ""});
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
-            answer["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
+            answer["work"] = json!({"missed":[],"resolved":[]});
         }
         let parsed = parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).unwrap();
         assert_eq!(parsed.goal, None);
@@ -2739,7 +2739,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     }
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let idle = agent(&path, "idle", 1);
     observe(&mut worker, &idle);
@@ -2766,7 +2766,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     harness.input.record("w1:p1", turn_at(2) - 300, false);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     observe(&mut worker, &agent(&path, "idle", 2));
     settle(&mut worker, &woken);
@@ -2797,7 +2797,7 @@ fn greetings_keep_the_native_title_until_real_work_sets_a_goal() {
     harness.session("greeting", "native-greeting", &completed_turn);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "배포 환경을 선택하세요", "end": "question",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let question = agent(&path, "idle", 4);
     observe(&mut worker, &question);
@@ -2883,7 +2883,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             language,
             json!({
                 "goal": null, "goal_update": "keep", "closed_result": "", "requests": [], "line": line, "end": end,
-                "work": {"missed": [], "resolved": [], "artifacts": []},
+                "work": {"missed": [], "resolved": []},
             }),
         )
         .unwrap()
@@ -3629,7 +3629,7 @@ fn a_turn_end_that_reads_a_new_deliverable_opens_a_flow() {
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "요청 보기 PRD 작성", "goal_update": "replace",
         "line": "PRD 초안 작성", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let idle = agent(&path, "idle", 3);
     observe(&mut worker, &idle);
@@ -3670,7 +3670,7 @@ fn a_goal_command_followed_by_a_letter_in_the_same_turn_still_opens_a_flow() {
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "요청 보기 구현", "goal_update": "keep",
         "line": "구현 마침", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     let idle = agent(&path, "idle", 3);
     observe(&mut worker, &idle);
@@ -3826,7 +3826,7 @@ fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends
 
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": null, "goal_update": "keep", "line": "검증 결과를 정리했습니다", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
     }));
     // The account can answer again, but the worker still owes the deadline.
     limits.set(hide_ai::UsageLimit::Percent(90), &reading(0.0));
@@ -5982,7 +5982,7 @@ fn a_pane_with_no_goal_is_still_analyzed_after_a_restart() {
     let no_goal = || {
         json!({
             "goal": null, "goal_update": "keep", "line": "", "end": "done",
-            "work": {"missed": [], "resolved": [], "artifacts": []},
+            "work": {"missed": [], "resolved": []},
         })
     };
     let mut turns = vec![("user", "안녕하세요"), ("assistant", "안녕하세요!")];
@@ -6272,7 +6272,7 @@ fn only_a_turn_that_opens_a_flow_hands_the_ledger_the_closed_flows_line() {
     let closing = |goal: &str, update: &str, closed: &str| {
         json!({
             "goal": goal, "goal_update": update, "closed_result": closed,
-            "line": "진행", "end": "done", "work": {"missed": [], "resolved": [], "artifacts": []},
+            "line": "진행", "end": "done", "work": {"missed": [], "resolved": []},
         })
     };
     harness.input.record("w1:p1", LATER - 300, false);
@@ -6382,7 +6382,7 @@ fn a_delegated_turn_end_keeps_only_questions_its_own_answer_asks() {
             ask("배포: 지금 배포할까요?", "operator"),
             ask("설정을 따로 낼까요?", "operator"),
             ask("127번 칩을 하나로 줄일지 알려 주세요.", "parent"),
-        ], "resolved": [], "artifacts": []},
+        ], "resolved": []},
     }));
     observe(&mut worker, &agent(&path, "idle", 1));
     settle(&mut worker, &woken);
@@ -6705,7 +6705,7 @@ fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions
     let point = "dev 서버와 e2e 포트 규칙이 문서에 없어 설정 파일을 뒤져 찾음";
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "로그인 e2e 포트 맞춤", "goal_update": "replace", "line": "포트를 맞춤", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
         "improvements": [{"kind": "no_doc", "text": point}],
     }));
     let mut observed = ObservedAgent {
@@ -6750,7 +6750,7 @@ fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions
     write(&records);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "로그인 e2e 포트 맞춤", "goal_update": "keep", "line": "오타 수정", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
         "improvements": [],
     }));
     observed.state_change_seq = 2;
@@ -6773,7 +6773,7 @@ fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions
     write(&records);
     harness.backend.answers.lock().unwrap().push_back(json!({
         "goal": "로그인 e2e 포트 맞춤", "goal_update": "keep", "line": "변경 기록 정리", "end": "done",
-        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "work": {"missed": [], "resolved": []},
         "improvements": [
             {"kind": "slow_disk", "text": "디스크가 느림"},
             {"kind": "no_doc", "text": 42},

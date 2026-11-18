@@ -13,8 +13,8 @@ use super::analysis::{
     RequestLine, normalize_goal, normalize_text_field, truncate_phrase,
 };
 use crate::links::ledger::{
-    ARTIFACT_CHARS, ARTIFACTS_PER_TURN, MISSED_CHARS, MissedKind, NEW_MISSED_LIMIT, NewMissedWork,
-    ResolvedMissedWork, SUMMARY_BATCH, SUMMARY_CHARS, TURN_MISSED_LIMIT, TurnJudgment,
+    MISSED_CHARS, MissedKind, NEW_MISSED_LIMIT, NewMissedWork, ResolvedMissedWork, SUMMARY_BATCH,
+    SUMMARY_CHARS, TURN_MISSED_LIMIT, TurnJudgment,
 };
 use crate::suggestions::ledger::ImprovementKind;
 use crate::suggestions::policy::{IMPROVEMENT_CHARS, IMPROVEMENTS_PER_TURN};
@@ -29,7 +29,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v28";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v29";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -227,12 +227,11 @@ fn end_prompt(limits: LabelLimits) -> String {
         "4 unfinished: work is not reported finished, nothing runs and no blocking cause is stated; includes giving up and unclear/interim stops. ",
         "5 done: assigned work is reported finished and no result remains pending. ",
         "With goal=null still judge the actual turn: an answered greeting/name question without a required action has line='' and end=done, never unfinished or 'waiting for instructions'. Do not infer states Herdr already knows, such as an approval prompt. ",
-        "work uses the schema's missed, resolved and artifacts. ",
+        "work uses the schema's missed and resolved. ",
         "missed: at most 3 items whose same_as is null, and besides them any ask with a same_as, each {kind:problem|follow_up|ask,text:<max 80 characters>,same_as:<an open-missed id>|null}. same_as is the id of the <open-missed> ask this item repeats, rewords or refines, the same question still waiting; null for a problem, a follow_up and a question <open-missed> does not hold. When a reply to the agent came this turn (the operator's request, or a letter from the session's parent), every earlier open ask closes as this turn is recorded: list again only an ask that still waits on the operator after this turn, worded as before. With goal_update replace, moving on answered the previous flow's asks: list none of them again. ",
         "problem is unrelated breakage found and follow_up a separate proposed deliverable nobody took, both OUTSIDE the assignment and abandoned on session close. Exclude optional offers, work already in an issue/PR by number/link, remaining assigned work, rechecking its result (real app/other environment/pre-release), and merge/install/deploy/app replacement, even if called a follow-up or limitation: the PR and CI already own these. ",
         "resolved: only real <open-missed> IDs actually handled this turn, an ask the operator answered in this turn's requests included, with issue_number null or a number and reason an empty string; do not re-list open problem or follow_up items in missed. ",
         "Also list an open ask this turn's events settled without the operator answering it here (another agent relayed the operator's decision, the agent decided or did it itself, the work moved past it), with reason: one line of at most 80 characters naming what settled it. The operator keeps it folded with that reason, so list one only when the events show it settled, never an ask still waiting on the operator; an operator's own step (signing in, approving, granting a permission, typing information) only when the events show it taken or no longer needed. ",
-        "artifacts: at most 3 names of what this turn created or published besides a pull request: a design board, a document such as a PRD, report or interview log, an HTML mockup, a GitHub issue, a release. Name each as the operator would recognize it; never code files, tests, commits, branches or pull requests. Only what this turn newly made or changed; one already in recorded-artifacts keeps that exact name. An empty list when there are none. ",
         "Use open-missed only for its IDs, in resolved and same_as, never to decide end. ",
         ASKS,
         &improvements_rule(),
@@ -289,11 +288,10 @@ fn end_schema(limits: LabelLimits) -> Value {
             "line": {"type": "string"},
             "end": {"type": "string", "enum": ["limited", "question", "blocked", "waiting", "unfinished", "done"]},
             "work":{
-                "type":"object","additionalProperties":false,"required":["missed","resolved","artifacts"],
+                "type":"object","additionalProperties":false,"required":["missed","resolved"],
                 "properties":{
                     "missed":{"type":"array","maxItems":TURN_MISSED_LIMIT,"items":{"type":"object","additionalProperties":false,"required":["kind","text","same_as","quote","ask_type","addressed_to"],"properties":{"kind":{"type":"string","enum":["problem","follow_up","ask"]},"text":{"type":"string","minLength":1,"maxLength":MISSED_CHARS},"same_as":{"type":["string","null"]},"quote":{"type":"string"},"ask_type":{"type":["string","null"],"enum":["decision","human_only",null]},"addressed_to":{"type":["string","null"],"enum":["operator","parent",null]}}}},
-                    "resolved":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["id","issue_number","reason"],"properties":{"id":{"type":"string"},"issue_number":{"type":["integer","null"],"minimum":1},"reason":{"type":"string","maxLength":MISSED_CHARS}}}},
-                    "artifacts":{"type":"array","maxItems":ARTIFACTS_PER_TURN,"items":{"type":"string","minLength":1,"maxLength":ARTIFACT_CHARS}}
+                    "resolved":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["id","issue_number","reason"],"properties":{"id":{"type":"string"},"issue_number":{"type":["integer","null"],"minimum":1},"reason":{"type":"string","maxLength":MISSED_CHARS}}}}
                 }
             },
             // Named for the provider and never checked: the router holds
@@ -384,7 +382,6 @@ struct EndAnswer {
 pub(crate) struct JudgedWork {
     missed: Vec<MissedAnswer>,
     resolved: Vec<ResolvedMissedWork>,
-    pub(crate) artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -494,7 +491,6 @@ impl JudgedWork {
             TurnJudgment {
                 missed,
                 resolved: self.resolved,
-                artifacts: self.artifacts,
             },
             checks,
         )
@@ -582,9 +578,8 @@ pub(crate) fn parse(
             )
         }
         AnalysisPhase::TurnEnd => {
-            let mut answer: EndAnswer =
+            let answer: EndAnswer =
                 serde_json::from_value(value).context("provider_invalid_analysis")?;
-            answer.work.artifacts = artifacts(&answer.work.artifacts)?;
             (
                 answer.goal,
                 answer.goal_update,
@@ -722,26 +717,6 @@ fn stored_text(text: &str) -> String {
     hide_memory::redact(&super::analysis::redact(text)).text
 }
 
-/// A turn's artifacts as the ledger stores them: at most
-/// [`ARTIFACTS_PER_TURN`], each one line of at most [`ARTIFACT_CHARS`], none
-/// repeated. A provider that broke the bounds is refused, so a judgment is
-/// never half kept.
-fn artifacts(names: &[String]) -> Result<Vec<String>> {
-    if names.len() > ARTIFACTS_PER_TURN {
-        return Err(anyhow!("provider_invalid_artifacts"));
-    }
-    let mut kept: Vec<String> = Vec::with_capacity(names.len());
-    for name in names {
-        let name = normalize_text_field(name, false)
-            .filter(|name| name.chars().count() <= ARTIFACT_CHARS)
-            .ok_or_else(|| anyhow!("provider_invalid_artifacts"))?;
-        if !kept.contains(&name) {
-            kept.push(name);
-        }
-    }
-    Ok(kept)
-}
-
 /// The same judgment over raw text, for tests, asked in Korean.
 #[cfg(test)]
 pub(crate) fn parse_text(phase: AnalysisPhase, raw: &str) -> Result<Analysis> {
@@ -749,7 +724,7 @@ pub(crate) fn parse_text(phase: AnalysisPhase, raw: &str) -> Result<Analysis> {
     // The older label-only fixtures exercise goal/line/end decisions. Give
     // those fixtures the explicit empty judgment the parser requires.
     if phase == AnalysisPhase::TurnEnd && value.get("work").is_none() {
-        value["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
+        value["work"] = json!({"missed":[],"resolved":[]});
     }
     // Likewise the fixtures that predate v20's request summaries and v21's
     // closed flow line.
@@ -776,8 +751,8 @@ mod tests {
         })
     }
 
-    fn work(artifacts: Value) -> Value {
-        json!({"missed": [], "resolved": [], "artifacts": artifacts})
+    fn work() -> Value {
+        json!({"missed": [], "resolved": []})
     }
 
     /// B12, B13: each unsummarized request comes back by its id, read like
@@ -797,7 +772,7 @@ mod tests {
             ]});
             if phase == AnalysisPhase::TurnEnd {
                 answer["end"] = json!("done");
-                answer["work"] = work(json!([]));
+                answer["work"] = work();
             }
             let parsed = parse(phase, OutputLanguage::Korean, answer.clone()).unwrap();
             assert_eq!(parsed.requests[0].id, "r1");
@@ -852,7 +827,7 @@ mod tests {
                     .unwrap()
                     .contains(&json!("closed_result"))
             );
-            let mut answer = end_answer(work(json!([])), "done");
+            let mut answer = end_answer(work(), "done");
             if phase == AnalysisPhase::TurnStart {
                 let object = answer.as_object_mut().unwrap();
                 object.remove("end");
@@ -891,7 +866,7 @@ mod tests {
     #[test]
     fn a_goal_naming_a_pane_or_agent_keeps_the_flow_and_the_rest_of_the_answer() {
         for goal in ["w9J:pGP 진행 확인", "agent-7112에게 편지 보내기"] {
-            let mut answer = end_answer(work(json!([])), "done");
+            let mut answer = end_answer(work(), "done");
             answer["goal"] = json!(goal);
             let parsed = parse(AnalysisPhase::TurnEnd, OutputLanguage::Korean, answer).unwrap();
             assert_eq!(parsed.goal, None, "{goal}");
@@ -903,7 +878,7 @@ mod tests {
     /// B8: a provider refusal is its own end, never a block.
     #[test]
     fn a_usage_limit_turn_reads_limited() {
-        let mut answer = end_answer(work(json!([])), "limited");
+        let mut answer = end_answer(work(), "limited");
         answer["line"] = json!("사용 한도 도달, 오후 3시 재설정");
         let parsed = parse(AnalysisPhase::TurnEnd, OutputLanguage::Korean, answer).unwrap();
         assert_eq!(parsed.end, LabelEnd::Limited);
@@ -923,45 +898,37 @@ mod tests {
         );
     }
 
-    /// B23: artifacts are bounded, one line each, and kept once.
+    /// v29 asks no named outputs: the 결과물 come from what the session
+    /// opened and the issues it made, so an answer that still names some,
+    /// like the v19 task judgment, is not read.
     #[test]
-    fn artifacts_are_bounded_one_line_and_kept_once() {
-        let parsed = parse(
+    fn an_answer_naming_outputs_or_tasks_is_not_read() {
+        let schema = request(
             AnalysisPhase::TurnEnd,
             OutputLanguage::Korean,
-            end_answer(
-                work(json!([" 기록 화면 시안 ", "기록 화면 시안", "PRD"])),
-                "done",
-            ),
+            "w1:p1",
+            "r".into(),
+            "",
         )
-        .unwrap();
-        assert_eq!(parsed.work.unwrap().artifacts, ["기록 화면 시안", "PRD"]);
-        let long = "가".repeat(ARTIFACT_CHARS + 1);
-        for artifacts in [
-            json!(["1", "2", "3", "4"]),
-            json!(["  "]),
-            json!([long]),
-            json!(["가\n나"]),
-        ] {
-            let failure = parse(
-                AnalysisPhase::TurnEnd,
-                OutputLanguage::Korean,
-                end_answer(work(artifacts.clone()), "done"),
-            )
-            .unwrap_err()
-            .to_string();
-            assert_eq!(failure, "provider_invalid_artifacts", "{artifacts}");
-        }
-        // The v19 task judgment is not read.
-        let old = json!({"task": {"kind": "none"}, "missed": [], "resolved": [], "artifacts": []});
-        assert!(
-            parse(
-                AnalysisPhase::TurnEnd,
-                OutputLanguage::Korean,
-                end_answer(old, "done")
-            )
-            .is_err()
+        .output_schema;
+        assert_eq!(
+            schema["properties"]["work"]["required"],
+            json!(["missed", "resolved"])
         );
+        for old in [
+            json!({"missed": [], "resolved": [], "artifacts": ["PRD"]}),
+            json!({"task": {"kind": "none"}, "missed": [], "resolved": []}),
+        ] {
+            assert!(
+                parse(
+                    AnalysisPhase::TurnEnd,
+                    OutputLanguage::Korean,
+                    end_answer(old.clone(), "done")
+                )
+                .is_err(),
+                "{old}"
+            );
+        }
     }
 
     fn line(
@@ -976,7 +943,7 @@ mod tests {
     }
 
     fn checked(missed: Vec<Value>, answer: &str) -> (TurnJudgment, AskChecks) {
-        let work = json!({"missed": missed, "resolved": [], "artifacts": []});
+        let work = json!({"missed": missed, "resolved": []});
         parse(
             AnalysisPhase::TurnEnd,
             OutputLanguage::Korean,
@@ -1121,7 +1088,7 @@ mod tests {
             ])
         );
         let old = json!({"missed": [{"kind": "ask", "text": "배포할까요", "same_as": null, "operator_only": false}],
-            "resolved": [], "artifacts": []});
+            "resolved": []});
         assert!(
             parse(
                 AnalysisPhase::TurnEnd,
@@ -1194,7 +1161,7 @@ mod tests {
         );
         assert!(!start.system.contains("searched_again"));
 
-        let label = end_answer(work(json!([])), "done");
+        let label = end_answer(work(), "done");
         let mut with = label.clone();
         with["improvements"] = json!([
             {"kind": "no_doc", "text": "dev 서버와 e2e 포트 규칙이 문서에 없어 설정 파일 6개를 뒤져 찾음"},
@@ -1234,7 +1201,7 @@ mod tests {
     /// its judgment whole; each bad item is dropped alone and counted.
     #[test]
     fn a_wrong_improvement_never_costs_the_turn_its_label() {
-        let label = end_answer(work(json!(["docs/PORTS.md"])), "question");
+        let label = end_answer(work(), "question");
         let parsed = |improvements: Option<Value>| {
             let mut answer = label.clone();
             match improvements {
@@ -1297,7 +1264,7 @@ mod tests {
     /// token masked, as every text the suggestions keep.
     #[test]
     fn an_improvement_keeps_no_email_home_account_or_token() {
-        let mut answer = end_answer(work(json!([])), "done");
+        let mut answer = end_answer(work(), "done");
         answer["improvements"] = json!([{"kind": "tool_friction",
             "text": "dev@example.com 계정과 /Users/example/app/.env 의 api_key=abcd1234efgh5678 를 다시 찾음"}]);
         let text = parse(AnalysisPhase::TurnEnd, OutputLanguage::Korean, answer)

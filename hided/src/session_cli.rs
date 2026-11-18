@@ -549,13 +549,19 @@ fn draw_record(value: &Value) -> String {
             let _ = writeln!(text, "PR {omitted}개 더 있음");
         }
     }
-    if let Some(artifacts) = value["artifacts"]
+    if let Some(issues) = value["issues"]
         .as_array()
-        .filter(|artifacts| !artifacts.is_empty())
+        .filter(|issues| !issues.is_empty())
     {
-        let _ = writeln!(text, "\n## 결과물");
-        for artifact in artifacts {
-            let _ = writeln!(text, "- [AI 요약] {}", artifact.as_str().unwrap_or(""));
+        let _ = writeln!(text, "\n## 이슈");
+        for issue in issues {
+            let _ = writeln!(
+                text,
+                "- #{} {} ({})",
+                issue["number"],
+                issue["title"].as_str().unwrap_or(""),
+                issue["state"].as_str().unwrap_or("-"),
+            );
         }
     }
     if let Some(children) = value["children"]

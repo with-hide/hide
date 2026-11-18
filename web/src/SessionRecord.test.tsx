@@ -29,10 +29,11 @@ const CHILD: WorkSession = { device_id: "local", agent: "codex", session_id: "ch
 const request = (offset: number, text: string, patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, at_unix_ms: AT + offset * MIN, text, author: "operator", images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false, ...patch });
 const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const output = (number: number, state: string, source: WorkSession): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR title ${number}`, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: source.session_id });
+const issue = (number: number, state: "open" | "closed", source: WorkSession = SESSION): WorkOutput => ({ ...output(number, state, source), kind: "issue", title: `Issue title ${number}`, url: `https://example.invalid/issues/${number}` });
 const pull = (number: number, state: PrState, extra: Partial<SessionPull> = {}) => sessionPull(number, state, { title: `PR title ${number}`, ...extra });
 const flow = (id: string, name: string, at: number, requests: WorkRequest[], result: WorkFlow["result"] = null): WorkFlow => ({ id, name, at_unix_ms: at, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
 const status = (end: RecordStatus["end"], line: string, limited: string | null = null): RecordStatus => ({ end, line, at_unix_ms: AT + 20 * MIN, limited, settled: null });
-const EMPTY = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
+const EMPTY = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], children: [] };
 const child: RecordValue = { ...EMPTY, session: CHILD, title: "Child work", fallback_title: "Codex", native_title: null, manual_title: null, state: "idle", cwd: null, path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, status: status("done", "Report sent") };
 const BASE: RecordValue = {
   ...EMPTY,
@@ -295,17 +296,26 @@ it("keeps a closed PR in the fold, dimmed, beside the merged ones (status-model,
   } finally { await unmount(); }
 });
 
-it("lists outputs other than PRs once, and no line without them (B22)", async () => {
-  const shown = await mount({ ...BASE, artifacts: ["Record PRD", "record-cases.html"] });
-  try { expect([...shown.container.querySelectorAll("[data-record-artifact]")].map(text)).toEqual(["Record PRD", "record-cases.html"]); } finally { await shown.unmount(); }
+it("lists the issues the tree made as rows that open their page, a closed one dimmed, and no line without Views or issues (B22)", async () => {
+  const opened = vi.spyOn(window, "open").mockImplementation(() => null);
+  const shown = await mount({ ...BASE, outputs: [...BASE.outputs, issue(41, "open"), issue(40, "closed", CHILD)] });
+  try {
+    const rows = [...shown.container.querySelectorAll<HTMLButtonElement>("[data-record-issue]")];
+    expect(rows.map((row) => [text(row), row.dataset.issueClosed ?? null])).toEqual([["Issue title 41#41", null], ["Issue title 40#40", "true"]]);
+    await act(async () => rows[0]!.click());
+    expect(opened).toHaveBeenCalledWith("https://example.invalid/issues/41", "_blank", "noopener,noreferrer");
+  } finally { opened.mockRestore(); await shown.unmount(); }
+  // Pull requests stay in their own section.
   const none = await mount(BASE);
   try { expect(none.container.querySelector("[data-record-artifacts]")).toBeNull(); } finally { await none.unmount(); }
 });
 
 it("draws the raw request list and the PRs only with summaries off, saying so once (B28)", async () => {
-  const { container, unmount } = await mount({ ...BASE, asks: [ask("ask-1", "Approve?")], artifacts: ["Record PRD"] }, { summaries: false });
+  const { container, unmount } = await mount({ ...BASE, asks: [ask("ask-1", "Approve?")], outputs: [...BASE.outputs, issue(41, "open")] }, { summaries: false });
   try {
-    expect(container.querySelector("[data-record-flows], [data-record-asks], [data-record-artifacts], [data-record-limited]")).toBeNull();
+    expect(container.querySelector("[data-record-flows], [data-record-asks], [data-record-limited]")).toBeNull();
+    // An issue is GitHub's fact, not Hide AI's, so it stays.
+    expect(container.querySelector('[data-record-issue="41"]')).not.toBeNull();
     expect(container.querySelectorAll("[data-record-raw-requests] [data-record-request]")).toHaveLength(3);
     expect(text(container.querySelector('[data-record-request="10"]'))).toContain("Write the PRD now");
     expect(text(container).split("AI summaries off")).toHaveLength(2);
@@ -581,7 +591,7 @@ it("leads with the request's own first line when no row shows the turn, and draw
 
 const view = (id: string, patch: Partial<RecordView> = {}): RecordView => ({ device_id: "local", checkout_path: "/fixture/checkout", display_id: id, kind: "file", label: `${id}.md`, path: `/fixture/checkout/${id}.md`, document_kind: "markdown", lines: [`# ${id}`, "first lines"], session: SESSION, ...patch });
 
-it("draws an image as a thumbnail and every View with no picture as a compact row, then the named outputs, with +N for the rest (D-40)", async () => {
+it("draws an image as a thumbnail and every View with no picture as a compact row, then the issues, with +N for the rest (D-40)", async () => {
   const scene = sidebarScene("reference", REFERENCE_FOLDS, AT).rest;
   const rest = { ...scene, status: { ...scene.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } } } as SnapshotRest;
   const checkout = rest.navigator!.workspaces!.find((row) => row.id === "hide")!.checkouts[0]!;
@@ -592,7 +602,7 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     view("child-board", { label: "menu.excalidraw", path: "/fixture/checkout/design/menu.excalidraw", document_kind: undefined, lines: undefined, session: CHILD }),
     view("e"), view("f"),
   ];
-  const record = { ...BASE, artifacts: ["Release notes"] };
+  const record = { ...BASE, outputs: [...BASE.outputs, issue(41, "open")] };
   const { container, sent, unmount } = await mount(record, { rest });
   try {
     await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: false, failure: null, record, views } }));
@@ -608,7 +618,7 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     expect(more.getAttribute("data-record-gallery-more")).toBe("2");
     await act(async () => more.click());
     expect(kinds()).toHaveLength(6);
-    expect(text(gallery.querySelector("[data-record-artifact]"))).toBe("Release notes");
+    expect(text(gallery.querySelector('[data-record-issue="41"] [data-record-view-detail]'))).toBe("#41");
     await act(async () => gallery.querySelector<HTMLButtonElement>('[data-record-view="doc"]')!.click());
     expect(sent.find((event) => event.kind === "focus_checkout")?.payload).toMatchObject({ checkout_id: checkout.id, display_id: "doc" });
   } finally { await unmount(); }

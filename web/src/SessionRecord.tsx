@@ -400,7 +400,7 @@ function Work({ record, summaries, onOpen, actions, locator }: { record: RecordV
   // A running plan of a pane at work is the 지금 block's; the section keeps every other plan.
   const planAbove = agent && liveTurn(agent) ? runningPlan(livePlan) : null;
   const section = useShellStore((state) => state.sessionRecord);
-  const tiles = useMemo(() => galleryTiles(section?.views ?? [], recordTree(record).map((one) => one.session), summaries ? record.artifacts : []), [section?.views, record, summaries]);
+  const tiles = useMemo(() => galleryTiles(section?.views ?? [], recordTree(record).map((one) => one.session), record.outputs), [section?.views, record]);
   // The core counts the Views past its cap for the whole tree it was asked for.
   const omitted = workKey(record.session) === (section?.session ? workKey(section.session) : null) ? section?.views_omitted ?? 0 : 0;
   return <>

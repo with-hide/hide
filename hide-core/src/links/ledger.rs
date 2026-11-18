@@ -24,15 +24,6 @@ pub const SUMMARY_CHARS: usize = 160;
 pub const SUMMARY_BATCH: usize = 8;
 /// Requests owed a summary that a context carries, oldest first.
 pub const OWED_IN_CONTEXT: usize = 16;
-/// Non-PR outputs one turn may name (D-16).
-pub const ARTIFACTS_PER_TURN: usize = 3;
-/// Non-PR outputs a record shows, newest first.
-pub const ARTIFACT_LIMIT: usize = 24;
-/// The session's recorded artifacts an END analysis reads, so it names the
-/// same output the same way (B22).
-pub const ARTIFACTS_IN_CONTEXT: usize = 12;
-/// The longest artifact name kept, in characters.
-pub const ARTIFACT_CHARS: usize = 80;
 /// Two identical messages from one sender this close together read as one
 /// line with a count (D-18).
 pub const REPEAT_WINDOW_MS: u64 = 60_000;
@@ -596,10 +587,6 @@ pub struct RequestSummary {
 pub struct TurnJudgment {
     pub missed: Vec<NewMissedWork>,
     pub resolved: Vec<ResolvedMissedWork>,
-    /// What the turn made besides a pull request: a board, a document, an
-    /// issue, a release (D-16).
-    #[serde(default)]
-    pub artifacts: Vec<String>,
 }
 
 /// Whether a goal starts a flow or renames the current one (D-09).
@@ -716,9 +703,6 @@ pub struct LedgerContext {
     /// The newest request offset the ledger holds: a message past it is not
     /// recorded yet, so it is owed a summary too.
     pub newest_offset: Option<u64>,
-    /// This session's recorded artifacts, newest first, each once, at most
-    /// [`ARTIFACTS_IN_CONTEXT`].
-    pub artifacts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -778,9 +762,6 @@ pub struct SessionRecord {
     /// leaves out too.
     #[serde(skip_serializing_if = "crate::agent_state::work::family::is_zero")]
     pub pr_omitted: usize,
-    /// Non-PR outputs of this session and its descendants, newest first,
-    /// each once (B22).
-    pub artifacts: Vec<String>,
     /// The session's own plan as its map draws it, kept after the session
     /// ends (PRD hide-plan B9, B21).
     #[serde(skip_serializing_if = "Option::is_none")]

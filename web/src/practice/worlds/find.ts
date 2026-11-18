@@ -147,7 +147,7 @@ function loginRecord(nowMs: number): SessionRecord {
     omitted_requests: 0,
     outputs: [output],
     pr_groups: [{ child: null, name: LOGIN_TITLE, pulls: [{ url: PR_URL, number: PR_NUMBER, title: PR_TITLE, state: "pending", own: true, holders: [], stale: false, last_read_at_unix_ms: at(1) }] }],
-    artifacts: [],
+   
     children: [],
   };
 }

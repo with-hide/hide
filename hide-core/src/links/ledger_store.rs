@@ -1240,14 +1240,8 @@ impl LinkStore {
                         .count()
                         > NEW_MISSED_LIMIT
                     || judgment.resolved.len() > MISSED_LIMIT
-                    || judgment.artifacts.len() > ARTIFACTS_PER_TURN
                 {
                     return Err("ledger_judgment_capacity".to_owned());
-                }
-                if judgment.artifacts.iter().any(|artifact| {
-                    artifact.trim().is_empty() || artifact.chars().count() > ARTIFACT_CHARS
-                }) {
-                    return Err("ledger_artifact_invalid".to_owned());
                 }
                 let start: Option<u64> = tx
                     .query_row(
@@ -1274,8 +1268,13 @@ impl LinkStore {
                 // A turn with no request of its own starts at the input that
                 // woke it (D-03).
                 let start_at = start.unwrap_or(*started_at_unix_ms).min(*at_unix_ms);
+                // `artifacts`, the outputs a turn's judgment named until
+                // context_label.v29, keeps its default and is no longer read:
+                // the 결과물 are the Views the session opened and the issues
+                // it made. Dropping the column waits for a release that also
+                // moves the store's version, as version 15 left its table.
                 tx.execute(
-                    "INSERT INTO ledger_turns(device,agent,id,offset,start_at,end_at,end,line,artifacts) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    "INSERT INTO ledger_turns(device,agent,id,offset,start_at,end_at,end,line) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                     params![
                         session.device_id,
                         session.agent,
@@ -1284,8 +1283,7 @@ impl LinkStore {
                         start_at as i64,
                         *at_unix_ms as i64,
                         encoded(end)?,
-                        line,
-                        encoded(&judgment.artifacts)?
+                        line
                     ],
                 )
                 .map_err(failed)?;
@@ -1899,11 +1897,6 @@ impl LinkStore {
         if record.outputs.len() > REQUEST_LIMIT {
             return Err("ledger_output_capacity".into());
         }
-        record.artifacts = turns
-            .iter()
-            .rev()
-            .flat_map(|turn| turn.artifacts.iter().cloned())
-            .collect();
         // A child is part of the record once the ledger records it: a spawn
         // is known before its file is read, and a Pi or omp child's edge is
         // under its file until the reader names it.
@@ -1939,7 +1932,6 @@ impl LinkStore {
             let child =
                 self.record_tree(&child, visited, depth + 1, request_budget, include_requests)?;
             record.outputs.extend(child.outputs.iter().cloned());
-            record.artifacts.extend(child.artifacts.iter().cloned());
             if record.outputs.len() > REQUEST_LIMIT {
                 return Err("ledger_output_capacity".into());
             }
@@ -1953,11 +1945,6 @@ impl LinkStore {
                 output.number,
             ))
         });
-        let mut artifacts_seen = BTreeSet::new();
-        record
-            .artifacts
-            .retain(|artifact| artifacts_seen.insert(artifact.clone()));
-        record.artifacts.truncate(ARTIFACT_LIMIT);
         settle(&mut record);
         Ok(record)
     }
@@ -1973,7 +1960,7 @@ impl LinkStore {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT start_at,end_at,end,line,artifacts FROM ledger_turns \
+                "SELECT start_at,end_at,end,line FROM ledger_turns \
                  WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY end_at,offset",
             )
             .map_err(failed)?;
@@ -1986,7 +1973,6 @@ impl LinkStore {
                         r.get::<_, u64>(1)?,
                         r.get::<_, String>(2)?,
                         r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
                     ))
                 },
             )
@@ -1994,13 +1980,12 @@ impl LinkStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(failed)?;
         rows.into_iter()
-            .map(|(start_at, end_at, end, line, artifacts)| {
+            .map(|(start_at, end_at, end, line)| {
                 Ok(TurnRow {
                     start_at,
                     end_at,
                     end: decoded(end)?,
                     line,
-                    artifacts: decoded(artifacts)?,
                 })
             })
             .collect()
@@ -2093,42 +2078,7 @@ impl LinkStore {
             },
             owed,
             newest_offset,
-            artifacts: self.recorded_artifacts(session)?,
         })
-    }
-
-    fn recorded_artifacts(&self, session: &SessionIdentity) -> Result<Vec<String>, String> {
-        let mut statement = self
-            .connection
-            .prepare_cached(
-                "SELECT artifacts FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 \
-                 AND artifacts!='[]' ORDER BY end_at DESC LIMIT ?4",
-            )
-            .map_err(failed)?;
-        let rows = statement
-            .query_map(
-                params![
-                    session.device_id,
-                    session.agent,
-                    session.session_id,
-                    ARTIFACTS_IN_CONTEXT as i64
-                ],
-                |r| r.get::<_, String>(0),
-            )
-            .map_err(failed)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?;
-        let mut seen = BTreeSet::new();
-        let mut artifacts = Vec::new();
-        for row in rows {
-            for artifact in decoded::<Vec<String>>(row)? {
-                if seen.insert(artifact.clone()) {
-                    artifacts.push(artifact);
-                }
-            }
-        }
-        artifacts.truncate(ARTIFACTS_IN_CONTEXT);
-        Ok(artifacts)
     }
 
     /// Closed issues also need creation facts; feed sightings to the existing
@@ -2687,7 +2637,6 @@ struct TurnRow {
     end_at: u64,
     end: LabelEnd,
     line: String,
-    artifacts: Vec<String>,
 }
 
 impl TurnRow {

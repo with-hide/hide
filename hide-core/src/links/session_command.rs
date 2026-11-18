@@ -737,7 +737,11 @@ fn record(
         "folded_flows": 0,
         "pr_groups": record.pr_groups,
         "pr_omitted": record.pr_omitted,
-        "artifacts": if summaries { record.artifacts.iter().map(|artifact| masked(artifact)).collect() } else { Vec::new() },
+        // The issues the session and its descendants made, as the record's
+        // 결과물 lists them beside the Views it opened.
+        "issues": record.outputs.iter().filter(|output| output.kind == "issue")
+            .map(|issue| json!({"repository": issue.repository, "number": issue.number, "title": masked(&issue.title), "state": issue.state, "url": issue.url}))
+            .collect::<Vec<_>>(),
         "children": children,
         "children_omitted": record.children.len().saturating_sub(CHILDREN_LIMIT),
     }))

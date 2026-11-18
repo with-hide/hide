@@ -3386,7 +3386,7 @@ export type SessionRecord = {
   session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null;
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
   status: RecordStatus | null; asks: MissedWork[]; /** The current flow's questions Hide AI folded (status-model.md, A question still waiting). */ folded_asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
-  outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; artifacts: string[]; children: SessionRecord[];
+  outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; children: SessionRecord[];
   /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
   plan?: PlanView;
 };
