@@ -292,7 +292,7 @@ class RelayDeploy(unittest.TestCase):
         DEPLOY.install(self.release("2" * 40), self.root, boundary)
         self.assertIn(("systemctl", "start", "hide-iroh-relay-limits.service"), calls)
         self.assertIn(("systemctl", "start", "hide-iroh-relay-meter.service"), calls)
-        enabled = next(args for args in calls if args[:2] == ("systemctl", "enable"))
+        enabled = {unit for args in calls if args[:2] == ("systemctl", "enable") for unit in args[2:]}
         # The meter, not boot, decides whether the relay itself runs.
         self.assertIn("hide-iroh-relay-meter.timer", enabled)
         self.assertNotIn("hide-iroh-relay.service", enabled)
@@ -323,6 +323,63 @@ class RelayDeploy(unittest.TestCase):
             return self.healthy(*args)
         DEPLOY.install(self.release("2" * 40), self.root, older_systemd)
         self.assertEqual(self.installed().resolve().name, "2" * 40)
+
+    def production_release_from_before_the_device_relay(self, source="0" * 40):
+        """What main's script staged and installed: no device files, no iroh-relay pin."""
+        release = self.root / "opt/hide-relay/releases" / source
+        release.mkdir(parents=True)
+        device = {"iroh-relay.toml", "iroh-relay.nft", "iroh-relay.version", "iroh-relay-meter.py"}
+        for template in BUNDLE.iterdir():
+            if template.name not in device and not template.name.startswith("hide-iroh-relay"):
+                (release / template.name).write_bytes(template.read_bytes())
+        (release / "hide-relay").write_bytes(b"phone relay from main")
+        checksum = DEPLOY.digest(release / "hide-relay")
+        (release / "source.json").write_text(json.dumps({
+            "source": source, "sha256": checksum, "repository": "with-hide/hide",
+            "workflow": ".github/workflows/relay-artifact.yml", "target": "x86_64-unknown-linux-gnu"}))
+        (release / "inputs.json").write_text(json.dumps({
+            "source": source, "sha256": checksum, "project": "fixture-project", "machine_id": "a" * 32}))
+        (release / "inventory.json").write_text(json.dumps({p.name: DEPLOY.digest(p) for p in release.iterdir()}))
+        current = self.root / "opt/hide-relay/current"
+        current.symlink_to("releases/" + source)
+        units = self.root / "etc/systemd/system"
+        units.mkdir(parents=True)
+        for unit in DEPLOY.SERVICES + DEPLOY.RETENTION:
+            (units / unit).symlink_to("/opt/hide-relay/current/" + unit)
+        (self.root / "etc/systemd/journald@hide-relay.conf").symlink_to("/opt/hide-relay/current/journald.conf")
+
+    def test_first_update_from_production_rolls_back_to_the_phone_relay_when_the_device_relay_fails(self):
+        self.production_release_from_before_the_device_relay()
+        calls = []
+        def boundary(*args):
+            calls.append(args)
+            if args[-1] == "https://device-relay.withhide.dev/ping":
+                return b"000"
+            return self.healthy(*args)
+        with self.assertRaisesRegex(RuntimeError, "device relay probe.*previous state restored$"):
+            DEPLOY.install(self.release(), self.root, boundary)
+        self.assertEqual(self.installed().resolve().name, "0" * 40)
+        self.assertFalse((self.root / "opt/hide-relay/pending.json").exists())
+        restored = calls[len(calls) - calls[::-1].index(("systemctl", "daemon-reload")):]
+        self.assertIn(("systemctl", "start", *DEPLOY.SERVICES), restored)
+        self.assertFalse([args for args in restored if args[1:2] == ("start",) and "iroh" in " ".join(args)])
+
+    def test_recovery_keeps_the_phone_relay_when_only_the_device_relay_fails(self):
+        DEPLOY.install(self.release(), self.root, self.healthy)
+        stopped = []
+        def boundary(*args):
+            if args[0] == "curl" and self.installed().resolve().name == "2" * 40 and "relay.withhide.dev" in args[-1]:
+                raise RuntimeError("candidate phone relay unhealthy")
+            if args[-1] == "https://device-relay.withhide.dev/ping":
+                return b"502"
+            if args[:2] == ("systemctl", "stop"):
+                stopped.append(args[2:])
+            return self.healthy(*args)
+        with self.assertRaisesRegex(RuntimeError, "previous state restored, but device relay stopped: HTTPS device"):
+            DEPLOY.install(self.release("2" * 40), self.root, boundary)
+        self.assertEqual(self.installed().resolve().name, "1" * 40)
+        self.assertIn(DEPLOY.DEVICE_RELAY, stopped[-1])
+        self.assertNotIn("hide-relay.service", stopped[-1])
 
     def test_device_relay_binary_identity_refused_before_output(self):
         artifact = self.base / ("artifact-" + "1" * 40)
@@ -383,7 +440,6 @@ class DeviceRelayBundle(unittest.TestCase):
         self.assertEqual(Path(self.config["tls"]["manual_cert_path"]), loaded / "tls.crt")
         self.assertEqual(Path(self.config["tls"]["manual_key_path"]), loaded / "tls.key")
         self.assertEqual(self.credential("tls.crt"), METER.CERTIFICATE)
-        self.assertEqual(METER.LOADED_CERTIFICATE, loaded / "tls.crt")
         self.assertEqual(self.credential("tls.key"), METER.CERTIFICATE.with_suffix(".key"))
         # Caddy's storage path for the host name under the pinned ACME issuer.
         self.assertEqual(METER.CERTIFICATE.parts[-3:-1],
@@ -394,7 +450,11 @@ class DeviceRelayBundle(unittest.TestCase):
         port = self.config["tls"]["https_bind_addr"].rsplit(":", 1)[1]
         self.assertIn(f'iif "lo" tcp dport {port} ct state new limit rate over 10/second burst 30 packets reject',
                       self.limits)
-        self.assertIn(f'iif "lo" tcp dport {port} ct state new ct count over 2048 reject', self.limits)
+        device = int(re.search(rf'iif "lo" tcp dport {port} ct state new ct count over (\d+) reject', self.limits)[1])
+        # Every device connection holds two descriptors in the Caddy the phone relay shares.
+        phone = int(re.search(r"MAX_CONNECTIONS: usize = (\d+);", (ROOT / "hide-relay/src/limits.rs").read_text())[1])
+        proxy = int(re.search(r"(?m)^LimitNOFILE=(\d+)$", (BUNDLE / "hide-relay-proxy.service").read_text())[1])
+        self.assertLessEqual(2 * device + 2 * phone + 1024, proxy)
         self.assertIn(f'oif "lo" tcp sport {port} counter name "sent"', self.limits)
         self.assertIn('udp sport 7842 counter name "sent"', self.limits)
         self.assertRegex(self.unit, r"(?m)^MemoryMax=\d+M$")
@@ -403,6 +463,20 @@ class DeviceRelayBundle(unittest.TestCase):
         # Nothing the relay prints, which can carry endpoint ids, is kept.
         self.assertIn("StandardOutput=null", self.unit)
         self.assertIn("StandardError=null", self.unit)
+
+    def test_per_address_cap_never_binds_below_the_phone_relays_own(self):
+        phone = int(re.search(r"MAX_CONNECTIONS_PER_IP: usize = (\d+);",
+                              (ROOT / "hide-relay/src/limits.rs").read_text())[1])
+        for family in ("ip", "ip6"):
+            cap = int(re.search(rf"tcp dport 443 ct state new add @\S+ {{ {family} saddr ct count over (\d+) }} reject",
+                                self.limits)[1])
+            self.assertEqual(cap, phone + 16)
+
+    def test_the_meters_state_folder_is_named_the_same_everywhere(self):
+        folder = Path("/") / DEPLOY.METER_STATE
+        self.assertEqual(METER.STATE, folder)
+        self.assertIn(f"\n\t\troot {folder}\n", (BUNDLE / "Caddyfile").read_text())
+        self.assertIn(f"\nStateDirectory={folder.name}\n", (BUNDLE / "hide-iroh-relay-meter.service").read_text())
 
     def test_only_categorical_alerts_leave_the_machine(self):
         collector = (BUNDLE / "fluent-bit.conf").read_text()
@@ -427,7 +501,6 @@ class Systemd:
         self.table = {"table": 7, "sent": 0, "connections": 0}
         self.actions = []
         self.certificate = folder / "caddy.crt"
-        self.loaded = folder / "loaded.crt"
         self.certificate.write_text("first")
 
     def __call__(self, *args):
@@ -446,7 +519,6 @@ class Systemd:
         self.actions.append(args[1])
         if args[1] in ("start", "restart"):
             self.active = b"active"
-            self.loaded.write_bytes(self.certificate.read_bytes())
         elif args[1] == "stop":
             self.active = b"inactive"
         return b""
@@ -468,7 +540,7 @@ class DeviceRelayMeter(unittest.TestCase):
             self.os.table["connections"] += connections
         output = io.StringIO()
         with redirect_stdout(output):
-            getattr(METER, action)(self.state, self.now, self.os, self.os.certificate, self.os.loaded)
+            getattr(METER, action)(self.state, self.now, self.os, self.os.certificate)
         lines = [json.loads(line) for line in output.getvalue().splitlines()]
         self.printed += lines
         return [line["event"] for line in lines]
@@ -527,13 +599,14 @@ class DeviceRelayMeter(unittest.TestCase):
         self.tick()
         self.assertEqual(self.os.actions, [])
         self.os.certificate.write_text("first")
-        self.tick()
-        self.tick()
+        for _ in range(5):
+            self.tick()
+        # A running relay with the certificate it started with is left alone.
         self.assertEqual(self.os.actions, ["start"])
         self.os.certificate.write_text("renewed")
         self.tick()
+        self.tick()
         self.assertEqual(self.os.actions, ["start", "restart"])
-        self.assertEqual(self.os.loaded.read_text(), "renewed")
 
 
 if __name__ == "__main__":

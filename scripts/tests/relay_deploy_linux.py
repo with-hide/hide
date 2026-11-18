@@ -47,6 +47,20 @@ def meter(*action):
                    ["python3", "-I", "/opt/hide-relay/current/iroh-relay-meter.py", *action], check=True)
 
 
+def main_pid(unit):
+    return subprocess.check_output(["systemctl", "show", unit, "-p", "MainPID", "--value"]).strip()
+
+
+def connect_many(port, count):
+    refused, opened = 0, []
+    for _ in range(count):
+        try:
+            opened.append(socket.create_connection(("127.0.0.1", port), timeout=2))
+        except ConnectionRefusedError:
+            refused += 1
+    return refused, opened
+
+
 def active(unit):
     return subprocess.run(["systemctl", "is-active", "--quiet", unit], check=False).returncode == 0
 
@@ -228,16 +242,20 @@ HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
             assert device("/elsewhere").endswith(b"\n404")
             assert subprocess.check_output(["ss", "-Hlun", "sport = :7842"]).strip(), "no address discovery socket"
             # A burst of new connections meets the accept limit (10 a second, bursts of 30).
-            refused, opened = 0, []
-            for _ in range(80):
-                try:
-                    opened.append(socket.create_connection(("127.0.0.1", 3443), timeout=2))
-                except ConnectionRefusedError:
-                    refused += 1
+            refused, opened = connect_many(3443, 80)
             for connection in opened:
                 connection.close()
             assert refused and opened, (refused, len(opened))
+            # One source address holds at most 76 open connections on the shared 443.
+            refused, opened = connect_many(443, 90)
+            for connection in opened:
+                connection.close()
+            assert refused and len(opened) <= 76, (refused, len(opened))
+            # The meter leaves a running relay alone while Caddy's certificate is unchanged.
+            relay = main_pid("hide-iroh-relay")
             meter()
+            meter()
+            assert main_pid("hide-iroh-relay") == relay, "the meter restarted a relay whose certificate did not change"
             state = json.loads((METER_STATE / "state.json").read_text())
             assert state["sent"] > 0 and state["hour_connections"] > 0, state
             # At the monthly cap the relay stops and Caddy says why; the alert leaves the machine.
