@@ -146,6 +146,11 @@ jobs:
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
       # macOS-only lanes out and the lanes below run without their macOS leg.
       macos: ${{ steps.plan.outputs.macos }}
+      # Whether the Rust lane checks every crate's license and the advisory
+      # database: `true` for a pull request that changes the lockfile or what
+      # the check is held to, and for the nightly (`scripts/ci-plan.py`,
+      # DENY_PATHS).
+      deny: ${{ steps.plan.outputs.deny }}
       # Where `vt`, `omp SDK contract` and `compile (macos)` run their macOS
       # job: the repository variable HIDE_MACOS_CI_RUNNER, a JSON `runs-on`
       # value naming the Mac mini's CI runner (docs/BUILD.md, The CI runner
@@ -219,6 +224,7 @@ jobs:
           bash scripts/check-no-workstation-identity.sh
           bash scripts/check-worktree-removal-boundary.sh
           python3 scripts/check-core-touches-no-machine.py
+          python3 scripts/check-iroh-stays-behind-the-seam.py
           python3 scripts/check-timed-waits.py --base HEAD^1
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
@@ -251,6 +257,7 @@ jobs:
     env:
       FULL: ${{ needs.plan.outputs.full }}
       PACKAGES: ${{ needs.plan.outputs.rust-packages }}
+      DENY: ${{ needs.plan.outputs.deny }}
     steps:
       - uses: actions/checkout@v7
       # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests
@@ -302,6 +309,19 @@ jobs:
         # command that selects other members builds dependencies again
         # (docs/BUILD.md, "One feature set per dependency").
         run: bash scripts/verify-cargo.sh hakari
+      - name: Install cargo-deny
+        # The pinned release build, checked against its digest, so no compile.
+        if: env.DENY == 'true'
+        timeout-minutes: 3
+        run: bash scripts/install-cargo-deny.sh
+      - name: Check every crate's license and the advisory database
+        # For a pull request that changes the lockfile, and nightly: a crate
+        # under a license Hide does not ship, or with a known vulnerability,
+        # stops here (deny.toml; CONTRIBUTING.md, CI gates). It reads the
+        # advisory database from the network, which is why no other run does.
+        if: env.DENY == 'true'
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh deny
       - name: Check formatting and lint the planned crates
         run: |
           if [ "$FULL" = true ]; then
