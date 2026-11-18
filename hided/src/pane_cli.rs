@@ -176,26 +176,48 @@ pub fn parse_agent_read(args: &[String]) -> Result<PaneCli, String> {
     })
 }
 
-/// `hide workspace purpose <text>`, the words after `purpose`.
+/// `hide workspace purpose <text>`, the words after `purpose`; an empty text
+/// clears the purpose. The checkout it names is the one the command runs in,
+/// read when it runs.
 pub fn parse_purpose(args: &[String]) -> Result<PaneCli, String> {
     match args {
-        [text] if !text.starts_with("--") && !text.trim().is_empty() => Ok(PaneCli {
-            command: PaneCommand::Purpose { text: text.clone() },
+        [text] if !text.starts_with("--") => Ok(PaneCli {
+            command: PaneCommand::Purpose {
+                text: text.clone(),
+                checkout: None,
+            },
             json: false,
         }),
         _ => Err(USAGE.to_owned()),
     }
 }
 
+/// The root of the Git checkout this command runs in, spelled as the core
+/// spells a checkout (its real path, `/` between names): the nearest folder
+/// holding a `.git`, which a linked worktree holds as a file. None outside
+/// one, which leaves the caller's own checkout to the core.
+fn checkout_root() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = cwd
+        .ancestors()
+        .find(|folder| folder.join(".git").exists())?
+        .to_path_buf();
+    let root = hide_platform::fs::identity::canonical(&root).unwrap_or(root);
+    hide_platform::path::to_wire(&root).ok()
+}
+
 /// Runs the command and prints its answer: a read's text, or one line,
 /// `{"ok":true,"value":…}` or `{"ok":false,"error":{"code","message"}}` with
 /// the step to take, and a non-zero exit for a refusal.
-pub fn run(env: &Env, cli: PaneCli) -> Result<(), String> {
+pub fn run(env: &Env, mut cli: PaneCli) -> Result<(), String> {
     let refused_with = |code: String, message: &str, answer: &serde_json::Value| {
         println!("{}", crate::cli::refusal_line(&code, message, answer));
         Err(code)
     };
     let refused = |code: String, message: &str| refused_with(code, message, &json!({}));
+    if let PaneCommand::Purpose { checkout, .. } = &mut cli.command {
+        *checkout = checkout_root();
+    }
     if let Err(code) = cli.command.check() {
         let message = hide_core::pane_command::next_action(code).unwrap_or_default();
         return refused(code.to_owned(), message);
