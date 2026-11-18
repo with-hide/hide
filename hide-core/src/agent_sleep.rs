@@ -65,7 +65,8 @@ pub struct Awake<'a> {
 }
 
 impl Awake<'_> {
-    fn holds(&self, agent: &SidebarAgentSnapshot, now_unix_ms: u64) -> bool {
+    /// Whether anything here keeps `agent` awake at `now_unix_ms`.
+    pub(crate) fn holds(&self, agent: &SidebarAgentSnapshot, now_unix_ms: u64) -> bool {
         self.on_screen.contains(&agent.pane_id)
             || self
                 .backoff_until
@@ -81,11 +82,31 @@ impl Awake<'_> {
 /// No automatic sleep takes one: a letter that woke it would wait again
 /// while it slept, and one rung no more would wait for a wake that never
 /// comes (with-hide/hide#2627). The hold ends with the letter's wait: handed
-/// over, taken in, expired or cancelled.
+/// over, taken in, expired or cancelled. The pane id alone names the machine,
+/// as the sleep records' keys do: another machine's panes are address-scoped
+/// (`crate::address`), so no device id is kept beside it.
 #[derive(Clone, Debug, Default)]
 pub struct LetterWaits(HashMap<String, HashSet<Option<String>>>);
 
 impl LetterWaits {
+    /// The waits `ledger` holds: each pending letter not yet handed over to a
+    /// prompt hook, by its recipient.
+    pub(crate) fn of(ledger: &crate::delivery::ledger::Ledger) -> Self {
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| {
+                letter.state == crate::delivery::ledger::State::Pending && !letter.handed
+            })
+            .map(|letter| {
+                (
+                    letter.recipient.pane_id.as_str(),
+                    letter.recipient.session.as_deref(),
+                )
+            })
+            .collect()
+    }
+
     /// Whether a letter waits for the agent in its row's pane and session.
     pub fn holds(&self, agent: &SidebarAgentSnapshot) -> bool {
         self.0.get(&agent.pane_id).is_some_and(|sessions| {

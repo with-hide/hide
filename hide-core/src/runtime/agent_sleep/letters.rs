@@ -14,7 +14,7 @@ use serde_json::json;
 use super::super::Runtime;
 use super::super::delivery::Observation;
 use super::super::hide_notes::{Note, NoteKind};
-use crate::agent_sleep::{DormantPhase, LetterWaits, SleepId, SleepPhase, WakeMode};
+use crate::agent_sleep::{DormantPhase, SleepId, SleepPhase, WakeMode};
 use crate::delivery::Actor;
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::{Asleep, Ledger, Sleeper, State};
@@ -324,26 +324,6 @@ impl Runtime {
             ))
         });
         panes.chain(dormant).collect()
-    }
-
-    /// The agents a letter still waits to be delivered to, which no automatic
-    /// sleep takes (`agent_sleep::LetterWaits`): a pending letter not handed
-    /// over to a prompt hook. A store that could not load keeps no letter.
-    pub(in crate::runtime) fn letter_waits(&self) -> LetterWaits {
-        let Ok(ledger) = &self.delivery_ledger else {
-            return LetterWaits::default();
-        };
-        ledger
-            .letters
-            .iter()
-            .filter(|letter| letter.state == State::Pending && !letter.handed)
-            .map(|letter| {
-                (
-                    letter.recipient.pane_id.as_str(),
-                    letter.recipient.session.as_deref(),
-                )
-            })
-            .collect()
     }
 
     /// The letters whose one wake started, with when, for the delivery

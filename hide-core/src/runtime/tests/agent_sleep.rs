@@ -2132,6 +2132,73 @@ fn a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again() {
     assert!(seen(&runtime) >= before);
 }
 
+/// with-hide/hide#2627: an agent whose sleep closed its pane is idle from
+/// the moment the pane its wake opened is confirmed, though the conversation
+/// it resumed ended long before: memory pressure takes it only half an hour
+/// later.
+#[test]
+fn a_wake_confirmed_in_a_new_pane_starts_its_idle_clock() {
+    use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
+    const MINUTE: u64 = 60 * 1000;
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.snapshot.ui_state.agent_sleep_after_hours = Some(24);
+    runtime.ingest_session(Ok(session(None)));
+    let native = "11111111-2222-3333-4444-555555555555";
+    let mut record = crate::agent_sleep::fixture_record("w-order:t9:p");
+    record.phase = crate::agent_sleep::DormantPhase::Starting;
+    record.closed = true;
+    record.connection_generation = runtime.live_generation;
+    record.native_session_id = native.into();
+    record.wake_pane_id = Some(SLEEPER.into());
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .dormant
+        .insert(crate::agent_sleep::SleepId::new().unwrap(), record);
+    // The woken pane lists the conversation, whose last reply came 51
+    // minutes ago, off the operator's screen.
+    let mut woken = session(Some(5));
+    woken.agents[0].facts = Some(crate::request_view::RowFacts {
+        native_session_id: Some(native.into()),
+        last_reply_at_unix_ms: Some(unix_milliseconds() - 51 * MINUTE),
+        ..Default::default()
+    });
+    runtime.ingest_session(Ok(woken));
+    let woke = unix_milliseconds();
+    assert!(
+        runtime.snapshot.ui_state.agent_sleep.dormant.is_empty(),
+        "the wake is confirmed"
+    );
+    let tick = |runtime: &mut Runtime, at: u64| {
+        runtime.ingest_memory_pressure(
+            None,
+            crate::memory_pressure::PressureReading {
+                answer: Ok(PressureAnswer {
+                    level: MemoryPressure::Warning,
+                    source: PressureSource::System,
+                }),
+                read_at_unix_ms: at,
+            },
+        );
+        runtime.tick_agent_sleep(at);
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .get(SLEEPER)
+            .map(|record| record.phase)
+    };
+    assert_eq!(tick(&mut runtime, woke + 10_000), None, "ten seconds on");
+    assert_eq!(tick(&mut runtime, woke + 29 * MINUTE), None);
+    assert_eq!(
+        tick(&mut runtime, woke + 31 * MINUTE),
+        Some(crate::agent_sleep::SleepPhase::Ending),
+        "half an hour after its wake"
+    );
+}
+
 /// The engine answers a wake's start once it has typed the start line; a line the
 /// pane's shell never ran (a Windows prompt reading a leftover bracketed
 /// paste as keys) brings no agent, and the wake fails with a reason once the

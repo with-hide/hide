@@ -204,6 +204,20 @@ fn phase(runtime: &Runtime, pane: &str) -> Option<SleepPhase> {
         .map(|record| record.phase)
 }
 
+/// Sets the letter `id` to `state`, handed over to a prompt hook or not, and
+/// publishes the ledger as the store does.
+fn set_letter(runtime: &mut Runtime, id: &str, state: State, handed: bool) {
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let letter = ledger
+        .letters
+        .iter_mut()
+        .find(|letter| letter.id == id)
+        .unwrap();
+    letter.state = state;
+    letter.handed = handed;
+    runtime.publish_delivery(Arc::new(ledger), true);
+}
+
 /// B1: a letter to a registered agent asleep in its pane is taken by the
 /// store, pending, by its registration id and by the pane it sleeps in,
 /// where it was refused `target_unavailable` before.
@@ -602,7 +616,10 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
     };
 
     // The pressure minute, ten seconds after the wake: its idle time starts
-    // at the wake, and a letter waits for it.
+    // at the wake, and a letter waits for it. Either keeps it awake here;
+    // the next minute checks the letter alone, and the clock alone is
+    // `agent_sleep`'s tests' (`the_idle_clock_of_an_agent_that_came_back_starts_at_its_wake`,
+    // `a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again`).
     assert_eq!(tick(&mut runtime, woke + 10_000), None, "ten seconds on");
     // Half an hour on, its session read has not settled the resumed turn,
     // so the doorbell still holds the letter; the letter alone keeps it awake.
@@ -637,19 +654,42 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
     );
 
     // The letter is taken in: nothing holds the worker but its idle time.
-    let mut taken = (*ledger).clone();
-    taken
-        .letters
-        .iter_mut()
-        .find(|letter| letter.id == id)
-        .unwrap()
-        .state = State::Delivered;
-    runtime.publish_delivery(Arc::new(taken), true);
+    set_letter(&mut runtime, &id, State::Delivered, false);
     assert_eq!(
         tick(&mut runtime, held + MINUTE),
         Some(SleepPhase::Ending),
         "the next pressure minute takes it"
     );
+}
+
+/// The letters that hold their recipient awake: a pending one not yet
+/// handed over to a prompt hook, and none that was handed over, taken in,
+/// cancelled, left undelivered or expired.
+#[test]
+fn only_a_pending_letter_not_yet_handed_over_holds_its_recipient() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    let id = letter(&mut runtime, WORKER, "request");
+    let worker = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == WORKER)
+        .cloned()
+        .unwrap();
+    for (state, handed, holds) in [
+        (State::Pending, false, true),
+        (State::Pending, true, false),
+        (State::Delivered, false, false),
+        (State::Acknowledged, false, false),
+        (State::Cancelled, false, false),
+        (State::Undelivered, false, false),
+        (State::Expired, false, false),
+    ] {
+        set_letter(&mut runtime, &id, state, handed);
+        let waits = crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap());
+        assert_eq!(waits.holds(&worker), holds, "{state:?}, handed {handed}");
+    }
 }
 
 fn mission(status: &str) -> crate::missions::Mission {
@@ -721,6 +761,22 @@ fn a_finished_nodes_worker_sleeps_once() {
     );
     runtime.sleep_finished_mission_agents(unix_milliseconds());
     assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// with-hide/hide#2627: a finished node's worker that a letter waits for
+/// keeps its mark and stays awake; once the letter is taken in, the next
+/// minute puts it to sleep.
+#[test]
+fn a_finished_nodes_worker_a_letter_waits_for_sleeps_once_it_is_taken_in() {
+    let mut runtime = mission_runtime();
+    let id = letter(&mut runtime, WORKER, "request");
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "a letter waits for it");
+    assert_eq!(marks(&runtime), ["agent-2"], "it keeps its mark");
+    set_letter(&mut runtime, &id, State::Delivered, false);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
 }
 
 /// D-19: an end refused because the agent took a turn keeps the mark, and

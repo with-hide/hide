@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use super::*;
 use crate::agent_sleep::{
-    Awake, DECISION_INTERVAL_MS, SLEEP_RETRY_BACKOFF_MS, Settled, SleepCause, SleepMachine,
-    SleepPhase, SleepRecord, SleepScope, WakeMode, valid_after_hours,
+    Awake, DECISION_INTERVAL_MS, LetterWaits, SLEEP_RETRY_BACKOFF_MS, Settled, SleepCause,
+    SleepMachine, SleepPhase, SleepRecord, SleepScope, WakeMode, valid_after_hours,
 };
 use crate::agent_sleep_engine::{self, SleepTarget, WakeOutcome, WakeRequest};
 use crate::model::AgentActionRefusal;
@@ -207,7 +207,15 @@ impl Runtime {
             .iter()
             .map(|(pane_id, backoff)| (pane_id.clone(), backoff.until_unix_ms))
             .collect::<HashMap<_, _>>();
-        let letters = self.letter_waits();
+        // Sleep set to Off sleeps nothing, so no letter is read for it; a
+        // store that could not load keeps no letter.
+        let letters = match (
+            self.snapshot.ui_state.agent_sleep_after_hours,
+            &self.delivery_ledger,
+        ) {
+            (Some(_), Ok(ledger)) => LetterWaits::of(ledger),
+            _ => LetterWaits::default(),
+        };
         let awake = Awake {
             on_screen: &on_screen,
             backoff_until: &backoff_until,
