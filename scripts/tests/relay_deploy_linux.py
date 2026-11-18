@@ -246,11 +246,6 @@ HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
             for connection in opened:
                 connection.close()
             assert refused and opened, (refused, len(opened))
-            # One source address holds at most 76 open connections on the shared 443.
-            refused, opened = connect_many(443, 90)
-            for connection in opened:
-                connection.close()
-            assert refused and len(opened) <= 76, (refused, len(opened))
             # The meter leaves a running relay alone while Caddy's certificate is unchanged.
             relay = main_pid("hide-iroh-relay")
             meter()

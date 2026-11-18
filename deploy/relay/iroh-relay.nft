@@ -12,29 +12,13 @@ table inet hide_iroh_relay {
 	counter sent {
 	}
 
-	# Open connections per source address on 443, which the phone relay and the
-	# device relay share behind one Caddy. iroh-relay sees only Caddy's loopback
-	# address, so this is the device relay's only per-address cap. 76 = the phone
-	# relay's own per-address limit (60, hide-relay/src/limits.rs
-	# MAX_CONNECTIONS_PER_IP) + 16 for the device relay, so no phone connection is
-	# refused here that the phone relay itself would accept.
-	set per_source_v4 {
-		type ipv4_addr
-		size 65535
-		flags dynamic
-	}
-	set per_source_v6 {
-		type ipv6_addr
-		size 65535
-		flags dynamic
-	}
-
 	chain input {
 		type filter hook input priority filter; policy accept;
-		tcp dport 443 ct state new add @per_source_v4 { ip saddr ct count over 76 } reject with tcp reset
-		tcp dport 443 ct state new add @per_source_v6 { ip6 saddr ct count over 76 } reject with tcp reset
 		# Caddy opens one loopback connection per relay client. iroh-relay has
-		# no accept rate or connection cap of its own.
+		# no accept rate or connection cap of its own, and sees only Caddy's
+		# address. There is no per-address cap: 443 is shared with the phone
+		# relay, whose own per-address limit is a rate, so any concurrent cap
+		# here could refuse phone connections behind one shared NAT.
 		iif "lo" tcp dport 3443 ct state new limit rate over 10/second burst 30 packets reject with tcp reset
 		# Each device connection holds two of Caddy's descriptors (client and
 		# relay). Caddy's LimitNOFILE is 4096 (hide-relay-proxy.service):

@@ -38,16 +38,20 @@ def read_counters(command=run):
     """The table's handle and its two counters, or None while no table is loaded.
 
     The handle changes when the limits unit loads the table again, which also
-    sets its counters back to zero.
+    sets its counters back to zero. Only the table list and the two counters
+    are read, nothing that holds an address.
     """
     tables = json.loads(command("/usr/sbin/nft", "-j", "list", "tables"))["nftables"]
-    if not any(item.get("table", {}).get("family") == TABLE[0] and item["table"].get("name") == TABLE[1]
-               for item in tables):
+    handle = next((item["table"]["handle"] for item in tables
+                   if item.get("table", {}).get("family") == TABLE[0] and item["table"].get("name") == TABLE[1]), None)
+    if handle is None:
         return None
-    listing = json.loads(command("/usr/sbin/nft", "-j", "list", "table", *TABLE))["nftables"]
-    handle = next(item["table"]["handle"] for item in listing if "table" in item)
-    counters = {item["counter"]["name"]: item["counter"] for item in listing if "counter" in item}
-    return {"table": handle, "sent": counters["sent"]["bytes"], "connections": counters["connections"]["packets"]}
+
+    def counter(name):
+        listing = json.loads(command("/usr/sbin/nft", "-j", "list", "counter", *TABLE, name))["nftables"]
+        return next(item["counter"] for item in listing if "counter" in item)
+
+    return {"table": handle, "sent": counter("sent")["bytes"], "connections": counter("connections")["packets"]}
 
 
 def fresh(month, hour):

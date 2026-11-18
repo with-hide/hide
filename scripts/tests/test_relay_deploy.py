@@ -464,13 +464,9 @@ class DeviceRelayBundle(unittest.TestCase):
         self.assertIn("StandardOutput=null", self.unit)
         self.assertIn("StandardError=null", self.unit)
 
-    def test_per_address_cap_never_binds_below_the_phone_relays_own(self):
-        phone = int(re.search(r"MAX_CONNECTIONS_PER_IP: usize = (\d+);",
-                              (ROOT / "hide-relay/src/limits.rs").read_text())[1])
-        for family in ("ip", "ip6"):
-            cap = int(re.search(rf"tcp dport 443 ct state new add @\S+ {{ {family} saddr ct count over (\d+) }} reject",
-                                self.limits)[1])
-            self.assertEqual(cap, phone + 16)
+    def test_no_cap_binds_the_phone_relays_connections_on_the_shared_port(self):
+        # The phone relay limits each address by rate, not by open connections.
+        self.assertNotRegex(self.limits, r"dport 443\b")
 
     def test_the_meters_state_folder_is_named_the_same_everywhere(self):
         folder = Path("/") / DEPLOY.METER_STATE
@@ -509,11 +505,10 @@ class Systemd:
                 tables = [{"table": {"family": "inet", "name": "hide_iroh_relay", "handle": self.table["table"]}}
                           ] if self.table else []
                 return json.dumps({"nftables": [{"metainfo": {}}] + tables}).encode()
-            return json.dumps({"nftables": [
-                {"table": {"family": "inet", "name": "hide_iroh_relay", "handle": self.table["table"]}},
-                {"counter": {"name": "connections", "packets": self.table["connections"], "bytes": 60}},
-                {"counter": {"name": "sent", "packets": 3, "bytes": self.table["sent"]}},
-            ]}).encode()
+            assert args[2:5] == ("list", "counter", "inet") and args[5] == "hide_iroh_relay", args
+            values = {"connections": {"packets": self.table["connections"], "bytes": 60},
+                      "sent": {"packets": 3, "bytes": self.table["sent"]}}[args[6]]
+            return json.dumps({"nftables": [{"metainfo": {}}, {"counter": {"name": args[6], **values}}]}).encode()
         if args[:2] == ("systemctl", "show"):
             return self.active + b"\n"
         self.actions.append(args[1])
