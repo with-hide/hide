@@ -55,6 +55,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # The release set `package.yml`'s macOS compile saves, so a nightly
       # compiles only the workspace's own crates.
       - uses: ./.github/actions/rust-cache

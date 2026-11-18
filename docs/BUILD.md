@@ -204,8 +204,10 @@ The Mac mini's release jobs therefore prepare the inputs as its verify job `vt (
 
 In CI, `.github/actions/vt-cache` restores the prepared folder, keyed by the pin file, system and architecture, and Zig's caches, keyed by the pin file, `hide-vt/build.rs` (which fixes the target mapping and the `ReleaseFast` optimize mode), system and architecture.
 Both live under the runner's temporary folder at fixed paths, because Zig's C-header cache keys include the compiler's installation path, and outside `target/`, which the workspace set's rust-cache entry holds.
-The `vt` lane is each system's one saver, on main only; `rust workspace`, `windows check` and the release's workspace tests restore, and a miss costs a download, never a failure.
-`scripts/tests/test_vt_cache.py` holds every job to that.
+The `vt` lane is each system's one saver, on main only; it has no Linux arm64 leg, so the remote mailbox lane's arm64 run on main saves that system.
+Every other job that builds hide-vt restores, and a miss costs a download, never a failure.
+A job that builds hide-vt without the action downloads the pinned packages on every run, so one package host being down fails every pull request: on 2026-11-18 codeberg.org stopped resolving and five jobs that did not restore failed at `translate-c` (#2631).
+`scripts/tests/test_vt_cache.py` holds every job to that: it reads each job's `verify-cargo.sh` calls the way `selects_vt` there does and fails a job that builds hide-vt without the action, and it fixes each saver's `save` condition.
 
 The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Windows from empty Zig caches and again from kept ones, recording the caches' sizes, runs its tests and Clippy and the pane holder's ([TESTING.md](TESTING.md#the-pane-holder)), builds it again with the network denied on Linux (`unshare --net`) and macOS (`sandbox-exec`) after showing the wrapper denies it, and runs `scripts/check-vt-build-refusals.sh`, which shows a missing Zig, another Zig version and a download of other bytes each stopping with its reason.
 On 2026-11-01 (main's run 41283189059) a build from empty Zig caches took 157 s with a largest process of 813 MiB on Linux, 108 s and 1,072 MiB on Windows and 45 s and 778 MiB on the Mac mini, and a build from kept caches 1.6 to 2.3 s and at most 300 MiB; the caches were 259 to 500 MiB and the prepared inputs about 450 MiB.
