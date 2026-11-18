@@ -6,9 +6,10 @@ Usage: prepare-vt-inputs.py [--quiet] [--manifest <build-inputs.json>]
 `hide-vt/build-inputs.json` pins every input by digest: the Zig 0.16.0
 compiler for this machine, the Herdr v0.9.5 source archive whose
 `vendor/libghostty-vt` is the libghostty-vt source dist with Herdr's patches
-applied, and the Zig packages that source's build needs. This script downloads
-each one once, refuses any whose digest differs, checks that each of Herdr's
-patches is applied to the extracted tree, has Zig fetch the packages (Zig
+applied, Hide's own patches to that tree (`hide-vt/patches/`), and the Zig
+packages that source's build needs. This script downloads each one once,
+refuses any whose digest differs, checks that each of Herdr's patches is
+applied to the extracted tree, applies Hide's, has Zig fetch the packages (Zig
 checks each against its own content hash) and moves the finished folder into
 place in one rename. `hide-vt/build.rs` then reads only that folder, and runs
 Zig with fetching turned off.
@@ -177,6 +178,25 @@ def check_patches_applied(source: Path, herdr: Path, patches: dict[str, str]) ->
             raise Refused(f"{Path(relative).name} is not applied to the extracted libghostty-vt: {detail[0] if detail else 'git apply failed'}")
 
 
+def apply_hide_patches(source: Path, folder: Path, patches: dict[str, str]) -> None:
+    # Hide's patches name files relative to the libghostty-vt tree
+    # (`a/pkg/...`) and live beside the pins, which name each one's sha256 so
+    # an edited patch also moves the entry's digest.
+    environment = dict(os.environ, GIT_CEILING_DIRECTORIES=str(source.parent))
+    for relative, sha256 in patches.items():
+        patch = folder / relative
+        actual = sha256_file(patch)
+        if actual != sha256:
+            raise Refused(f"{relative} has sha256 {actual}, but hide-vt/build-inputs.json pins {sha256}")
+        result = subprocess.run(
+            ["git", "apply", "-p1", str(patch)],
+            cwd=source, env=environment, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip().splitlines()
+            raise Refused(f"{Path(relative).name} does not apply to the extracted libghostty-vt: {detail[0] if detail else 'git apply failed'}")
+
+
 def fetch_packages(zig: Path, packages: list[dict[str, str]], work: Path, dest: Path) -> None:
     """Has Zig fetch exactly the pinned packages, each checked by its hash."""
     project = work / "hide_vt_packages"
@@ -291,6 +311,7 @@ def prepare(quiet: bool, manifest_path: Path = MANIFEST) -> Path:
                 if actual != sha256:
                     raise Refused(f"{relative} in the Herdr archive has sha256 {actual}, but hide-vt/build-inputs.json pins {sha256}")
         check_patches_applied(staged / "source", herdr, source["patches"])
+        apply_hide_patches(staged / "source", manifest_path.parent, source["hide_patches"])
 
         if not quiet:
             print(f"fetching {len(manifest['packages'])} Zig packages", file=sys.stderr)
