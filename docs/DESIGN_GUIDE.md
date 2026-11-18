@@ -48,6 +48,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | A short label or count | `Badge` | `secondary` by default; `outline`, `default`, `destructive`. |
 | A shortcut | `Kbd`, `KbdGroup` | `Keycap` is the number a modifier hold reveals on a row or tile. |
 | A hint on hover or focus | `Hint` (or `Tooltip` parts) | A hint holds nothing to click. |
+| A notice the operator can act on | `Toast` inside the window's one `ToastStack` (`App.tsx`) | `level="info"` leaves on its own after `TOAST_INFO_MS` when given `timeout`; `level="important"` draws the warning border and mark and stays; a shell notice goes through `useUiStore`'s `showNotice` rather than a Toast of its own ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#notices)). |
 | A divider | `Separator` | Spacing first (design principle 8). |
 
 ## Product composites

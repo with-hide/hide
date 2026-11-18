@@ -235,7 +235,7 @@ describe("remote view", () => {
 
 describe("commands with an SSH device selected", () => {
   beforeEach(() => {
-    useUiStore.setState({ notice: null, pendingClose: null });
+    useUiStore.setState({ notices: [], pendingClose: null });
   });
 
   it("splits, zooms and focuses the host's exact pane and sends nothing local", () => {
@@ -273,12 +273,12 @@ describe("commands with an SSH device selected", () => {
     actions.split("down");
     actions.closeTab("remote:studio:tab:w9:t1");
     expect(sent).toHaveLength(0);
-    expect(useUiStore.getState().notice?.text).toContain("Studio Mac is not connected");
+    expect(useUiStore.getState().notices.at(-1)?.text).toContain("Studio Mac is not connected");
   });
 
   it("closes the device Workspace's active view with the close chord while its View area owns the keyboard, connected or not", () => {
     for (const state of ["connected", "stale"]) {
-      useUiStore.setState({ notice: null, pendingClose: null });
+      useUiStore.setState({ notices: [], pendingClose: null });
       seed({ ...rest("studio", state), workspace_view: deviceViews(true) });
       const { sent, actions } = recorder();
       useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
@@ -289,7 +289,7 @@ describe("commands with an SSH device selected", () => {
         kind: "view_layout",
         payload: { action: "close", display_id: "d2", workspace: { device_id: "studio", path: "/home/remote/app" } },
       });
-      expect(useUiStore.getState().notice).toBeNull();
+      expect(useUiStore.getState().notices).toEqual([]);
       expect(useUiStore.getState().pendingClose).toBeNull();
     }
   });
@@ -308,7 +308,7 @@ describe("commands with an SSH device selected", () => {
     actions.openFind();
     expect(sent).toHaveLength(0);
     expect(useUiStore.getState().overlay).toBe("find");
-    expect(useUiStore.getState().notice).toBeNull();
+    expect(useUiStore.getState().notices).toEqual([]);
   });
 
   it("reorders the device's own strip, naming its checkout", () => {

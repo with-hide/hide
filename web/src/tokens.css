@@ -299,6 +299,7 @@
   --size-hint-gap: 4px;
   --size-hint-window-inset: 8px;
   --size-tooltip-max-width: 360px;
+  --size-toast-w: 360px;
   --size-overview-cleanup: 560px;
   --size-disk-sheet: 1160px;
   --size-editor-inset: 12px;

@@ -26,9 +26,6 @@
   "web/src/DiskCleanupSheet.tsx": {
     "button": 1
   },
-  "web/src/DraftRecovery.tsx": {
-    "button": 1
-  },
   "web/src/FirstRunWizard.tsx": {
     "button": 4
   },
@@ -142,9 +139,6 @@
   "web/src/ViewComments.tsx": {
     "button": 3,
     "textarea": 1
-  },
-  "web/src/WorkspaceDialogs.tsx": {
-    "button": 3
   },
   "web/src/WorkspaceScreen.tsx": {
     "button": 1

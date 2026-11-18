@@ -74,8 +74,20 @@ Over the center it carries the Workspace's path and icons while a Workspace is i
 The switch's glyph starts a step after the traffic lights' space, where the device name used to; with the sidebar hidden the path follows the switch, and full screen, where macOS removes the lights, gives the space back so the row starts at its own inset.
 Dragging any empty part of the row moves the window and a double-click does what macOS's "Double-click a window's title bar" setting says; the switch, the path, the icons and the device menu take a press instead of a drag.
 The desktop page's connecting and failure states keep a drag strip of the same height, so no screen draws under the traffic lights.
-Window-wide notices (the connection badge, the notice line, the agent close notice, draft recovery and Workspace notices) run the window's width under the row.
+The connection badge runs the window's width under the row, because while it shows the whole window waits on the core; every other notice stands in the window's lower right corner ([Notices](#notices)).
 Windows, Linux and a browser tab keep their own window frame and draw the same row with no traffic-light space.
+
+### Notices
+
+Web owner: `web/src/components/ui/toast.tsx` (`Toast`, `ToastStack`), `web/src/ui.ts` (`notices`), `web/src/Overlays.tsx` (`NoticeToasts`), `web/src/App.tsx`.
+
+A notice the operator can act on stands in the window's lower right corner over the screen, the newest nearest the corner, and the screen under it never moves to make room.
+It is one of two levels.
+An info notice tells the operator something that already happened (a page that did not open, a command a device that is not connected did not take, a View action refused) on the popover surface with a plain line, and leaves 5 seconds after it appears; the pointer or the keyboard inside it holds it, and it counts its whole time again once they leave.
+An important notice waits for the operator: it carries an action (check the status, Don't save, retry a close, review drafts) or a state that lasts (typed input lost, an agent Reopen ended and could not start again, agents waiting for room, a worktree removal that failed, an agent that did not start), is drawn with the warning colour's border and mark, and stays until it is dismissed or its cause clears.
+The corner holds at most three of the shell's own notices: past that the oldest info notice leaves first, and the oldest of any when every older one is important; the same notice raised again replaces the one shown and comes back newest.
+The agent close notice, the draft recovery line and a Workspace's agent start notice stand in the same corner and stay while their state does; an agent that is still starting is drawn at the info level and leaves when it has started.
+Every notice the shell raises leaves when the device in front changes, as before.
 
 ### A part that cannot be drawn
 
@@ -272,7 +284,7 @@ A disconnected device disables the start controls and sends no start; Enter duri
 Tabs have no numbered shortcut or hold keycap; ⌃⇥ steps through the recent tabs (see Keyboard shortcuts per system).
 
 At most 64 normal Agent tabs are placed across all the checkout's groups together, counting drafts, live tabs and pending admissions; each group has up to six areas and three split levels.
-New tab, Reopen that needs a tab, and protected replacement close count pending admissions and refuse before any external effect when full; the existing one-line notice asks the operator to close a tab.
+New tab, Reopen that needs a tab, and protected replacement close count pending admissions and refuse before any external effect when full; the existing notice asks the operator to close a tab.
 After an ambiguous creation reply, Hide checks the request marker once without resending the mutation.
 An unconfirmed creation retains its request-specific place and reports that uncertainty in the same notice; elapsed time alone never frees the place.
 External tabs beyond the cap remain in the engine's topology, with their waiting count in that same notice, and enter the active area in authoritative order when a slot opens.
@@ -984,7 +996,7 @@ A descendant whose pane's terminal failed to restore runs nothing and is listed 
 `이것만 닫기` closes the target alone as the ordinary close, with no second question; its direct children become the operator's roots and their own children stay under them.
 While the sheet is open its list is live, as in the removal dialogs: a descendant that appears shows up, one that goes drops out, and the title's N and the count line follow.
 `모두 닫기` sends one event naming the target and exactly the descendants the sheet shows at the press: one that appears after the press is not closed, and one already gone counts as closed.
-The core checks each listed pane again as it arrives; if one now needs a status check, an earlier close of one is still unresolved, more than 64 are listed, four closes with children already run, or every close slot is taken, nothing closes and the one-line notice says which and what to do.
+The core checks each listed pane again as it arrives; if one now needs a status check, an earlier close of one is still unresolved, more than 64 are listed, four closes with children already run, or every close slot is taken, nothing closes and the notice says which and what to do.
 A tree of any listed size is otherwise admitted: its panes take the close slots it holds a few at a time instead of all at once.
 A pane whose earlier close was refused is simply closed again, since asking again is the retry.
 If every descendant goes while the sheet is open, it turns in place into the target's Stop-work confirmation, a quiet target dimmed, whose `Stop work and close` closes the target alone; a descendant that appears under an open Stop-work confirmation turns it into this sheet the same way.
@@ -1747,7 +1759,7 @@ The editor retains only its latest unacknowledged draft while older core snapsho
 In the Live view, the line holding the caret, and every line a selection crosses, shows its source; a fenced code block is one unit, so a caret anywhere inside it shows both fences.
 Markup hides again the moment the caret leaves, with no animation.
 Headings hide their hashes; bold, italic, and strikethrough hide their delimiters; inline code and fenced blocks use the editor's monospaced font; unordered markers draw as a bullet and ordered markers keep their digits, both with a hanging indent; a quote indents behind a bar and hides its `>`; a link shows its text in the accent color with the brackets and URL hidden; a `---` line draws as a rule.
-Footnotes and inline HTML other than `<img>` (`<br>`, `<kbd>`, `<sub>`) are not drawn: they stay monospaced source, editable in place, and a parse the view cannot use leaves the whole document monospaced with the reason in the notice bar while typing continues.
+Footnotes and inline HTML other than `<img>` (`<br>`, `<kbd>`, `<sub>`) are not drawn: they stay monospaced source, editable in place, and a parse the view cannot use leaves the whole document monospaced with the reason in a notice while typing continues.
 A GFM table at the top level of the document is drawn as a table, read-only, by the renderer the phone and a pull request's card draw tables with (`web/src/mobile/markdown.tsx`): a header row in the subtle text colour and medium weight, a hairline under it and between rows, no outer frame, and each column aligned as the delimiter row says (`:---` left, `:---:` centred, `---:` right, `---` left).
 A table takes the width its text needs, up to the column; past that each cell wraps inside its own column: a word of prose stays whole, Korean words included, while inline code, a link and a bare address break anywhere, so a long path, hash or URL wraps inside its column; only a long token in plain prose can make the table wider than the column, and then the table scrolls sideways inside its own box, never the page.
 A cell draws its emphasis, code, strikethrough, links, an escaped `\|` as a pipe (inside code too, as GitHub reads it), and `<br>`, `<kbd>`, `<sub>` and `<sup>`; an empty cell keeps its column, a short row is filled with empty cells, and a cell past the header's count is not drawn, as GitHub draws it.
@@ -2733,7 +2745,7 @@ Reopen is hidden where the core says the pane cannot be reopened (a pane on anot
 Not now closes the popover only and the chip stays; Settings has no Reopen button.
 Reopen sends one `pane_reopen` however often it is pressed before the core answers, shows the core's pending state as a busy button, and on a refusal known before the agent was touched leaves one line from the refusal code (the agent is working, no saved conversation, the folder is gone, the agent would not stop) while the pane stays as it was; a session that reconnects loses its chip and closes the popover with it.
 A start refused after the agent was ended leaves a pane with no agent and so no chip to carry a line, and it is the one Reopen failure that is a notice rather than only a diagnostic (design principle 13): the operator can act on it, because the agent is gone from the pane and its conversation is kept, so they start it again.
-The shell turns `last_error` kinds `terminal.input_hold_failed` (a new tab, split or fork exceeded its input hold bound) and `pane_reopen.not_restarted` into the one-line notice bar (`web/src/errorNotice.ts`), worded by kind (`web/src/coreError.ts`), and the notice stays until dismissed or until the front device changes, because the core clears `last_error` at its next event of any kind; every other failure of Reopen stays on the chip.
+The shell turns `last_error` kinds `terminal.input_hold_failed` (a new tab, split or fork exceeded its input hold bound) and `pane_reopen.not_restarted` into an important notice (`web/src/errorNotice.ts`), worded by kind (`web/src/coreError.ts`), and the notice stays until dismissed or until the front device changes, because the core clears `last_error` at its next event of any kind; every other failure of Reopen stays on the chip.
 The link opens a confirmation before anything changes, in the device-removal pattern with no button focused (PRD codex-daemon-apply B1, B2).
 It names the machine's Codex shared server, says autostart goes off and the server running now stops, that every Codex attached to it disconnects and continues in its pane with `codex resume`, and that Codex Hide started keeps running; it shows no count of Codex, since Codex reports none.
 Its buttons are "Leave it running" and "Turn off and stop", and Escape, a click outside or "Leave it running" changes nothing.

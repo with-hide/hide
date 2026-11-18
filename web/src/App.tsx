@@ -12,7 +12,8 @@ import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
-import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeBar } from "./Overlays";
+import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeToasts } from "./Overlays";
+import { ToastStack } from "./components/ui/toast";
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
 import { Palette } from "./Palette";
@@ -131,8 +132,8 @@ export function App() {
       const waiting = state.rest?.workspace_view?.agent_layout?.waiting ?? 0;
       const previouslyWaiting = previous.rest?.workspace_view?.agent_layout?.waiting ?? 0;
       if (waiting !== previouslyWaiting || state.rest?.workspace_view?.path !== previous.rest?.workspace_view?.path) {
-        if (waiting > 0) useUiStore.getState().setNotice({ text: agentCapacityNotice(waiting), refreshable: false });
-        else if (previouslyWaiting > 0 && useUiStore.getState().notice?.text === agentCapacityNotice(previouslyWaiting)) useUiStore.getState().setNotice(null);
+        if (waiting > 0) useUiStore.getState().showNotice({ level: "important", key: "agent_capacity", text: agentCapacityNotice(waiting), refreshable: false });
+        else if (previouslyWaiting > 0) useUiStore.getState().dismissNotices((notice) => notice.key === "agent_capacity");
       }
       // A refused commit brings nothing forward, so the next surface in use is a visit again.
       if (fresh) {
@@ -261,13 +262,15 @@ export function App() {
   // Each part fails on its own and this component, which owns the socket,
   // stays mounted (`RenderBoundary`). A notice, an overlay or the browser
   // displays' bridge that cannot draw is left out on its own, since nothing
-  // in its place would be something to act on.
+  // in its place would be something to act on. The connection badge runs the
+  // window's width under the top row, because while it shows the whole window
+  // waits on the core; every other notice stands in the window's corner,
+  // newest nearest the corner.
   const notices: [string, ReactNode][] = [
-    ["connection", <ConnectionBadge actions={actions} />],
-    ["notice", <NoticeBar actions={actions} />],
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
     ["workspace_notices", <WorkspaceNotices actions={actions} />],
+    ["notice", <NoticeToasts actions={actions} />],
   ];
   const overlays: [string, ReactNode][] = [
     ["overview", <OverviewModal actions={actions} />],
@@ -302,7 +305,7 @@ export function App() {
           <RenderBoundary region="title" fallback={<TitleRowFailed />}>
             <TitleRow actions={actions} />
           </RenderBoundary>
-          {notices.map(leftOut)}
+          {leftOut(["connection", <ConnectionBadge actions={actions} />])}
           <div className="flex min-h-0 flex-1">
             <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
               <Sidebar actions={actions} />
@@ -313,6 +316,7 @@ export function App() {
               </RenderBoundary>
             </main>
           </div>
+          <ToastStack>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}
         </div>
       </RenderBoundary>
@@ -377,7 +381,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
       const failure = translate("shell.openTimeout");
       if (store.screen?.kind !== "workspace") return store.setOpening({ ...opening, failure });
       store.setOpening(null);
-      store.setNotice({ text: translate("shell.notOpened", { reason: failure }), refreshable: false });
+      store.showNotice({ level: "info", text: translate("shell.notOpened", { reason: failure }), refreshable: false });
     }, "startRequestId" in opening.target ? START_ANSWER_TIMEOUT_MS : OPEN_ANSWER_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [opening]);
