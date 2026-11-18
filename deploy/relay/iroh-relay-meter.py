@@ -11,6 +11,7 @@ event with counts; no address, endpoint id or key ever reaches it.
 
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,6 @@ TABLE = ("inet", "hide_iroh_relay")
 STATE = Path("/var/lib/hide-iroh-relay-meter")
 CERTIFICATE = Path("/var/lib/hide-relay-proxy/caddy/certificates/acme-v02.api.letsencrypt.org-directory"
                    "/device-relay.withhide.dev/device-relay.withhide.dev.crt")
-LOADED_CERTIFICATE = Path("/run/credentials") / UNIT / "tls.crt"
 
 
 def run(*argv):
@@ -53,7 +53,7 @@ def read_counters(command=run):
 def fresh(month, hour):
     return {"month": month, "sent": 0, "warned": False, "stopped": False, "resumed": False,
             "hour": hour, "hour_sent": 0, "hour_connections": 0,
-            "table": None, "counter_sent": 0, "counter_connections": 0}
+            "table": None, "counter_sent": 0, "counter_connections": 0, "certificate": None}
 
 
 def advance(state, counters, now):
@@ -99,8 +99,14 @@ def paused(state):
     return state["stopped"] and not state["resumed"]
 
 
-def reconcile(state, directory, certificate, loaded, command):
-    """Make the relay and Caddy's marker match the state; safe to repeat."""
+def reconcile(state, directory, certificate, command):
+    """Make the relay and Caddy's marker match the state; safe to repeat.
+
+    The relay copies Caddy's certificate when it starts, so the meter keeps the
+    fingerprint of the file it started the relay with and restarts the relay
+    only when Caddy's file differs. It cannot look at the relay's own copy:
+    systemd hides every unit's credentials from this one.
+    """
     marker = directory / "stopped"
     if paused(state):
         marker.touch()
@@ -112,13 +118,18 @@ def reconcile(state, directory, certificate, loaded, command):
         if running:
             command("systemctl", "stop", UNIT)
         return
+    fingerprint = hashlib.sha256(certificate.read_bytes()).hexdigest()
     if not running:
         if active == b"failed":
             command("systemctl", "reset-failed", UNIT)
         command("systemctl", "start", UNIT)
-    elif not loaded.exists() or loaded.read_bytes() != certificate.read_bytes():
+    elif state.get("certificate") != fingerprint:
         # Caddy renewed the certificate; the relay reads it only at start.
         command("systemctl", "restart", UNIT)
+    else:
+        return
+    state["certificate"] = fingerprint
+    save(directory, state)
 
 
 def load(directory):
@@ -140,16 +151,16 @@ def emit(events):
         print(json.dumps(event, separators=(",", ":")), flush=True)
 
 
-def tick(directory=STATE, now=None, command=run, certificate=CERTIFICATE, loaded=LOADED_CERTIFICATE):
+def tick(directory=STATE, now=None, command=run, certificate=CERTIFICATE):
     state, events = advance(load(directory), read_counters(command),
                             now or datetime.datetime.now(datetime.timezone.utc))
     # An alert printed twice after a crash is better than one never printed.
     emit(events)
     save(directory, state)
-    reconcile(state, directory, certificate, loaded, command)
+    reconcile(state, directory, certificate, command)
 
 
-def resume(directory=STATE, now=None, command=run, certificate=CERTIFICATE, loaded=LOADED_CERTIFICATE):
+def resume(directory=STATE, now=None, command=run, certificate=CERTIFICATE):
     """The operator starts a stopped relay again until the month ends."""
     state, events = advance(load(directory), read_counters(command),
                             now or datetime.datetime.now(datetime.timezone.utc))
@@ -159,7 +170,7 @@ def resume(directory=STATE, now=None, command=run, certificate=CERTIFICATE, load
     events.append({"event": "device_relay_resumed"})
     emit(events)
     save(directory, state)
-    reconcile(state, directory, certificate, loaded, command)
+    reconcile(state, directory, certificate, command)
 
 
 def main():
