@@ -12105,8 +12105,8 @@ fn decision_views(runtime: &mut Runtime) -> Vec<(String, &'static str)> {
         .iter()
         .map(|view| {
             let by = match view.by {
-                super::mission_views::DecisionViewBy::Conductor => "conductor",
-                super::mission_views::DecisionViewBy::Worker => "worker",
+                super::mission_views::LinkedViewBy::Conductor => "conductor",
+                super::mission_views::LinkedViewBy::Worker => "worker",
             };
             (view.display_id.clone(), by)
         })
@@ -12199,7 +12199,8 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     let press = |runtime: &mut Runtime, key: u64, view: &str, request: &str| {
         runtime.mission_view_reopen_event(super::events::MissionViewReopenPayload {
             mission: "mission-1".into(),
-            key,
+            key: Some(key),
+            node: None,
             view: view.into(),
             request_id: Some(request.into()),
         });
@@ -12242,7 +12243,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     assert!(!row.closed);
     assert_eq!(
         row.reopens,
-        [super::mission_views::DecisionReopen {
+        [super::mission_views::ViewReopen {
             request_id: "r1".into(),
             refused: false
         }]
@@ -12261,7 +12262,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
 
     // A file that cannot be read opens nothing, and two phones pressing it
     // at once each find their own press refused on the row.
-    let refused = |request: &str| super::mission_views::DecisionReopen {
+    let refused = |request: &str| super::mission_views::ViewReopen {
         request_id: request.into(),
         refused: true,
     };
@@ -12272,7 +12273,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     assert_eq!(row.reopens, [refused("r4"), refused("r4b")]);
     // A press whose View never comes ends refused once its wait is over.
     runtime.hold_reopen("r4c", "mission-1", question, &file_view);
-    let waiting = super::mission_views::DecisionReopen {
+    let waiting = super::mission_views::ViewReopen {
         request_id: "r4c".into(),
         refused: false,
     };
@@ -12525,6 +12526,147 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         .unwrap_err(),
         "mission_question_without_line"
     );
+}
+
+/// A done node lists the documents its worker and the agents under it
+/// opened in its current attempt, open or closed, as its `결과`
+/// (with-hide/hide#2637): a node still working lists none, a closed one is
+/// listed under the name it had and a press naming the node opens it again
+/// from what its link kept, and a press naming neither a question nor a
+/// node, or both, opens nothing.
+#[test]
+fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() {
+    use crate::view_layout::DisplayKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(dir.path().join("views.json"), Default::default()).0);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Spike"}),
+    )
+    .unwrap();
+    without_gate(&mut runtime);
+    command(&mut runtime, "sender", plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    // The node's worker started a helper in the `recipient` pane.
+    let helper = crate::runtime::delivery::tests::observed(&runtime, "recipient").actor;
+    let record = |id: &str, actor: Actor, parent: Option<&str>| crate::coordination::AgentRecord {
+        id: id.into(),
+        name: Some(id.into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: crate::node::TEST_NODE.into(),
+        native_machine: crate::node::TEST_NODE.into(),
+        session: format!("{id}-session"),
+        instance: actor.pane_id.clone(),
+        pane: actor.pane_id.clone(),
+        parent: parent.map(str::to_owned),
+        origin: None,
+        project: None,
+        actor,
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    };
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: None,
+    };
+    register(&mut runtime, record("agent-2", worker, Some("agent-1")));
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "cause", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    register(&mut runtime, record("agent-9", helper, Some("agent-2")));
+    let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let results = project_view(&mut runtime, "/checkouts/fixture/results.md");
+    runtime.link_mission_view(&key, &results, "recipient", 10);
+    let url = "https://example.test/spec";
+    let spec = runtime
+        .change_view_layout(&key, |layout, stamp| {
+            let display = layout.new_browser_display(url, 1);
+            let id = display.id.clone();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, stamp)?;
+            Ok((id, true))
+        })
+        .unwrap();
+    runtime.link_mission_view(&key, &spec, "recipient", 20);
+    // The Conductor's own open is not the node's.
+    let own = project_view(&mut runtime, "/checkouts/fixture/plan.md");
+    runtime.link_mission_view(&key, &own, "sender", 30);
+    let rows = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        let node = runtime.snapshot.missions.items[0]
+            .nodes
+            .iter()
+            .find(|node| node.key == "cause")
+            .unwrap();
+        node.views
+            .iter()
+            .map(|row| (row.label.clone(), row.closed, row.view.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert!(rows(&mut runtime).is_empty(), "a node at work lists none");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "cause", "patch": {"status": "done"}}),
+    )
+    .unwrap();
+    // Its worker's documents in the order they were opened, the
+    // Conductor's own not among them.
+    let listed = rows(&mut runtime);
+    assert_eq!(listed.len(), 2);
+    assert_eq!((listed[0].0.as_str(), listed[0].1), ("results.md", false));
+    assert!(!listed[1].1);
+    let page = listed[1].2.clone();
+    let label = listed[1].0.clone();
+
+    // Closed, the page stays listed under the name it had.
+    runtime
+        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
+        .unwrap();
+    assert_eq!(rows(&mut runtime)[1], (label.clone(), true, page.clone()));
+    let press = |runtime: &mut Runtime, key: Option<u64>, node: Option<&str>| {
+        runtime.mission_view_reopen_event(super::events::MissionViewReopenPayload {
+            mission: "mission-1".into(),
+            key,
+            node: node.map(str::to_owned),
+            view: page.clone(),
+            request_id: None,
+        })
+    };
+    let pages = |runtime: &Runtime| {
+        runtime
+            .view_layout_of(&key)
+            .map(|layout| {
+                layout
+                    .displays()
+                    .filter(|display| {
+                        display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
+                    })
+                    .count()
+            })
+            .unwrap_or_default()
+    };
+    // A press naming no owner, or both, opens nothing.
+    assert!(!press(&mut runtime, None, None));
+    assert!(!press(&mut runtime, Some(1), Some("cause")));
+    // A press naming another node finds no such row.
+    assert!(!press(&mut runtime, None, Some("fix")));
+    assert_eq!(pages(&runtime), 0);
+    // Named by its node, it opens again from what its link kept.
+    assert!(press(&mut runtime, None, Some("cause")));
+    assert_eq!(pages(&runtime), 1);
+    assert_eq!(rows(&mut runtime)[1], (label, false, page.clone()));
 }
 
 /// A decision with nothing linked asks the Conductor for something to look
