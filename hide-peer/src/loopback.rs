@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::gate::{Gate, Guarded};
 use crate::key::{self, CHALLENGE_BYTES, MachineKey, PROOF_BYTES};
-use crate::transport::{PeerConn, PeerTransport, TransportError};
+use crate::transport::{PeerConn, PeerTransport, RelayState, TransportError};
 
 /// The bytes a loopback stream holds before its writer waits.
 const STREAM_BUFFER: usize = 64 * 1024;
@@ -257,6 +257,10 @@ impl PeerTransport for Loopback {
                 return Ok(conn);
             }
         }
+    }
+
+    async fn relay(&self) -> RelayState {
+        RelayState::None
     }
 
     async fn close(&self) {

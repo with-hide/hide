@@ -17,7 +17,11 @@
 //!   `hide-peer` dials it again: iroh does not reopen a relay path, and a
 //!   connection without one dies with its direct path;
 //! - among the addresses this machine found for itself, Tailscale's range
-//!   is listed last (D-04).
+//!   is listed last (D-04);
+//! - a relay this machine is not attached to is asked why once, when a
+//!   caller wants the reason: the device relay answers 503 and "monthly
+//!   limit reached" while it has stopped for the month (B34). iroh keeps its
+//!   own relay failure as text to print, never to decide by.
 
 use std::io;
 use std::net::SocketAddr;
@@ -26,7 +30,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use hide_peer::limits;
-use hide_peer::transport::{PeerConn, PeerTransport, TransportError};
+use hide_peer::transport::{PeerConn, PeerTransport, RelayState, TransportError};
 use hide_peer_protocol::addr::rank_self_discovered;
 use hide_peer_protocol::{ALPN, Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
 use iroh::endpoint::{
@@ -49,11 +53,25 @@ pub const PATH_KEEP_ALIVE: Duration = Duration::from_secs(1);
 const PATH_CHECK: Duration = Duration::from_secs(1);
 const RELAY_PATH_GRACE: Duration = Duration::from_secs(5);
 
+/// The relay a release attaches to (PRD D-44). It answers address discovery
+/// on iroh's default UDP port, which [`Options::relay`] always asks for.
+pub const DEVICE_RELAY_URL: &str = "https://device-relay.withhide.dev";
+
+/// What the relay's host answers every request with while the relay has
+/// stopped for the rest of the month (PRD B34).
+const LIMIT_STATUS: u16 = 503;
+const LIMIT_WORDS: &str = "monthly limit reached";
+
+/// How long the relay's host is given to answer, and how much of its answer
+/// is read.
+const RELAY_ANSWERS_WITHIN: Duration = Duration::from_secs(10);
+const RELAY_ANSWER_BYTES: usize = 1024;
+
 /// How this machine's endpoint is set up.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// The URL of the relay this build attaches to. `None` runs without
-    /// one: only direct addresses work.
+    /// The URL of the relay this build attaches to, [`DEVICE_RELAY_URL`] in
+    /// a release. `None` runs without one: only direct addresses work.
     pub relay: Option<String>,
     /// Finding other machines on the local network by mDNS.
     pub mdns: bool,
@@ -106,9 +124,9 @@ async fn bind(secret: &SecretKey, options: &Options) -> Result<Endpoint, BindFai
     builder = match &options.relay {
         Some(url) => {
             let url: RelayUrl = url.parse().map_err(|error| failed(&error))?;
-            builder.relay_mode(RelayMode::Custom(RelayMap::from(RelayConfig::new(
-                url, None,
-            ))))
+            // With the relay's address discovery, which is how this machine
+            // learns the address a peer behind another NAT can dial.
+            builder.relay_mode(RelayMode::Custom(RelayMap::from(RelayConfig::from(url))))
         }
         None => builder.relay_mode(RelayMode::Disabled),
     };
@@ -257,6 +275,22 @@ impl PeerTransport for IrohTransport {
         }
     }
 
+    async fn relay(&self) -> RelayState {
+        let Some(url) = &self.options.relay else {
+            return RelayState::None;
+        };
+        let endpoint = self.endpoint();
+        let attached = endpoint
+            .home_relay_status()
+            .get()
+            .iter()
+            .any(|relay| relay.is_connected());
+        if attached {
+            return RelayState::Attached;
+        }
+        relay_answer(url, &endpoint).await
+    }
+
     async fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.endpoint().close().await;
@@ -366,6 +400,38 @@ impl PeerConn for IrohConn {
     async fn closed(&self) -> CloseCode {
         let error = self.conn.closed().await;
         self.end(&error)
+    }
+}
+
+/// Asks the relay's host over HTTPS why this machine is not attached, under
+/// the trust anchors iroh holds the relay's certificate to and through the
+/// proxy the environment names.
+async fn relay_answer(url: &str, endpoint: &Endpoint) -> RelayState {
+    let client = reqwest::Client::builder()
+        .use_preconfigured_tls(endpoint.tls_config().clone())
+        .timeout(RELAY_ANSWERS_WITHIN)
+        .build();
+    let Ok(client) = client else {
+        return RelayState::Unreachable;
+    };
+    let Ok(mut answer) = client.get(url).send().await else {
+        return RelayState::Unreachable;
+    };
+    if answer.status().as_u16() != LIMIT_STATUS {
+        return RelayState::Unreachable;
+    }
+    let mut body = Vec::new();
+    while body.len() < RELAY_ANSWER_BYTES {
+        match answer.chunk().await {
+            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    body.truncate(RELAY_ANSWER_BYTES);
+    if String::from_utf8_lossy(&body).contains(LIMIT_WORDS) {
+        RelayState::MonthlyLimit
+    } else {
+        RelayState::Unreachable
     }
 }
 

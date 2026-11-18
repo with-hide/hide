@@ -34,4 +34,4 @@ pub mod wire;
 pub use hide_peer_protocol as protocol;
 pub use key::MachineKey;
 pub use peers::{Link, PeerEvent, PeerIdentity, PeerStream, Peers};
-pub use transport::{PeerConn, PeerTransport, TransportError};
+pub use transport::{PeerConn, PeerTransport, RelayState, TransportError};

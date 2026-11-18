@@ -4,7 +4,8 @@
 //!
 //! What only a network shows (a relay path, a NAT, a sleep) is the network
 //! gate's; these prove the seam carries `hide-peer`'s rules over iroh as
-//! the loopback transport does.
+//! the loopback transport does. The one relay here is a listener that
+//! answers as the device relay's host does while it is stopped.
 
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -14,7 +15,7 @@ use hide_peer::peers::{Config, Incoming, PeerEvent, Peers};
 use hide_peer::protocol::hello::GrantState;
 use hide_peer::protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey, StreamKind};
 use hide_peer::store::{Host, KnownState, Via};
-use hide_peer::{MachineKey, PeerTransport};
+use hide_peer::{MachineKey, PeerTransport, RelayState};
 use hide_peer_iroh::{IrohConn, IrohTransport, Options};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
@@ -273,4 +274,67 @@ async fn a_rebuilt_endpoint_keeps_its_key_and_accepts_again() {
         host.accept().await,
         Err(hide_peer::TransportError::Closed)
     ));
+}
+
+/// A relay host on this machine's loopback that answers every request with
+/// `status` and `body` and relays nothing, and its URL.
+async fn relay_host_answering(status: &'static str, body: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                // The request's head; nothing in it changes the answer.
+                let mut head = [0u8; 4096];
+                let _ = stream.read(&mut head).await;
+                let answer = format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(answer.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    url
+}
+
+async fn relay_state_with(relay: Option<String>) -> RelayState {
+    let key = MachineKey::generate().unwrap();
+    let options = Options { relay, ..local() };
+    let transport = IrohTransport::open(&key.secret(), options).await.unwrap();
+    let state = within("the relay's state", transport.relay()).await;
+    transport.close().await;
+    state
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relay_stopped_for_the_month_is_told_apart_from_one_that_is_down() {
+    assert_eq!(relay_state_with(None).await, RelayState::None);
+
+    // What the device relay's host answers while it is stopped (B34).
+    let stopped = relay_host_answering(
+        "503 Service Unavailable",
+        "device relay stopped: monthly limit reached",
+    )
+    .await;
+    assert_eq!(
+        relay_state_with(Some(stopped)).await,
+        RelayState::MonthlyLimit
+    );
+
+    // A 503 for another reason, and a host that answers something else, are
+    // a relay that cannot be reached.
+    let overloaded = relay_host_answering("503 Service Unavailable", "no upstream").await;
+    assert_eq!(
+        relay_state_with(Some(overloaded)).await,
+        RelayState::Unreachable
+    );
+    let missing = relay_host_answering("404 Not Found", "monthly limit reached").await;
+    assert_eq!(
+        relay_state_with(Some(missing)).await,
+        RelayState::Unreachable
+    );
 }

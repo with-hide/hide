@@ -3188,9 +3188,10 @@ An event another core hands this one is appended and synced to `peers/inbox/<hos
 Events are applied one at a time with `cursor.json` saved after each, and one that cannot be applied is acknowledged and logged rather than blocking the ones behind it.
 
 **The iroh transport.**
-`hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none.
+`hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
 A path counts as idle after 3 s with a keep-alive every 1 s, and a connection that has had no relay path for 5 s while a relay is configured closes as `no_relay_path`, so the keeper dials it again.
 Among the addresses a machine finds for itself, one in 100.64.0.0/10 is ranked last (`addr::rank_self_discovered`); mDNS lookup is an option the caller turns on.
+`PeerTransport::relay` answers what the transport knows of its relay when a caller has a machine it could not reach to explain: none, attached, unreachable, or stopped for the month, which the relay's host says with a 503 and the words "monthly limit reached" to one HTTPS request made then, never on a timer; iroh keeps its own relay failure as text to print, not to decide by.
 An endpoint that ends without being asked is built again, and iroh's own spelling of a key never leaves the crate: a key is 64 lower hex characters everywhere Hide stores or sends it.
 
 **The link multiplexer.**

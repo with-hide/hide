@@ -40,6 +40,22 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+/// What a transport knows of the relay this machine connects through: the
+/// reason a machine out of direct reach gives for "not connected" (PRD B33,
+/// B34).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayState {
+    /// The transport uses no relay.
+    None,
+    /// This machine is attached to its relay.
+    Attached,
+    /// The relay answers that it stopped relaying for the rest of the month
+    /// (B34). Nothing is gained by dialing through it until it resumes.
+    MonthlyLimit,
+    /// The relay could not be reached, or answered something else.
+    Unreachable,
+}
+
 pub trait PeerTransport: Send + Sync + 'static {
     type Conn: PeerConn;
 
@@ -59,6 +75,11 @@ pub trait PeerTransport: Send + Sync + 'static {
     /// The next connection a peer dialed, its key proved.
     /// [`TransportError::Closed`] once the transport is closed.
     fn accept(&self) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send;
+
+    /// The relay's state now. A transport may ask the relay to answer, so
+    /// this is called to explain a machine that could not be reached, never
+    /// on a timer.
+    fn relay(&self) -> impl Future<Output = RelayState> + Send;
 
     /// Closes every connection and stops accepting.
     fn close(&self) -> impl Future<Output = ()> + Send;
