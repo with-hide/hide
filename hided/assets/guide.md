@@ -126,7 +126,8 @@ hide automation list | show <id|name> | run <id|name> | pause <id|name> | resume
 hide automation edit <id|name> …        hide automation preview --schedule <when>        hide automation help
 ```
 
-- When the operator asks for a task to happen again at a time ("매일 아침 9시에 이슈 정리해줘"), make an automation: each time comes, Hide starts one agent on the task, in the automation's own folder unless a project is named, and the operator sees its runs under 자동화 in the sidebar.
+- When the operator asks for a task to run again at set times with no one present ("매일 아침 9시에 이슈 정리해줘"), make an automation: each time comes, Hide starts one agent on the task, in the automation's own folder unless a project is named, and the operator sees its runs under 자동화 in the sidebar.
+  A wait or a check inside this conversation is not one; keep doing it yourself.
 - Run `hide automation help` first: it names the schedule forms (`daily 09:00`, `weekdays 09:00`, `weekly mon,thu 09:00`, `every 3h 09:00`, `cron 0 9 * * 1-5`), how to write the task and which folder and agent to choose.
 - The answer gives `reads_as_text` and `next_run_at` on the wall clock of the machine that runs Hide; tell the operator both in one line. A refusal's `message` says what to change, such as a period under an hour.
 - Remove an automation only when the operator asked for it.

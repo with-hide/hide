@@ -10,7 +10,7 @@
 //! tell the operator to do. The window's form opens the same calls by its own
 //! events; nothing here is the form's.
 
-use hide_core::automations::{Call, Clock, Schedule, Weekday};
+use hide_core::automations::{Call, Clock, PauseReason, Schedule, Weekday};
 use serde_json::{Value, json};
 
 use crate::env::Env;
@@ -136,9 +136,11 @@ fn key(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-/// A task as the contract's `body` admits it: it may run over lines.
+/// A task: not blank, and it may run over lines. One longer than the
+/// contract's `body` admits is refused when the command runs, with the
+/// core's own reason (`automation_task_too_long`).
 fn body(value: &str) -> bool {
-    !value.trim().is_empty() && value.len() <= hide_core::delivery::BODY_LIMIT
+    !value.trim().is_empty()
 }
 
 /// Parses the words after `hide automation`.
@@ -403,8 +405,11 @@ pub fn next_action(code: &str) -> &'static str {
         "automation_agent_unknown" => {
             "Name an agent Hide starts with --kind (hide agent catalog lists them), and a model, effort and profile as hide agent spawn takes them"
         }
+        "automation_folder_on_device" => {
+            "An automation runs on the machine that runs Hide, not on this device, so it cannot work in this device's folder; leave out --folder to work in the automation's own folder there"
+        }
         "automation_folder_unknown" => {
-            "--folder must name a project folder of the machine that runs Hide; open the folder in Hide first (hide <path>), or leave --folder out to work in the automation's own folder"
+            "--folder must name a project's root folder as Hide has it open on the machine that runs Hide, not a folder inside one; open the folder in Hide first (hide <path>), or leave --folder out to work in the automation's own folder"
         }
         "automation_worktree_needs_git" => {
             "A new worktree per run needs a Git project; name one with --folder, or leave out --worktree"
@@ -446,12 +451,18 @@ pub fn next_action(code: &str) -> &'static str {
     }
 }
 
-/// The folder `raw` names, absolute and spelled as the core spells paths:
-/// its real path, so a link or `.` names the project Hide registered.
+/// The folder `raw` names, as the core spells a project's path.
 fn wire_path(raw: &str) -> Result<String, &'static str> {
-    let absolute = std::path::absolute(raw).map_err(|_| "automation_folder_unknown")?;
-    let path = hide_platform::fs::identity::canonical(&absolute).unwrap_or(absolute);
-    hide_platform::path::to_wire(&path).map_err(|_| "automation_folder_unknown")
+    crate::cli::wire_folder(raw).map_err(|_| "automation_folder_unknown")
+}
+
+/// A task the core would refuse for its length, refused before it is sent
+/// with the core's own reason.
+fn checked_task(task: &str) -> Result<&str, &'static str> {
+    if task.trim().len() > hide_core::delivery::BODY_LIMIT {
+        return Err("automation_task_too_long");
+    }
+    Ok(task)
 }
 
 fn agent_json(agent: &Agent) -> Value {
@@ -479,7 +490,7 @@ fn call_json(request: &Request) -> Result<Value, &'static str> {
         } => json!({
             "call": "add",
             "name": name,
-            "task": task,
+            "task": checked_task(task)?,
             "schedule": schedule(when)?,
             "agent": agent_json(agent),
             "folder": folder(path)?,
@@ -500,7 +511,7 @@ fn call_json(request: &Request) -> Result<Value, &'static str> {
                 call["name"] = json!(name);
             }
             if let Some(task) = task {
-                call["task"] = json!(task);
+                call["task"] = json!(checked_task(task)?);
             }
             if let Some(when) = when {
                 call["schedule"] = schedule(when)?;
@@ -657,14 +668,11 @@ fn schedule_words(schedule: &Value) -> Option<String> {
     })
 }
 
-/// The pause's code, as a refusal names the same reason.
-fn pause_code(paused: &Value) -> Option<String> {
-    let reason = paused["reason"].as_str()?;
-    Some(if reason == "operator" {
-        "automation_paused".to_owned()
-    } else {
-        format!("automation_{reason}")
-    })
+/// The pause's code, as the core names the reason.
+fn pause_code(paused: &Value) -> Option<&'static str> {
+    serde_json::from_value::<PauseReason>(paused["reason"].clone())
+        .ok()
+        .map(PauseReason::code)
 }
 
 /// A record with its time on the wall clock beside its milliseconds.
@@ -691,7 +699,7 @@ fn automation(clock: &Clockface, mut item: Value, records: bool) -> Value {
     item["next_run_at"] = clock.at(&item["next_run_at_unix_ms"]);
     item["zone"] = json!(clock.name());
     if let Some(code) = item.get("paused").and_then(pause_code) {
-        item["fix"] = json!(next_action(&code));
+        item["fix"] = json!(next_action(code));
     }
     let entries = item["records"].as_array().cloned().unwrap_or_default();
     if records {
@@ -721,9 +729,33 @@ fn refusal(code: String) -> Refusal {
     (code, next)
 }
 
+/// What an answer to a pane of a connected device adds: the automation
+/// runs where Hide's core runs, not on the device (D-21).
+pub const ON_CORE_MACHINE: &str = "This automation runs on the machine that runs Hide, not on this device: its folder and its runs are there.";
+
+/// A device's pane names a folder of the device, which the core's machine
+/// does not have: an automation runs on the core's machine (D-21), so a
+/// device's folder is refused rather than read there.
+fn device_folder(call: &Call) -> bool {
+    match call {
+        Call::Add(draft) => draft.folder.is_some(),
+        Call::Edit { changes, .. } => matches!(changes.folder, Some(Some(_))),
+        _ => false,
+    }
+}
+
 /// The daemon's answer to a pane's call: the core's own, then the
 /// automation as it stands after a change, worded for an agent (B9, B10).
-pub fn answer(core: &crate::core::CoreHandle, call: Call) -> Result<Value, Refusal> {
+/// `from_device` is a pane of a connected device rather than of the core's
+/// machine.
+pub fn answer(
+    core: &crate::core::CoreHandle,
+    call: Call,
+    from_device: bool,
+) -> Result<Value, Refusal> {
+    if from_device && device_folder(&call) {
+        return Err(refusal("automation_folder_on_device".to_owned()));
+    }
     let clock = Clockface::here();
     let show = |id: &str| {
         core.automation(Call::Show { id: id.to_owned() })
@@ -763,8 +795,16 @@ pub fn answer(core: &crate::core::CoreHandle, call: Call) -> Result<Value, Refus
         }
         change => {
             let changed = core.automation(change).map_err(refusal)?;
-            let id = changed["id"].as_str().unwrap_or_default().to_owned();
-            let mut answer = json!({"automation": show(&id)?});
+            let Some(id) = changed["id"].as_str() else {
+                return Err(refusal("automations_unavailable".to_owned()));
+            };
+            // Read back as the section has it; one removed in between
+            // still answers the change the core made.
+            let read_back = show(id).unwrap_or_else(|_| automation(&clock, changed.clone(), false));
+            let mut answer = json!({"automation": read_back});
+            if from_device {
+                answer["note"] = json!(ON_CORE_MACHINE);
+            }
             if let Some(run) = changed.get("run") {
                 answer["run"] = run.clone();
             }
@@ -1020,12 +1060,87 @@ mod tests {
             Some("every 3 hours from 09:30".into())
         );
         assert_eq!(
-            pause_code(&json!({"reason": "operator"})).as_deref(),
-            Some("automation_paused")
-        );
-        assert_eq!(
-            pause_code(&json!({"reason": "login_expired"})).as_deref(),
+            pause_code(&json!({"reason": "login_expired"})),
             Some("automation_login_expired")
         );
+        assert_eq!(pause_code(&json!({"reason": "someday"})), None);
+    }
+
+    /// Every reason an automation stops for, and every refusal of an
+    /// automation as written, has its own sentence, not the fallback for a
+    /// daemon that could not be reached.
+    #[test]
+    fn every_stop_and_refusal_has_its_own_sentence() {
+        use PauseReason::*;
+        let reasons = [
+            Operator,
+            LoginExpired,
+            FolderMissing,
+            AgentMissing,
+            FolderDetached,
+            MachineChanged,
+            FolderInRepository,
+        ];
+        // A reason the core adds fails to compile here until it is listed.
+        for reason in reasons {
+            match reason {
+                Operator | LoginExpired | FolderMissing | AgentMissing | FolderDetached
+                | MachineChanged | FolderInRepository => {}
+            }
+        }
+        let codes = reasons.iter().map(|reason| reason.code()).chain(
+            crate::cli_contract::AUTOMATION_DRAFT_REFUSALS
+                .iter()
+                .copied(),
+        );
+        for code in codes {
+            assert_ne!(
+                next_action(code),
+                crate::cli::request_next_action(code),
+                "{code} has no sentence of its own"
+            );
+        }
+    }
+
+    /// From a device's pane, a folder is the device's, so it is refused;
+    /// its own folder, or a move back to it, is not (D-21).
+    #[test]
+    fn a_device_pane_names_no_folder() {
+        let call = |line: &[&str]| from_wire(&call_json(&request(line)).unwrap()).unwrap();
+        let add = [
+            "add",
+            "--name",
+            "n",
+            "--task",
+            "t",
+            "--schedule",
+            "daily 09:00",
+            "--kind",
+            "claude",
+        ];
+        assert!(!device_folder(&call(&add)));
+        let mut with_folder = add.to_vec();
+        with_folder.extend(["--folder", "/"]);
+        assert!(device_folder(&call(&with_folder)));
+        assert!(device_folder(&call(&["edit", "n", "--folder", "/"])));
+        assert!(!device_folder(&call(&["edit", "n", "--own-folder"])));
+        assert!(!device_folder(&call(&["edit", "n", "--name", "m"])));
+    }
+
+    #[test]
+    fn a_task_past_the_cap_is_refused_with_the_core_reason() {
+        let long = "x".repeat(hide_core::delivery::BODY_LIMIT + 1);
+        let line = [
+            "add",
+            "--name",
+            "n",
+            "--task",
+            long.as_str(),
+            "--schedule",
+            "daily 09:00",
+            "--kind",
+            "claude",
+        ];
+        assert_eq!(call_json(&request(&line)), Err("automation_task_too_long"));
     }
 }

@@ -7009,6 +7009,7 @@
                 "automation_task_too_long",
                 "automation_agent_unknown",
                 "automation_folder_unknown",
+                "automation_folder_on_device",
                 "automation_worktree_needs_git",
                 "automation_home_unknown",
                 "automation_cap",
@@ -7249,6 +7250,7 @@
                 "automation_task_too_long",
                 "automation_agent_unknown",
                 "automation_folder_unknown",
+                "automation_folder_on_device",
                 "automation_worktree_needs_git",
                 "automation_home_unknown",
                 "automation_cap",
@@ -7484,7 +7486,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:8b1193c5f38cd52ebd28f4dd925fb139136a5294d98d9e3fb3b3b89a0c15a0aa",
+    "digest": "sha256:70d8d63458f5a49fa90a7711fdc0542cbc0adbf444324d4e4a600e8dc7e344c4",
     "envelopes": {
         "access": {
             "answer": "value",

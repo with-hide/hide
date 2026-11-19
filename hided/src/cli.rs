@@ -1627,6 +1627,25 @@ pub(crate) fn bootstrap_refused(reason: &str) -> bool {
         )
 }
 
+/// Why a folder a command was given cannot be spelled as the core spells it.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WireFolder {
+    /// It cannot be made absolute from the working directory.
+    Unresolved,
+    /// Its path has no wire spelling.
+    Unspelled,
+}
+
+/// A folder a command was given on this machine, absolute and spelled as
+/// the core spells paths: its real path when it exists, so a link, `.` or
+/// `/tmp` names the folder Hide registered, and the absolute path when it
+/// is gone.
+pub(crate) fn wire_folder(raw: &str) -> Result<String, WireFolder> {
+    let absolute = std::path::absolute(raw).map_err(|_| WireFolder::Unresolved)?;
+    let path = hide_platform::fs::identity::canonical(&absolute).unwrap_or(absolute);
+    hide_platform::path::to_wire(&path).map_err(|_| WireFolder::Unspelled)
+}
+
 /// One refused command's line, `{"ok":false,"error":{"code","message"}}`,
 /// with what work that stopped partway left as a field of `error`: a
 /// spawn's `spawn`, the id and pane `hide agent show` finds it by, and a

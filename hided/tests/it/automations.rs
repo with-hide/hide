@@ -181,17 +181,13 @@ async fn acting_tool(
     tool
 }
 
-/// A refusal with `code` and the sentence `hide automation` gives for it.
-fn refused(ran: &crate::access::Ran, code: &str) {
+/// A refusal with `code`, and the sentence it gives, which names what to
+/// change.
+fn refused(ran: &crate::access::Ran, code: &str) -> String {
     assert!(!ran.ok, "{code} expected, the command ran: {}", ran.out);
     let line = ran.json();
     assert_eq!(line["error"]["code"], code, "{}", ran.out);
-    assert_eq!(
-        line["error"]["message"],
-        hided::automation_cli::next_action(code),
-        "{}",
-        ran.out
-    );
+    line["error"]["message"].as_str().unwrap().to_owned()
 }
 
 fn wall_clock_at(value: &Value, time: &str) -> bool {
@@ -213,6 +209,25 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
     let mut env = daemon_env(dir.path());
     env.keep_alive = true;
     env.idle_secs = 600;
+    // A plain-folder project Hide has open, by its real path.
+    let project = hide_platform::fs::identity::canonical(&env.home)
+        .unwrap()
+        .join("projects")
+        .join("issues");
+    std::fs::create_dir_all(project.join("notes")).unwrap();
+    let project_wire = hide_platform::path::to_wire(&project).unwrap();
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "workspace_registrations": [{"id": "w-issues", "label": "issues", "path": project_wire}],
+        })
+        .to_string(),
+    )
+    .unwrap();
     let running = hided::start_daemon(env).await.unwrap();
     let mut settings = crate::access::Window::open(&running).await;
     let tool = acting_tool(dir.path(), &mut settings, "scheduler", "act").await;
@@ -273,10 +288,11 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
             "codex",
         ])
     };
-    refused(
+    let under_hour = refused(
         &draft("cron */30 * * * *", "Half-hourly"),
         "schedule_under_hour",
     );
+    assert!(under_hour.contains("at most once an hour"), "{under_hour}");
     refused(
         &draft("cron 0 9 * *", "Four fields"),
         "schedule_cron_invalid",
@@ -292,6 +308,45 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
         &draft("weekdays 09:00", "Morning issues"),
         "automation_name_taken",
     );
+    // A project's root folder is the project's; a folder inside it is not
+    // one Hide has open (B5).
+    let inside = project.join("notes");
+    refused(
+        &tool.run(&[
+            "automation",
+            "add",
+            "--name",
+            "Notes",
+            "--task",
+            "Tidy the notes",
+            "--schedule",
+            "daily 08:00",
+            "--kind",
+            "claude",
+            "--folder",
+            inside.to_str().unwrap(),
+        ]),
+        "automation_folder_unknown",
+    );
+    let in_project = tool.run(&[
+        "automation",
+        "add",
+        "--name",
+        "Project notes",
+        "--task",
+        "Tidy the notes",
+        "--schedule",
+        "daily 08:00",
+        "--kind",
+        "claude",
+        "--folder",
+        project.to_str().unwrap(),
+    ]);
+    assert!(in_project.ok, "{}", in_project.out);
+    let folder = &in_project.json()["value"]["automation"]["folder"];
+    assert_eq!(folder["default"], false, "{folder}");
+    assert_eq!(folder["path"], project_wire.as_str(), "{folder}");
+    assert!(tool.run(&["automation", "remove", "Project notes"]).ok);
     let preview = tool.run(&["automation", "preview", "--schedule", "cron 0 9 * * 1-5"]);
     assert!(preview.ok, "{}", preview.out);
     // A cron line equal to a choice reads as that choice (B6).

@@ -222,7 +222,7 @@ const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
 ];
 
 /// Why an automation as written is refused (B7, B10).
-const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
+pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
     "schedule_unreadable",
     "schedule_under_hour",
     "schedule_cron_invalid",
@@ -238,6 +238,7 @@ const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
     "automation_task_too_long",
     "automation_agent_unknown",
     "automation_folder_unknown",
+    "automation_folder_on_device",
     "automation_worktree_needs_git",
     "automation_home_unknown",
     "automation_cap",

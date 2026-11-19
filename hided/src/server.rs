@@ -2147,7 +2147,8 @@ async fn scoped_client_loop(
                                         })?
                                 }
                                 ScopedRequest::Automation(call) => {
-                                    crate::automation_cli::answer(&core, *call)?
+                                    let from_device = cap.context.device_id != core.node().as_str();
+                                    crate::automation_cli::answer(&core, *call, from_device)?
                                 }
                                 ScopedRequest::FoldAsk { id, reason } => {
                                     core.fold_ask_scope(&cap.context.device_id, &cap.pane_id, &cap.context)

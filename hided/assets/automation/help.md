@@ -1,6 +1,7 @@
 # hide automation
 An automation hands one agent the same task on a schedule, such as tidying new issues every weekday morning: at each time Hide starts a fresh conversation in the automation's folder, and the operator sees its runs under 자동화 below the missions in the sidebar.
-When the operator asks for something to happen again and again at a time ("매일 아침 9시에 이슈 정리해줘", "every Monday check the stale PRs"), make it with `hide automation add`; do not start a cron job, a launchd agent or a loop of your own.
+When the operator asks for a task to run again at set times with no one present ("매일 아침 9시에 이슈 정리해줘", "every Monday check the stale PRs"), make it with `hide automation add`, not a cron job, an OS scheduler or a script of your own.
+A wait or a check inside this conversation (watch CI every ten minutes until it ends, poll a deploy) is not an automation: keep doing it yourself as now.
 
 ```
 hide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]
@@ -19,12 +20,13 @@ hide automation remove <id|name>
   - `every 3h 09:00`: every 1 to 12 hours, counted from that time (00:00, 03:00, ..., 21:00 here).
   - `cron 0 9 * * 1-5`: a five-field cron line, minute hour day month weekday.
 - An automation runs at most once an hour: a cron line names one minute (`0 * * * *` is hourly; `*/30 * * * *` is refused).
-  For "every 30 minutes", tell the operator the shortest period is an hour and offer hourly.
+  When the operator wants an unattended repeat more often than that, tell them the shortest period is an hour and offer hourly.
 - `hide automation preview --schedule <when>` answers what a schedule reads as and when it runs next, without making anything.
 - `--kind`, `--profile`, `--model` and `--effort` name the agent each run starts, as `hide agent spawn` takes them (`hide agent catalog` lists what a machine has).
   Use the agent, model and effort the operator named; when they named none, your own kind with the model and effort you run with.
 - Without `--folder` each run works in the automation's own folder, `~/hide/automations/<name>-<id>`, which Hide makes and keeps out of the sidebar's projects, and its results stay there.
-  Give `--folder` only when the operator named a project, or the task is plainly about one (this repository's issues or pull requests): a folder Hide has open as a project on the machine that runs Hide, Git or not.
+  Give `--folder` only when the operator named a project, or the task is plainly about one (this repository's issues or pull requests): the project's root folder as Hide has it open on the machine that runs Hide, Git or not, never a folder inside it or a worktree of your own that will go.
+  An automation runs on the machine that runs Hide: from a pane of a connected device, leave out `--folder` (it is refused with `automation_folder_on_device`), and tell the operator it runs on that machine.
   `--worktree` gives each run a new worktree of that Git project; a run that changed nothing leaves none behind.
 - `--run-now` starts a run as soon as the automation is made, marked manual; do it when the operator wants to see one now.
 - Each run starts with the agent permissions the operator set in Settings › Agents, with no one watching: say so when the task writes outside its folder.
