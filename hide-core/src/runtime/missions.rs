@@ -709,6 +709,22 @@ pub struct MissionAdmission {
     /// which starts from the branch the repository's own folder has out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destination: Option<String>,
+    /// The mission's project folder, when the destination is a branch of it
+    /// only if the spawn's repository is that one: a spawn on the mission's
+    /// own machine. The spawn reads both repositories there, off the lock,
+    /// and compares them by the Git directory they share, so any spelling of
+    /// the folder, a link to it or one of its worktrees is the project
+    /// (with-hide/hide#2634). None for a worker on another machine, admitted
+    /// above as the same GitHub repository, and for a mission with no
+    /// destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The spawn is a node's worker, which works in the mission's project
+    /// only: one sent to another repository is refused
+    /// (`mission_other_repository`) rather than started without the
+    /// destination.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub node_worker: bool,
     /// The registrations closed now, which Reopen closed holds and which
     /// hold no place under the cap (`closed_registrations.rs`).
     #[serde(default)]
@@ -3624,24 +3640,18 @@ impl Runtime {
                 &started,
             ));
         }
-        // The destination is a branch of the mission's project: a spawn
-        // into another repository of that machine starts from that
-        // repository's own branch, as it did. A worker on another machine
-        // was admitted above as the same GitHub repository. A repository
-        // the catalog does not list yet (no window since the restart) is
-        // compared as it was named, as a project's profile is
-        // (`project_agent_profile`).
-        let destination = mission.destination.clone().filter(|_| {
-            worker_machine != mission.device_id
-                || self
-                    .catalog_project_of(worker_machine, worker.repo)
-                    .map_or(worker.repo, |project| project.root_path.as_str())
-                    == mission.project
-        });
+        // The destination is a branch of the mission's project. A worker on
+        // another machine was admitted above as the same GitHub repository;
+        // one on the mission's machine is judged by the spawn against the
+        // project itself (`project`), which a path's text cannot answer.
+        let project = (worker_machine == mission.device_id && mission.destination.is_some())
+            .then(|| mission.project.clone());
         Ok(Some(MissionAdmission {
             mission: mission.id.clone(),
             cap: mission.cap,
-            destination,
+            destination: mission.destination.clone(),
+            project,
+            node_worker: node.is_some(),
             closed: self.closed_registration_ids().into_iter().collect(),
         }))
     }

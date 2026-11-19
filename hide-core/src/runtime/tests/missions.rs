@@ -16585,8 +16585,10 @@ fn an_outside_nodes_view_says_where_its_work_goes() {
 }
 
 /// B5: a worker of the mission starts its worktree from the destination,
-/// which its admission carries off the lock; a mission that records none
-/// names none, so its worktree starts as it always did.
+/// which its admission carries off the lock with the mission's project, the
+/// repository the spawn judges its own against there (with-hide/hide#2634),
+/// whatever the spawn's folder is named; a mission that records none names
+/// neither, so its worktree starts as it always did.
 #[test]
 fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from() {
     for (branch, expected) in [(Some("feat/login"), Some("feat/login")), (None, None)] {
@@ -16603,37 +16605,7 @@ fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from()
         .unwrap();
         command(&mut runtime, "sender", plan()).unwrap();
         command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
-        let admission = runtime
-            .mission_spawn_admission(
-                &fixture.conductor,
-                &worker(None, "codex", &Default::default()),
-                &mut None,
-                "plain",
-                false,
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(admission.destination.as_deref(), expected);
-        // A spawn into another repository starts from that repository's own
-        // branch: the destination is a branch of the mission's project.
-        let elsewhere = runtime
-            .mission_spawn_admission(
-                &fixture.conductor,
-                &crate::runtime::missions::SpawnWorker {
-                    repo: "/checkouts/other",
-                    ..worker(None, "codex", &Default::default())
-                },
-                &mut None,
-                "plain",
-                false,
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(elsewhere.destination, None);
-        // So does one the catalog lists under another project, and the
-        // mission's own project still carries it when the catalog lists
-        // nothing, as after a restart no window has followed.
-        let admitted = |runtime: &Runtime, repo: &str| {
+        let admitted = |runtime: &Runtime, repo: &str, intent: &str| {
             runtime
                 .mission_spawn_admission(
                     &fixture.conductor,
@@ -16642,13 +16614,16 @@ fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from()
                         ..worker(None, "codex", &Default::default())
                     },
                     &mut None,
-                    "plain",
-                    false,
+                    intent,
+                    true,
                 )
                 .unwrap()
                 .unwrap()
-                .destination
         };
+        let project = expected.map(|_| PROJECT.to_owned());
+        // The text of the path decides nothing: the project spelled with a
+        // trailing `/`, another repository, and one the catalog lists under
+        // another project are all judged by the spawn.
         runtime
             .worktree_catalog
             .projects
@@ -16656,9 +16631,14 @@ fn a_missions_worker_is_admitted_with_the_destination_its_worktree_starts_from()
                 root_path: "/checkouts/other".into(),
                 ..Default::default()
             });
-        assert_eq!(admitted(&runtime, "/checkouts/other"), None);
-        runtime.worktree_catalog.projects.clear();
-        assert_eq!(admitted(&runtime, PROJECT).as_deref(), expected);
+        for repo in [PROJECT, "/checkouts/fixture/", "/checkouts/other"] {
+            let admission = admitted(&runtime, repo, "plain");
+            assert_eq!(admission.destination.as_deref(), expected, "{repo}");
+            assert_eq!(admission.project, project, "{repo}");
+            assert!(!admission.node_worker, "{repo}");
+        }
+        // A node's worker is marked so, since it works in the project only.
+        assert!(admitted(&runtime, PROJECT, "mission-1:cause").node_worker);
     }
 }
 
