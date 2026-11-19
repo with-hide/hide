@@ -343,7 +343,7 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     // A machine paired with nothing lists nothing, and looking opens no
     // endpoint (D-83).
     assert!(host.peers().is_empty());
-    assert!(!hided::peer_host::paired(&host.state).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&host.state).unwrap());
 
     // What is the operator's alone is refused where an agent runs: by this
     // command's own environment, and by what the kernel says of the caller.
@@ -637,7 +637,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         "{}",
         looked.text()
     );
-    assert!(!hided::peer_host::paired(&target.state).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&target.state).unwrap());
 
     // One command pairs: no link, no words.
     let added = guest.run(&["device", "add", "studio", "--json"]);
@@ -683,7 +683,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     let removed = guest.run(&[
         "device",
         "remove",
-        &value["device_id"].as_str().unwrap().to_owned(),
+        value["device_id"].as_str().unwrap(),
         "--json",
     ]);
     assert!(removed.ok, "{}", removed.text());
