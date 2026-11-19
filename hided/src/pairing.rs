@@ -43,6 +43,7 @@ use tokio::time::Instant;
 
 use crate::core::CoreHandle;
 use crate::ending::Ending;
+use crate::guests::HelperFolder;
 use crate::pairing_ssh;
 use crate::peer_host::{HostPeers, Incoming, Link, PeerHost};
 
@@ -158,6 +159,12 @@ pub enum Ask {
         name: String,
         #[serde(default)]
         wsl: bool,
+        /// The asking machine dialed a device helper on this account and
+        /// asks for that helper's folder and terminals with the grant
+        /// (D-49). When another machine took them first nothing is saved
+        /// and the answer names that machine (D-75).
+        #[serde(default)]
+        helper: bool,
     },
 }
 
@@ -326,6 +333,10 @@ pub struct Pairing {
     /// The request each alias's pairing runs under, so one that ssh lost
     /// midway is asked again as the same request (security spec 15).
     ssh_requests: Mutex<Vec<SshRequest>>,
+    /// Held by an SSH pairing that asks for the device helper's folder,
+    /// from its look at who holds the folder to its record of having taken
+    /// it: two machines that ask at once are answered one after the other.
+    helper_asks: tokio::sync::Mutex<()>,
     shutdown: Ending,
 }
 
@@ -373,6 +384,7 @@ impl Pairing {
             ssh,
             ssh_dials: Arc::new(Semaphore::new(SSH_DIALS)),
             ssh_requests: Mutex::new(Vec::new()),
+            helper_asks: tokio::sync::Mutex::default(),
             shutdown,
         });
         for kind in [StreamKind::Pairing, StreamKind::Revoke] {
@@ -891,20 +903,76 @@ impl Pairing {
                 device,
                 name,
                 wsl,
+                helper,
             } => {
                 let guest = PeerKey::from_hex(&key).map_err(|_| "invalid_request")?;
                 self.relay_named(&peers).await;
                 let via = if wsl { Via::Wsl } else { Via::Ssh };
-                let accepted = service
-                    .accept_ssh(&request, guest, &device, &name, via)
-                    .map_err(|error| match error {
-                        AcceptError::Invalid => "invalid_request",
-                        AcceptError::Already => "device_already_connected",
-                        AcceptError::Store(error) => store(error),
-                    })?;
-                Ok(json!({ "accepted": accepted }))
+                let _one = match helper {
+                    true => Some(self.helper_asks.lock().await),
+                    false => None,
+                };
+                // Who holds the helper's folder is read before the grant is
+                // saved: a machine that came second saves nothing until its
+                // operator said yes to losing the terminals (D-75).
+                if helper && let HelperFolder::HeldBy(holder) = self.helper(&peers, guest, false).await {
+                    let by = self
+                        .paired(&peers)
+                        .into_iter()
+                        .find(|paired| paired.key == holder)
+                        .map(|paired| paired.machine.name)
+                        .unwrap_or_default();
+                    return Ok(json!({ "helper": "held", "by": by }));
+                }
+                let accepted = match service.accept_ssh(&request, guest, &device, &name, via) {
+                    Ok(accepted) => json!(accepted),
+                    // A machine that is paired already asks for the folder
+                    // alone.
+                    Err(AcceptError::Already) if helper => Value::Null,
+                    Err(AcceptError::Invalid) => return Err("invalid_request"),
+                    Err(AcceptError::Already) => return Err("device_already_connected"),
+                    Err(AcceptError::Store(error)) => return Err(store(error)),
+                };
+                if !helper {
+                    return Ok(json!({ "accepted": accepted }));
+                }
+                let folder = match self.helper(&peers, guest, true).await {
+                    HelperFolder::Taken => "taken",
+                    HelperFolder::Absent => "absent",
+                    // Read as free a moment ago, under the same lock.
+                    HelperFolder::Kept | HelperFolder::HeldBy(_) => "kept",
+                };
+                Ok(json!({ "accepted": accepted, "helper": folder }))
             }
         }
+    }
+
+    /// Who holds the device helper's folder on this machine, as `guest`
+    /// finds it; with `take`, `guest` takes it when it is free.
+    async fn helper(
+        self: &Arc<Self>,
+        peers: &HostPeers,
+        guest: PeerKey,
+        take: bool,
+    ) -> HelperFolder {
+        let Some(guests) = self.guests.get().cloned() else {
+            return HelperFolder::Absent;
+        };
+        let granted: Vec<PeerKey> = self
+            .paired(peers)
+            .into_iter()
+            .filter(|paired| paired.machine.opened_by.is_some())
+            .map(|paired| paired.key)
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            let paired = |key: &PeerKey| granted.contains(key);
+            match take {
+                true => guests.take_helper(&guest, paired),
+                false => guests.helper_for(&guest, paired),
+            }
+        })
+        .await
+        .unwrap_or(HelperFolder::Kept)
     }
 
     /// Runs one `ssh` step for `alias` off the runtime, when fewer than

@@ -633,6 +633,16 @@ pub fn device_node_state(home: &Path) -> PathBuf {
     hide_home(home).join("device-node")
 }
 
+/// The record in a device helper's node folder of the paired machine that
+/// took the folder over (PRD device-connect-iroh D-49, D-75): that
+/// machine's whole key. Its node runs on the helper's panes from then on,
+/// from the helper root ([`helper_root`]) in place of an install root of
+/// its own, and every other machine's node gets a folder of its own
+/// ([`guest_dir`]). One machine holds it, the first that asked.
+pub fn device_node_guest(home: &Path) -> PathBuf {
+    device_node_state(home).join("guest")
+}
+
 /// The folder a state folder keeps its connections to other Hide machines
 /// in (PRD device-connect-iroh D-52): the machine key, the grants this
 /// machine gives, the hosts it is a guest of, and its inboxes.

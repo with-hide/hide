@@ -98,6 +98,9 @@ pub enum Verb {
         device: String,
         name: String,
         wsl: bool,
+        /// The caller dialed a device helper on this account and asks for
+        /// its folder and terminals with the grant (D-49).
+        helper: bool,
     },
 }
 
@@ -116,6 +119,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut json = false;
     let mut wait = false;
     let mut wsl = false;
+    let mut helper = false;
     let mut direction = None;
     let (mut name, mut request, mut key, mut device) = (None, None, None, None);
     let mut words = Vec::new();
@@ -131,6 +135,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             }
             "--wsl" if accept && !wsl => {
                 wsl = true;
+                continue;
+            }
+            "--helper" if accept && !helper => {
+                helper = true;
                 continue;
             }
             "--outgoing" | "--incoming" | "--both" if directed && direction.is_none() => {
@@ -213,6 +221,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 device,
                 name,
                 wsl,
+                helper,
             },
             _ => return Err(USAGE.to_owned()),
         },
@@ -396,12 +405,13 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             device,
             name,
             wsl,
+            helper,
         } => {
             let value = pairing(
                 env,
                 json!({
                     "verb":"accept_ssh","request":request,"key":key,
-                    "device":device,"name":name,"wsl":wsl,
+                    "device":device,"name":name,"wsl":wsl,"helper":helper,
                 }),
             )?;
             // Read by the machine that ran it, never by a person.

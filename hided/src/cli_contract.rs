@@ -1034,6 +1034,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--device", Key),
             required("--name", Text),
             switch("--wsl"),
+            switch("--helper"),
         ],
         rest: None,
         answers: &["device_accepted"],
