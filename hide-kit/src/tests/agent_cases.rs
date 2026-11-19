@@ -1417,7 +1417,9 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
     let omp = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
     // with-hide/hide#2580: agy is rung at rest, once the screen read shows its
     // empty prompt, beside omp's features.
-    let antigravity = [Skill, Guidance, Letters, Bell, Memory, Sleep, Fork, Start, Titles];
+    let antigravity = [
+        Skill, Guidance, Letters, Bell, Memory, Sleep, Fork, Start, Titles,
+    ];
     let expected: [(&str, &[Feature], bool); 7] = [
         ("claude-code", &Feature::ALL, false),
         ("codex", &Feature::ALL, false),
