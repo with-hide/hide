@@ -39,6 +39,7 @@ mod detail;
 mod device_analytics;
 mod device_catalog;
 mod device_names;
+mod device_switch;
 mod device_sign_in;
 mod devices;
 mod disk_sweep;
@@ -1312,6 +1313,10 @@ pub struct Runtime {
     /// The last connection test of each device, kept apart from the device
     /// rows because those are rebuilt with every catalog.
     remote_device_tests: HashMap<String, crate::model::DeviceTestSnapshot>,
+    /// Each helper device's switch to its machine's own connection, while
+    /// one is under way or stopped (`device_switch`). Never saved: a switch
+    /// is one press of the operator, asked again after a restart.
+    device_switches: HashMap<String, device_switch::DeviceSwitch>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2461,6 +2466,7 @@ impl Runtime {
             inbound_arrivals: HashMap::new(),
             retired_remote_syncs: Vec::new(),
             remote_device_tests: HashMap::new(),
+            device_switches: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

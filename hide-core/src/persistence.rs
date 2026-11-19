@@ -1231,7 +1231,8 @@ mod tests {
                 (
                     "windows-pc",
                     crate::model::LinkOrigin::Peer {
-                        key: "ab".repeat(32)
+                        key: "ab".repeat(32),
+                        switched: false,
                     }
                 ),
             ]

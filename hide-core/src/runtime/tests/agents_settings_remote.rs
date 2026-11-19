@@ -101,6 +101,7 @@ fn remote_session_sync_reconciles_target_scoped_structured_terminals() {
         machine_name: None,
         dials_in: false,
         peer_key: None,
+        switch: None,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: "mini".to_owned(),

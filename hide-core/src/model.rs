@@ -1053,6 +1053,34 @@ pub struct DeviceSnapshot {
     /// device-connect-iroh D-72): the machine has one row in Settings, its
     /// pairing's, and this device serves its rail tile and its panes.
     pub peer_key: Option<String>,
+    /// Where the device's switch to its machine's own connection stands
+    /// (PRD device-connect-iroh B36, B41); `None` when none was asked for
+    /// or it finished.
+    pub switch: Option<DeviceSwitchSnapshot>,
+}
+
+/// A helper device's switch to the connection of the Hide on its machine,
+/// as its row draws it: the step under way, or why the last one stopped.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceSwitchSnapshot {
+    pub state: DeviceSwitchState,
+    /// Why a `failed` switch stopped: a code the shell words, the pairing's
+    /// refusal codes among them.
+    pub reason: Option<String>,
+}
+
+/// `contracts/snapshot-wire-enums.json`: `device_switch_state`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceSwitchState {
+    /// The machine is asked what it has.
+    Checking,
+    /// A Hide is being put on the machine.
+    Installing,
+    /// The two machines are paired and the connection is being opened.
+    Connecting,
+    /// The switch stopped; the device is used as before.
+    Failed,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -6134,8 +6162,10 @@ pub enum LinkOrigin {
     /// device-connect-iroh D-61): this core's node runs there as a process
     /// of this core's build, under that machine's Hide, on the connection
     /// the two keep. `key` is that machine's connection key, 64 lower hex
-    /// characters; its id is that machine's own node id.
-    Peer { key: String },
+    /// characters; its id is that machine's own node id. `switched` is a
+    /// device the core dialed as a helper before the two machines were
+    /// paired (D-49): it keeps the id and the name it had.
+    Peer { key: String, switched: bool },
 }
 
 /// Whether a device the core dials over SSH is named by its machine's own id
@@ -6205,9 +6235,21 @@ impl LinkOrigin {
     /// The connection key of a machine paired with this one.
     pub fn peer_key(&self) -> Option<&str> {
         match self {
-            Self::Peer { key } => Some(key),
+            Self::Peer { key, .. } => Some(key),
             Self::Dialed { .. } | Self::Inbound | Self::Wsl { .. } => None,
         }
+    }
+
+    /// Whether the device was a helper device switched to its machine's
+    /// connection, which keeps the id and the name it had as one.
+    pub fn switched(&self) -> bool {
+        matches!(self, Self::Peer { switched: true, .. })
+    }
+
+    /// Whether the core dials a helper of its own on the machine: the kind
+    /// a device is switched from (D-49).
+    pub fn dials_helper(&self) -> bool {
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether the core brings a lost link back itself; a node that dials
@@ -6264,6 +6306,10 @@ struct StoredDeviceRegistration {
     wsl_distro: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     peer_key: Option<String>,
+    /// A paired machine's device that was a helper device before
+    /// ([`LinkOrigin::switched`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    peer_switched: bool,
     /// A dialed device's `DeviceNaming`; absent is `Legacy`, which every
     /// registration an earlier build wrote reads as. An earlier build reads
     /// past it.
@@ -6307,7 +6353,10 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
                         stored.id
                     ));
                 }
-                LinkOrigin::Peer { key }
+                LinkOrigin::Peer {
+                    key,
+                    switched: stored.peer_switched,
+                }
             }
             (None, false, None, None) => {
                 return Err(format!(
@@ -6342,6 +6391,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             inbound,
             wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
             peer_key: registration.origin.peer_key().map(str::to_owned),
+            peer_switched: registration.origin.switched(),
             naming: registration
                 .origin
                 .naming()
@@ -11178,6 +11228,23 @@ mod wire_enum_tests {
             &problems.map(DeviceProblem::code),
         );
         checked.insert("device_problem");
+
+        let switch_states = [
+            DeviceSwitchState::Checking,
+            DeviceSwitchState::Installing,
+            DeviceSwitchState::Connecting,
+            DeviceSwitchState::Failed,
+        ];
+        for variant in switch_states {
+            match variant {
+                DeviceSwitchState::Checking
+                | DeviceSwitchState::Installing
+                | DeviceSwitchState::Connecting
+                | DeviceSwitchState::Failed => {}
+            }
+        }
+        assert_wire(&contract, "device_switch_state", &switch_states);
+        checked.insert("device_switch_state");
 
         let text = String::new;
         let waits = [

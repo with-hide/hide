@@ -1163,6 +1163,7 @@ fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
     };
     let peer = LinkOrigin::Peer {
         key: "ab".repeat(32),
+        switched: false,
     };
 
     // Not confirmed by its host yet: nothing to open.
@@ -1236,4 +1237,141 @@ fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
         Some("pc".to_owned())
     );
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+}
+
+/// A helper device is switched to its machine's own connection under the
+/// registration it has (PRD device-connect-iroh D-49, B36, B41): the steps
+/// hided says are drawn on its row, a switch that stops leaves the helper
+/// as it was with the reason, and once the paired machine's grant is active
+/// the same id and name go on over that machine's connection.
+#[test]
+fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
+    use crate::model::{DeviceNaming, DeviceRegistration, DeviceSwitchState, LinkOrigin};
+    let mut runtime = runtime();
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let machines = |opens: &str| {
+        serde_json::json!({ "machines": [{
+            "key": "ab".repeat(32), "device_id": "build-box-id", "name": "ubuntu-build",
+            "opens": opens, "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]})
+    };
+    let step = |step: &str| serde_json::json!({"device_id": "build-box-id", "step": step});
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    runtime.rebuild_device_rows();
+    let helper = runtime.device_registration("build-box-id").unwrap().clone();
+
+    // Each step is drawn on the device's row.
+    for (said, drawn) in [
+        ("checking", DeviceSwitchState::Checking),
+        ("installing", DeviceSwitchState::Installing),
+    ] {
+        assert!(dispatch(&mut runtime, "device_switch", step(said)));
+        let switch = device(&runtime, "build-box-id").switch.clone().unwrap();
+        assert_eq!((switch.state, switch.reason), (drawn, None), "{said}");
+    }
+
+    // A switch that stops before the pairing leaves the helper device, with
+    // the reason (B41).
+    let mut failed = step("failed");
+    failed["reason"] = serde_json::json!("ssh_not_reached");
+    dispatch(&mut runtime, "device_switch", failed);
+    let switch = device(&runtime, "build-box-id").switch.clone().unwrap();
+    assert_eq!(switch.state, DeviceSwitchState::Failed);
+    assert_eq!(switch.reason.as_deref(), Some("ssh_not_reached"));
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+
+    // Paired, and not confirmed yet: still the helper's.
+    let mut connecting = step("connecting");
+    connecting["key"] = serde_json::json!(key);
+    dispatch(&mut runtime, "device_switch", connecting.clone());
+    dispatch(&mut runtime, "peer_machines", machines("confirming"));
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    assert_eq!(
+        device(&runtime, "build-box-id").switch.as_ref().map(|switch| switch.state),
+        Some(DeviceSwitchState::Connecting)
+    );
+
+    // The grant is active: the same registration is that machine's device.
+    dispatch(&mut runtime, "peer_machines", machines("active"));
+    let switched = runtime.device_registration("build-box-id").unwrap().clone();
+    assert_eq!(
+        switched.origin,
+        LinkOrigin::Peer {
+            key: key.clone(),
+            switched: true
+        }
+    );
+    assert_eq!(switched.label, "build-box", "the name its operator gave stays");
+    assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+    let row = device(&runtime, "build-box-id");
+    assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
+    assert_eq!((row.ssh_alias.as_deref(), &row.switch), (None, &None));
+    // Saved as it is, and read back the same.
+    let stored = serde_json::to_value(&switched).unwrap();
+    assert_eq!(stored["peer_switched"], true);
+    assert_eq!(
+        serde_json::from_value::<DeviceRegistration>(stored).unwrap(),
+        switched
+    );
+
+    // Its machine's name changing later does not rename it, and the pairing
+    // ending removes it like any paired machine's device.
+    let mut renamed = machines("active");
+    renamed["machines"][0]["name"] = serde_json::json!("renamed");
+    dispatch(&mut runtime, "peer_machines", renamed);
+    assert_eq!(
+        runtime.device_registration("build-box-id").unwrap().label,
+        "build-box"
+    );
+    dispatch(&mut runtime, "peer_machines", machines("unpaired"));
+    assert_eq!(runtime.device_registration("build-box-id"), None);
+
+    // A machine paired before the switch was asked for is taken at once.
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(helper.clone());
+    runtime.rebuild_device_rows();
+    dispatch(&mut runtime, "peer_machines", machines("active"));
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    dispatch(&mut runtime, "device_switch", connecting);
+    assert!(
+        runtime
+            .device_registration("build-box-id")
+            .unwrap()
+            .origin
+            .switched()
+    );
+
+    // A step that names no key, or a reason that is not a code, is refused.
+    for bad in [
+        serde_json::json!({"device_id": "build-box-id", "step": "connecting"}),
+        serde_json::json!({"device_id": "build-box-id", "step": "failed", "reason": "No such host"}),
+        serde_json::json!({"device_id": "build-box-id", "step": "connecting", "key": "zz"}),
+    ] {
+        let before = runtime.snapshot.ui_state.device_registrations.clone();
+        dispatch(&mut runtime, "device_switch", bad);
+        assert_eq!(runtime.snapshot.ui_state.device_registrations, before);
+    }
 }

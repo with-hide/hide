@@ -1437,6 +1437,8 @@ pub(super) struct GuestPanesPayload {
     pub(super) guests: Vec<crate::guest_panes::GuestPanes>,
 }
 
+pub(super) use super::device_switch::DeviceSwitchPayload;
+
 /// One Hide AI settings event, carrying whatever it is about.
 ///
 /// It folds what a single screen does into one event, the way
@@ -1838,6 +1840,7 @@ pub(super) enum Event {
     UiAttached(UiAttachedPayload),
     PeerMachines(PeerMachinesPayload),
     GuestPanes(GuestPanesPayload),
+    DeviceSwitch(DeviceSwitchPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
@@ -2206,6 +2209,12 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             Event::GuestPanes(payload) if crate::guest_panes::valid(&payload.guests) => Ok(event),
             _ => Err(invalid_payload("guest_panes")),
         }),
+        "device_switch" => {
+            decode!(DeviceSwitchPayload, DeviceSwitch).and_then(|event| match &event {
+                Event::DeviceSwitch(payload) if payload.valid() => Ok(event),
+                _ => Err(invalid_payload("device_switch")),
+            })
+        }
         "peer_machines" => {
             decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
                 Event::PeerMachines(payload) if crate::peer_machines::valid(&payload.machines) => {
@@ -2618,6 +2627,7 @@ impl Runtime {
                 }
                 changed
             }
+            Event::DeviceSwitch(payload) => self.device_switch(payload),
             Event::PeerMachines(payload) => {
                 let changed = self.snapshot.navigator.peers != payload.machines;
                 if changed {

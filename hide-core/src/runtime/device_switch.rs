@@ -1,0 +1,200 @@
+//! A helper device's switch to the connection of the Hide on its machine
+//! (PRD device-connect-iroh D-49, B35, B36, B41).
+//!
+//! The steps run in hided, which reaches the machine over the device's SSH
+//! login, has a Hide put there when it has none and pairs the two. The
+//! core hears each step as a `device_switch` event, sent by the daemon
+//! only: it draws the step on the device's row and, once the paired
+//! machine's grant is active, changes the registration's link in place.
+//! The device keeps its id and its name, and so its engine folder, its
+//! projects, its tabs and every record that names it; only the transport
+//! under it is made again. Until that moment the registration is the
+//! helper's and its link is untouched, so a switch that stops leaves the
+//! device as it was, with the reason on its row.
+
+use serde::Deserialize;
+
+use super::devices::Retiring;
+use super::*;
+use crate::model::{DeviceSwitchSnapshot, DeviceSwitchState, LinkOrigin};
+
+/// Where one device's switch stands.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DeviceSwitch {
+    state: DeviceSwitchState,
+    reason: Option<String>,
+    /// The connection key of the machine the device is, known from the
+    /// pairing on: the grant that becomes active under it takes the device.
+    key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct DeviceSwitchPayload {
+    pub(super) device_id: String,
+    pub(super) step: SwitchStep,
+    /// With `connecting`: the paired machine's connection key.
+    #[serde(default)]
+    pub(super) key: Option<String>,
+    /// With `failed`: why, as a code.
+    #[serde(default)]
+    pub(super) reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum SwitchStep {
+    Checking,
+    Installing,
+    Connecting,
+    Failed,
+    /// The switch is over with nothing to show: the operator was asked
+    /// something first, or cancelled.
+    Ended,
+}
+
+impl DeviceSwitchPayload {
+    pub(super) fn valid(&self) -> bool {
+        let key_spelled = self
+            .key
+            .as_deref()
+            .is_none_or(crate::model::peer_key_is_spelled);
+        let reason_plain = self.reason.as_deref().is_none_or(|reason| {
+            !reason.is_empty()
+                && reason.len() <= 64
+                && reason
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        });
+        key_spelled && reason_plain && (self.step != SwitchStep::Connecting || self.key.is_some())
+    }
+}
+
+impl Runtime {
+    /// The switch of `device_id` as its row draws it.
+    pub(super) fn device_switch_snapshot(&self, device_id: &str) -> Option<DeviceSwitchSnapshot> {
+        self.device_switches
+            .get(device_id)
+            .map(|switch| DeviceSwitchSnapshot {
+                state: switch.state,
+                reason: switch.reason.clone(),
+            })
+    }
+
+    /// The helper device that is being switched to the machine under `key`.
+    pub(super) fn switching_to(&self, key: &str) -> Option<String> {
+        self.device_switches
+            .iter()
+            .find(|(_, switch)| switch.key.as_deref() == Some(key))
+            .map(|(device, _)| device.clone())
+    }
+
+    /// One step of a device's switch, as hided said it.
+    pub(super) fn device_switch(&mut self, payload: DeviceSwitchPayload) -> bool {
+        let device_id = payload.device_id;
+        let helper = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .any(|registration| registration.id == device_id && registration.origin.dials_helper());
+        if !helper {
+            // Switched already, or removed meanwhile: no step is drawn.
+            let dropped = self.device_switches.remove(&device_id).is_some();
+            return dropped && self.refresh_device_snapshots();
+        }
+        let state = match payload.step {
+            SwitchStep::Ended => {
+                let dropped = self.device_switches.remove(&device_id).is_some();
+                return dropped && self.refresh_device_snapshots();
+            }
+            SwitchStep::Checking => DeviceSwitchState::Checking,
+            SwitchStep::Installing => DeviceSwitchState::Installing,
+            SwitchStep::Connecting => DeviceSwitchState::Connecting,
+            SwitchStep::Failed => DeviceSwitchState::Failed,
+        };
+        let key = payload
+            .key
+            .filter(|_| payload.step == SwitchStep::Connecting);
+        self.device_switches.insert(
+            device_id.clone(),
+            DeviceSwitch {
+                state,
+                reason: payload
+                    .reason
+                    .filter(|_| payload.step == SwitchStep::Failed),
+                key: key.clone(),
+            },
+        );
+        // A machine that was paired before the switch was asked for is
+        // active already: no change of the paired machines will say so.
+        if let Some(key) = key
+            && self.peer_opens(&key)
+        {
+            self.switch_device_link(&device_id, &key);
+        }
+        self.refresh_device_snapshots();
+        true
+    }
+
+    /// The paired machine under `key` may be opened: the helper device
+    /// `device_id` becomes that machine's device. Its helper link is closed
+    /// and the machine's connection is dialed in its place, under the same
+    /// registration; the machine's own Hide then starts this core's node on
+    /// the folder the helper ran in, and the panes are taken up again as on
+    /// any new link.
+    pub(super) fn switch_device_link(&mut self, device_id: &str, key: &str) -> bool {
+        let taken = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .any(|registration| registration.origin.peer_key() == Some(key));
+        let Some(registration) = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == device_id && registration.origin.dials_helper())
+            .filter(|_| !taken)
+        else {
+            // Another registration is that machine's device already: the
+            // helper device stays as it is until that one is removed.
+            crate::diagnostic!(serde_json::json!({
+                "component": "device_switch",
+                "kind": "device_switch.not_switched",
+                "target": device_id,
+                "key_taken": taken,
+            }));
+            if let Some(switch) = self.device_switches.get_mut(device_id) {
+                switch.state = DeviceSwitchState::Failed;
+                switch.reason = Some("device_already_connected".to_owned());
+                switch.key = None;
+            }
+            return self.refresh_device_snapshots();
+        };
+        registration.origin = LinkOrigin::Peer {
+            key: key.to_owned(),
+            switched: true,
+        };
+        let registration = registration.clone();
+        self.device_switches.remove(device_id);
+        self.rebuild_device_rows();
+        self.persist_current_ui_state();
+        let focused_device = self.look.front().map(str::to_owned);
+        let persisted_focus = self.snapshot.ui_state.focused_device_id.clone();
+        // One selection, as a retry keeps it: the device in front stays
+        // there while its link is made again (`retry_remote_device`).
+        self.change_look(|runtime| {
+            runtime.disconnect_remote_device(device_id, Retiring::Retried);
+            runtime.set_front_device(focused_device);
+            runtime.snapshot.ui_state.focused_device_id = persisted_focus;
+        });
+        self.push_diagnostic(
+            "device.switched",
+            format!("Device {device_id} now uses its machine's own connection"),
+        );
+        self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
+        self.refresh_device_snapshots();
+        true
+    }
+}
