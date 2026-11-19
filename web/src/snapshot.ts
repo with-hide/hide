@@ -3570,6 +3570,8 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
+    /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
+    peers?: import("./pairing").Peer[];
     focused_device_id?: string | null;
     /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
     tools?: ToolCell[];

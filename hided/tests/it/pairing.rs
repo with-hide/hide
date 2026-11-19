@@ -135,8 +135,7 @@ impl Terminal {
     fn command_of(&self, program: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(program);
         for (key, _) in std::env::vars_os() {
-            let upper = key.to_string_lossy().to_uppercase();
-            if upper.starts_with("HIDE_") || upper.starts_with("HERDR_") {
+            if key.to_string_lossy().to_uppercase().starts_with("HIDE_") {
                 command.env_remove(key);
             }
         }
@@ -584,4 +583,109 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
         }
     }
     assert_eq!(pairing_frames, 0);
+}
+
+/// B7 for a machine that already runs its own Hide, reached over SSH: the
+/// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
+/// the target's `hide device accept-ssh` with no words to compare, and
+/// confirms over the connection. Nothing is installed on the target, and
+/// adding the same machine again says it is already connected (B51).
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
+    use crate::support::sshd::Sshd;
+
+    let root = tempfile::tempdir().unwrap();
+    let _running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let target = Terminal {
+        home: root.path().join("host-home"),
+        state: root.path().join("host-state"),
+        machine: None,
+    };
+    let guest = Terminal {
+        home: root.path().join("guest-home"),
+        state: root.path().join("guest-state"),
+        machine: Some(GUEST),
+    };
+    // What an SSH login to the target's account finds: its home, its state
+    // folder, and the `hide` command its own Hide linked.
+    let ssh = Sshd::start(
+        &root.path().join("sshd"),
+        &[
+            (hided::env::HOME.into(), target.home.clone().into()),
+            ("HIDE_STATE_DIR".into(), target.state.clone().into()),
+        ],
+    )
+    .unwrap();
+    std::fs::create_dir_all(guest.home.join(".ssh")).unwrap();
+    std::fs::write(guest.home.join(".ssh/config"), ssh.client_config("studio")).unwrap();
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+
+    // The target's own command, as the guest's daemon runs it over SSH: a
+    // look changes nothing, and the target stays paired with nothing.
+    let commands = target.home.join(".local/bin");
+    std::fs::create_dir_all(&commands).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_hide"), commands.join("hide")).unwrap();
+    let looked = target.run(&["device", "look-ssh"]);
+    assert!(looked.ok, "{}", looked.text());
+    assert_eq!(
+        looked.json()["value"]["look"]["core"],
+        true,
+        "{}",
+        looked.text()
+    );
+    assert!(!hided::peer_host::endpoint_wanted(&target.state).unwrap());
+
+    // One command pairs: no link, no words.
+    let added = guest.run(&["device", "add", "studio", "--json"]);
+    assert!(added.ok, "{}", added.text());
+    let value = added.json()["value"].clone();
+    assert_eq!(value["paired"], "ssh", "{value}");
+    let opened = guest
+        .peer_becomes("the guest opens the target", |peer| {
+            peer["opens"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert_eq!(opened["id"], value["device_id"], "{opened}");
+    assert!(opened["opened_by"].is_null(), "{opened}");
+    let opener = target
+        .peer_becomes("the target is opened by the guest", |peer| {
+            peer["opened_by"] == "active"
+        })
+        .await;
+    assert_eq!(opener["id"], GUEST, "{opener}");
+    assert!(opener["opens"].is_null(), "{opener}");
+
+    // Nothing of the guest's was installed in the target's account: no
+    // device helper, and the command folder holds only the target's own.
+    assert!(!target.home.join(".hide").join("host-helper").exists());
+    let linked: Vec<_> = std::fs::read_dir(&commands)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(linked, ["hide"]);
+
+    // The same machine added again is the one it already is.
+    guest
+        .run(&["device", "add", "studio", "--json"])
+        .refused("device_already_connected");
+    assert_eq!(guest.peers().len(), 1);
+
+    let removed = guest.run(&["device", "remove", "studio", "--json"]);
+    assert!(
+        !removed.ok,
+        "an alias names no paired machine: {}",
+        removed.text()
+    );
+    let removed = guest.run(&[
+        "device",
+        "remove",
+        value["device_id"].as_str().unwrap(),
+        "--json",
+    ]);
+    assert!(removed.ok, "{}", removed.text());
+    ssh.stop().unwrap();
 }

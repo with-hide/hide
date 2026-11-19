@@ -280,6 +280,12 @@ fn testing_an_unconnected_device_reports_the_way_out() {
 }
 
 pub(super) fn runtime_with_home() -> Runtime {
+    runtime_showing_drives(None)
+}
+
+/// A runtime on a machine that shows its Windows PC's drives at
+/// `windows_drives`: a WSL distribution, or none for any other machine.
+fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
     let folder = scratch_dir("hide-core-devices-");
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
@@ -297,6 +303,7 @@ pub(super) fn runtime_with_home() -> Runtime {
         local_issues_path: None,
         effects_held: false,
         machine_name: None,
+        windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
     };
     let mut runtime = Runtime::new(
@@ -311,6 +318,31 @@ pub(super) fn runtime_with_home() -> Runtime {
     );
     runtime.test_dirs.push(folder);
     runtime
+}
+
+/// PRD wsl-device B16 for a core that itself runs in a distribution: its own
+/// device row says where the Windows PC's drives show, as a device's helper
+/// reports its own, and a row built again keeps it. Any other machine names
+/// none, so a pasted Windows path stays as typed there.
+#[test]
+fn a_cores_own_device_row_names_where_its_windows_drives_show() {
+    let drives = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .devices
+            .iter()
+            .find(|device| device.kind != "remote")
+            .expect("this machine's row")
+            .host
+            .windows_drives
+            .clone()
+    };
+    let mut distribution = runtime_showing_drives(Some("/mnt"));
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    distribution.rebuild_device_rows();
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    assert_eq!(drives(&runtime_with_home()), None);
 }
 
 /// A real worker resolves the alias with the system `ssh`, which refuses a
@@ -1000,6 +1032,19 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
     // machine, one row.
     assert_eq!(answer["devices"][0]["id"], "windows-pc");
     assert_eq!(answer["devices"].as_array().map(Vec::len), Some(1));
+    // A window draws its rows from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["peers"].clone(),
+        )
+    };
+    let (seen, peers) = sent(&mut runtime, 0);
+    assert_eq!(peers[0]["device_id"], "windows-pc");
+    assert_eq!(peers[0]["opened_by"], "paused");
 
     // A machine paired in neither direction is not a paired machine: the
     // list is refused whole and the one before it stands.
@@ -1012,6 +1057,8 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
     // The store is the owner: an empty list clears it.
     assert!(told(&mut runtime, serde_json::json!([])));
     assert!(runtime.snapshot.navigator.peers.is_empty());
+    // A window that drew the machine is told it is gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
 }
 
 /// The panes another machine's work runs in here are the list hided last
@@ -1051,6 +1098,20 @@ fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
         }])
     );
 
+    // A window draws the list from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["guest_panes"].clone(),
+        )
+    };
+    let (seen, guests) = sent(&mut runtime, 0);
+    assert_eq!(guests[0]["device_id"], "macbook");
+    assert_eq!(guests[0]["panes"][0]["id"], "guest:macbook:pane:w1:p1");
+
     // A pane under another machine's address.
     let mut other = macbook.clone();
     other["panes"][0]["id"] = serde_json::json!("guest:mini:pane:w1:p1");
@@ -1062,6 +1123,8 @@ fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
 
     assert!(told(&mut runtime, serde_json::json!([])));
     assert!(runtime.snapshot.navigator.guest_panes.is_empty());
+    // A window that drew the panes is told they are gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
 }
 
 /// A machine this one opens is a device for as long as the pairing holds

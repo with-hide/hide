@@ -617,6 +617,11 @@ impl Session {
         &self.facts.home
     }
 
+    /// The machine's system as it answered: `macos`, `linux` or `windows`.
+    pub fn system(&self) -> &str {
+        &self.facts.os
+    }
+
     /// Whether a step lost this session, so no later step may use it.
     pub fn broken(&self) -> bool {
         self.broken

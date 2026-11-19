@@ -61,6 +61,14 @@ pub struct CoreOptions {
     /// B2); absent where the system names none.
     #[serde(default)]
     pub machine_name: Option<String>,
+    /// Where this machine shows the drives of the Windows PC it runs on,
+    /// when it is a WSL distribution (`hide_platform::host::windows_drives`);
+    /// absent on any other machine. It goes on this machine's own device
+    /// row, as a device's helper reports its own, so a Windows path pasted
+    /// into a core that runs in a distribution becomes that distribution's
+    /// path (PRD wsl-device B16).
+    #[serde(default)]
+    pub windows_drives: Option<String>,
     /// The embedder runs on the state folder this account's hide picks by
     /// default; only such a core writes this machine's guardrails policy,
     /// which every hook of the account reads (PRD agent-guardrails D-11). A
@@ -11662,6 +11670,7 @@ mod release_1_2_1_wire_tests {
             local_issues_path: None,
             effects_held: false,
             machine_name: None,
+            windows_drives: None,
             account_state_folder: false,
         });
         let rest = RestSections::capture(&snapshot, None, 1);

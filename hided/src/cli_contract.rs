@@ -797,8 +797,8 @@ pub const COMMANDS: &[Spec] = &[
     },
     // A link pairs with the Hide that shared it: the command shows the four
     // words and takes the operator's yes or no at the terminal. An SSH alias
-    // registers the device, which installs nothing until the operator
-    // presses Allow and install on its row.
+    // whose machine already runs its own Hide is paired over SSH and nothing
+    // is installed there; any other alias registers the core's SSH device.
     Spec {
         words: &["device", "add"],
         arguments: &[Arg {
@@ -811,7 +811,7 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[optional("--name", Text), switch("--json")],
         rest: None,
-        answers: &["device_added", "device_joined"],
+        answers: &["device_added", "device_joined", "device_paired"],
         refusals: &[
             "machine_not_permitted",
             "device_invalid",
@@ -829,6 +829,14 @@ pub const COMMANDS: &[Spec] = &[
             "pairing_unreachable",
             "pairing_update_needed",
             "pairing_ended",
+            "ssh_hide_absent",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "ssh_not_reached",
+            "ssh_busy",
+            "device_own",
+            "device_limit",
+            "peer_unavailable",
         ],
     },
     // Answers, at this terminal, the machines that wait for this machine's
@@ -995,6 +1003,20 @@ pub const COMMANDS: &[Spec] = &[
             "device_dials_in",
             "device_wait_timeout",
         ],
+    },
+    // What a machine about to pair over SSH runs on its target first: it
+    // changes nothing there and answers whether a Hide of that account's
+    // own runs. A refusal carries the same `look`, with `core` false on an
+    // account that never ran one.
+    Spec {
+        words: &["device", "look-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["device_looked"],
+        refusals: &["hide_unavailable", "request_timeout"],
     },
     // What a machine pairing over SSH or wsl.exe runs on its target, with
     // the request it made: the target saves a grant that opens nothing
@@ -2092,6 +2114,11 @@ fn answers() -> Value {
     map.insert("device_allowed".into(), shape(&["answered"]));
     map.insert("device_changed".into(), shape(&["device_id"]));
     map.insert("device_accepted".into(), shape(&["accepted"]));
+    map.insert("device_looked".into(), shape(&["look"]));
+    map.insert(
+        "device_paired".into(),
+        shape(&["device_id", "name", "paired"]),
+    );
     map.insert(
         "device_retried".into(),
         hide_core::device_command::retried_schema(),
