@@ -51,6 +51,9 @@
       "vendor/patches/libghostty-vt/0005-bounded-word-selection.patch": "860a12e7db762e45174ea056cdbe4017dc91080df22b7cd795473a4ee4c4ae0e",
       "vendor/patches/libghostty-vt/0006-clear-screen-preserving-cursor-line.patch": "8570226466679fe75f743cabc43bafae9bfe50f57d864f45c247a110fa15c325",
       "vendor/patches/libghostty-vt/0007-experimental-png-retention.patch": "c584e68d01e3f12c81d10492b314368fb9d3f8d49810483b686679bb208dab4a"
+    },
+    "hide_patches": {
+      "patches/0001-simdutf-msvc-stl-version-gate.patch": "0ee4a756f1de25593685dc76f4a069fdc280ddae7146570c0e40175344332cb9"
     }
   },
   "packages": [
