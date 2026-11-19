@@ -20,6 +20,7 @@ import {
 
 export type { AgentRow, SnapshotRest } from "./snapshot";
 import type { MobileState } from "./mobileSettings";
+import type { PairingResult, PairingView } from "./pairing";
 
 /** The pane holding the keyboard on the device in front, as the core reports it. */
 export function focusedPaneOf(rest: SnapshotRest): string | null {
@@ -151,6 +152,10 @@ type Store = {
   daemon: DaemonInfo | null;
   /** Settings > Mobile as the daemon reports it (`mobile` frame); null until the first one. */
   mobile: MobileState | null;
+  /** The pairings under way as the daemon reports them (`pairing` frame), sent to this machine's own windows only; null until the first one. */
+  pairing: PairingView | null;
+  /** The daemon's answer to the last `pairing_*` event this window sent. */
+  pairingResult: PairingResult | null;
   /** The core move as the process's supervisor reports it (`core_move` frame); null until the first one. */
   coreMove: MoveView | null;
   /** Why the last `core_move` event was refused (`move_busy`, ...); cleared by the next frame of the move. */
@@ -368,6 +373,8 @@ export const useShellStore = create<Store>((set, get) => ({
   connection: "connecting",
   daemon: null,
   mobile: null,
+  pairing: null,
+  pairingResult: null,
   coreMove: null,
   coreMoveRefusal: null,
   coreLink: null,
@@ -660,6 +667,14 @@ export const useShellStore = create<Store>((set, get) => ({
     }
     if (frame.type === "mobile") {
       set({ mobile: frame.payload as unknown as MobileState });
+      return [];
+    }
+    if (frame.type === "pairing") {
+      set({ pairing: frame.payload as unknown as PairingView });
+      return [];
+    }
+    if (frame.type === "pairing_result") {
+      set({ pairingResult: frame.payload as unknown as PairingResult });
       return [];
     }
     if (frame.type === "core_move") {
