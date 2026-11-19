@@ -1694,6 +1694,113 @@ mod tests {
         PeerKey::from_hex(&format!("{byte:02x}").repeat(32)).unwrap()
     }
 
+    /// A copy of a released state folder as the release left it: every file
+    /// and folder private to the account, as a core writes them.
+    fn copy_private(from: &Path, to: &Path) {
+        private::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_private(&entry.path(), &target);
+            } else {
+                private::create_new_file(&target)
+                    .unwrap()
+                    .write_all(&std::fs::read(entry.path()).unwrap())
+                    .unwrap();
+            }
+        }
+    }
+
+    /// B16 over the state folders released builds wrote
+    /// (`hide-core/tests/fixtures/release-state/`): what this host keeps of
+    /// a guest (`h/node.json`) names the guest by its device id, here the
+    /// machine the release itself dialed, which then gave this one its
+    /// work. The start's conversions, which rename the devices an earlier
+    /// build dialed in every store they know, leave a guest's folder as it
+    /// was, and the daemon that starts next reads the same guest, device
+    /// and build.
+    #[tokio::test]
+    async fn a_guests_record_keeps_its_device_through_a_start_over_a_released_state_folder() {
+        use hide_core::node_migration::{CORE_STATE, MARKER_FILE, convert, name_devices};
+
+        let released =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../hide-core/tests/fixtures/release-state");
+        let mut folders: Vec<PathBuf> = std::fs::read_dir(&released)
+            .unwrap_or_else(|error| panic!("{}: {error}", released.display()))
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_dir())
+            .collect();
+        folders.sort();
+        assert!(!folders.is_empty(), "no released state folder was found");
+        for folder in folders {
+            let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+            let root = short_root();
+            let state = root.path().join("s");
+            copy_private(&folder, &state);
+            let stored = |name: &str| -> serde_json::Value {
+                serde_json::from_slice(&std::fs::read(state.join(name)).unwrap()).unwrap()
+            };
+            let node =
+                hide_core::node::NodeId::parse(stored(MARKER_FILE)["node"].as_str().unwrap())
+                    .unwrap_or_else(|error| panic!("{tag}: {error}"));
+            // The upgrade's own start, which names the release's device.
+            convert(&state, &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+            name_devices(&state, &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+            let device = stored(CORE_STATE)["device_registrations"][0]["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tag}: the release's device is not in the store"))
+                .to_owned();
+
+            let home = tempfile::tempdir().unwrap();
+            let guests = || {
+                Guests::new(
+                    state.clone(),
+                    home.path().to_path_buf(),
+                    HelperPackages::new(None, crate::cli::RELEASE),
+                    None,
+                )
+            };
+            let guest = key(7);
+            let record = NodeRecord {
+                build_id: "1.2.3-main.0123abcd".to_owned(),
+                device,
+            };
+            guests()
+                .folder(&guest)
+                .unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+            atomic::write_file(
+                &layout::guest_node_record(&state, &guest),
+                &serde_json::to_vec(&record).unwrap(),
+                Access::Private,
+            )
+            .unwrap();
+            let kept = |path: PathBuf| std::fs::read(&path).unwrap();
+            let before = (
+                kept(layout::guest_key(&state, &guest)),
+                kept(layout::guest_node_record(&state, &guest)),
+            );
+
+            // The next start.
+            convert(&state, &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+            let named =
+                name_devices(&state, &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+            assert_eq!(named, Default::default(), "{tag}");
+            assert_eq!(
+                (
+                    kept(layout::guest_key(&state, &guest)),
+                    kept(layout::guest_node_record(&state, &guest)),
+                ),
+                before,
+                "{tag}: the start rewrote the guest's folder"
+            );
+            let next = guests();
+            let known: Vec<PeerKey> = next.folders().into_iter().map(|(key, _)| key).collect();
+            assert_eq!(known, [guest], "{tag}");
+            assert_eq!(next.remembered(&guest), Some(record), "{tag}");
+        }
+    }
+
     /// PRD B34: a relay carries about 2 MiB a second, so the largest build
     /// (`build::MAX_BYTES`) takes two minutes to arrive, longer than any
     /// one wait of the link. Its bytes are read to the end, because each
