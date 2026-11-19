@@ -27,6 +27,7 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
+import { frontCard, workspaceViewOf } from "./workspace";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
 import { PlanChecklist } from "./components/plan-checklist";
 import { OpenAskList } from "./components/open-asks";
@@ -77,11 +78,19 @@ export type RecordFrame = {
 };
 
 /**
- * The 보기 slot's record (PRD sidebar-task-lens D-44, B16): the slot's head
- * is the panel's, a child opens as the slot's next item so ← comes back to
- * its parent, and the core reads what the slot shows.
+ * A record card on the desk (PRD sidebar-task-lens D-44, B16;
+ * lane-desk-pair-view D-13): a child opens as the desk's next card so ←
+ * comes back to its parent, and the core reads the card in front of the
+ * drawn desk alone (conductor decision 3).
  */
 export function SlotSessionRecord({ actions, target }: { actions: Actions; target: WorkSession }) {
+  // Only the card the core reads asks for a read again: a folded desk's card,
+  // whose read the core stopped, would open its desk again with the ask.
+  const read = useShellStore((state) => {
+    const view = workspaceViewOf(state.rest);
+    const top = view?.open && view.tray.shown ? frontCard(view) : null;
+    return top?.kind === "record" && workKey(top.session) === workKey(target);
+  });
   const frame = useMemo<RecordFrame>(() => ({
     kind: "lane",
     trail: [],
@@ -89,10 +98,12 @@ export function SlotSessionRecord({ actions, target }: { actions: Actions; targe
       const child = next.at(-1);
       if (child) actions.openChildRecord(child);
     },
-    onRead: () => actions.openChildRecord(target),
-    // The core starts and stops the slot's read with the slot itself.
+    onRead: () => {
+      if (read) actions.openChildRecord(target);
+    },
+    // The core starts and stops the card's read with the desk itself.
     onLeave: () => undefined,
-  }), [actions, target]);
+  }), [actions, target, read]);
   return <SessionRecord actions={actions} target={target} frame={frame} />;
 }
 
