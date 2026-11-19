@@ -8,34 +8,71 @@ fn guest() -> PeerKey {
     PeerKey::from_bytes([7; 32])
 }
 
-/// launchd's stand-in: the session answers, and `print` answers a job
-/// loaded once a list is bootstrapped and until a bootout.
+/// launchd's stand-in: the session answers, `print` answers a job loaded
+/// once a list is bootstrapped and until a bootout, and each bootout is
+/// counted.
 #[cfg(unix)]
-const LAUNCHCTL: &str = "#!/bin/sh\ncase \"$1\" in\n  print) [ \"$2\" = fixture ] && exit 0; [ -f \"$HOME/loaded\" ] && exit 0; exit 113 ;;\n  bootstrap) touch \"$HOME/loaded\" ;;\n  bootout) rm -f \"$HOME/loaded\" ;;\nesac\nexit 0\n";
+const LAUNCHCTL: &str = "#!/bin/sh\ncase \"$1\" in\n  print) [ \"$2\" = fixture ] && exit 0; [ -f \"$HOME/loaded\" ] && exit 0; exit 113 ;;\n  bootstrap) touch \"$HOME/loaded\" ;;\n  bootout) rm -f \"$HOME/loaded\"; echo bootout >> \"$HOME/bootouts\" ;;\nesac\nexit 0\n";
 
-#[cfg(unix)]
 struct Machine {
     home: tempfile::TempDir,
     state: PathBuf,
     agents: UserAgents,
 }
 
-#[cfg(unix)]
 impl Machine {
+    /// launchd's stand-in on Unix; on Windows Task Scheduler's, whose
+    /// `schtasks.exe` is a copy of this test program: given `schtasks`'
+    /// arguments it runs no test and exits 0, a task created and run.
     fn new() -> Self {
-        use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let state = home.path().join("state");
         std::fs::create_dir_all(&state).unwrap();
-        let launchctl = home.path().join("launchctl");
-        std::fs::write(&launchctl, LAUNCHCTL).unwrap();
-        std::fs::set_permissions(&launchctl, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let agents = UserAgents::fixture(home.path());
+        #[cfg(unix)]
+        let agents = {
+            use std::os::unix::fs::PermissionsExt;
+            let launchctl = home.path().join("launchctl");
+            std::fs::write(&launchctl, LAUNCHCTL).unwrap();
+            std::fs::set_permissions(&launchctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+            UserAgents::fixture(home.path())
+        };
+        #[cfg(windows)]
+        let agents = {
+            std::fs::copy(
+                std::env::current_exe().unwrap(),
+                home.path().join("schtasks.exe"),
+            )
+            .unwrap();
+            UserAgents::fixture_of(hide_platform::user_agents::Kind::TaskScheduler, home.path())
+        };
         Self {
             home,
             state,
             agents,
         }
+    }
+
+    /// Records this test process as the core running on the folder, as the
+    /// daemon's state names it.
+    fn run_here(&self) {
+        let pid = std::process::id();
+        crate::state_file::write_state(
+            &self.state,
+            &crate::state_file::DaemonState {
+                pid,
+                port: 1,
+                token: "t".to_owned(),
+                started_at: String::new(),
+                pid_started: Some(hide_platform::process::start_time(pid).unwrap()),
+            },
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn bootouts(&self) -> usize {
+        std::fs::read_to_string(self.home.path().join("bootouts"))
+            .map_or(0, |calls| calls.lines().count())
     }
 
     fn pair(&self) -> String {
@@ -77,6 +114,7 @@ impl Machine {
         crate::login_item::installed(&self.agents, self.home.path(), &self.state).unwrap()
     }
 
+    #[cfg(unix)]
     fn loaded(&self) -> bool {
         self.home.path().join("loaded").exists()
     }
@@ -147,6 +185,68 @@ fn the_core_the_item_runs_forgets_its_item_and_keeps_running() {
     assert_eq!(machine.reconcile(true, &installs), Outcome::Removed);
     assert!(!machine.installed() && !machine.kept());
     assert!(machine.loaded(), "the asking core's job was unloaded");
+}
+
+/// The first pairing's item is put in by the core running on the folder,
+/// which nothing stops: the item's core only waits on the folder's lock
+/// (S1). On Windows the item's start once ended the running core by its
+/// pid, which here is this test's own process.
+#[test]
+fn the_core_that_puts_its_item_in_keeps_running() {
+    let machine = Machine::new();
+    machine.run_here();
+    let installs = std::cell::Cell::new(0);
+    machine.pair();
+    assert!(matches!(
+        machine.reconcile(false, &installs),
+        Outcome::Installed { .. }
+    ));
+    assert!(machine.installed() && machine.kept());
+    #[cfg(unix)]
+    assert_eq!(machine.bootouts(), 0, "the asking core's job was unloaded");
+    assert_eq!(machine.reconcile(false, &installs), Outcome::Kept);
+}
+
+/// The core the item runs forgets its item at the last removal and keeps
+/// running; paired again in the same run, it puts the item back over its
+/// own run without unloading it (S1).
+#[test]
+fn the_core_the_item_runs_paired_again_adopts_its_item() {
+    let machine = Machine::new();
+    machine.run_here();
+    let installs = std::cell::Cell::new(0);
+    machine.pair();
+    machine.reconcile(false, &installs);
+    machine.unpair();
+    assert_eq!(machine.reconcile(true, &installs), Outcome::Removed);
+    assert!(!machine.installed() && !machine.kept());
+
+    machine.pair();
+    assert!(matches!(
+        machine.reconcile(true, &installs),
+        Outcome::Installed { .. }
+    ));
+    assert!(machine.installed() && machine.kept());
+    #[cfg(unix)]
+    {
+        assert!(machine.loaded());
+        assert_eq!(machine.bootouts(), 0, "the asking core's job was unloaded");
+    }
+}
+
+/// An item whose definition is there but that the system no longer holds
+/// (Hide turned off in the login items, a failed load) is loaded again, so
+/// a paired machine's item is kept only while it can run the core (O2).
+#[cfg(unix)]
+#[test]
+fn an_item_the_system_dropped_is_loaded_again() {
+    let machine = Machine::new();
+    let installs = std::cell::Cell::new(0);
+    machine.pair();
+    machine.reconcile(false, &installs);
+    std::fs::remove_file(machine.home.path().join("loaded")).unwrap();
+    assert_eq!(machine.reconcile(false, &installs), Outcome::Kept);
+    assert!(machine.loaded());
 }
 
 /// A core a move placed here keeps the move's own item, paired or not.

@@ -2216,15 +2216,28 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
             ConnectError::StartFailed(detail)
         })?;
     }
-    // A paired machine's core runs under its login item and nothing else
-    // (PRD device-connect-iroh D-41): the item starts it, with its marker
-    // put back, and a core of an older build it started is updated.
+    // A paired machine's core runs under its login item (PRD
+    // device-connect-iroh D-41): the item starts it, with its marker put
+    // back, and a core of an older build it started is updated. An item
+    // that cannot start it (no GUI session, turned off in the login items,
+    // its task deleted) leaves the core to this start, so the app opens.
     let agents = crate::always_on::agents_for(&env.home);
-    if crate::login_item::installed(&agents, &env.home, &env.state_dir)
+    let item_started = crate::login_item::installed(&agents, &env.home, &env.state_dir)
         .map_err(ConnectError::StartFailed)?
-    {
-        crate::login_item::start_installed(&agents, &env.home, &env.state_dir)
-            .map_err(ConnectError::StartFailed)?;
+        && match crate::login_item::start_installed(&agents, &env.home, &env.state_dir) {
+            Ok(()) => true,
+            Err(message) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "component": "hide", "kind": "core.item_unavailable",
+                        "message": message,
+                    })
+                );
+                false
+            }
+        };
+    if item_started {
         let (state, health) = wait_for_item_core(env)?;
         if health["build"] == build.as_str() {
             return Ok((state, health));

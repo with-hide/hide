@@ -126,6 +126,18 @@ impl Launchd {
         stop: &AtomicBool,
     ) -> io::Result<()> {
         self.unload(agent.label, home, stop)?;
+        self.adopt(agent, marker, home, stop)
+    }
+
+    /// Writes `agent`'s property list under `home` and loads it when launchd
+    /// does not hold its label; a job it holds goes on as it was loaded.
+    pub(super) fn adopt(
+        &self,
+        agent: &LoginAgent<'_>,
+        marker: &Path,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
         let path = Self::plist(home, agent.label);
         if let Some(folder) = path.parent() {
             std::fs::create_dir_all(folder)?;
@@ -135,7 +147,16 @@ impl Launchd {
             plist(agent, marker).as_bytes(),
             crate::fs::Access::Private,
         )?;
-        self.bootstrap(&path, home, stop)
+        self.load(agent.label, home, stop)
+    }
+
+    /// Loads the installed property list of `label` when launchd does not
+    /// hold it.
+    pub(super) fn load(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
+        if self.is_loaded(label, home, stop)? {
+            return Ok(());
+        }
+        self.bootstrap(&Self::plist(home, label), home, stop)
     }
 
     /// Loads `agent` into the GUI session from a property list written in

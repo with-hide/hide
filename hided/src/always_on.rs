@@ -90,7 +90,12 @@ pub fn reconcile(
     }
     let installed = crate::login_item::installed(agents, home, state_dir)?;
     match (paired, installed) {
-        (true, true) => Ok(Outcome::Kept),
+        (true, true) => {
+            // Kept only while the item can run the core: one the system no
+            // longer holds is loaded again.
+            crate::login_item::hold(agents, home, state_dir)?;
+            Ok(Outcome::Kept)
+        }
         (false, false) => Ok(Outcome::Nothing),
         (false, true) => {
             if asker.under_item {
@@ -102,7 +107,9 @@ pub fn reconcile(
         }
         (true, false) => {
             let program = install(&hide_kit::layout::core_root(home))?;
-            crate::login_item::start(agents, home, state_dir, &program)?;
+            // The asking core goes on; the item's core waits on the
+            // folder's lock until it exits.
+            crate::login_item::adopt(agents, home, state_dir, &program)?;
             let warning = match agents.linger(home, &AtomicBool::new(false)) {
                 Ok(Linger::On) => None,
                 Ok(Linger::NeedsAdministrator { command }) => Some(Warning {

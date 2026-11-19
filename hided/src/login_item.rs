@@ -25,12 +25,46 @@ const CORE_LOG_LOOK_EVERY: Duration = Duration::from_secs(60);
 
 /// Installs the login item that runs `program` as the core on
 /// `state_dir`, with the folder's marker, which starts it; one already
-/// installed for that folder is replaced, which ends its core.
+/// installed for that folder is replaced, which ends its core. What asks is
+/// never that core: a starter replacing it (`core_move::starter`).
 pub fn start(
     agents: &UserAgents,
     home: &Path,
     state_dir: &Path,
     program: &Path,
+) -> Result<(), String> {
+    put_in(agents, home, state_dir, program, Put::Replace)
+}
+
+/// Installs the login item that runs `program` as the core on `state_dir`,
+/// with the folder's marker, asked by the core running on that folder
+/// (`always_on`): nothing that runs is stopped, the asking core's own run
+/// under an item it forgot included, and the item's core starts only to
+/// wait on the folder's lock until the asking core exits.
+pub fn adopt(
+    agents: &UserAgents,
+    home: &Path,
+    state_dir: &Path,
+    program: &Path,
+) -> Result<(), String> {
+    put_in(agents, home, state_dir, program, Put::Adopt)
+}
+
+/// Whether putting an item in stops the core running on the folder.
+#[derive(Clone, Copy, PartialEq)]
+enum Put {
+    /// A starter replaces the core: its run ends with the old item's.
+    Replace,
+    /// The core itself asks: nothing that runs is stopped.
+    Adopt,
+}
+
+fn put_in(
+    agents: &UserAgents,
+    home: &Path,
+    state_dir: &Path,
+    program: &Path,
+    put: Put,
 ) -> Result<(), String> {
     let stop = AtomicBool::new(false);
     if agents
@@ -75,10 +109,14 @@ pub fn start(
         .ok()
         .flatten()
         .filter(crate::state_file::DaemonState::is_proven_running);
-    agents
-        .install(&agent, &marker(state_dir), home, &stop)
-        .map_err(|error| format!("the login item {label}: {error}"))?;
+    match put {
+        Put::Replace => agents.install(&agent, &marker(state_dir), home, &stop),
+        Put::Adopt => agents.adopt(&agent, &marker(state_dir), home, &stop),
+    }
+    .map_err(|error| format!("the login item {label}: {error}"))?;
     if let Some(previous) = previous
+        && put == Put::Replace
+        && previous.pid != std::process::id()
         && previous.is_proven_running()
         && cfg!(windows)
     {
@@ -136,12 +174,25 @@ pub fn installed(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<b
 }
 
 /// Starts the installed item's core on `state_dir` now, with the marker put
-/// back, when it is not running.
+/// back, when it is not running; an item the system no longer holds is
+/// loaded again from its definition first ([`hold`]).
 pub fn start_installed(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), String> {
+    hold(agents, home, state_dir)?;
     keep(state_dir)?;
     let label = hide_kit::layout::core_login_item(home, state_dir);
     agents
         .start(&label, home, &AtomicBool::new(false))
+        .map_err(|error| format!("the login item {label}: {error}"))
+}
+
+/// Has the system hold the installed item of `state_dir` again when it does
+/// not (a failed load, Hide turned off in the login items, the task deleted
+/// in Task Scheduler), without starting it; an error says the item cannot
+/// run the core.
+pub fn hold(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), String> {
+    let label = hide_kit::layout::core_login_item(home, state_dir);
+    agents
+        .load(&label, home, &AtomicBool::new(false))
         .map_err(|error| format!("the login item {label}: {error}"))
 }
 

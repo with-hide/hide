@@ -179,6 +179,47 @@ impl UserAgents {
         }
     }
 
+    /// Installs `agent` as [`install`] does, except that a run of it going on
+    /// now is left going, under the definition it started with: the process
+    /// asking may be that run, which an unload would stop midway. The next
+    /// login, and the next start after it exits, run the new definition.
+    ///
+    /// [`install`]: Self::install
+    pub fn adopt(
+        &self,
+        agent: &LoginAgent<'_>,
+        marker: &Path,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
+        match &self.system {
+            System::Launchd(launchd) => launchd.adopt(agent, marker, home, stop),
+            System::Systemd(systemd) => systemd.adopt(agent, marker, home, stop),
+            System::TaskScheduler(tasks) => tasks.adopt(agent, home, stop),
+            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+        }
+    }
+
+    /// Has the system hold the installed agent `label` again from its
+    /// definition when it does not (a failed load, a login item turned off
+    /// in System Settings, a task deleted in Task Scheduler), without
+    /// starting it; one it holds is left as it is. `NotFound` when nothing
+    /// is installed under `label`.
+    pub fn load(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
+        if !self.is_installed(label, home)? {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no login agent {label} is installed"),
+            ));
+        }
+        match &self.system {
+            System::Launchd(launchd) => launchd.load(label, home, stop),
+            System::Systemd(systemd) => systemd.load(label, home, stop),
+            System::TaskScheduler(tasks) => tasks.load(label, home, stop),
+            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+        }
+    }
+
     /// Starts `agent` once where an installed agent runs, never again at a
     /// login and never after it exits, until [`unload`] ends it. What the
     /// system needs to run it is kept in `folder`, a private folder the
@@ -229,12 +270,12 @@ impl UserAgents {
 
     /// Whether the system holds the agent `label` now: running it, or
     /// ready to start it again. Task Scheduler holds a task while it is
-    /// installed.
+    /// registered.
     pub fn is_loaded(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
         match &self.system {
             System::Launchd(launchd) => launchd.is_loaded(label, home, stop),
             System::Systemd(systemd) => systemd.is_loaded(label, home, stop),
-            System::TaskScheduler(_) => task_scheduler::TaskScheduler::is_installed(label, home),
+            System::TaskScheduler(tasks) => tasks.is_registered(label, home, stop),
             System::None => Ok(false),
         }
     }

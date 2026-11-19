@@ -338,6 +338,43 @@ fn an_install_loads_its_definition_and_a_removal_unloads_it_first() {
 #[cfg(unix)]
 const RECORDING_SYSTEMCTL: &str = "#!/bin/sh\nshift\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\ncase \"$1\" in\n  show) [ -f \"$HOME/active\" ] && echo ActiveState=active && exit 0; echo ActiveState=inactive; exit 0 ;;\n  start) touch \"$HOME/active\" ;;\n  stop) rm -f \"$HOME/active\" ;;\n  enable) mkdir -p \"$HOME/.config/systemd/user/default.target.wants\"; ln -sf \"../$2\" \"$HOME/.config/systemd/user/default.target.wants/$2\" ;;\nesac\nexit 0\n";
 
+/// An agent adopted over its own run is written and left running, never
+/// unloaded: the process asking may be that run. One the system dropped is
+/// loaded again from its definition, and one never installed is
+/// `NotFound`.
+#[cfg(unix)]
+#[test]
+fn an_adopted_agent_keeps_its_run_and_a_dropped_one_is_loaded_again() {
+    let directory = tempfile::tempdir().unwrap();
+    crate::stand_ins::program(&directory.path().join("launchctl"), RECORDING_LAUNCHCTL);
+    let agents = UserAgents::fixture(directory.path());
+    let home = directory.path();
+    let stop = AtomicBool::new(false);
+    let agent = LoginAgent {
+        label: "example.agent",
+        program: Path::new("/bin/sleep"),
+        arguments: &["600"],
+        environment: &[],
+        log: &home.join("agent.log"),
+    };
+    let marker = home.join("keep-alive");
+    let missing = agents.load("example.agent", home, &stop).unwrap_err();
+    assert_eq!(missing.kind(), ErrorKind::NotFound, "{missing}");
+
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    agents.forget("example.agent", home, &stop).unwrap();
+    agents.adopt(&agent, &marker, home, &stop).unwrap();
+    assert!(agents.is_installed("example.agent", home).unwrap());
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    assert_eq!(changes(home), ["bootstrap fixture"], "the run was unloaded");
+
+    std::fs::remove_file(home.join("loaded")).unwrap();
+    agents.load("example.agent", home, &stop).unwrap();
+    agents.load("example.agent", home, &stop).unwrap();
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    assert_eq!(changes(home), ["bootstrap fixture", "bootstrap fixture"]);
+}
+
 /// systemd's agent is a unit the account's manager wants with
 /// `default.target`, kept alive while its marker exists: an install stops
 /// what runs, writes the unit, reloads, enables and starts it; a removal

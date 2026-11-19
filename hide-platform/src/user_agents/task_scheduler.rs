@@ -41,6 +41,18 @@ pub(super) struct TaskScheduler {
     fixture: bool,
 }
 
+/// A task carries no environment: one asked for is refused rather than
+/// dropped.
+fn carries_no_environment(agent: &LoginAgent<'_>) -> io::Result<()> {
+    if agent.environment.is_empty() {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "a scheduled task carries no environment",
+    ))
+}
+
 impl TaskScheduler {
     #[cfg(windows)]
     pub(super) fn current() -> Self {
@@ -89,14 +101,21 @@ impl TaskScheduler {
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
-        if !agent.environment.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "a scheduled task carries no environment",
-            ));
-        }
-        let user = self.user()?;
+        carries_no_environment(agent)?;
         self.unload(agent.label, home, stop)?;
+        self.adopt(agent, home, stop)
+    }
+
+    /// Creates `agent`'s task, replacing one of its name, and runs it when
+    /// no run of it is going; a run going on is left to its program.
+    pub(super) fn adopt(
+        &self,
+        agent: &LoginAgent<'_>,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
+        carries_no_environment(agent)?;
+        let user = self.user()?;
         let definition = Self::definition(home, agent.label);
         if let Some(folder) = definition.parent() {
             crate::fs::private::create_dir_all(folder)?;
@@ -106,20 +125,47 @@ impl TaskScheduler {
             &utf16_le(&task(agent, &self.conhost, &user)),
             crate::fs::Access::Private,
         )?;
-        let path = definition.to_string_lossy().into_owned();
+        self.register(agent.label, home, stop)?;
+        self.start(agent.label, home, stop)
+    }
+
+    /// Creates the task `label` from its definition, replacing one of its
+    /// name.
+    fn register(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
+        let path = Self::definition(home, label).to_string_lossy().into_owned();
         self.check(
-            &[
-                "/Create",
-                "/TN",
-                &Self::name(agent.label),
-                "/XML",
-                &path,
-                "/F",
-            ],
+            &["/Create", "/TN", &Self::name(label), "/XML", &path, "/F"],
             home,
             stop,
-        )?;
-        self.start(agent.label, home, stop)
+        )
+    }
+
+    /// Creates the installed task `label` again from its definition when
+    /// Task Scheduler does not have it.
+    pub(super) fn load(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
+        if self.is_registered(label, home, stop)? {
+            return Ok(());
+        }
+        self.register(label, home, stop)
+    }
+
+    /// Whether Task Scheduler has the task `label`: `/Query` exits 0 for a
+    /// task it has and 1 for one it does not, whatever its language.
+    pub(super) fn is_registered(
+        &self,
+        label: &str,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<bool> {
+        let result = self.schtasks(&["/Query", "/TN", &Self::name(label)], home, stop)?;
+        match result.code {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            code => Err(io::Error::other(format!(
+                "schtasks /Query failed (exit {code:?}): {}",
+                result.stderr.trim()
+            ))),
+        }
     }
 
     fn user(&self) -> io::Result<String> {

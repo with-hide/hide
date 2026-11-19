@@ -139,6 +139,19 @@ impl Systemd {
         stop: &AtomicBool,
     ) -> io::Result<()> {
         self.unload(agent.label, home, stop)?;
+        self.adopt(agent, marker, home, stop)
+    }
+
+    /// Writes `agent`'s unit under `home`, has the manager start it with the
+    /// account, and starts it when it is not running; a running one goes on
+    /// as it was started.
+    pub(super) fn adopt(
+        &self,
+        agent: &LoginAgent<'_>,
+        marker: &Path,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
         let path = Self::unit_file(home, agent.label);
         crate::fs::private::create_dir_all(&Self::units(home))?;
         crate::fs::atomic::write_file(
@@ -146,9 +159,18 @@ impl Systemd {
             unit(agent, marker).as_bytes(),
             crate::fs::Access::Private,
         )?;
-        self.check(&["daemon-reload"], home, stop)?;
-        self.check(&["enable", &Self::unit(agent.label)], home, stop)?;
+        self.load(agent.label, home, stop)?;
+        if self.is_loaded(agent.label, home, stop)? {
+            return Ok(());
+        }
         self.start(agent.label, home, stop)
+    }
+
+    /// Has the manager read the installed unit `label` and start it with the
+    /// account; enabling a unit already enabled changes nothing.
+    pub(super) fn load(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
+        self.check(&["daemon-reload"], home, stop)?;
+        self.check(&["enable", &Self::unit(label)], home, stop)
     }
 
     /// Starts the unit `label` when it is not running; the manager answers
