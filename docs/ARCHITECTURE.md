@@ -3034,7 +3034,7 @@ On the socket the core and the node trade one line each: the core names its node
 A build is named by its hash, which says only whether two builds are the same; its release (`hided/src/build_order.rs`: the version it ships and its first-parent commit count on main, which `desktop/scripts/package.mjs` passes as `HIDE_BUILD_ORDER`: the count of the last commit it shares with main, so a build packaged off a branch is ordered by where it left main and never past a later main build by its own commits; a shallow checkout names the order or is refused, and CI's `0.0.0-*` builds, which no release compares, name 0) orders two builds by `MAJOR.MINOR.PATCH` and then that count, and two builds neither key orders, or whose version names no release, are unordered (PRD core-host-node-move D-10, Q3).
 The node decides before it says hello and logs both builds when it does not link (`link.build_refused`): only the same build links, a node older than C waits as `core_newer` and C is left as it is (B11), a newer one updates C to its own build first (see [Updating the core](#updating-the-core)), and an unordered one waits as `other_build`.
 C keeps the same rule as its own defense: an older node is refused as `core_newer` and any other build as `other_build`, as are C's own node id, a device C dials, and a node that would be the seventeenth C keeps registered (`nodes_full`); otherwise the core hands back a relay grant and the stream becomes the node's link, the same `RemoteHost` a dialed device's channel builds, marked `dialed_by_node`.
-From the line after that answer, both ends run `link_mux` over the attach role's bytes (`hided/src/link_mux.rs`), at C's attach service so the attach role stays a byte pipe of any build: stream 0 is the node's link, and every other stream is one TCP connection M opens to an address on C's loopback, which C's end connects and refuses for any other address, so nothing C's `sshd` forwards or refuses to forward matters.
+From the line after that answer, both ends run the link multiplexer over the attach role's bytes (`hide_peer::mux`, `hide-peer/src/mux.rs`), at C's attach service so the attach role stays a byte pipe of any build: stream 0 is the node's link, and every other stream is one TCP connection M opens to an address on C's loopback, which C's end connects and refuses for any other address, so nothing C's `sshd` forwards or refuses to forward matters.
 A stream whose socket leaves 64 frames untaken is closed rather than hold up the others, at most 64 streams hold a slot at once, each until every thread of it ended, and a ping C's end answers says the whole way still answers.
 Each end's owner ends its connection: M's `Mux` and C's `Served`, which C holds until its link to M closes; a close or the connection's end wakes a stream's reader waiting for room in the bounded outbox, and a start that fails partway ends what it started.
 A node whose earlier link still stands is greeted on that link first: when it answers within 3 s the new one is refused as `already_linked`, and when it does not the earlier link is ended and the new one taken, so a node whose connection went half open in a network change is back at once rather than after the attach role's 30 s silence (B9).
@@ -3134,6 +3134,74 @@ Each label worker asks the node of the machine that runs its engine for the lock
 | Project Memory read and written by an agent hook on M: the `memory` request through M's node to the one store C keeps, and the receipts C's label reads find in M's sessions (`hide_core::memory_hook`, `Runtime::linked_node`) | M's session files, which M's node reads for C (`ProjectSessions`, `SessionConversation`, `SessionText`) |
 | A held letter: C keeps it while M is not linked and its wait counts only while M is (`delivery.md`), and hands it to M's agent through M's node when the agent's hook pulls | |
 | The login item: installed, started and removed by `hided core-move` on the machine taking or giving the core, in that account's GUI session (`hided::login_item`, `UserAgents`) | |
+
+### The peer connection
+
+Two machines that each run Hide keep one connection between them, and three crates hold it.
+No daemon opens one yet: in this build the crates, their contract file and their tests exist, and the only part that runs in a daemon is the link multiplexer below.
+The security and ownership specification this connection is built to (the threat model, pairing, who owns a guest's work, the relay's limits) is with-hide/hide-private's `docs/device-connection-security.md`; this section is the runtime contract the code keeps.
+
+| Crate | What it holds | What it may link |
+|---|---|---|
+| `hide-peer-protocol` | What the two say: the hello and its versions, the stream kinds and priorities, the pairing, revoke and management messages, the events one core hands another, a guest node's launch contract with its folder and socket names, the tap | `hex`, `serde`, `serde_json`, `sha2`, and no crate of Hide's |
+| `hide-peer` | The connection above any transport: the machine key, the grant and known-host stores, each direction's gate, admission and the dial rule, the event inbox, a loopback transport, the link multiplexer | Hide's crates and tokio; no transport |
+| `hide-peer-iroh` | The transport: an iroh endpoint behind `hide_peer`'s seam, with no product state | iroh and noq, which no other member may name |
+
+`contracts/peer-link.json` is written from `hide-peer-protocol`'s types (`contract::shape`), and a test fails when the file and the code differ ([contracts/README.md](../contracts/README.md)).
+`hide_kit::layout` names every folder below: `peers/` under the state folder for this machine's key, stores and inboxes, and `g/<first 16 hex characters of a guest's key>/` for a guest, short because a guest node's socket path has to fit a Unix socket address (a test holds the longest one inside 103 bytes for a 16-byte account name).
+
+**The seam.**
+`PeerTransport` (this machine's key, its address candidates, `dial`, `accept`, `close`) and `PeerConn` (the peer's key, which side dialed, the path's kind, `open` at a priority, `accept`, `close` with a code, how it ended) are all `hide-peer` asks of a transport, as generic parameters and never a trait object.
+`hide_peer::loopback` is the second transport: in-process streams between the `Peers` of one test, each end proving its key by signing the other's challenge, so pairing, grants and delivery are tested with no socket.
+`scripts/check-iroh-stays-behind-the-seam.py` fails when a member other than `hide-peer-iroh` names an iroh or noq crate, when `hide-core`, `hide-node`, `hide-host`, `hide-holder` or `hide-agent-hooks` reaches `hide-peer-iroh` through any chain of members, when `workspace-hack` lists a crate only the transport reaches, or when iroh or noq is asked for by anything but an exact version without default features.
+
+**One connection, two directions.**
+A pair of machines keeps one connection whichever side dialed, and each direction has its own grant: A may be B's guest, B may be A's, or both.
+`peers::decide` is the whole dial rule: with no connection held the new one is installed; a second connection dialed by the same side replaces the first, which closes as `replaced`; and when both sides dialed at once the one the smaller key dialed stays and the other closes as `duplicate`.
+A dial waits its key's turn and for a closing connection to finish, never starts while a live connection exists, and ends early when the peer's own dial is admitted first.
+`Peers::keep` dials again after a drop, 1 s later and doubling to 60 s, and `network_changed` starts that wait over.
+
+**The first exchange.**
+Each side sends a hello first: the magic `HIDEPEER`, a length, and at most 16 KiB of JSON carrying the framing number, the oldest and newest link version it speaks, its capabilities, its build and its device id.
+The two run the newest link version both speak and the capabilities both name; when they share none, the connection closes as `update_needed` and `PeerEvent::UpdateNeeded` says which side is behind.
+A build that is not a release also sends the contract file's hash, and two such builds with different hashes refuse each other, so a contract change is never tested against a stale peer by accident.
+The hello stream stays open for the connection's life and carries each side's grant state and generation as they change, and the request to update and its answer.
+
+**Streams.**
+The side that opens a stream writes nine bytes, the stream's kind and the generation it believes it holds, and the other side answers nine bytes, a status (`accepted`, `no_grant`, `stale`, `limit`, `unknown_kind`) and its current generation.
+Hello, pairing and revoke need no grant; every other kind is refused unless the direction it serves has an active grant at that generation.
+An accepted stream is bound to the generation it was accepted under (`gate::Guarded`): its next read or write after the generation moves fails, so a pause or a removal ends every stream it allowed without a list of them.
+A connection carries at most 72 streams, and each kind has its own cap inside that (`limits::max_streams_of`), so a flood of one kind never takes another's place.
+The transport sends by priority: keys typed into a pane first (100), then hello, pairing, revoke and management (75), the node link (50), terminal output and the remote screen (0), and files and pages last (-100).
+
+**Grants are saved first.**
+The host keeps who may be its guest in `peers/grants.json` and the guest keeps the hosts it paired with in `peers/known.json`, private files of at most 64 KiB replaced atomically.
+A change is saved under the store's lock, then the direction's gate moves (one atomic generation, where 0 is closed), then the peer is told on the hello stream: a crash between two of those steps leaves the saved state, which is what the next start enforces.
+Pairing settles in two steps: the host saves a `pending` grant that opens nothing and answers `granted`, and the guest saves its side and sends `confirm`, which makes the grant `active`.
+A confirm answers the same however often it is sent and never revives a paused or removed grant; a pending grant its guest never confirms is dropped after 10 minutes.
+A removed grant leaves a tombstone for 30 days, 256 at most with the oldest dropped first, so its guest's next connection is told `revoked` rather than `none`; a host grants 32 machines at most and a guest remembers 64 hosts.
+When no grant is left in either direction the connection closes as `no_grant`, and a connection with none may stay 10 minutes, the life of a pending grant.
+
+**The machine key.**
+`peers/machine.key` holds the Ed25519 secret a machine connects as, with the id of the machine it was made on.
+A file that names another machine, as a copied or restored home folder would carry, is replaced by a new key; a damaged file is an error, never a silent new identity.
+
+**Events.**
+An event another core hands this one is appended and synced to `peers/inbox/<host>/events.jsonl` before it is acknowledged, in the sender's own sequence: a repeat answers its old number, a gap is refused with what the inbox holds, and a full inbox refuses instead of dropping.
+Events are applied one at a time with `cursor.json` saved after each, and one that cannot be applied is acknowledged and logged rather than blocking the ones behind it.
+
+**The iroh transport.**
+`hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
+A path counts as idle after 3 s with a keep-alive every 1 s, and a connection that has had no relay path for 5 s while a relay is configured closes as `no_relay_path`, so the keeper dials it again.
+Among the addresses a machine finds for itself, one in 100.64.0.0/10 is ranked last (`addr::rank_self_discovered`); mDNS lookup is an option the caller turns on.
+`PeerTransport::relay` answers what the transport knows of its relay when a caller has a machine it could not reach to explain: none, attached, unreachable, or stopped for the month, which the relay's host says with a 503 and the words "monthly limit reached" to one HTTPS request made then, never on a timer; iroh keeps its own relay failure as text to print, not to decide by.
+An endpoint that ends without being asked is built again, and iroh's own spelling of a key never leaves the crate: a key is 64 lower hex characters everywhere Hide stores or sends it.
+
+**The link multiplexer.**
+`hide_peer::mux` is the multiplexer the SSH and WSL links run ([A core on another machine](#a-core-on-another-machine)), moved from `hided` with no change to what it does, so the peer link's node stream can run it too.
+
+**Diagnostics.**
+`hide-peer` writes its diagnostics through `hide_peer::log`, which `hided` points at the core's diagnostic log at start; a program that sets no sink gets them on stderr.
 
 ### Moving the core
 
