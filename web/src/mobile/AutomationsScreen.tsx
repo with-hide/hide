@@ -100,12 +100,24 @@ export function ScheduleLine({ automation, className }: { automation: PhoneAutom
       {next.kind === "running" ? (
         <span className="whitespace-nowrap text-agent-working">● {nextRunText(automation, Date.now(), zone, language, t)}</span>
       ) : paused ? (
-        // Only the operator's own pause is quiet; the rest are a person's to fix (D-12). The mark and its reason wrap together.
-        <span className={cn("whitespace-nowrap", paused.reason !== "operator" && "text-warning")} data-phone-automation-paused={paused.reason}>⏸ {pauseReasonText(paused.reason, t)}</span>
+        // Only the operator's own pause is quiet; the rest are a person's to fix (D-12).
+        <span className={paused.reason === "operator" ? undefined : "text-warning"} data-phone-automation-paused={paused.reason}><PauseText text={pauseReasonText(paused.reason, t)} /></span>
       ) : (
         <span>{nextRunText(automation, Date.now(), zone, language, t)}</span>
       )}
     </span>
+  );
+}
+
+/** `⏸ <why>`: the mark stays with the reason's first word, and a long reason wraps after it. */
+function PauseText({ text }: { text: string }) {
+  const space = text.indexOf(" ");
+  const head = space < 0 ? text : text.slice(0, space);
+  return (
+    <>
+      <span className="whitespace-nowrap">⏸ {head}</span>
+      {space < 0 ? null : text.slice(space)}
+    </>
   );
 }
 
