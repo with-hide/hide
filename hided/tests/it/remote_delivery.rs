@@ -923,6 +923,12 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
             "a Hide was started on the account before the operator allowed it"
         );
 
+        // The build this core's node runs from on that machine, placed in
+        // the helper root as that machine's Hide would place it: a
+        // development build is larger than a build may be, so it would
+        // refuse to (`shipped::place_guest_build`).
+        let programs = fixture.hide.parent().context("the staged build")?;
+        crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
         let journey = (|| -> Result<()> {
             // Allowed: a Hide of the account's own is started over the
             // same SSH login, from the helper's build, and paired with.

@@ -195,35 +195,9 @@ fn free_port() -> u16 {
 }
 
 /// Puts the shipped build in `programs` where a host of `state` keeps the
-/// builds of the guest `key`, as a host does once every file of a build
-/// matched; answers the build's name.
+/// builds of the guest `key`; answers the build's name.
 fn place_build(programs: &Path, state: &Path, key: &hide_peer::protocol::PeerKey) -> String {
-    use hide_node::ssh::host::{HelperPackages, guest_build};
-    use hide_platform::fs::{Access, atomic, private};
-    let build = HelperPackages::new(Some(programs.to_path_buf()), hided::cli::RELEASE)
-        .guest_build(std::env::consts::OS, std::env::consts::ARCH)
-        .unwrap_or_else(|error| panic!("the shipped build is not whole: {error:?}"));
-    let folder = hide_kit::layout::guest_build(state, key, build.id());
-    private::create_dir_all(&folder).unwrap();
-    for (index, file) in build.files().iter().enumerate() {
-        let access = match file.executable {
-            true => Access::PrivateExecutable,
-            false => Access::Private,
-        };
-        atomic::write_file(
-            &folder.join(&file.path),
-            build.bytes(index).unwrap(),
-            access,
-        )
-        .unwrap();
-    }
-    atomic::write_file(
-        &folder.join(guest_build::MARKER),
-        build.id().as_bytes(),
-        Access::Private,
-    )
-    .unwrap();
-    build.id().to_owned()
+    shipped::place_guest_build(programs, &hide_kit::layout::guest_install_root(state, key))
 }
 
 /// Pairs the two by the host's link, both operators saying yes, and answers
