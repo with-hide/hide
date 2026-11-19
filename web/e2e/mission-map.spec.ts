@@ -160,6 +160,8 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
 
     // The card belongs to the Agent tab it opened in: another tab in front shows none, and back in that tab it is as it was (operator decision 2026-11-09).
     const home = (await page.locator("[data-tab][aria-selected=true]").getAttribute("data-tab"))!;
+    // The keyboard back in the Conductor's pane, ⌘T opens an Agent tab; in the card on the desk it would open a View tab there.
+    await page.locator(`[data-pane-view="${opened.pane}"] .xterm-helper-textarea`).focus();
     await page.keyboard.press(chord("new_tab"));
     await expect(page.locator("[data-tab][aria-selected=true]")).not.toHaveAttribute("data-tab", home);
     await expect(map).toHaveCount(0);

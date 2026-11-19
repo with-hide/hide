@@ -1,8 +1,7 @@
 // The right lane (PRD right-lane B25; PRD lane-two-columns D-12) in the
 // production Workspace over invented local data: each `state` the design
-// boards drew, from the closed rail to a narrow window whose pinned lane
-// stacks its two columns; the rail's pin is drawn off and on, with the lane
-// up and closed; the rail has no Mission icon, missions being the page's
+// boards drew, from the closed rail to a narrow window whose lane stacks its
+// two columns over Agent Views; the rail has no Mission icon, missions being the page's
 // mission screen (PRD mission-screen B18). The Project tool draws its
 // week empty, partly filled and filled (PRD project-panel-results B21). No
 // daemon is used.
@@ -22,25 +21,23 @@ import { memorySceneProject } from "./MemoryScene";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "closed-pinned", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow"] as const;
+const STATES = ["closed", "overlay", "explorer-overlay", "explorer-only", "expanded", "project", "project-partial", "project-empty", "memory", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
-type Lane = { tool: Tool | null; pinned: boolean; documents: boolean; expanded: boolean };
+type Lane = { tool: Tool | null; documents: boolean; expanded: boolean };
 
 const LANES: Record<LaneState, Lane> = {
-  closed: { tool: null, pinned: false, documents: true, expanded: false },
-  "closed-pinned": { tool: null, pinned: true, documents: true, expanded: false },
-  overlay: { tool: null, pinned: false, documents: true, expanded: false },
-  pinned: { tool: null, pinned: true, documents: true, expanded: false },
-  "explorer-overlay": { tool: "explorer", pinned: false, documents: true, expanded: false },
-  "explorer-only": { tool: "explorer", pinned: true, documents: false, expanded: false },
-  expanded: { tool: "explorer", pinned: false, documents: true, expanded: true },
-  project: { tool: "project", pinned: true, documents: true, expanded: false },
-  "project-partial": { tool: "project", pinned: true, documents: true, expanded: false },
-  "project-empty": { tool: "project", pinned: true, documents: true, expanded: false },
-  memory: { tool: "memory", pinned: true, documents: true, expanded: false },
-  changes: { tool: "changes", pinned: true, documents: true, expanded: false },
-  narrow: { tool: "explorer", pinned: true, documents: true, expanded: false },
+  closed: { tool: null, documents: true, expanded: false },
+  overlay: { tool: null, documents: true, expanded: false },
+  "explorer-overlay": { tool: "explorer", documents: true, expanded: false },
+  "explorer-only": { tool: "explorer", documents: false, expanded: false },
+  expanded: { tool: "explorer", documents: true, expanded: true },
+  project: { tool: "project", documents: true, expanded: false },
+  "project-partial": { tool: "project", documents: true, expanded: false },
+  "project-empty": { tool: "project", documents: true, expanded: false },
+  memory: { tool: "memory", documents: true, expanded: false },
+  changes: { tool: "changes", documents: true, expanded: false },
+  narrow: { tool: "explorer", documents: true, expanded: false },
 };
 
 const REVIEW = `# 설정 화면 검토
@@ -66,7 +63,7 @@ export function rightLaneSceneParams(params: URLSearchParams): SceneParams & { s
 
 export function RightLaneScene({ theme, scale, content, state }: SceneParams & { state: LaneState }) {
   const lane = LANES[state];
-  const open = state !== "closed" && state !== "closed-pinned";
+  const open = state !== "closed";
   const fixture = useMemo(() => {
     const scene = sidebarScene(content, REFERENCE_FOLDS, Date.now());
     const workspace = scene.rest.navigator!.workspaces!.find((project) => project.id === "hide")!;

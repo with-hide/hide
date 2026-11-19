@@ -6,7 +6,7 @@ import { useShellStore } from "./store";
 
 /** A box with its orb at the top center: `orb` is the orb's diameter. */
 export type GraphBox = { width: number; height: number; orb: number };
-type Dimensions = { root: GraphBox; child: GraphBox; operator: number; label: { width: number; height: number }; gap: number };
+export type Dimensions = { root: GraphBox; child: GraphBox; operator: number; label: { width: number; height: number }; gap: number };
 export type GraphLayout = {
   phase: "loading" | "ready" | "failed";
   size: Dimensions | null;
@@ -55,6 +55,18 @@ function dimensions(element: HTMLElement, scale: number): Dimensions {
 
 /** The room a session's circle and words need around its orb center, for the physics to keep apart. */
 const room = (box: GraphBox, gap: number) => Math.max(box.width / 2, box.height - box.orb / 2) * 0.85 + gap / 2;
+
+/**
+ * The room a start circle needs so no session's box covers it (issue 2514):
+ * sessions pack with their words a little inside each other's room, which a
+ * circle the operator presses cannot afford, so it keeps its own circle and
+ * a gap past the farthest corner of a root's or a child's box.
+ */
+export function startRoom(size: Pick<Dimensions, "root" | "child" | "gap">): number {
+  const reach = (box: GraphBox) => Math.hypot(box.width / 2, box.height - box.orb / 2);
+  const circle = room({ width: size.root.orb, height: size.root.orb, orb: size.root.orb }, size.gap);
+  return Math.max(circle, ...[size.root, size.child].map((box) => reach(box) + size.root.orb / 2 + size.gap - room(box, size.gap)));
+}
 
 /** Appearance writes the interface scale on the root; release its observer with the graph. */
 function useGraphScale(): number {
@@ -117,8 +129,8 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
           ...input.projects.flatMap((group) => [
             ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
             ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
-            // A start circle carries no words, so it needs only its circle's room.
-            ...(latestStarts.current ? [{ id: group.startSlot, projectId: group.id, parent: null, radius: room({ width: size.root.orb, height: size.root.orb, orb: size.root.orb }, size.gap), quiet: true }] : []),
+            // A start circle carries no words, but it stays clear of every session's words.
+            ...(latestStarts.current ? [{ id: group.startSlot, projectId: group.id, parent: null, radius: startRoom(size), quiet: true }] : []),
           ]),
           ...(adding ? [{ id: ADD_PROJECT.slot, projectId: ADD_PROJECT.project, parent: null, radius: room(size.root, size.gap), quiet: true }] : []),
         ],

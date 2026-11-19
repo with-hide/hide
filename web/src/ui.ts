@@ -16,7 +16,7 @@ import type { KeyboardOwner } from "./viewFocus";
 import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
-import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
+import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
 
 export type { ViewFocusRequest } from "./viewLayout";
@@ -328,6 +328,8 @@ type UiStore = {
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;
+  /** The page each Workspace drew last in front of its desk (`laneCalls.ts`). Never sent. */
+  drawnPages: DrawnPages;
   /**
    * The Workspace (`workspaceKey`) whose lane call put a page in front, until
    * the Workspace screen, which measures the body, widens its lane for it
@@ -518,6 +520,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   missions: MISSION_ENTRY,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
+  drawnPages: NO_DRAWN_PAGES,
   pageWiden: null,
   browserDevices: {},
   drawnLane: { mode: "closed", view: "none", tool: null, stacked: false },

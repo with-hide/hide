@@ -119,9 +119,11 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   const summaries = summariesEnabled(rest?.status?.background_ai);
   const connected = deviceConnected(rest, target.device_id);
   const read = section?.session && workKey(section.session) === workKey(target) ? section : null;
-  // Whether this record is the card tab in front of the desk the lane draws, the one the core reads.
+  // Whether this record is the card tab in front of the desk the lane draws, the one the core reads;
+  // a folded desk's card, whose read the core stopped, would open its desk again with an ask (B14).
   const front = useShellStore((state) => {
-    const card = frontCard(workspaceViewOf(state.rest));
+    const view = workspaceViewOf(state.rest);
+    const card = view?.open && view.tray.shown ? frontCard(view) : null;
     return card?.kind === "record" && workKey(card.session) === workKey(target);
   });
   const settled = read && !read.loading && !read.failure ? read : null;

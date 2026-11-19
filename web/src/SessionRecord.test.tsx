@@ -48,16 +48,19 @@ const BASE: RecordValue = {
   children: [child],
 };
 
-/** A desk whose front card tab is `session`'s record, the card the core reads (PRD lane-desk-pair-view D-13). */
-const deskFront = (session: WorkSession) => ({ tray: { tab_id: "t1", shown: true, count: 1 }, layout: { root: { area: { id: "a1", displays: [{ id: "d1", kind: "card", card: { kind: "record", session } }], active: "d1" } }, active_area: "a1" } });
+/** The front Workspace with `session`'s record as the one card of its tab's desk, drawn while `shown`. */
+const desk = (shown: boolean, session: WorkSession = SESSION) => ({
+  device_id: "local", path: "/p", open: true, tool: null, tray: { tab_id: "t1", shown, count: 1 },
+  layout: { root: { area: { id: "area-1", active: "card-1", displays: [{ id: "card-1", kind: "card", card: { kind: "record", session } }] } }, active_area: "area-1", display_count: 1 },
+});
 
-async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; front?: boolean; locator?: { request_offset: number; query?: string } } = {}) {
+async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; locator?: { request_offset: number; query?: string }; folded?: boolean } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: options.summaries !== false, chosen: true, agent_summary: options.summaries !== false } } } as unknown as SnapshotRest;
-  const shown = options.front ? { ...(options.rest ?? rest), workspace_view: deskFront(SESSION) } as unknown as SnapshotRest : options.rest ?? rest;
-  useShellStore.setState({ rest: shown, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
+  const shown = options.rest ?? rest;
+  useShellStore.setState({ rest: { ...shown, workspace_view: shown.workspace_view ?? desk(options.folded !== true) } as SnapshotRest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -364,17 +367,17 @@ it("opens the past flow holding a History hit and shows its words with the query
 });
 
 it("asks for the record once when the desk's front card tab draws one nothing has read, as after a relaunch, and not when it is read", async () => {
-  const restored = await mount(null, { front: true });
+  const restored = await mount(null);
   try {
     expect(restored.sent).toEqual([{ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session: SESSION } } }]);
     expect(restored.container.querySelector("[data-record-loading]")).not.toBeNull();
   } finally { await restored.unmount(); }
-  const read = await mount(BASE, { front: true });
+  const read = await mount(BASE);
   try { expect(read.sent).toEqual([]); } finally { await read.unmount(); }
 });
 
 it("asks again when the window lands on a new core session while the desk's front card tab still draws the record", async () => {
-  const restored = await mount(null, { front: true });
+  const restored = await mount(null);
   try {
     expect(restored.sent).toHaveLength(1);
     // The same slot, a self-contained snapshot of a core that has read nothing.
@@ -383,6 +386,17 @@ it("asks again when the window lands on a new core session while the desk's fron
     await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: true, failure: null, record: null } }));
     expect(restored.sent).toHaveLength(2);
   } finally { await restored.unmount(); }
+});
+
+it("asks for no read while its desk is folded, which would bring the desk up again (lane-desk-pair-view B14)", async () => {
+  const folded = await mount(null, { folded: true });
+  try { expect(folded.sent).toEqual([]); } finally { await folded.unmount(); }
+  const drawn = await mount(BASE);
+  try {
+    // The desk button folds the desk, and the core stops the card's read with it.
+    await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, workspace_view: desk(false) } as SnapshotRest, sessionRecord: { session: null, loading: false, failure: null, record: null } }));
+    expect(drawn.sent).toEqual([]);
+  } finally { await drawn.unmount(); }
 });
 
 it("expands a child in place and opens its full record only with the explicit action", async () => {
@@ -635,7 +649,7 @@ it("keeps what a record card tab out of its desk's front drew while the core rea
     // The desk's front card is another record, which the core reads now.
     const other: WorkSession = { device_id: "local", agent: "codex", session_id: "other" };
     await act(async () => useShellStore.setState((state) => ({
-      rest: { ...state.rest!, workspace_view: deskFront(other) } as unknown as SnapshotRest,
+      rest: { ...state.rest!, workspace_view: desk(true, other) } as SnapshotRest,
       sessionRecord: { session: other, loading: true, failure: null, record: null },
     })));
     expect(container.querySelector("[data-record-loading]")).toBeNull();

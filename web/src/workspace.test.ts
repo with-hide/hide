@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Checkout, StripTab } from "./snapshot";
 import type { ViewDisplaySnapshot, ViewLayoutSnapshot } from "./snapshot";
-import { agentEntries, columnLanding, laneFrame, laneLanding, laneViewOf, NO_CALLS_SEEN, pageCalled, pageLaneWidth, readCalls, TOOLS, TOOL_SCOPES, type LaneColumn, type LaneInput, type LaneSizes } from "./workspace";
+import { agentEntries, columnLanding, laneFrame, laneLanding, laneViewOf, DRAWN_PAGES_LIMIT, NO_CALLS_SEEN, NO_DRAWN_PAGES, pageLaneWidth, readDrawnPage, readCalls, TOOLS, TOOL_SCOPES, type DrawnPages, type LaneColumn, type LaneInput, type LaneSizes } from "./workspace";
 
 const strip: StripTab[] = [
   { id: "engine:1", kind: "engine", source_id: "t1", label: "1", preview: false },
@@ -144,7 +144,7 @@ describe("widening the lane for a page (PRD browser-width-zoom)", () => {
   });
 });
 
-describe("a lane call that puts a page in front (PRD browser-width-zoom D-04)", () => {
+describe("the page a Workspace draws in front (PRD browser-width-zoom D-04)", () => {
   const display = (id: string, kind: ViewDisplaySnapshot["kind"], url: string | null = null, load = 1) =>
     ({ id, kind, url, load, tab_id: null, path: "", label: id, committed: null, preview: false, state: "ready", reason: null }) as unknown as ViewDisplaySnapshot;
   const view = (active: string, displays: ViewDisplaySnapshot[], path = "/a", shown = true) => ({
@@ -156,23 +156,28 @@ describe("a lane call that puts a page in front (PRD browser-width-zoom D-04)", 
   });
   const file = display("d1", "file");
   const page = display("d2", "browser", "http://localhost:5173/");
+  type Called = Parameters<typeof readDrawnPage>[1];
+  /** Whether the last of `views`, read one after another, draws a fresh page. */
+  const freshAfter = (...views: Called[]) => views.reduce<{ drawn: DrawnPages; fresh: boolean }>((read, next) => readDrawnPage(read.drawn, next), { drawn: NO_DRAWN_PAGES, fresh: false }).fresh;
 
   it("is a page that came in front, or one that loaded again in front (B1)", () => {
-    expect(pageCalled(view("d1", [file]), view("d2", [file, page]))).toBe(true);
-    expect(pageCalled(view("d1", [file, page]), view("d2", [file, page]))).toBe(true);
-    expect(pageCalled(view("d2", [file, page]), view("d2", [file, { ...page, load: 2 }]))).toBe(true);
-    expect(pageCalled(null, view("d2", [page]))).toBe(true);
+    expect(freshAfter(view("d1", [file]), view("d2", [file, page]))).toBe(true);
+    expect(freshAfter(view("d2", [file, page]), view("d2", [file, { ...page, load: 2 }]))).toBe(true);
+    expect(freshAfter(null, view("d2", [page]))).toBe(true);
     // The same page in front of another Workspace is new to this one.
-    expect(pageCalled(view("d2", [page], "/b"), view("d2", [page]))).toBe(true);
-    // A desk the documents button brings up with a page in front (lane-desk-pair-view B2).
-    expect(pageCalled(view("d2", [file, page], "/a", false), view("d2", [file, page]))).toBe(true);
+    expect(freshAfter(view("d2", [page], "/b"), view("d2", [page]))).toBe(true);
+    // A page that waited on a folded desk, never drawn, is new when the desk comes up (lane-desk-pair-view B2).
+    expect(freshAfter(view("d2", [file, page], "/a", false), view("d2", [file, page]))).toBe(true);
   });
 
-  it("is nothing when the page in front stayed, or a file, a diff or a new tab came in front (B4)", () => {
-    expect(pageCalled(view("d2", [file, page]), view("d2", [file, page]))).toBe(false);
-    expect(pageCalled(view("d2", [file, page]), view("d1", [file, page]))).toBe(false);
-    expect(pageCalled(view("d1", [file]), view("d3", [file, display("d3", "browser")]))).toBe(false);
-    expect(pageCalled(view("d1", [file]), view("d4", [file, display("d4", "diff")]))).toBe(false);
+  it("is nothing when the page drawn last comes back, or a file, a diff or a new tab came in front (B4)", () => {
+    expect(freshAfter(view("d2", [file, page]), view("d2", [file, page]))).toBe(false);
+    expect(freshAfter(view("d2", [file, page]), view("d1", [file, page]))).toBe(false);
+    // Through a file tab and back, a folded desk, or a closed lane, the page drawn last is not new.
+    expect(freshAfter(view("d2", [file, page]), view("d1", [file, page]), view("d2", [file, page]))).toBe(false);
+    expect(freshAfter(view("d2", [file, page]), view("d2", [file, page], "/a", false), view("d2", [file, page]))).toBe(false);
+    expect(freshAfter(view("d1", [file]), view("d3", [file, display("d3", "browser")]))).toBe(false);
+    expect(freshAfter(view("d1", [file]), view("d4", [file, display("d4", "diff")]))).toBe(false);
   });
 
   it("reads only the active area's front display", () => {
@@ -184,8 +189,16 @@ describe("a lane call that puts a page in front (PRD browser-width-zoom D-04)", 
       layout: { root: { split: { id: "s", axis: "row", ratio: 0.5, first: { area: { id: "area-1", active: "d1", displays: [file] } }, second: { area: { id: "area-2", active: other.id, displays: [other] } } } }, active_area, limits: { areas: 4, depth: 2, displays: 32 }, display_count: 2 } as unknown as ViewLayoutSnapshot,
     });
     // A page loading again in an area the call did not land in widens nothing.
-    expect(pageCalled(split("area-1", page), split("area-1", { ...page, load: 2 }))).toBe(false);
-    expect(pageCalled(split("area-1", page), split("area-2", page))).toBe(true);
+    expect(freshAfter(split("area-1", page), split("area-1", { ...page, load: 2 }))).toBe(false);
+    expect(freshAfter(split("area-1", page), split("area-2", page))).toBe(true);
+  });
+
+  it("keeps the pages of the 256 Workspaces whose page changed last", () => {
+    let drawn: DrawnPages = NO_DRAWN_PAGES;
+    for (let index = 0; index <= DRAWN_PAGES_LIMIT; index += 1) drawn = readDrawnPage(drawn, view("d2", [page], `/w${index}`)).drawn;
+    expect(drawn.size).toBe(DRAWN_PAGES_LIMIT);
+    expect(readDrawnPage(drawn, view("d2", [page], `/w${DRAWN_PAGES_LIMIT}`)).fresh).toBe(false);
+    expect(readDrawnPage(drawn, view("d2", [page], "/w0")).fresh).toBe(true);
   });
 });
 
