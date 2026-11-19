@@ -448,11 +448,12 @@ impl Runtime {
             return;
         }
         let store = self.workspace_views.as_mut().expect("read above");
-        if store.views.entry(&key.0, &key.1).adopt_pending_tray(&tab) {
+        if let Some(adopted) = store.views.entry(&key.0, &key.1).adopt_pending_tray(&tab) {
             store.generation += 1;
             crate::diagnostic!(serde_json::json!({
                 "component": "view_layout", "kind": "tray.pending_adopted",
-                "device": key.0, "tab": tab,
+                "device": key.0, "tab": tab, "inherited": adopted.inherited,
+                "shelved": adopted.shelved, "dropped": adopted.dropped,
             }));
             self.persist_workspace_views();
         }

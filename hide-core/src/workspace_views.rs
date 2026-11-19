@@ -619,56 +619,80 @@ impl WorkspaceView {
 
     /// The pending desk an older file's documents wait on goes to `tab`,
     /// the first Agent tab the Workspace shows (D-18): taken whole when the
-    /// tab has no desk yet, else its Views join the tab's. Whether it moved.
-    pub fn adopt_pending_tray(&mut self, tab: &str) -> bool {
+    /// tab has no desk yet, else its Views join the tab's. A View the tab's
+    /// desk has no room for goes where `retire_tray` sends it: an agent's to
+    /// the shelf, still in its pane's list, the operator's nowhere, since the
+    /// shelf shows only agents' Views; it is counted. `None` when nothing was
+    /// pending.
+    pub fn adopt_pending_tray(&mut self, tab: &str) -> Option<Retired> {
         if tab == PENDING_TRAY {
-            return false;
+            return None;
         }
-        let Some(index) = self.trays.iter().position(|tray| tray.tab == PENDING_TRAY) else {
-            return false;
-        };
+        let index = self
+            .trays
+            .iter()
+            .position(|tray| tray.tab == PENDING_TRAY)?;
         let pending = self.trays.remove(index);
+        let mut retired = Retired::default();
         match self.trays.iter().position(|tray| tray.tab == tab) {
-            None => self.trays.push(Tray {
-                tab: tab.to_owned(),
-                ..pending
-            }),
+            None => {
+                retired.inherited = pending.layout.display_count();
+                self.trays.push(Tray {
+                    tab: tab.to_owned(),
+                    ..pending
+                });
+            }
             Some(at) => {
-                let tray = &mut self.trays[at];
-                tray.shown |= pending.shown;
+                self.trays[at].shown |= pending.shown;
                 for display in pending.layout.displays().cloned().collect::<Vec<_>>() {
-                    let area = tray.layout.active_area().id.clone();
-                    if tray.layout.append(&area, display.clone()).is_err() {
-                        let area = self.shelf.active_area().id.clone();
-                        let _ = self.shelf.append(&area, display);
+                    let layout = &mut self.trays[at].layout;
+                    let area = layout.active_area().id.clone();
+                    match layout.append(&area, display.clone()) {
+                        Ok(()) => retired.inherited += 1,
+                        Err(_) => self.shelve_or_drop(display, &mut retired),
                     }
                 }
             }
         }
-        true
+        Some(retired)
+    }
+
+    /// A View a desk has no room for: an agent's goes to the shelf, which
+    /// its pane's list shows; the operator's, which no list shows, and one
+    /// the shelf has no room for, are dropped. Counted in `retired`.
+    fn shelve_or_drop(&mut self, display: crate::view_layout::Display, retired: &mut Retired) {
+        if display.operator || display.openers.is_empty() {
+            retired.dropped += 1;
+            return;
+        }
+        let area = self.shelf.active_area().id.clone();
+        match self.shelf.append(&area, display) {
+            Ok(()) => retired.shelved += 1,
+            Err(_) => retired.dropped += 1,
+        }
     }
 
     /// Takes away the tray of a tab the engine no longer lists: its agents'
     /// Views go on no tray, to stay in their panes' lists, and the
     /// operator's go to `heir`'s tray (the desk in front, or the pending one
-    /// while no tab is shown), so no page or document leaves with the tab.
-    /// A View neither has room for is dropped, and counted.
+    /// while no tab is shown, and when `heir` is the tab that left), so no
+    /// page or document leaves with the tab. A View neither has room for is
+    /// dropped, and counted.
     pub fn retire_tray(&mut self, tab: &str, heir: &str) -> Retired {
         let mut retired = Retired::default();
         let Some(index) = self.trays.iter().position(|tray| tray.tab == tab) else {
             return retired;
         };
         let tray = self.trays.remove(index);
+        let heir = if heir == tab { PENDING_TRAY } else { heir };
         for display in tray.layout.displays().cloned().collect::<Vec<_>>() {
-            let agents = !display.operator && !display.openers.is_empty();
-            let layout = if agents || heir == tab {
-                &mut self.shelf
-            } else {
-                &mut self.tray_entry(heir).layout
-            };
+            if !display.operator && !display.openers.is_empty() {
+                self.shelve_or_drop(display, &mut retired);
+                continue;
+            }
+            let layout = &mut self.tray_entry(heir).layout;
             let area = layout.active_area().id.clone();
             match layout.append(&area, display) {
-                Ok(()) if agents => retired.shelved += 1,
                 Ok(()) => retired.inherited += 1,
                 Err(_) => retired.dropped += 1,
             }
@@ -2062,13 +2086,13 @@ mod tests {
         operators(&mut layout, "/repo/a.md");
         view.adopt_checkout_documents(layout, true);
         assert!(view.tray(PENDING_TRAY).is_some());
-        assert!(view.adopt_pending_tray("t1"));
+        assert!(view.adopt_pending_tray("t1").is_some());
         assert!(view.tray(PENDING_TRAY).is_none());
         let tray = view.tray("t1").unwrap();
         assert!(tray.shown);
         assert_eq!(tray.layout.display_count(), 1);
         assert!(
-            !view.adopt_pending_tray("t2"),
+            view.adopt_pending_tray("t2").is_none(),
             "nothing is pending any more"
         );
     }
