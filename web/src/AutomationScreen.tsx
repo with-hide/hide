@@ -66,6 +66,7 @@ export function AutomationScreen({ actions }: { actions: Actions }) {
       ) : (
         <>
           <Head count={section.items.length} />
+          {section.unreadable ? <UnreadableLine file={section.unreadable.file} /> : null}
           <Table section={section} actions={actions} />
         </>
       )}
@@ -95,6 +96,12 @@ function NewButton({ className }: { className?: string }) {
       {t("automationScreen.new")}
     </Button>
   );
+}
+
+/** The saved book the core could not read and set aside, one line above the table until an automation is made. */
+function UnreadableLine({ file }: { file: string }) {
+  const { t } = useInterfaceTranslation();
+  return <p className="shrink-0 px-lg pt-sm text-caption text-warning" title={file} data-automation-unreadable="true">{t("automationScreen.unreadable", { file: lastName(file) })}</p>;
 }
 
 /** Quiet rows before the core's automations first arrive: no count, no words. */
@@ -233,7 +240,7 @@ function RecordWords({ tone, text }: { tone: RecordTone; text: string }) {
 /** `기본 폴더 · Claude`, `hide · Codex · 새 워크트리`. */
 function Where({ automation }: { automation: Automation }) {
   const { t } = useInterfaceTranslation();
-  const folder = automation.folder.default ? t("automationScreen.ownFolder") : folderName(automation.folder.path);
+  const folder = automation.folder.default ? t("automationScreen.ownFolder") : lastName(automation.folder.path);
   return (
     <>
       <span className="min-w-0 truncate" title={automation.folder.path}>{folder}</span>
@@ -245,7 +252,7 @@ function Where({ automation }: { automation: Automation }) {
   );
 }
 
-function folderName(path: string): string {
+function lastName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
@@ -352,7 +359,7 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
           <Fact label={t("automationScreen.detail.next")}><NextRunWords automation={automation} words={words} /></Fact>
           <Fact label={t("automationScreen.detail.folder")}>
             <span className="flex min-w-0 flex-col">
-              <span>{automation.folder.default ? t("automationScreen.ownFolder") : folderName(automation.folder.path)}{automation.folder.worktree ? ` · ${t("automationScreen.worktree")}` : ""}</span>
+              <span>{automation.folder.default ? t("automationScreen.ownFolder") : lastName(automation.folder.path)}{automation.folder.worktree ? ` · ${t("automationScreen.worktree")}` : ""}</span>
               <span className="truncate font-mono text-caption text-muted-foreground" title={automation.folder.path} data-automation-folder-path="true">{automation.folder.path}</span>
             </span>
           </Fact>

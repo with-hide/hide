@@ -3270,7 +3270,7 @@ export type AutomationAgent = { kind: string; profile?: string; model?: string; 
 /** Why an automation does not run on schedule (`automation_pause_reason`): only `operator` is quiet; the rest are its own Needs You line (D-12). */
 export type AutomationPauseReason = "operator" | "login_expired" | "folder_missing" | "agent_missing" | "folder_detached" | "machine_changed" | "folder_in_repository";
 
-export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped" | "skipped";
+export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped";
 
 export type AutomationRun = {
   number: number;
@@ -3335,6 +3335,8 @@ export type AutomationsSection = {
   zone?: string;
   /** `~/hide/automations` on this machine, which the form names under its default folder (B5). */
   own_folder_root?: string;
+  /** The saved automations could not be read and were set aside as `file`; gone once an automation is made. */
+  unreadable?: { file: string; at_unix_ms: number };
 };
 
 /** The `desk` section: absent until hided starts Desk. */

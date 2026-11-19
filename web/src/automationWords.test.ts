@@ -52,6 +52,8 @@ describe("an automation's words", () => {
     expect(recordText(run({ state: "failed", attempt: 3, reason: "agent_exited", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "failed", text: "실패 · 3번 시도" });
     expect(recordText(run({ state: "failed", reason: "automation_login_expired", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "failed", text: "로그인 만료" });
     expect(recordText(run({ state: "running", attempt: 2 }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "running", text: "2번째 시도" });
+    expect(recordText(run({ state: "stopped", reason: "stopped_by_person", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "stopped", text: "멈춤 · 사람이 끝냄" });
+    expect(recordText(run({ state: "stopped", reason: "automation_machine_changed", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "stopped", text: "멈춤 · 기계 바뀜" });
     expect(recordText({ kind: "skipped", at_unix_ms: NOW, reason: { kind: "previous_running" } }, NOW, SEOUL, "ko", ko)).toEqual({ tone: "skipped", text: "건너뜀 · 이전 회차 진행 중" });
   });
 

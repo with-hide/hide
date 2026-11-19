@@ -165,9 +165,8 @@ export function runText(run: RunFacts, language: InterfaceLanguage, t: Translate
       return { tone: "failed", text: pause ? pauseReasonText(pause, t) : t("automation.record.failed", { count: run.attempt }) };
     }
     case "stopped":
-      return { tone: "stopped", text: t("automation.record.stopped") };
-    case "skipped":
-      return { tone: "skipped", text: t("automation.record.skippedRunLimit") };
+      // A person ended it, or the core of another machine read it and stopped it.
+      return { tone: "stopped", text: run.reason === "automation_machine_changed" ? t("automation.record.stoppedMachine") : t("automation.record.stopped") };
   }
 }
 
