@@ -1159,7 +1159,7 @@ impl Runtime {
 
     /// The panes of the tabs on one machine's screen; empty while another
     /// device is in front, because none of this machine's tabs is then.
-    fn agent_sleep_on_screen(&self, device: Option<&str>) -> HashSet<String> {
+    pub(super) fn agent_sleep_on_screen(&self, device: Option<&str>) -> HashSet<String> {
         let tabs = match device {
             None if self.device_in_front(self.node.as_str()) => self.shown_agent_tabs(),
             None => Vec::new(),

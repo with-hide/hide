@@ -103,10 +103,11 @@ STORES = {
         "and committed shelf eviction also deletes its owned history",
     ),
     "hide-core/src/latest_file.rs": (
-        6,
+        7,
         "the write and read of a core store that keeps only its latest value "
-        "(the saved GitHub answers and the panes held as a draft), "
-        "and the one copy a store keeps of the file a schema conversion read",
+        "(the saved GitHub answers, the panes held as a draft, the automations), "
+        "the one copy a store keeps of the file a schema conversion read, "
+        "and the file a store could not read set aside beside it",
     ),
     "hide-core/src/diagnostics.rs": (7, "the core's own log file"),
     "hide-core/src/engine/own/store.rs": (

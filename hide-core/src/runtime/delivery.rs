@@ -2225,6 +2225,7 @@ impl Runtime {
         }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
+                || *actor == Actor::hide(super::automations::AUTOMATION_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::missions::CONDUCTOR_ROLE, self.node.as_str())
                 || *actor
                     == Actor::hide(super::agent_sleep::letters::WAKE_ROLE, self.node.as_str())
@@ -2867,6 +2868,7 @@ pub(crate) mod tests {
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".into(),
                 workspace_id: "workspace".into(),

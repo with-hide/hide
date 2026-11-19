@@ -517,6 +517,7 @@ A scenario step a release itself refuses is recorded as not done in `<tag>.json`
 A change to how a stored mission is read is held to what the release itself showed: the scenario has the release store missions in each state it keeps (closed done, waiting for a branch, running with nodes at work, stacked, gated, waiting on an outside branch, verified) and keeps each as the release published it in `<tag>.json` (`missions`), cut to what the record alone decides, and `runtime::tests::missions::a_released_builds_missions_read_as_that_build_published_them` compares this build's reading of the same records with it and runs one evaluation, which may move nothing.
 A folder made before the scenario kept that view (v1.2.6 and earlier) names none, and its missions are only read and evaluated.
 The step `a Home started on the core and the device` makes each release write the old Home registration (flagged `home`) on both machines, and the upgrade test holds that this build loads it as the registration it was, with one pending retirement per device that follows the device's renaming (PRD retire-hide-home).
+`runtime::tests::automations::a_released_old_home_that_holds_only_the_automations_folder_drops_its_registration` answers each of those retirements from an account whose `~/hide` holds the marker and the automations' folder with a run's files (`hide_host::home::retire` on a real folder), and holds that this build drops the old Home registration and keeps the folder and its files (PRD automations B31).
 
 ### Agent screen rules
 

@@ -864,6 +864,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
@@ -1390,12 +1391,15 @@ impl Runtime {
             // The catalog's first checkout, passing over one whose folder
             // the node found gone: a restored pane's row stays while its
             // folder is missing, and with no activity its place in the order
-            // is its id's, so the window would open on it by chance.
+            // is its id's, so the window would open on it by chance. A
+            // project no list shows (an automation's folder) is never opened
+            // on: its run's terminal would become the selected pane.
             let starts = || {
                 self.snapshot
                     .navigator
                     .workspaces
                     .iter()
+                    .filter(|workspace| !workspace.unlisted)
                     .flat_map(|workspace| workspace.checkouts.iter())
                     .filter(|checkout| checkout.exists)
             };
@@ -6090,6 +6094,7 @@ impl Runtime {
             &mut workspaces,
             &self.snapshot.navigator.agents,
         );
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
