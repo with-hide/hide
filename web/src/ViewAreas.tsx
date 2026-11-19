@@ -235,7 +235,9 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
       aria-selected={selected}
       aria-label={identity}
       tabIndex={0}
-      data-tab={display.tab_id ?? ""}
+      // Only a View with an editor tab names it; a card or a page carries
+      // none, so `[data-tab]` stays the Agent tabs' and the documents'.
+      data-tab={display.tab_id ?? undefined}
       data-display={display.id}
       data-tab-kind={display.kind}
       data-preview={display.preview ? "true" : "false"}

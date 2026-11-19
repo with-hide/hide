@@ -55,7 +55,8 @@ test("@platform session records by goal flow, ended work and search render in bo
     const deskButton = page.locator('[data-lane-tool="documents"]');
     await expect(deskButton).toHaveAttribute("aria-pressed", "true");
     await deskButton.click();
-    await expect(record).toHaveCount(0);
+    // A folded desk stays laid out out of sight, as its documents do, so the card is kept but not drawn.
+    await expect(record).toBeHidden();
     await expect(deskButton).toHaveAttribute("aria-pressed", "false");
     await deskButton.click();
     await expect(record).toBeVisible();
