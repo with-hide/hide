@@ -268,11 +268,9 @@ fn codex_add(words: &[String], mut env: Vec<String>, mut keys: Keys) -> Option<P
     })
 }
 
-/// The name a local server goes by: its package for a runner (`npx`,
-/// `uvx`, `bunx`, `pnpm dlx`, `docker run`), the program's otherwise, with
-/// the words every server package carries (`@scope/`, `server-`, `mcp-`,
-/// `-mcp`) taken off.
-fn name_of_command(words: &[String]) -> String {
+/// A local server's program, and the package it runs when the program is
+/// a runner (`npx`, `uvx`, `bunx`, `pnpm dlx`, `docker run`, ...).
+pub(super) fn package_of(words: &[String]) -> (String, Option<&str>) {
     let program = hide_shell::Syntax::Posix.program(&words[0]);
     let runner = matches!(
         program.as_str(),
@@ -303,6 +301,15 @@ fn name_of_command(words: &[String]) -> String {
     } else {
         None
     };
+    (program, package)
+}
+
+/// The name a local server goes by: its package for a runner (`npx`,
+/// `uvx`, `bunx`, `pnpm dlx`, `docker run`), the program's otherwise, with
+/// the words every server package carries (`@scope/`, `server-`, `mcp-`,
+/// `-mcp`) taken off.
+fn name_of_command(words: &[String]) -> String {
+    let (program, package) = package_of(words);
     let package = package.unwrap_or(&program);
     // `@scope/name@1.2.3`, `ghcr.io/org/name:tag`, `pkg==1.0`, `./server.js`;
     // a scoped package whose own name says only that it is a server

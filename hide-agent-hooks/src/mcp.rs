@@ -186,6 +186,58 @@ pub fn takes_name(format: McpFormat, name: &str) -> bool {
     valid_name(name) && !shape(format).reserved.contains(&name)
 }
 
+/// The version a local server's command runs, for the short version beside
+/// its name (B36).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Pin {
+    /// The package or image names this version.
+    Version(String),
+    /// An npm runner's package that names no version, or `latest`, so each
+    /// start runs the newest ('npm 최신').
+    NpmLatest,
+    /// A program on the machine, or another runner's package that names no
+    /// version.
+    Unpinned,
+}
+
+/// What `command` with `args` runs, as [`Pin`] says it.
+pub fn pin(command: &str, args: &[String]) -> Pin {
+    let words: Vec<String> = std::iter::once(command.to_owned())
+        .chain(args.iter().cloned())
+        .collect();
+    let (program, package) = paste::package_of(&words);
+    let Some(package) = package else {
+        return Pin::Unpinned;
+    };
+    let npm = matches!(
+        program.as_str(),
+        "npx" | "bunx" | "pnpx" | "pnpm" | "yarn" | "bun"
+    );
+    let version = match program.as_str() {
+        // `name@1.2.3`, `@scope/name@1.2.3`.
+        _ if npm => package
+            .rsplit_once('@')
+            .filter(|(name, _)| !name.is_empty())
+            .map(|(_, version)| version),
+        // `pkg==1.2.3`, or uv's `pkg@1.2.3`.
+        "uvx" | "uv" | "pipx" => package
+            .split_once("==")
+            .or_else(|| package.split_once('@'))
+            .map(|(_, version)| version),
+        // `ghcr.io/org/image:tag`; a registry's port is before a `/`.
+        "docker" | "podman" => package
+            .rsplit_once(':')
+            .filter(|(_, tag)| !tag.contains('/'))
+            .map(|(_, tag)| tag),
+        _ => None,
+    };
+    match version.filter(|version| !version.is_empty()) {
+        Some("latest") | None if npm => Pin::NpmLatest,
+        Some("latest") | None => Pin::Unpinned,
+        Some(version) => Pin::Version(version.to_owned()),
+    }
+}
+
 impl Server {
     /// What the store compares an agent's entry with (`hide_kit::store`):
     /// the server's name, how it is reached and the names of its keys, in a

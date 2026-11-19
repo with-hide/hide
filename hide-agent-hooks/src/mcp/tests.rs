@@ -322,3 +322,39 @@ fn a_key_prints_masked_and_a_server_carries_none() {
     assert!(!server.contains("s3cr3t-value"), "{server}");
     assert!(server.contains("TOKEN"), "{server}");
 }
+
+#[test]
+fn a_local_servers_version_is_what_its_package_or_image_pins() {
+    let pin_of = |line: &str| {
+        let words: Vec<String> = line.split(' ').map(str::to_owned).collect();
+        pin(&words[0], &words[1..])
+    };
+    let cases = [
+        ("npx -y @modelcontextprotocol/server-github", Pin::NpmLatest),
+        ("npx @playwright/mcp@latest", Pin::NpmLatest),
+        (
+            "npx -y @upstash/context7-mcp@1.0.14",
+            Pin::Version("1.0.14".to_owned()),
+        ),
+        ("npx some-mcp@2.1.0", Pin::Version("2.1.0".to_owned())),
+        ("pnpm dlx some-mcp", Pin::NpmLatest),
+        ("uvx mcp-server-fetch", Pin::Unpinned),
+        (
+            "uvx mcp-server-fetch==2025.4.7",
+            Pin::Version("2025.4.7".to_owned()),
+        ),
+        (
+            "docker run -i --rm ghcr.io/github/github-mcp-server",
+            Pin::Unpinned,
+        ),
+        (
+            "docker run -i --rm ghcr.io/github/github-mcp-server:v0.5.0",
+            Pin::Version("v0.5.0".to_owned()),
+        ),
+        ("docker run -i localhost:5000/tool", Pin::Unpinned),
+        ("/usr/local/bin/my-tool --stdio", Pin::Unpinned),
+    ];
+    for (line, expected) in cases {
+        assert_eq!(pin_of(line), expected, "{line}");
+    }
+}
