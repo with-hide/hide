@@ -1280,6 +1280,35 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     runtime.rebuild_device_rows();
     let helper = runtime.device_registration("build-box-id").unwrap().clone();
 
+    // What hided switches it from names the projects registered on it and
+    // no other machine's (D-48), by its id or the alias it is dialed by.
+    for (id, device, path) in [
+        ("workspace:app", "build-box-id", "/home/me/app"),
+        ("workspace:here", crate::node::TEST_NODE, "/Users/me/here"),
+    ] {
+        runtime.snapshot.ui_state.workspace_registrations.push(
+            crate::model::WorkspaceRegistration {
+                primary_checkout_id: None,
+                id: id.to_owned(),
+                label: id.to_owned(),
+                path: path.to_owned(),
+                device_id: device.to_owned(),
+                pinned: false,
+            },
+        );
+    }
+    for named in ["build-box-id", "build-box"] {
+        let source = runtime
+            .device_switch_source(named)
+            .expect("a device to switch");
+        assert_eq!(source.device_id, "build-box-id", "{named}");
+        assert_eq!(source.projects, ["/home/me/app"], "{named}");
+    }
+    assert_eq!(
+        runtime.device_switch_source("nowhere").err(),
+        Some("device_unknown")
+    );
+
     // Each step is drawn on the device's row.
     for (said, drawn) in [
         ("checking", DeviceSwitchState::Checking),

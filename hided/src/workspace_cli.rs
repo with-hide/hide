@@ -785,6 +785,20 @@ pub fn request_project_open_with_token(
     )
 }
 
+/// Registers this machine's folder `path` as a project of its own Hide and
+/// brings nothing forward, with the daemon's token from the state file this
+/// account owns (`project_open::run_add`).
+pub fn request_project_add_with_token(port: u16, token: &str, path: &str) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"project_add","request_id":request_id,"path":path}),
+        &request_id,
+        PROJECT_OPEN_TIMEOUT,
+    )
+}
+
 /// `hide import herdr` on the core's own machine, with the daemon's token,
 /// as `hide <path>` asks (PRD engine-bundle-4-herdr-removal B17): what this
 /// machine's Herdr save offers, and with `yes` the move itself.

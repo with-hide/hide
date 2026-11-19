@@ -1044,6 +1044,7 @@ impl Pairing {
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
         let target = alias.to_owned();
         let (helper_root, press) = (source.helper_root.clone(), source.sign_in.clone());
+        let projects = source.projects.clone();
         // The install's step is told from the thread that runs ssh.
         let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
         let installed = device.to_owned();
@@ -1059,6 +1060,7 @@ impl Pairing {
                     me: &me,
                     key: &key,
                     helper_root: (!own_folder).then_some(helper_root.as_str()),
+                    projects: &projects,
                     press,
                     install,
                     installing: &installing,

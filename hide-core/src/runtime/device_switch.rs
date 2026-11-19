@@ -41,9 +41,18 @@ pub struct DeviceSwitchSource {
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
     pub helper_root: String,
+    /// The folders registered as projects on the device, as the device
+    /// spells them, which its machine's own Hide lists from then on (PRD
+    /// device-connect-iroh D-48); at most [`SWITCHED_PROJECTS`].
+    pub projects: Vec<String>,
     /// Where the questions of the switch's SSH login go: the device's row.
     pub sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
 }
+
+/// The most projects a switch hands the device's machine, which is as many
+/// as that machine's `hide device accept-ssh` takes: as many as a core adds
+/// at once.
+pub const SWITCHED_PROJECTS: usize = 32;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct DeviceSwitchPayload {
@@ -150,6 +159,15 @@ impl Runtime {
                 .as_ref()
                 .map(|consent| consent.helper_root.clone())
                 .unwrap_or_else(|| self.host_helper_root()),
+            projects: self
+                .snapshot
+                .ui_state
+                .workspace_registrations
+                .iter()
+                .filter(|project| project.device_id == device_id)
+                .map(|project| project.path.clone())
+                .take(SWITCHED_PROJECTS)
+                .collect(),
             sign_in,
         })
     }

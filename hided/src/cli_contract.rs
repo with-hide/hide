@@ -1058,7 +1058,9 @@ pub const COMMANDS: &[Spec] = &[
     // the request it made: the target saves a grant that opens nothing
     // until that machine confirms it over the connection, and answers its
     // own ids and addresses. Run again with the same request, it answers
-    // the same.
+    // the same. Each `--project` is a folder of the account that machine
+    // had registered on its device there, which this machine's own Hide
+    // then lists as a project too.
     Spec {
         words: &["device", "accept-ssh"],
         arguments: &[],
@@ -1071,6 +1073,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--name", Text),
             switch("--wsl"),
             optional("--helper", Text),
+            repeated("--project", Text, hide_core::SWITCHED_PROJECTS),
         ],
         rest: None,
         answers: &["device_accepted"],
@@ -2487,6 +2490,13 @@ mod tests {
                 .take_while(|argument| argument["required"] != false)
             {
                 base.push(exported_sample(&argument["value"]));
+            }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
             }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();
