@@ -71,6 +71,7 @@ pub mod node_migration;
 mod observed;
 pub mod pane_command;
 mod pane_reopen;
+pub mod peer_machines;
 mod persistence;
 pub mod plans;
 mod ports;

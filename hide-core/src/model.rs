@@ -881,6 +881,12 @@ pub struct NavigatorSnapshot {
     pub focused_workspace_id: Option<String>,
     pub focused_checkout_id: Option<String>,
     pub devices: Vec<DeviceSnapshot>,
+    /// The machines this one is paired with over the peer connection, both
+    /// directions of each pair, as hided last told the core (PRD
+    /// device-connect-iroh D-72). Beside `devices`, not among them: a paired
+    /// machine runs its own core.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<crate::peer_machines::PeerMachine>,
     pub workspaces: Vec<WorkspaceSnapshot>,
     /// Project rows the core grouped at the bottom of each device's Projects
     /// list. `workspaces` remains the one authoritative row collection so
@@ -8267,6 +8273,7 @@ impl Snapshot {
                     options.machine_name.as_deref(),
                     None,
                 )],
+                peers: Vec::new(),
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
                 agents: Vec::new(),
@@ -11456,6 +11463,66 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "session_thread_view_kind", &views);
         checked.insert("session_thread_view_kind");
+
+        {
+            use crate::peer_machines::{PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate};
+            let opens = [
+                PeerOpens::Confirming,
+                PeerOpens::Active,
+                PeerOpens::Paused,
+                PeerOpens::PausedThere,
+                PeerOpens::Removing,
+                PeerOpens::Unpaired,
+            ];
+            for variant in opens {
+                match variant {
+                    PeerOpens::Confirming
+                    | PeerOpens::Active
+                    | PeerOpens::Paused
+                    | PeerOpens::PausedThere
+                    | PeerOpens::Removing
+                    | PeerOpens::Unpaired => {}
+                }
+            }
+            assert_wire(&contract, "peer_opens", &opens);
+            checked.insert("peer_opens");
+
+            let opened_by = [PeerOpenedBy::Active, PeerOpenedBy::Paused];
+            for variant in opened_by {
+                match variant {
+                    PeerOpenedBy::Active | PeerOpenedBy::Paused => {}
+                }
+            }
+            assert_wire(&contract, "peer_opened_by", &opened_by);
+            checked.insert("peer_opened_by");
+
+            let paths = [PeerPath::Direct, PeerPath::Relay, PeerPath::Local];
+            for variant in paths {
+                match variant {
+                    PeerPath::Direct | PeerPath::Relay | PeerPath::Local => {}
+                }
+            }
+            assert_wire(&contract, "peer_path", &paths);
+            checked.insert("peer_path");
+
+            let reasons = [PeerReason::RelayUnreachable, PeerReason::RelayMonthlyLimit];
+            for variant in reasons {
+                match variant {
+                    PeerReason::RelayUnreachable | PeerReason::RelayMonthlyLimit => {}
+                }
+            }
+            assert_wire(&contract, "peer_reason", &reasons);
+            checked.insert("peer_reason");
+
+            let updates = [PeerUpdate::Here, PeerUpdate::There];
+            for variant in updates {
+                match variant {
+                    PeerUpdate::Here | PeerUpdate::There => {}
+                }
+            }
+            assert_wire(&contract, "peer_update", &updates);
+            checked.insert("peer_update");
+        }
 
         let unchecked = contract
             .keys()

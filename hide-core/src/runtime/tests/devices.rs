@@ -957,3 +957,56 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
         Some("device_unknown")
     );
 }
+
+/// hided tells the core the machines this one is paired with as one list;
+/// the snapshot and `hide device list` then say both directions of each
+/// pair, and a list that is not such a list changes nothing (PRD
+/// device-connect-iroh D-72, B24).
+#[test]
+fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, machines: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": machines }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    let pc = serde_json::json!({
+        "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+        "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
+        "reason": null, "update": null,
+    });
+    assert!(told(&mut runtime, serde_json::json!([pc])));
+    assert!(
+        !told(&mut runtime, serde_json::json!([pc])),
+        "the same list again publishes nothing"
+    );
+    let (answer, _) = runtime
+        .device_command(crate::node::TEST_NODE, DeviceCommand::List)
+        .expect("listed");
+    assert_eq!(
+        answer["peers"],
+        serde_json::json!([{
+            "id": "windows-pc", "name": "Windows PC", "connection_id": "ab".repeat(32),
+            "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
+            "reason": null, "update": null,
+        }])
+    );
+    assert_eq!(answer["devices"], serde_json::json!([]));
+
+    // A machine paired in neither direction is not a paired machine: the
+    // list is refused whole and the one before it stands.
+    let mut nobody = pc.clone();
+    nobody["opens"] = serde_json::Value::Null;
+    nobody["opened_by"] = serde_json::Value::Null;
+    told(&mut runtime, serde_json::json!([nobody]));
+    assert_eq!(runtime.snapshot.navigator.peers.len(), 1);
+
+    // The store is the owner: an empty list clears it.
+    assert!(told(&mut runtime, serde_json::json!([])));
+    assert!(runtime.snapshot.navigator.peers.is_empty());
+}
