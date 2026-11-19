@@ -287,15 +287,29 @@ pub(super) fn runtime_with_home() -> Runtime {
 /// `windows_drives`: a WSL distribution, or none for any other machine.
 fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
     let folder = scratch_dir("hide-core-devices-");
+    let mut runtime = runtime_reading(
+        &folder.path().join("state.json"),
+        crate::node::test_node(),
+        &folder.path().join("home"),
+        windows_drives,
+    );
+    runtime.test_dirs.push(folder);
+    runtime
+}
+
+/// A runtime of `node` started from the store at `state`, as a core's
+/// start reads it, with `home` as the account's home.
+fn runtime_reading(
+    state: &std::path::Path,
+    node: crate::node::NodeId,
+    home: &std::path::Path,
+    windows_drives: Option<&str>,
+) -> Runtime {
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         home: None,
-        node_id: crate::node::test_node(),
-        app_state_path: folder
-            .path()
-            .join("state.json")
-            .to_string_lossy()
-            .into_owned(),
+        node_id: node,
+        app_state_path: state.to_string_lossy().into_owned(),
         host_helper_root: None,
         host_cli_dir: None,
         workspace_views_path: None,
@@ -306,18 +320,16 @@ fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
         windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
     };
-    let mut runtime = Runtime::new(
+    Runtime::new(
         options,
         environment::EnvironmentReport {
             statuses: Vec::new(),
-            home_path: Some(folder.path().join("home")),
+            home_path: Some(home.to_path_buf()),
             codex_home: None,
         },
-        std::sync::Arc::new(hide_node::Local::new(Some(folder.path().join("home")))),
+        std::sync::Arc::new(hide_node::Local::new(Some(home.to_path_buf()))),
         crate::node::test_devices(),
-    );
-    runtime.test_dirs.push(folder);
-    runtime
+    )
 }
 
 /// PRD wsl-device B16 for a core that itself runs in a distribution: its own
@@ -1237,6 +1249,138 @@ fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
         Some("pc".to_owned())
     );
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+}
+
+/// PRD device-connect-iroh D-34 (1), D-49: the helper device each released
+/// build registered, with the project and the terminals its agents ran in,
+/// is switched by this build under the id the upgrade named it by. The same
+/// registration becomes its machine's, with its name and what the operator
+/// allowed there, and every other record of the store is saved as it was:
+/// the projects, tabs, agents and sessions that name the device name it
+/// still, so its terminals are taken up again under the ids they had.
+#[test]
+fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
+    use crate::model::LinkOrigin;
+    use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    // Everything the store keeps but the devices themselves.
+    let rest = |runtime: &Runtime| {
+        let mut stored = serde_json::to_value(&runtime.snapshot.ui_state).expect("the store");
+        stored
+            .as_object_mut()
+            .expect("the store is an object")
+            .remove("device_registrations");
+        stored
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        // The store is read by the start itself, so what is in front and
+        // every other record is the release's own.
+        let state = started(&folder);
+        let mut runtime = runtime_reading(
+            &state.path().join(crate::node_migration::CORE_STATE),
+            node_of(state.path()),
+            &state.path().join("home"),
+            None,
+        );
+        let helper = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.origin.dials_helper())
+            .cloned()
+            .unwrap_or_else(|| panic!("{tag}: the release registered no helper device"));
+        let devices = runtime.snapshot.ui_state.device_registrations.len();
+        // The release left a project on the device, which its machine's own
+        // Hide is handed (D-48).
+        let source = runtime
+            .device_switch_source(&helper.id)
+            .unwrap_or_else(|code| panic!("{tag}: the upgraded device cannot be switched: {code}"));
+        assert!(
+            !source.projects.is_empty(),
+            "{tag}: no project on the device"
+        );
+        let before = rest(&runtime);
+        // The terminals its agents ran in are known by the launches the
+        // store keeps under each pane, which the wire leaves out.
+        let launches = runtime.snapshot.ui_state.pane_launches.clone();
+        let there = format!("remote:{}:pane:", helper.id);
+        assert!(
+            launches.keys().any(|pane| pane.starts_with(&there)),
+            "{tag}: no agent ran in a terminal of the device"
+        );
+
+        dispatch(
+            &mut runtime,
+            "device_switch",
+            serde_json::json!({"device_id": helper.id, "step": "connecting", "key": key}),
+        );
+        assert_eq!(
+            runtime.device_registration(&helper.id),
+            Some(&helper),
+            "{tag}: the device changed before its machine was paired"
+        );
+        dispatch(
+            &mut runtime,
+            "peer_machines",
+            serde_json::json!({ "machines": [{
+                "key": key, "device_id": helper.id, "name": "device",
+                "opens": "active", "opened_by": null, "connected": false, "path": null,
+                "reason": null, "update": null,
+            }]}),
+        );
+
+        let switched = runtime
+            .device_registration(&helper.id)
+            .unwrap_or_else(|| panic!("{tag}: the device is gone"))
+            .clone();
+        assert_eq!(
+            switched.origin,
+            LinkOrigin::Peer {
+                key: key.clone(),
+                switched: true
+            },
+            "{tag}"
+        );
+        assert_eq!(
+            (&switched.label, &switched.host_consent),
+            (&helper.label, &helper.host_consent),
+            "{tag}"
+        );
+        assert_eq!(
+            runtime.snapshot.ui_state.device_registrations.len(),
+            devices,
+            "{tag}"
+        );
+        assert_eq!(
+            runtime.snapshot.ui_state.pane_launches, launches,
+            "{tag}: a terminal's launch changed"
+        );
+        let after = rest(&runtime);
+        let changed: Vec<_> = before
+            .as_object()
+            .expect("the store is an object")
+            .iter()
+            .filter(|(name, value)| after.get(name.as_str()) != Some(value))
+            .map(|(name, value)| format!("{name}: {value} -> {:?}", after.get(name.as_str())))
+            .collect();
+        assert!(
+            changed.is_empty()
+                && after.as_object().map(serde_json::Map::len)
+                    == before.as_object().map(serde_json::Map::len),
+            "{tag}: the switch changed another record: {changed:#?}"
+        );
+    }
 }
 
 /// A helper device is switched to its machine's own connection under the
