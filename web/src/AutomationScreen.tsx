@@ -5,9 +5,11 @@ import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { callAutomations } from "./automationCall";
 import { AutomationForm } from "./AutomationForm";
+import { settledPlace } from "./automationPlace";
 import { lastResult, nextRun, nextRunText, recordText, scheduleText, whenText, type RecordTone } from "./automationWords";
 import { useMinuteClock } from "./components/elapsed";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
+import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { RowButton, RowOverlayButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
@@ -46,16 +48,18 @@ export function AutomationScreen({ actions }: { actions: Actions }) {
   const selected = section?.items.find((item) => item.id === place.selected) ?? null;
   const editing = place.form === "edit" ? selected : null;
 
-  // An automation removed while its detail or its form shows returns to the table, without a word.
+  // An automation or run removed while it shows steps back without a word; one just answered waits for its section (B8).
   useEffect(() => {
-    if (place.selected !== null && section && !selected) useUiStore.getState().setAutomations({ selected: null, run: null, form: place.form === "new" ? "new" : null });
-  }, [place.selected, place.form, section, selected]);
+    const settled = settledPlace(place, section);
+    if (settled) useUiStore.getState().setAutomations(settled);
+  }, [place, section]);
 
-  const state = section === null ? "loading" : place.form ? "form" : selected ? (place.run !== null ? "run" : "detail") : "table";
+  const waiting = section === null || (place.arriving && !selected);
+  const state = waiting ? "loading" : place.form ? "form" : selected ? (place.run !== null ? "run" : "detail") : "table";
   return (
     // The table follows the mission screen's, so it takes that screen's container and its one breakpoint (`missions-split`).
     <section className="@container/missions flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground" aria-label={t("automationScreen.title")} data-automation-screen={state}>
-      {section === null ? (
+      {waiting ? (
         <>
           <Head count={null} />
           <Skeleton />
@@ -63,7 +67,7 @@ export function AutomationScreen({ actions }: { actions: Actions }) {
       ) : place.form === "new" || (place.form === "edit" && editing) ? (
         <AutomationForm key={editing?.id ?? "new"} section={section} automation={editing} actions={actions} />
       ) : selected ? (
-        <Detail automation={selected} run={place.run} actions={actions} />
+        <Detail key={selected.id} automation={selected} run={place.run} actions={actions} />
       ) : (
         <>
           <Head count={section.items.length} />
@@ -132,9 +136,15 @@ const TABLE_COLUMNS = "grid grid-cols-[var(--size-icon-sm)_minmax(0,1fr)_var(--s
 function Table({ section, actions }: { section: AutomationsSection; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const box = useRef<HTMLDivElement>(null);
+  // Back from a detail or the form, whose button is gone, the keys land on the first row or [+ 새 자동화] (B38).
+  useEffect(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    box.current?.querySelector<HTMLElement>("[data-automation-open], [data-automation-new]")?.focus();
+  }, []);
   if (section.items.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-sm px-lg py-xl" data-automation-screen-state="empty">
+      <div ref={box} className="flex flex-col items-start gap-sm px-lg py-xl" data-automation-screen-state="empty">
         <p className="text-body text-foreground">{t("automationScreen.empty")}</p>
         <NewButton />
         <p className="text-caption text-muted-foreground">{t("automationScreen.emptyTalk")}</p>
@@ -225,7 +235,8 @@ function ToneMark({ tone }: { tone: RecordTone }) {
     case "running":
       return <span aria-hidden="true" className="flex size-(--size-icon-sm) shrink-0 items-center justify-center"><span className="size-(--size-tab-status-dot) rounded-full bg-agent-working" /></span>;
     case "stopped":
-      return <SquareIcon aria-hidden="true" className={className} />;
+      // ■, filled, so it never reads as an empty checkbox.
+      return <SquareIcon aria-hidden="true" className={cn(className, "fill-current")} />;
   }
 }
 
@@ -292,12 +303,9 @@ function Detail({ automation, run, actions }: { automation: Automation; run: num
     if (live && unseen) actions.automation("seen", automation.id);
   }, [actions, automation.id, unseen, live]);
   const shown = run === null ? null : automation.records.find((record): record is Extract<AutomationRecord, { kind: "run" }> => record.kind === "run" && record.number === run) ?? null;
-  useEffect(() => {
-    if (run !== null && !shown) useUiStore.getState().setAutomations({ run: null });
-  }, [run, shown]);
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={automation.name} data-automation-detail={automation.id}>
-      {shown ? <RunView automation={automation} run={shown} actions={actions} /> : <Facts automation={automation} actions={actions} />}
+      {shown ? <RunView key={shown.number} automation={automation} run={shown} actions={actions} /> : run !== null ? <Skeleton /> : <Facts automation={automation} actions={actions} />}
     </section>
   );
 }
@@ -423,9 +431,6 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
   const shown = recordText(record, words.now, words.zone, words.language, t);
   const body = (
     <>
-      <span className="flex w-(--size-tab-status-dot) shrink-0 justify-center">
-        {record.kind === "run" && !record.seen && record.state !== "running" && record.state !== "starting" ? <span role="img" aria-label={t("automationScreen.unseen")} className="size-(--size-tab-status-dot) rounded-full bg-primary" /> : null}
-      </span>
       {whenWords ? <span className="w-(--size-mission-table-project) shrink-0 truncate text-caption tabular-nums text-subtle-foreground">{whenWords}</span> : null}
       <span className="flex min-w-0 flex-1 items-center gap-xs">
         <RecordWords tone={shown.tone} text={shown.text} />
@@ -455,7 +460,7 @@ function RunTags({ run }: { run: AutomationRun }) {
   return (
     <>
       {tags.map(([kind, text]) => (
-        <span key={kind} className={cn("shrink-0 rounded-xs border border-border px-xxs text-micro", kind === "opened" ? "text-agent-working" : "text-muted-foreground")} data-automation-run-tag={kind}>{text}</span>
+        <Badge key={kind} variant="outline" className={kind === "opened" ? "text-agent-working" : undefined} data-automation-run-tag={kind}>{text}</Badge>
       ))}
     </>
   );
@@ -474,6 +479,9 @@ function paneRowOf(rest: SnapshotRest | null, paneId: string | undefined): PaneR
   }
   return null;
 }
+
+/** How often a showing run terminal tells the core again that it shows: the core holds a viewing for 30 minutes (`VIEWING_HOLD_MS`). */
+const VIEWING_REPEAT_MS = 5 * 60_000;
 
 /**
  * A run's terminal in the automation screen (B16-B18): the run going, live
@@ -497,10 +505,16 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
     arrived.current = true;
     if (openable) opening.open();
   }, [live, openable, opening]);
+  // Said again well inside the core's hold, so a terminal watched longer than it stays open (B15).
   useEffect(() => {
     if (!live) return undefined;
-    actions.automationRunViewing(automation.id, run.number, true);
-    return () => actions.automationRunViewing(automation.id, run.number, false);
+    const say = () => actions.automationRunViewing(automation.id, run.number, true);
+    say();
+    const again = window.setInterval(say, VIEWING_REPEAT_MS);
+    return () => {
+      window.clearInterval(again);
+      actions.automationRunViewing(automation.id, run.number, false);
+    };
   }, [actions, automation.id, run.number, live]);
   const shown = recordText(run, words.now, words.zone, words.language, t);
   const when = whenText(run.due_unix_ms ?? run.started_at_unix_ms, words.now, words.zone, words.language, t);
@@ -530,7 +544,7 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
         </span>
         {going ? (
           <Button variant="secondary" size="sm" onClick={() => actions.automationRunStop(automation.id, run.number)} data-automation-run-stop={run.number}>
-            <SquareIcon aria-hidden="true" />
+            <SquareIcon aria-hidden="true" className="fill-current" />
             {t("automationScreen.run.stop")}
           </Button>
         ) : null}
@@ -564,7 +578,7 @@ function Line({ data, children }: { data: string; children: ReactNode }) {
   return <p className="px-lg py-md text-caption text-muted-foreground" data-automation-run-terminal={data}>{children}</p>;
 }
 
-/** The run's pane as the canvas draws one, its header, marks and sleep included. */
+/** The run's pane as the canvas draws one, its header, marks and sleep included; the run owns its life, so the head has no menu and no ✕. */
 function RunTerminal({ pane, actions }: { pane: PaneRow; actions: Actions }) {
   const transport = useShellStore((s) => s.rest?.terminal?.panes?.find((row) => row.pane_id === pane.id));
   const scale = useShellStore((s) => s.rest?.ui_state?.pane_text_scales?.[pane.id] ?? 1);
@@ -573,7 +587,7 @@ function RunTerminal({ pane, actions }: { pane: PaneRow; actions: Actions }) {
   const props = useMemo(() => agentProps(agent), [agent]);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-automation-run-terminal="pane" data-automation-run-pane={pane.id}>
-      <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...props} paneCount={1} zoomed={false} />
+      <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...props} paneCount={1} zoomed={false} owned />
     </div>
   );
 }

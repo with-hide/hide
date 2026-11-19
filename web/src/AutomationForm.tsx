@@ -18,7 +18,7 @@ import { effortsOf } from "./conductorSettings";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { localDeviceId, type Automation, type AutomationsSection, type AutomationWeekday, type Workspace } from "./snapshot";
+import { listedWorkspaces, localDeviceId, type Automation, type AutomationsSection, type AutomationWeekday, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -50,7 +50,7 @@ type Preview = { state: "reading" } | { state: "read"; value: SchedulePreview } 
 function useFolders(): Workspace[] {
   const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
   const local = useShellStore((s) => localDeviceId(s.rest));
-  return useMemo(() => (workspaces ?? []).filter((workspace) => workspace.device_id === local && !workspace.temporary && !workspace.unlisted), [workspaces, local]);
+  return useMemo(() => listedWorkspaces(workspaces ?? []).filter((workspace) => workspace.device_id === local && !workspace.temporary), [workspaces, local]);
 }
 
 export function AutomationForm({ section, automation, actions }: { section: AutomationsSection; automation: Automation | null; actions: Actions }) {
@@ -59,6 +59,15 @@ export function AutomationForm({ section, automation, actions }: { section: Auto
   const [draft, setDraft] = useState<FormDraft>(() => draftOf(automation, section.last_choice));
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [sending, setSending] = useState(false);
+  const [touched, setTouched] = useState({ name: false, task: false });
+  // An answer that lands after the form closed (cancel, back, another screen) moves nothing (B8).
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
   const preview = usePreview(draft.schedule);
   const folders = useFolders();
   const chosen = draft.folder === null ? null : folders.find((workspace) => workspace.path === draft.folder) ?? null;
@@ -78,19 +87,27 @@ export function AutomationForm({ section, automation, actions }: { section: Auto
     if (automation) {
       const call = editCall(automation, draft, git);
       const answer = call ? await callAutomations(call) : null;
+      if (!open.current) return;
       setSending(false);
       if (answer && !answer.ok) return setRefusal({ field: refusalField(answer.code), code: answer.code });
       useUiStore.getState().setAutomations({ form: null });
       return;
     }
     const answer = await callAutomations(addCall(draft, git, runNow));
+    if (!open.current) return;
     setSending(false);
     if (!answer.ok) return setRefusal({ field: refusalField(answer.code), code: answer.code });
-    // The new automation's detail, with the terminal of the run it started (B8).
-    useUiStore.getState().setAutomations({ selected: answer.value.id, run: answer.value.run ?? null, form: null });
+    // The new automation's detail, with the terminal of the run it started, held until the section has them (B8).
+    useUiStore.getState().setAutomations({ selected: answer.value.id, run: answer.value.run ?? null, form: null, arriving: true });
   };
 
-  const field = (name: Refusal["field"]) => (refusal?.field === name ? <RefusalLine code={refusal.code} field={name} /> : null);
+  // An empty name or task is one red line under its field once the field was left (B7); [만들기] already waits.
+  const missing = (name: "name" | "task") => (touched[name] && !draft[name].trim() ? (name === "name" ? "automation_name_missing" : "automation_task_missing") : null);
+  const field = (name: Refusal["field"]) => {
+    if (refusal?.field === name) return <RefusalLine code={refusal.code} field={name} />;
+    const empty = name === "name" || name === "task" ? missing(name) : null;
+    return empty ? <RefusalLine code={empty} field={name} /> : null;
+  };
   const scheduleRefusal = refusal?.field === "schedule" ? refusal.code : preview.state === "refused" ? preview.code : null;
   return (
     <>
@@ -111,11 +128,11 @@ export function AutomationForm({ section, automation, actions }: { section: Auto
       >
         <div className="grid max-w-(--size-mission-panel-words) grid-cols-[max-content_minmax(0,1fr)] items-start gap-x-lg gap-y-md">
           <Field label={t("automationScreen.form.name")} htmlFor="automation-name">
-            <Input id="automation-name" autoFocus value={draft.name} maxLength={80} placeholder={t("automationScreen.form.namePlaceholder")} onChange={(event) => change({ name: event.target.value })} aria-invalid={refusal?.field === "name" || undefined} data-automation-field="name" />
+            <Input id="automation-name" autoFocus value={draft.name} maxLength={80} placeholder={t("automationScreen.form.namePlaceholder")} onChange={(event) => change({ name: event.target.value })} onBlur={() => setTouched((now) => ({ ...now, name: true }))} aria-invalid={refusal?.field === "name" || missing("name") !== null || undefined} data-automation-field="name" />
             {field("name")}
           </Field>
           <Field label={t("automationScreen.form.task")} htmlFor="automation-task">
-            <Textarea id="automation-task" rows={4} value={draft.task} placeholder={t("automationScreen.form.taskPlaceholder")} onChange={(event) => change({ task: event.target.value })} aria-invalid={refusal?.field === "task" || undefined} data-automation-field="task" />
+            <Textarea id="automation-task" rows={4} value={draft.task} placeholder={t("automationScreen.form.taskPlaceholder")} onChange={(event) => change({ task: event.target.value })} onBlur={() => setTouched((now) => ({ ...now, task: true }))} aria-invalid={refusal?.field === "task" || missing("task") !== null || undefined} data-automation-field="task" />
             {field("task")}
           </Field>
           <Field label={t("automationScreen.form.agent")}>

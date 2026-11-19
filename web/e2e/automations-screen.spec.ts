@@ -72,7 +72,11 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     await expect(page.locator('[data-automation-field="worktree"]')).toHaveCount(0);
     const create = page.locator("[data-automation-create]");
     await expect(create).toBeDisabled();
+    // B7: a name left empty is one red line under it once the field is left.
+    await page.locator('[data-automation-field="task"]').click();
+    await expect(page.locator('[data-automation-refusal="automation_name_missing"]')).toBeVisible();
     await page.locator('[data-automation-field="name"]').fill("아침 점검");
+    await expect(page.locator('[data-automation-refusal="automation_name_missing"]')).toHaveCount(0);
     await page.locator('[data-automation-field="task"]').fill("의존성 점검");
     // B6: the default schedule is read back with its next run.
     await expect(page.locator("[data-automation-preview]")).toBeVisible();
@@ -106,6 +110,8 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     const made = page.locator("[data-automation-row]");
     await expect(made).toHaveCount(1);
     await expect(made).toContainText("아침 점검");
+    // B38: back on the table, the keys are on its first row, not lost to the page.
+    await expect(made.nth(0).locator("[data-automation-open]")).toBeFocused();
 
     // B38: ↑ and ↓ move between rows, and Enter opens the focused one.
     await add(page, stack.daemon, { name: "저녁 정리", task: "로그 정리", agent: { kind: "claude" } });

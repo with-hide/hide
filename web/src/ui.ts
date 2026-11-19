@@ -113,9 +113,15 @@ export type AutomationPlace = {
   run: number | null;
   /** The form, new or editing the selected automation (B4, B26); null shows the table or the detail. */
   form: "new" | "edit" | null;
+  /**
+   * The selected automation and run are what the core just answered a make
+   * with (B8): they wait for the section that holds them instead of reading
+   * as removed, since the answer and the snapshot reach the window in no fixed order.
+   */
+  arriving: boolean;
 };
 
-export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null };
+export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };
@@ -612,7 +618,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ browserDevices: next });
   },
   setMissions: (patch) => set({ missions: { ...get().missions, ...patch } }),
-  setAutomations: (patch) => set({ automations: { ...get().automations, ...patch } }),
+  // Any move but the one that names an answered automation ends its wait.
+  setAutomations: (patch) => set({ automations: { ...get().automations, arriving: false, ...patch } }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   taskTable: { filter: "all", task: null },
   showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),
