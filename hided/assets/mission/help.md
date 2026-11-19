@@ -104,6 +104,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - A node that works is one of two kinds, chosen by one question, whether it leaves code; a third, the waiting node, has no worker:
   - `change`, a code node (코드 노드), changes code and has a `delivery`: `pr` (a pull request into the destination) or `direct` (a branch merged into the destination by you).
   - `general`, a general node (일반 노드), leaves a line and no code: it runs in the project checkout without a worktree, on the project's machine, and its result is its `--line`, with a verdict when it judged something.
+    Its worker opens each document it leaves with `hide file open <path>` before it reports, and its report's first line is its conclusion: once the node is done, its panel's `결과` shows that line while you have recorded no `--line`, and the documents it opened, each opening with one press.
     Its `preset` says what kind of work it is and what it starts with; leave it out for any other work that leaves no code.
 
     | `preset` | Use it when | It leaves | It starts with |
@@ -232,7 +233,8 @@ Every worker's brief, code or general, says in its first line what the node is, 
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
 - the limits: start no agents of its own, merge nothing, never touch the operator's app, terminals or panes, never force push or rebase, stop and write a letter when the goal or scope would change, and declare a step only a person can take with `hide agent ask-human` rather than in a letter (section 9);
 - its plan: the node's `steps` from your plan, copied into the brief as a numbered list; before code the worker puts exactly those steps up with `hide task set` as `hide task help` says (a node planned without `steps`, of three steps or more, gets three to eight of its own, each something it delivers or checks inside this node, never research and never the node itself restated); it changes a step only when the work turns out different, and then says why with `--reason`; no `--ask`, since you read the plan, not the operator; each step marked `working` when it starts and `done` when it ends, so the node's panel on the map shows where the work is;
-- what to send back and when: a `--kind progress` letter once the plan is up, with its approach in a few lines (`hide task show <agent>` shows you its steps), and a `--kind report` letter with the pull request number and the evidence when done.
+- what to send back and when: a `--kind progress` letter once the plan is up, with its approach in a few lines (`hide task show <agent>` shows you its steps), and a `--kind report` letter with the pull request number and the evidence when done, whose first line is the node's conclusion in one sentence for the operator (the node's `결과` shows it while you record no `--line`);
+- for a general node, that it opens each document it leaves (results, a spec, measurements) with `hide file open <path>` before it reports, so the node's `결과` lists it and the operator opens it with one press.
 
 ## 3. Starting
 

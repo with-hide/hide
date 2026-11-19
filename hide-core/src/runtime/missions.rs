@@ -105,7 +105,7 @@ pub struct MissionView {
     /// The Views linked to that decision that are still open, for the
     /// operator to look at before answering (`mission_views`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub decision_views: Vec<super::mission_views::DecisionView>,
+    pub decision_views: Vec<super::mission_views::LinkedView>,
     /// The operator's answer from the banner to that decision (B26, B28).
     pub answer: Option<AnswerView>,
     /// Why the last answer did not reach the Conductor (B28).
@@ -251,6 +251,16 @@ pub struct NodeView {
     pub stage: Option<u8>,
     pub attempts: u8,
     pub line: Option<String>,
+    /// The first line of its worker's last report to the Conductor
+    /// (`MissionNode::reported`): a done node's `결과` shows it as the
+    /// conclusion while `line` is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported: Option<String>,
+    /// A done node's documents, its `결과` (with-hide/hide#2637): the Views
+    /// its worker and the agents under it opened in its current attempt,
+    /// open or closed (`mission_views::node_views`); empty for any other.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<super::mission_views::LinkedView>,
     pub change: Option<String>,
     pub review: Option<String>,
     /// The node's finish lines as they stand now: a check command passed on
@@ -926,10 +936,11 @@ struct ViewsMadeFrom {
     /// a node's `work` reads, and of the doorbell's holds, which its
     /// Conductor's held letters read; zero with none running.
     rows_and_holds: u64,
-    /// While a decision links Views: the View layouts' change count, since
-    /// its card lists the ones still open and whether each was seen; zero
-    /// with none linked.
-    views_generation: u64,
+    /// Per mission in book order: while its open decision or a done node
+    /// links Views, the View layouts' and the presses' change count, since
+    /// their rows say which are open, closed or seen; zero with none linked
+    /// (`mission_views_generation`).
+    views_generation: Vec<u64>,
     /// Per mission in book order: its project's default branch as the
     /// catalog lists it, which a mission that records no destination and
     /// an outside branch are drawn with, and which moves without the book.
@@ -4773,6 +4784,8 @@ impl Runtime {
                     stage: node_stage(node, pr_state),
                     attempts: node.attempts,
                     line: node.line.clone(),
+                    reported: node.reported.clone(),
+                    views: self.node_views(mission, node),
                     change: node.change.clone(),
                     review: node.review.clone(),
                     criteria,
@@ -5096,7 +5109,13 @@ impl Runtime {
         }));
         let laid = self.laid_panes();
         let rows_and_holds = self.rows_and_holds_digest(ledger.as_deref());
-        let views_generation = self.decision_views_generation();
+        let views_generation: Vec<u64> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .map(|mission| self.mission_views_generation(mission))
+            .collect();
         let defaults: Vec<Option<String>> = self
             .missions
             .book
@@ -5138,15 +5157,29 @@ impl Runtime {
             return;
         }
         // A closed mission whose node waits on the operator is drawn again
-        // with the rows, which decide where it shows in Needs You (B14).
-        let kept_closed =
-            |mission: &Mission| closed_kept && !mission.status.open() && !operator_waits(mission);
+        // with the rows, which decide where it shows in Needs You (B14), and
+        // one whose done nodes' Views moved with its rows of them.
+        let kept: Vec<bool> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .enumerate()
+            .map(|(index, mission)| {
+                closed_kept
+                    && !mission.status.open()
+                    && !operator_waits(mission)
+                    && before.views_generation.get(index) == views_generation.get(index)
+            })
+            .collect();
         let made: Vec<&Mission> = self
             .missions
             .book
             .missions
             .iter()
-            .filter(|mission| !kept_closed(mission))
+            .zip(&kept)
+            .filter(|(_, kept)| !**kept)
+            .map(|(mission, _)| mission)
             .collect();
         let agents = worker_records(ledger.as_deref(), made.iter().copied());
         let items = self
@@ -5154,8 +5187,9 @@ impl Runtime {
             .book
             .missions
             .iter()
-            .map(|mission| {
-                let kept = kept_closed(mission)
+            .zip(&kept)
+            .map(|(mission, kept)| {
+                let kept = kept
                     .then(|| {
                         self.snapshot
                             .missions

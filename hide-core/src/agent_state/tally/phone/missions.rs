@@ -333,7 +333,7 @@ pub struct PhoneDecisionView {
     pub device_id: String,
     pub display_id: String,
     /// The name a press asks for it by, which says no path
-    /// (`DecisionView::view`); empty from a device on a build before it,
+    /// (`LinkedView::view`); empty from a device on a build before it,
     /// whose rows a press cannot name.
     #[serde(default)]
     pub view: String,
@@ -347,7 +347,7 @@ pub struct PhoneDecisionView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
     /// What became of each kept press that asked it to open again
-    /// (`DecisionView::reopens`).
+    /// (`LinkedView::reopens`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reopens: Vec<PhoneDecisionReopen>,
 }
