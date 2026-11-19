@@ -42,7 +42,7 @@ it("sends the project's path when the Checkouts fold is clicked and draws the fo
     inactive_checkouts: { expanded, checkout_ids: ["old"] },
   });
   const catalog = (expanded: boolean) =>
-    ({ navigator: { devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }], workspaces: [project(expanded)], agents: [], focused_device_id: "local" } }) as unknown as SnapshotRest;
+    ({ navigator: { devices: [{ id: "local", label: "This Mac", kind: "local", state: "local", agent_scope: {} }], workspaces: [project(expanded)], agents: [], focused_device_id: "local" } }) as unknown as SnapshotRest;
   useShellStore.setState({ rest: catalog(false), agents: [], connection: "live" });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
