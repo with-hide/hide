@@ -1181,7 +1181,7 @@ impl Runtime {
 /// `split` and `move` of a View on no tray (PRD lane-desk-pair-view D-36).
 const VIEW_NOT_IN_LANE: Refusal = Refusal {
     reason: "view_not_in_lane",
-    next_action: "The operator has not put this View in their lane yet (운영자가 아직 책상에 올리지 않음); it waits in your pane's Views until they open it, so leave its layout to them",
+    next_action: "The operator has not put this View on their tab's Views yet; it waits in your pane's Views list until they open it, so leave its layout to them",
 };
 
 /// Desk has no pane and no checkout: it acts through delivery commands
