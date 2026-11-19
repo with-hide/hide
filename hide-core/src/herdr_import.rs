@@ -692,8 +692,8 @@ pub struct Handover<'a> {
 }
 
 /// Gives the Hide state of the panes of the moved workspaces `moved` to the
-/// engine (D-4), in the state folder `state_dir`, the core move's way
-/// (`node_migration/reown.rs`): each registration of `handover`'s machine
+/// engine (D-4), in the state folder `state_dir`: each registration of
+/// `handover`'s machine
 /// whose host scope is its `from_scope` and whose pane is in a moved
 /// workspace takes its `to_scope`, and its Herdr terminal id becomes its
 /// pane's id, the engine's terminal id, in the registration and in each View

@@ -228,7 +228,9 @@ impl Runtime {
     /// and the machine's connection is dialed in its place, under the same
     /// registration; the machine's own Hide then starts this core's node on
     /// the folder the helper ran in, and the panes are taken up again as on
-    /// any new link.
+    /// any new link. A node that dialed this core is taken over the same
+    /// way once its machine runs a core of its own (D-46): what it ran for
+    /// this core goes on in the folder its node kept.
     pub(super) fn switch_device_link(&mut self, device_id: &str, key: &str) -> bool {
         let taken = self
             .snapshot
@@ -241,7 +243,7 @@ impl Runtime {
             .ui_state
             .device_registrations
             .iter_mut()
-            .find(|registration| registration.id == device_id && registration.origin.dials_helper())
+            .find(|registration| registration.id == device_id && registration.origin.becomes_peer())
             .filter(|_| !taken)
         else {
             // Another registration is that machine's device already: the

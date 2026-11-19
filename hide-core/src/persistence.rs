@@ -497,6 +497,32 @@ pub fn load(path: &Path) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition
     }
 }
 
+/// The machines `path`'s core state registers as nodes that dial this core
+/// in, by id: only a core moved here before 1.2.0 holds any (PRD
+/// device-connect-iroh D-46). Read with no core running, by the daemon's
+/// own questions about the folder; a folder with no core state holds none,
+/// and a state this build does not read is an error, never an empty answer.
+pub fn dialing_nodes(path: &Path) -> Result<Vec<String>, String> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let (state, _, disposition) = decode(&bytes);
+    if disposition == LoadDisposition::Corrupt {
+        return Err(format!(
+            "{}: not a core state this build reads",
+            path.display()
+        ));
+    }
+    Ok(state
+        .device_registrations
+        .into_iter()
+        .filter(|registration| registration.origin == crate::model::LinkOrigin::Inbound)
+        .map(|registration| registration.id)
+        .collect())
+}
+
 /// Reads the stored practice progress chapter by chapter and returns it with
 /// how many entries were dropped: one that is not a chapter id with a
 /// readable progress, a step past the limit, or past the chapter limit.
@@ -2057,6 +2083,33 @@ mod tests {
             AgentPermission::Ask
         );
         assert_eq!(state.sidebar_lens, SidebarLens::Tasks);
+    }
+
+    #[test]
+    fn only_a_node_that_dials_in_is_read_as_a_dialing_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core-state.json");
+        assert_eq!(dialing_nodes(&path).unwrap(), Vec::<String>::new());
+        let key = "ab".repeat(32);
+        fs::write(
+            &path,
+            serde_json::json!({
+                "schema_version": UI_STATE_SCHEMA_VERSION,
+                "expanded_paths": [],
+                "selected_path": null,
+                "selected_pane_id": null,
+                "device_registrations": [
+                    {"id": "macbook", "label": "MacBook", "inbound": true},
+                    {"id": "mini", "label": "mini", "ssh_alias": "mini-host"},
+                    {"id": "studio", "label": "studio", "peer_key": key, "peer_switched": true},
+                ],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(dialing_nodes(&path).unwrap(), ["macbook"]);
+        fs::write(&path, "{").unwrap();
+        assert!(dialing_nodes(&path).is_err());
     }
 
     #[test]

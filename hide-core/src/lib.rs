@@ -124,6 +124,7 @@ pub use model::{
     CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
     SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
 };
+pub use persistence::dialing_nodes;
 pub use runtime::WorkspaceRemoteRoute;
 pub use runtime::device_switch::DeviceSwitchSource;
 pub use runtime::serialize_snapshot_delta;

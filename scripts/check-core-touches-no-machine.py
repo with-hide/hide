@@ -64,11 +64,12 @@ BANNED = [
 # Each entry is the number of machine touches the file has and why.
 STORES = {
     "hide-core/src/persistence.rs": (
-        12,
+        13,
         "the core's UI state file, including durable directory/write receipts "
         "with the durable writer's own access type, the state folder's identity "
-        "that keeps its directory receipt once per folder, and explicit "
-        "write-error variants before sleeping-session effects",
+        "that keeps its directory receipt once per folder, explicit "
+        "write-error variants before sleeping-session effects, and the read of "
+        "the nodes that dial a core moved before 1.2.0, asked with no core running",
     ),
     "hide-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
     "hide-core/src/delivery/ledger.rs": (
