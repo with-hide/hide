@@ -18,6 +18,8 @@
 use super::*;
 #[path = "bootstrap.rs"]
 pub(super) mod bootstrap;
+#[path = "guest_build.rs"]
+pub mod guest_build;
 #[path = "inbound.rs"]
 pub mod inbound;
 #[path = "kit/mod.rs"]

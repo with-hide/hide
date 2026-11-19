@@ -30,13 +30,11 @@ pub const NODE_SIDE: &str = "n";
 /// The guest's install root: the builds of that guest the host keeps, each
 /// in a folder named by the first 16 hex characters of its digest, and the
 /// `current` that leads to the one its hooks run. The host build writes the
-/// build folders and removes them; the guest build runs from one, points
-/// `current` at itself and keeps its holders' version folders in
-/// [`HOLDERS_DIR`] below it (D-77 (2)).
+/// build folders and removes them, and touches nothing else there; the
+/// guest build runs from one, points `current` at itself and keeps its
+/// holders' version folders below the root as it keeps the account's below
+/// a home, apart from the account's own (D-77 (2)).
 pub const INSTALL_SIDE: &str = "i";
-/// The folder under the install root that holds the version folders the
-/// guest's pane holders run from, apart from the account's own.
-pub const HOLDERS_DIR: &str = "holders";
 /// How many builds of one guest a host keeps: the one that runs and the one
 /// before it.
 pub const BUILDS_KEPT: usize = 2;
