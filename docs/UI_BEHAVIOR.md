@@ -161,7 +161,7 @@ Choosing another Agent tab while it reads leaves the checkout's Views and select
 When several tabs request the same file during its read, they share the read and document buffer while each keeps its own display request.
 A buffer opened through another path before the read answers retains its draft and save state, and the pending GUI displays still open in their requesting tabs.
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
-Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
+Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is; the lane keeps its tool column, and the viewing column shows the chosen tab's desk (see Views per Agent tab).
 A new checkout in front changes the documents and the Explorer to that checkout's.
 The 보기 slot belongs to the pane it was opened for: each pane has its own slot, which stays while that pane has the keyboard, and another pane pressed, in the same tab or another, in this checkout or another, shows its own slot or an empty one, so the lane is the checkout's documents or Explorer as it stands, the rail's 보기 button brings back only that pane's own slot, and ⌘E opens the lane with that slot when the pane has one (operator decision 2026-11-09, replacing the slot the panes of one Agent tab shared).
 A pane that runs no agent (a shell) has its own slot like any other.
@@ -233,17 +233,13 @@ An unavailable or retired keyboard target never falls through to closing a diffe
 When a connected pane selects, splits, moves, or closes a View through `hide view`, the same View layout rules apply to that pane's Workspace even while another Workspace is in front.
 These commands do not move the keyboard target; a close that would lose the last View of an unsaved document reports the refusal and keeps the draft.
 `hide file open` and `hide diff open` put the calling pane's file or changed-file diff into its own Workspace and never select that Workspace or another tab.
-Each of them, and `hide browser open` for a page, opens its View as a tab of the active View area, or brings the same file, diff or address forward where it already is; an agent never splits the View areas, which only the operator does (PRD unseen-agent-views D-24).
+Each of them, and `hide browser open` for a page, opens one View, or finds the same file, diff or address where it already is; an agent never splits the View areas, which only the operator does (PRD unseen-agent-views D-24).
 An open with `--beside` opens nothing and is refused with the next action to run it again without `--beside`.
 What an agent opens is unseen until the operator looks at it, and waits in Needs You as `볼 것` (To look at) on its row ([status-model.md](status-model.md#a-view-to-look-at)).
-Only an agent in the pane the operator is in, the selected pane of the front Workspace, changes what the operator sees: its open or `hide view select` brings the View to the front and shows the documents as a click does, the tool column staying as it was.
-Another pane of that Workspace, of the same tab or another, adds its View to the checkout's list and leaves the selection, the active area, the keyboard, the lane and the tab on screen as they were, and the documents button's badge counts the new view (see File Views per checkout).
-A Workspace not on screen is not what the operator sees: there, an agent in its active tab brings its View to that Workspace's front, so a page it opens loads and can be driven, and an agent in another tab adds its View behind.
-A shell bound only to the checkout, which no pane vouches for (a pane Hide has not connected yet, or a command run with its pane reference removed), counts as another pane on the Workspace on screen and as the active tab on one that is not.
-The desktop window's browser gateway, creating a page for a CDP client, brings its page forward, since a page loads only in front.
-No option brings a View forward from another pane; the operator does that.
+Where it lands follows Views per Agent tab below: only the pane the operator watches puts it on a desk, and any other agent's waits in its pane's Views list (PRD lane-desk-pair-view B1, B2, D-36).
+`hide view select` follows the same rule as an open; `close`, `list` and `status` work on any View of the checkout, on a desk or not.
+`hide view split` and `move` apply to a View on a desk only; one waiting in its pane's list is refused with `view_not_in_lane` and the next action to leave its layout to the operator (B33).
 A browser page's own new target, bound to its area, does not open the lane.
-`hide view split`, `move` and `close` apply to the checkout's list, from any tab, including a tab that is not on screen.
 
 ### Agent areas
 
@@ -393,23 +389,36 @@ No area gets narrower or shorter than its minimum, a divider stops where either 
 An area whose last view leaves disappears, and its neighbour takes the space.
 When the last view closes, the viewing column closes; the lane stays while it has a tool column and closes otherwise (PRD lane-two-columns B12; see The right lane).
 
-### File Views per checkout
+### Views per Agent tab
 
-The checkout owns one Files View list, its split and its active area, and each View remembers the sessions that opened it and whether the operator did (PRD session-files D-10, D-26).
-The Files strip shows only the Views the session whose pane has the keyboard opened, and the operator's own, which show in every session; in a split Agent tab the pane with the keyboard decides (D-13).
-The operator's Views are those opened from the Explorer, ⌘K, the file tree, a new tab's address field or an address typed into a page, by a caller Hide could not bind to a pane, and every View that was open before the update without an opener mark (D-29).
-A pane with no agent session, a plain shell, shows only the operator's Views, and a path clicked or opened there is the operator's (D-28).
-A session is its terminal or its native session, so a session found again in another pane keeps its Views, and an agent that exits to its shell or sleeps keeps them too (D-27).
-The same rule holds for a file, a diff, a page, an image and a PDF (D-30); there is no folded list of other sessions' Views, which show when their session has the keyboard (D-15).
-Switching Agent tab or pane, through the strip, sidebar, search, cycling or a confirmed local or device switch, switches the strip and the shown View together: each session shows again the View it last showed, the first time its first View, and with none of its own the operator's; the previous View does not stay behind as a dimmed tab (D-12).
-Plain shells, and agents that have opened nothing in the checkout, share the operator's strip, so moving the keyboard among them leaves the View in front where it is.
-A View named from elsewhere, a pane's `N views` row, Recent Panels or a session record's gallery tile, that the strip does not show brings the session that opened it to the keyboard first, so it shows in that session's strip.
-An area that holds none of the strip's Views is not drawn, and its neighbour takes the space; a dragged tab lands among the Views the strip draws.
-The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
+Each Agent tab has its own desk: the Views it holds as tabs of its View areas, its split, each area's front and its active area (PRD lane-desk-pair-view D-06).
+The lane's viewing column draws the desk of the tab on screen; another tab shows its own desk, the viewing column closed while that desk is empty, and coming back shows the first desk as it was (B9).
+Moving the keyboard between the panes of one tab changes nothing on its desk: its tabs, the one in front, and whether it shows (B8).
+A View is on one desk at most: opened again on another tab's desk, it moves there and leaves the first (D-20, B10).
+A View on no desk is held for the panes that opened it: their Views lists (`뷰 N개`) show it, a page there still loads and takes `hide browser` commands, and the operator puts it on the desk in front from that list (D-19, D-37, B3, B32).
+Each View remembers the sessions that opened it and whether the operator did (PRD session-files D-10, D-26); a session is its terminal or its native session, so a session found again in another pane keeps its Views (D-27).
+The operator's Views are those opened from the Explorer, ⌘K, the file tree, a new tab's address field or an address typed into a page, and by a caller Hide could not bind to a pane (D-29).
+
+From the pane the operator watches, the selected pane of the Workspace on screen, an agent's file, diff or browser open or select lands on its tab's desk; in front when the lane is open, the keyboard staying in the terminal; behind and marked To look at when the lane is closed, which stays closed (B2).
+From any other agent's pane, of the same tab or another, or from a Workspace not on screen, nothing on the screen moves: the View goes on no desk, in that pane's Views list, marked To look at (B1; conductor decision 5).
+A plain shell's pane, which has no agent to list its View, and a shell bound only to the checkout, which no pane vouches for, open behind on the desk in front and never bring it forward (conductor decision 2026-11-19).
+The desktop window's browser gateway, creating a page for a CDP client, brings its page to the front of the desk in front, where it loads.
+A GUI action, such as a click on a terminal link, acts for the operator as before.
+A file read remains bound to the original tab and native session: a closed, moved or replaced caller is refused rather than falling back to the operator's tab, and a read that completes after the operator left the caller's tab lands on no desk.
+
+A desk holds at most 32 Views in its six View areas and depth three (D-23).
+An open that would add a 33rd takes off the View looked at longest ago, never the one in front of any area, nor a document with unsaved work (D-34, B12); an agent's View goes to its pane's list, and the operator's closes, the way closing its last View closes a file (Reopen Closed brings it back).
+Only when nothing can come off is the open refused, with the View notice, and existing content stays as it was.
+Closing a desk tab with its `✕` takes an agent's View off the desk into its pane's list, and closes the operator's (D-07, B11); closing the last one closes the viewing column.
+An agent's `hide view close` closes its View wherever it is, and leaves the viewing column as it was (PRD right-lane B12).
+
 A session's Views close when Hide closes its pane, its tab or its subtree, or archives it (`세션 보관`), and only then; a View another session also opened, and the operator's, stay (D-14, D-27).
-Before such a close, a View of a document with unsaved work that only that session's Views show asks once for the whole close: `Save and close` saves each and then closes, `Close without saving` drops the text, and `Cancel` closes nothing; a document whose text this page does not hold stays open as the operator's View, as does one a close that did not ask finds unsaved.
-A pane that closes outside Hide, such as a shell's `exit`, closes no Views; they leave the strip with their session and the cap below closes them first.
-Closing the lane preserves its documents, unsaved text and save state.
+Before such a close, a View of a document with unsaved work that only that session's Views show asks once for the whole close: `Save and close` saves each and then closes, `Close without saving` drops the text, and `Cancel` closes nothing; a document whose text this page does not hold stays open as the operator's View on the desk in front, as does one a close that did not ask finds unsaved.
+A pane that closes outside Hide, such as a shell's `exit`, closes no Views.
+An Agent tab the engine no longer lists takes its desk: its agents' Views go to their panes' lists, and the operator's go to the desk in front, or wait for the first tab shown when none is left, so no page, card or document leaves with the tab (conductor decision 2026-11-19).
+An unanswered connected-device session or unresolved catalog preserves saved state, and a tab's pending opens leave with it.
+
+Closing the lane preserves every desk, its documents, unsaved text and save state.
 Closing the selected input View chooses its area's most recently visited surviving View, then the right neighbour and then the left when none was visited, and the keyboard follows the confirmed result.
 Closing a background View, including the selected View of another area, leaves input where it was.
 A View context menu borrows the current input without selecting its target, and its automatic focus return does not cancel a pending close follow.
@@ -417,32 +426,16 @@ An emptied area collapses and input follows its surviving neighbour.
 The last View returns input to the existing tree if it is on, else closes the lane and returns to the existing Agent pane; with no pane there is no invented input target.
 A last document reference waits for save protection; failure or conflict leaves it open, and a newer input destination wins over a delayed close completion.
 
-From the pane the operator is in, a file, diff or browser open or a select brings the View to the front, its area becomes the active one and the lane is called to Files.
-From another pane of the Workspace on screen, of the same tab or another, the View is added at the end of the area it lands in, in that pane's session's strip; the selection, the active area, the keyboard, the lane and the tab on screen stay as they were, and the Files icon's badge counts the Views the strip on screen draws.
-On a Workspace not on screen, the agent in its active tab brings the View to that Workspace's front and an agent in another tab adds it behind; neither moves the screen or calls the lane.
-A shell bound only to the checkout counts as another pane there; the browser gateway's new page comes to the front of its area, where it loads.
-The operator brings it forward from the strip; selecting the caller's tab does not.
-A GUI action, such as a click on a terminal link, acts for the operator as before.
-A file read remains bound to the original tab and native session: a closed, moved or replaced caller is refused rather than falling back to the operator's tab.
-
 Matching checkout and path documents use one shared buffer, and the same address opened from two tabs is one page.
 Dirty-document close guards count every reference.
 A page added behind the front may stay pending until it first appears, and `--wait` proves only a real load.
-The desktop hides every retained page absent from the current placements.
 
-The list, split and selection are saved with the Workspace and survive restart and core moves.
-Obsolete `tab_views` bookmarks are ignored without erasing the saved `view_layout`, lane, documents or comments.
-A first start after the update shows an empty list: Views saved per tab by the earlier build are not read, while the lane's tool, pin, tree, widths, comments and the Agent layout are kept.
-Authoritative topology drops a closed tab's pending opens and keeps the Views and documents; only Hide's own close closes a session's Views.
-An unanswered connected-device session or unresolved catalog preserves saved state.
+Every desk and the Views on no desk are saved with the Workspace and survive restart and core moves (B27).
+A first start after the update moves an older file once (D-18, B34, B35): the checkout's open documents go to the desk of the Agent tab last seen, each pane's 보기 slot cards to the desk of that pane's tab in the order they stacked, a pinned lane opens over the agents, and documents, comments and unsaved drafts stay; the file is then saved only in the new form.
 Local and connected-device callers follow the same rules; the phone keeps its existing flow.
-No additional badge, notice or setting is introduced.
-The checkout keeps at most 32 Views in its six View areas and depth three.
-An open that would add the 33rd View first closes the View looked at longest ago in the checkout, the way closing its last View closes a file (Reopen Closed brings it back); a View in front of any area and a document with unsaved work never close.
-Only when nothing can close is the open refused, with the View notice, and existing content stays as it was.
-Web owner: the shell draws the snapshot projection, the strip already filtered, and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
+Web owner: the shell draws the snapshot projection of the desk on screen and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
 Core owner: `hide-core/src/runtime/{view_sessions,view_callers,view_areas,workspace_control,workspace_view}.rs` and `hide-core/src/workspace_views.rs`.
-Regression owners are `runtime/tests/view_bookmarks.rs`, `runtime/view_sessions.rs`, `web/e2e/{view-bookmarks,right-lane}.spec.ts` and `desktop/e2e/browser.spec.ts`.
+Regression owners are `runtime/tests/desk_views.rs`, `runtime/tests/unseen_views.rs`, `runtime/view_sessions.rs`, `web/e2e/right-lane.spec.ts` and `desktop/e2e/browser.spec.ts`.
 
 ### Opening, preview, and Open to the side
 

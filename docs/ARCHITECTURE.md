@@ -4174,28 +4174,32 @@ The engine's session carries the creation cause and a focus revision with the au
 One pending creation pairing per live tab is consumed by the first move onto that tab; a later move gets a new revision and is followed.
 The engine records no move for a focus command that leaves its shown tab unchanged; Hide cannot observe that no-op command.
 This metadata remains inside the core projection, adds no terminal-output work, and is removed with its tab; local New and Reopen intents retain their existing focus claim.
-Each Workspace stores one Files View list, `view_layout`, with its split, selection and active area, independent of Agent tabs.
-Obsolete `tab_views` bookmarks and the older per-tab keys are ignored; the existing `view_layout`, lane, documents, comments and Agent layout are retained, without a schema change.
-The shell receives the existing projected layout and Agent switches make no View-selection change.
+Each Workspace stores a tray per Agent tab (the operator's desk, `Tray { tab, layout, shown, pair }` in `workspace_views.rs`; Desk names another feature), each a View layout with its split, selection and active area, and one shelf for the Views on no tray, which their panes' lists hold (PRD lane-desk-pair-view D-06, D-19).
+Display ids are unique across the trees of a Workspace (`WorkspaceView::next_id`), so a View moves between trees keeping its id, and `place_of` says which tree holds it; a View is in one tree at most (D-20).
+The tray in front is `front_place`: the core's visible tab of the checkout, else the engine's active tab, else the catalog's, else the pending tray an older file's documents wait on until a first tab shows (`adopt_pending_tray`).
+Schema 6 is the only form saved; schemas 1 to 5 load once into it (`workspace_views::load`): the checkout's documents to the tray of the tab last seen, the pinned lane to an open one, and the 보기 slots `ui_state.moving_cards` keeps until each pane's tab is known (`move_slot_cards`), a card the checkout already holds landing once.
+The shell receives the projected tray of the tab on screen, and an Agent switch shows that tab's tray.
 A focused View close follows the core-selected successor only after the removed display leaves the snapshot.
 The shell retains one bounded pending follow and rejects it after newer input, disconnection or a Workspace change.
 Desktop window activation is reported separately from native page focus, so a page taking input never makes the app appear inactive.
 The lane's tool, pin, tree and widths stay checkout-wide.
 
 Workspace control records the caller's actual tab and native session before an asynchronous read, validates them again at commit, and refuses stale identity without another-tab fallback.
-`caller_stays_behind` decides who is a background caller.
-On the front Workspace, every caller but the pane the operator is in (the selected pane, `snapshot.terminal.pane_id`, or a device's focused pane) is: another pane of the same tab, and a checkout-bound shell, which no pane vouches for.
-On a Workspace not on screen, a pane of a tab other than its active one is (B7); the active tab's panes and a checkout-bound shell change only what that Workspace shows, so a page they open is selected and can be driven.
-A desktop window's browser gateway never is, because a page its CDP client creates loads only in front; hided names it `gateway:<key>:<path>` (`gateway_caller_id`), which `Caller::parse` reads as a checkout caller with `gateway` set, so it resolves like any checkout caller and is told apart only here.
+`control_place` decides where a command's open or select lands and `watched_caller` whether it comes forward (`runtime/view_callers.rs`).
+The watched pane is the pane the operator is in on the Workspace on screen (the selected pane, `snapshot.terminal.pane_id`, or a device's focused pane); its open lands on its tab's tray, in front when that tray is drawn (B2).
+Any other pane with an agent, on that Workspace or one not on screen, places its View on the shelf with the To look at mark (B1, conductor decision 5).
+A pane with no agent (`pane_opener` finds none), a checkout-bound shell and a tool's own connection have no list to hold a View, so theirs lands behind on the tray in front.
+A desktop window's browser gateway comes forward, because a page its CDP client creates loads where it is drawn; hided names it `gateway:<key>:<path>` (`gateway_caller_id`), which `Caller::parse` reads as a checkout caller with `gateway` set.
 No command option makes a background caller foreground.
 A background command records the selection first (`keep_front`) and puts it back after the commit (`restore_front`): a new display stays at the end of the area it landed in, in no area's front, and the area in use, the keyboard and the editor's active tab are as they were.
-An open or select from the foreground caller calls the lane on Files after the commit, decided before the open adds its view so a tree that showed alone stays beside it; a browser page's own area-bound target calls nothing.
-Reconcile, preview retirement, close guards, restart hydration and browser inventory read the checkout's one list.
-Admission counts the checkout's 32 displays (`MAX_VIEW_DISPLAYS`) in its six View areas.
-An open that would pass the cap first closes the display focused longest ago in the checkout (`make_view_room`); the search skips every area's front and never closes a document that holds work or a file still being read back; a display that was its document's last closes that document as `close_file_tab_now` does, and each close is one `view_layout.oldest_closed` diagnostic.
+An open or select from the watched pane calls the lane after the commit only while the lane is open, decided before the open adds its view so a tree that showed alone stays beside it; into a closed lane it calls nothing and marks the View To look at; a browser page's own area-bound target calls nothing.
+`hide view split` and `move` of a shelf View are refused with `view_not_in_lane` (D-36).
+Reconcile binds every tree's restored displays before it fills the tray in front, so a document another tree shows is not added twice; preview retirement, close guards, restart hydration and browser inventory read every tree, the shelf included, so a page on no tray still loads (D-37).
+Admission counts a tray's 32 displays (`MAX_VIEW_DISPLAYS`) in its six View areas.
+An open that would pass the cap first takes off the display focused longest ago on that tray (`make_view_room`); the search skips every area's front and never takes a document that holds work or a file still being read back; an agent's display goes to the shelf, the operator's closes, a display that was its document's last closing that document as `close_file_tab_now` does, and each is one `view_layout.oldest_closed` diagnostic.
 Each layout retains depth three, and authoritative Agent topology keeps the existing 64-tab admission and prunes closed records.
 The same admission check covers a caller on an inbound node; an unanswered session or unresolved catalog grouping preserves saved state, while an empty checkout in a fully answered catalog prunes its final tab's pending reads.
-Pruning drops a closed tab's pending reads and keeps its displays and clean documents in the list, so a tab close never closes a View.
+Pruning drops a closed tab's pending reads and retires its tray (`retire_tray`): agents' displays go to the shelf and the operator's to the tray in front, or the pending tray when no tab is left, so a tab close never closes a View; each is one `tray.tab_gone` diagnostic with the counts, and a pair view whose left pane left its tab ends (B28).
 Every tab-valued owner and tab-keyed map participates in `node_migration::KEYS` with `Moves::Tab` for core moves and returns.
 Changes use the existing coalesced off-lock save and notification path; identical state creates no additional save or publication, and there is no new polling, subprocess or blocking work under Runtime.
 Agent admission counts the shared checkout-wide 64-item limit across every group's drafts and live tabs together with pending creates, placements, reopen and replacement-close effects.
