@@ -48,12 +48,16 @@ const BASE: RecordValue = {
   children: [child],
 };
 
-async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; locator?: { request_offset: number; query?: string } } = {}) {
+/** A desk whose front card tab is `session`'s record, the card the core reads (PRD lane-desk-pair-view D-13). */
+const deskFront = (session: WorkSession) => ({ tray: { tab_id: "t1", shown: true, count: 1 }, layout: { root: { area: { id: "a1", displays: [{ id: "d1", kind: "card", card: { kind: "record", session } }], active: "d1" } }, active_area: "a1" } });
+
+async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; front?: boolean; locator?: { request_offset: number; query?: string } } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: options.summaries !== false, chosen: true, agent_summary: options.summaries !== false } } } as unknown as SnapshotRest;
-  useShellStore.setState({ rest: options.rest ?? rest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
+  const shown = options.front ? { ...(options.rest ?? rest), workspace_view: deskFront(SESSION) } as unknown as SnapshotRest : options.rest ?? rest;
+  useShellStore.setState({ rest: shown, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -359,18 +363,18 @@ it("opens the past flow holding a History hit and shows its words with the query
   }
 });
 
-it("asks for the record once when the slot draws one nothing has read, as after a relaunch, and not when it is read", async () => {
-  const restored = await mount(null);
+it("asks for the record once when the desk's front card tab draws one nothing has read, as after a relaunch, and not when it is read", async () => {
+  const restored = await mount(null, { front: true });
   try {
     expect(restored.sent).toEqual([{ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session: SESSION } } }]);
     expect(restored.container.querySelector("[data-record-loading]")).not.toBeNull();
   } finally { await restored.unmount(); }
-  const read = await mount(BASE);
+  const read = await mount(BASE, { front: true });
   try { expect(read.sent).toEqual([]); } finally { await read.unmount(); }
 });
 
-it("asks again when the window lands on a new core session while the slot still draws the record", async () => {
-  const restored = await mount(null);
+it("asks again when the window lands on a new core session while the desk's front card tab still draws the record", async () => {
+  const restored = await mount(null, { front: true });
   try {
     expect(restored.sent).toHaveLength(1);
     // The same slot, a self-contained snapshot of a core that has read nothing.
@@ -621,5 +625,21 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     expect(text(gallery.querySelector('[data-record-issue="41"] [data-record-view-detail]'))).toBe("#41");
     await act(async () => gallery.querySelector<HTMLButtonElement>('[data-record-view="doc"]')!.click());
     expect(sent.find((event) => event.kind === "focus_checkout")?.payload).toMatchObject({ checkout_id: checkout.id, display_id: "doc" });
+  } finally { await unmount(); }
+});
+
+it("keeps what a record card tab out of its desk's front drew while the core reads another, and only the front one asks to read (PRD lane-desk-pair-view D-13)", async () => {
+  const { container, sent, unmount } = await mount(BASE);
+  try {
+    expect(container.querySelector("[data-record-content]")).not.toBeNull();
+    // The desk's front card is another record, which the core reads now.
+    const other: WorkSession = { device_id: "local", agent: "codex", session_id: "other" };
+    await act(async () => useShellStore.setState((state) => ({
+      rest: { ...state.rest!, workspace_view: deskFront(other) } as unknown as SnapshotRest,
+      sessionRecord: { session: other, loading: true, failure: null, record: null },
+    })));
+    expect(container.querySelector("[data-record-loading]")).toBeNull();
+    expect(text(container.querySelector("[data-record-content] h2"))).toContain("Session goal");
+    expect(sent.filter((event) => event.kind === "detail_open")).toEqual([]);
   } finally { await unmount(); }
 });

@@ -27,7 +27,8 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, SessionRecordSection, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
+import { frontCard, workspaceViewOf } from "./workspace";
 import { PlanChecklist } from "./components/plan-checklist";
 import { OpenAskList } from "./components/open-asks";
 import { FoldedAskList } from "./components/folded-asks";
@@ -96,13 +97,39 @@ export function SlotSessionRecord({ actions, target }: { actions: Actions; targe
   return <SessionRecord actions={actions} target={target} frame={frame} />;
 }
 
+/**
+ * The records card tabs drew last, newest last, so a record card that is not
+ * its desk's front tab, such as the front of an area that does not hold the
+ * keyboard, keeps what it showed: the core reads only the desk's front card
+ * (PRD lane-desk-pair-view D-13). Kept for this page's life and capped; the
+ * card reads again when it comes in front.
+ */
+const KEPT_RECORDS = 8;
+const keptRecords = new Map<string, SessionRecordSection>();
+function keepRecord(key: string, section: SessionRecordSection): void {
+  keptRecords.delete(key);
+  keptRecords.set(key, section);
+  if (keptRecords.size > KEPT_RECORDS) keptRecords.delete(keptRecords.keys().next().value!);
+}
+
 export function SessionRecord({ actions, target, frame }: { actions: Actions; target: WorkSession; frame: RecordFrame }) {
   const { t } = useInterfaceTranslation();
   const section = useShellStore((state) => state.sessionRecord);
   const rest = useShellStore((state) => state.rest);
   const summaries = summariesEnabled(rest?.status?.background_ai);
   const connected = deviceConnected(rest, target.device_id);
-  const own = section?.session && workKey(section.session) === workKey(target) ? section : null;
+  const read = section?.session && workKey(section.session) === workKey(target) ? section : null;
+  // Whether this record is the card tab in front of the desk the lane draws, the one the core reads.
+  const front = useShellStore((state) => {
+    const card = frontCard(workspaceViewOf(state.rest));
+    return card?.kind === "record" && workKey(card.session) === workKey(target);
+  });
+  const settled = read && !read.loading && !read.failure ? read : null;
+  useEffect(() => {
+    if (settled && frame.kind === "lane") keepRecord(workKey(target), settled);
+  }, [settled, frame.kind, target]);
+  // A card tab out of front draws what it drew last rather than a read in flight for another.
+  const own = read ?? (frame.kind === "lane" && !front ? keptRecords.get(workKey(target)) ?? null : null);
   const records = useMemo(() => own?.record ? recordTree(own.record) : [], [own?.record]);
   // The drilled child, when it is still in the tree; a vanished one leaves its parent shown.
   const shown = useMemo(() => {
@@ -125,13 +152,14 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   // across a core that moved, was opened by no event. The Overview's panel
   // starts its own read when it opens.
   useEffect(() => {
-    const unread = frame.kind === "lane" && !own && askedIn.current !== generation;
-    if (connected && (!wasConnected.current || unread)) {
+    // Only the desk's front card asks: one out of front would take the read from it.
+    const unread = frame.kind === "lane" && front && !own && askedIn.current !== generation;
+    if (connected && (frame.kind !== "lane" || front) && (!wasConnected.current || unread)) {
       askedIn.current = generation;
       frame.onRead();
     }
     wasConnected.current = connected;
-  }, [frame, connected, own, generation]);
+  }, [frame, connected, own, generation, front]);
   const up = () => frame.onTrail(frame.trail.slice(0, -1));
   const open = (child: RecordValue) => frame.onTrail([...frame.trail, child.session]);
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-session-record={frame.kind}>
