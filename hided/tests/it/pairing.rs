@@ -669,8 +669,20 @@ async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machin
     assert!(taken.ok, "{}", taken.text());
     let value = taken.json()["value"].clone();
     assert_eq!(value["adopted"], true, "{value}");
+    // The answer as the machine that asked reads it (`moved_core::split`):
+    // the core itself, by the key its peer records keep.
+    let accepted: hide_peer::pairing::Accepted =
+        serde_json::from_value(value["accepted"].clone()).expect("the core's answer reads");
+    let own = hide_peer::MachineKey::load_or_create(
+        &hide_kit::layout::machine_key(&core.state),
+        &hide_platform::host::machine_id().unwrap(),
+    )
+    .unwrap()
+    .0
+    .public();
+    assert_eq!(accepted.key, own, "{value}");
     let grant = value["accepted"]["grant"].clone();
-    assert!(grant.is_string(), "{value}");
+    assert_eq!(grant, accepted.grant.as_str(), "{value}");
     let peer = core
         .peer_becomes("the node's machine is paired both ways", |peer| {
             peer["opened_by"] == "active" && !peer["opens"].is_null()
