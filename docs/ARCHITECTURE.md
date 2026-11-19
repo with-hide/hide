@@ -3274,13 +3274,14 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 
 A guest's work runs on this machine in the guest's own node (`hided node serve --guest`), and this machine's daemon reaches its panes only through the tap that node serves (`hided/src/guests/tap.rs`), whether or not the guest is connected.
 The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, sizes, redraws and a close.
+Nothing on this machine sends that close for one pane yet: the screen that lists a guest's panes and closes one is the ownership work's, and until then a guest's panes end here together, with its removal ([A guest taken off the host](#a-guest-taken-off-the-host)).
 The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 256 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
-The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field, from the daemon-only `guest_panes` event that replaces the list whole; `hide device list` answers it.
+The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field, from the daemon-only `guest_panes` event that replaces the list whole; `hide device list` answers it and prints each pane's address under its machine, with the panes a machine left after it was taken off under its id.
 The node keeps a session on every pane its holders' records say may run, so the host draws a pane whether or not the guest's core looks at it, and the guest's core's attach and release only decide whether a pane's output also goes up the node link.
 It lists each by the id its core names it by (`Holders::live_pane_ids`), never by the name its record's file has, so the host, the node's sessions and the guest's core name one pane one way.
 With no link, from its start to its first one too, nothing the node reports waits for a core that is not there, and its diagnostics go to the host's log.
 After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
-`hide pane send` types text and Enter into a guest's pane through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
+A screen of this machine draws a guest's pane and types into it by its `guest:` address, and `hide pane send` types text and Enter into it through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
 
 ### A guest's hook entries
 

@@ -484,7 +484,7 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
         let peer = listed["peers"].as_array()?.first()?;
         (peer["connected"] == false).then_some(())
     });
-    assert_eq!(guest_panes(&host.listed()), [pane.clone()]);
+    assert_eq!(guest_panes(&host.listed()), [pane.as_str()]);
     types(&host, &pane, &itself("f4")).await;
     assert_eq!(left(&at("f4")), shell);
     types(&host, &pane, &asks_its_core("f5")).await;
@@ -504,7 +504,7 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
         host.lists("the saved pane", |listed| {
             Some(guest_panes(listed)).filter(|panes| !panes.is_empty())
         }),
-        [pane.clone()]
+        [pane.as_str()]
     );
     types(&host, &pane, &itself("f6")).await;
     assert_eq!(left(&at("f6")), shell);
