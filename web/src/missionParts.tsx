@@ -101,13 +101,12 @@ export function useNodeTimes(mission: Mission, node: MissionNode, events: Missio
 
 /** Where a node's time went (`nodeSpans`) as one line, `작업 1.5h · 리뷰·CI 8.5h · 기다림 3h`, the words `hide mission show` prints; null when the record cannot split it, and while its device does not answer a running span says nothing (B35). */
 export function useNodeSpans(mission: Mission, node: MissionNode, end: number): string | null {
-  const { t, i18n } = useInterfaceTranslation();
-  const language = requireInterfaceLanguage(i18n.language);
+  const { t } = useInterfaceTranslation();
   const spans = nodeSpans(node, end);
   if (!spans || (mission.stale && node.finished_at_unix_ms == null)) return null;
   const parts = (["work", "review", "wait"] as const).flatMap((part) => {
     const span = spans[part];
-    return span == null ? [] : [t(`mission.time.${part}`, { span: formatSpan(language, span) })];
+    return span == null ? [] : [t(`mission.time.${part}`, { span: formatSpan(span) })];
   });
   return parts.join(" · ");
 }
