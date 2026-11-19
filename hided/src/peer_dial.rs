@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use hide_node::ssh::host::HelperPackages;
 use hide_node::ssh::host::guest_build::GuestBuild;
 use hide_node::ssh::host::peer::{Opened, PeerDial};
-use hide_node_link::device::{Cancel, EstablishError};
+use hide_node_link::device::{Cancel, EstablishError, InstallStop};
 use hide_peer::inbox::{Applied, Apply, Inbox, Recorded};
 use hide_peer::protocol::build::FileMessage;
 use hide_peer::protocol::event::Event;
@@ -356,9 +356,10 @@ fn stopped(reason: NodeStop, detail: Option<String>) -> EstablishError {
         NodeStop::FolderRefused => EstablishError::Unsupported(format!(
             "That machine could not make this Hide's folder there. {detail}"
         )),
-        NodeStop::BuildMissing => EstablishError::Install(format!(
-            "That machine does not have this Hide's build and did not take it. {detail}"
-        )),
+        NodeStop::BuildMissing => EstablishError::install(
+            InstallStop::Refused,
+            format!("That machine does not have this Hide's build and did not take it. {detail}"),
+        ),
         NodeStop::Crashed => EstablishError::Helper(format!(
             "This Hide's node there crashed too often and is left stopped. {detail}"
         )),
@@ -371,11 +372,23 @@ fn stopped(reason: NodeStop, detail: Option<String>) -> EstablishError {
 /// Sends the host `build`: the list of its files, then each file's bytes
 /// in that order, and waits for the host to say it is placed.
 async fn upload(link: &Link, build: &GuestBuild) -> Result<(), EstablishError> {
+    // A wait that ran out is the machine answering nothing; any other
+    // failure is the connection ending part way.
     let sent = |error: io::Error| {
-        EstablishError::Install(format!("This build did not reach that machine: {error}"))
+        let stop = match error.kind() {
+            io::ErrorKind::TimedOut => InstallStop::Quiet,
+            _ => InstallStop::Ended,
+        };
+        EstablishError::install(
+            stop,
+            format!("This build did not reach that machine: {error}"),
+        )
     };
     let mut stream = link.open(StreamKind::File).await.map_err(|error| {
-        EstablishError::Install(format!("The file stream did not open: {error}"))
+        EstablishError::install(
+            InstallStop::Ended,
+            format!("The file stream did not open: {error}"),
+        )
     })?;
     wire::write_message(
         &mut stream.send,
@@ -404,11 +417,17 @@ async fn upload(link: &Link, build: &GuestBuild) -> Result<(), EstablishError> {
     .map_err(sent)?;
     match body.as_deref().map(FileMessage::parse) {
         Some(Ok(Some(FileMessage::BuildPlaced { .. }))) => Ok(()),
-        Some(Ok(Some(FileMessage::Refused { reason }))) => Err(EstablishError::Install(format!(
-            "That machine refused this Hide's build: {reason}"
-        ))),
-        _ => Err(EstablishError::Install(
-            "That machine did not say whether it placed this Hide's build".to_owned(),
+        Some(Ok(Some(FileMessage::Refused { reason }))) => Err(EstablishError::install(
+            InstallStop::Refused,
+            format!("That machine refused this Hide's build: {reason}"),
+        )),
+        None => Err(EstablishError::install(
+            InstallStop::Ended,
+            "That machine closed the stream before it said whether it placed this Hide's build",
+        )),
+        Some(_) => Err(EstablishError::install(
+            InstallStop::Refused,
+            "That machine did not say whether it placed this Hide's build",
         )),
     }
 }
