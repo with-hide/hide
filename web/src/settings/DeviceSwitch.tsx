@@ -98,6 +98,19 @@ export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actio
 }
 
 /**
+ * How many of a machine's terminals its switch could not take up again and
+ * closed (B36), under that machine's row: the strip over its screen says it
+ * once to the window that watched the switch, and the row keeps it for a
+ * first open that came later. Nothing when every terminal carried on.
+ */
+export function DeviceNotCarriedLine({ deviceId }: { deviceId: string }) {
+  const { t } = useInterfaceTranslation();
+  const left = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.id === deviceId)?.not_carried ?? 0);
+  if (left <= 0) return null;
+  return <Note tone="warn" data-device-not-carried={`${deviceId}:${left}`}>{t("devices.switch.notCarried", { count: left })}</Note>;
+}
+
+/**
  * The strip over a helper device's screen (B35): the offer with its button,
  * then the switch's steps or its failure. Only this computer's own window
  * draws it, since no other screen may switch a device (B52).
@@ -204,15 +217,17 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
     );
   }
   const by = answer.by ?? "";
+  // The dialog closes on either button, so its close decides nothing: only
+  // Cancel and Escape leave the question.
   return (
-    <AlertDialog open onOpenChange={(next) => { if (!next) cancel(); }}>
-      <AlertDialogContent data-device-switch-held={deviceId}>
+    <AlertDialog open onOpenChange={(next) => { if (!next) close(); }}>
+      <AlertDialogContent data-device-switch-held={deviceId} onEscapeKeyDown={cancel}>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("devices.switch.heldTitle", { name })}</AlertDialogTitle>
           <AlertDialogDescription>{count > 0 ? t("devices.switch.held", { by, count }) : t("devices.switch.heldNone", { by })}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+          <AlertDialogCancel onClick={cancel}>{t("common.cancel")}</AlertDialogCancel>
           <AlertDialogAction
             data-device-switch-held-go="true"
             onClick={() => {
@@ -254,7 +269,14 @@ function useSwitchLanded() {
 function useSwitchAfterAdd(actions: Actions) {
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const ready = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.switch_first === true && switchOffered(device) && device.state === "ready" && device.host?.state === "ready" && !device.switch)?.id ?? null);
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const asked = useRef(new Set<string>());
+  // A device that was taken off is a new device when it is added again,
+  // under the id it had: what was asked of it goes with it.
+  useEffect(() => {
+    if (!devices) return;
+    for (const id of asked.current) if (!devices.some((device) => device.id === id)) asked.current.delete(id);
+  }, [devices]);
   useEffect(() => {
     if (ready === null || !ownScreen || asked.current.has(ready)) return;
     asked.current.add(ready);

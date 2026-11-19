@@ -1098,14 +1098,19 @@ mod tests {
         let host_key = host.host.peers().unwrap().key();
         let guest_key = guest.host.peers().unwrap().key();
 
-        // The stand-in node keeps a box; this test is its link endpoint.
+        // The stand-in node keeps a box; this test is its link endpoint,
+        // and keeps the node's end of each link open in `links` until it
+        // lets it go, as a node keeps its own while it runs.
         let node_dir = layout::guest_node_side(host.dir.path(), &guest_key);
         std::fs::create_dir_all(&node_dir).unwrap();
         let listener = LocalListener::bind(&node_dir.join(launch::LINK_ENDPOINT)).unwrap();
-        let _links = std::thread::spawn(move || {
-            let mut held = Vec::new();
+        let (accepted, links) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             while let Ok(stream) = listener.accept() {
-                held.push(stream);
+                // A link taken after the test let them go is closed here.
+                if accepted.send(stream).is_err() {
+                    break;
+                }
             }
         });
         let programs = tempfile::tempdir().unwrap();
@@ -1173,6 +1178,32 @@ mod tests {
             .unwrap_or_else(|error| panic!("the host still runs the node: {error}"));
         let (_, third) = within("the third event", heard.recv()).await.unwrap();
         assert_eq!((third.seq, &third.body["from"]), (3, &json!(2)));
-        (again.close)();
+
+        // The node's end of the link goes, as when a node ends, and the
+        // link ends on this machine with it. The host carries a link on a
+        // thread of its own until one of its ends closes, and a test's
+        // runtime waits for that thread when it is dropped, without running
+        // what would bring it this machine's close: left to that, the test
+        // hung whenever its end outran the close (seen in CI, run
+        // 44545668117).
+        drop(links);
+        let Opened {
+            mut reading,
+            writing,
+            close,
+            ..
+        } = again;
+        let ended = within(
+            "the second link's end",
+            tokio::task::spawn_blocking(move || {
+                let mut rest = Vec::new();
+                reading.read_to_end(&mut rest).map(|_| rest)
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(ended.as_deref(), Ok([]) | Err(_)), "{ended:?}");
+        close();
+        drop(writing);
     }
 }
