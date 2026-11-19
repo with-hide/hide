@@ -230,6 +230,15 @@ impl Runtime {
                 self.drop_report_marks(next, letter, |actor| child.actor.same_identity(actor));
                 continue;
             }
+            // A node worker's report to its Conductor is the node's
+            // conclusion while the Conductor gives it none.
+            if self
+                .missions
+                .book
+                .note_worker_report(&child.id, &letter.recipient, &letter.body)
+            {
+                self.save_missions();
+            }
             let conducts = self.missions.book.missions.iter().any(|mission| {
                 mission.status.open() && mission.conductor.agent_id.as_deref() == Some(&child.id)
             });

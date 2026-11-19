@@ -53,7 +53,7 @@
       "vendor/patches/libghostty-vt/0007-experimental-png-retention.patch": "c584e68d01e3f12c81d10492b314368fb9d3f8d49810483b686679bb208dab4a"
     },
     "hide_patches": {
-      "patches/0001-simdutf-msvc-stl-version-gate.patch": "0ee4a756f1de25593685dc76f4a069fdc280ddae7146570c0e40175344332cb9"
+      "patches/0001-msvc-stl-version-gate.patch": "4e2772706d342a27d58246ea704d3e1acd668b2e1d668b91183714f7c77c57dc"
     }
   },
   "packages": [

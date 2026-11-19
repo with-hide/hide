@@ -978,9 +978,10 @@ pub struct ViewLink {
     /// opened it, where every other link is the Conductor's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worker: bool,
-    /// On a question: what the View was when the decision linked it, so the
-    /// card keeps the row after the View closes and opens it again from
-    /// here (PRD mission-human-gate D-20). Absent on a node's or the
+    /// What the View was when it was linked, so a row keeps it after the
+    /// View closes and opens it again from here: a question's when the
+    /// decision linked it (PRD mission-human-gate D-20), a node's when its
+    /// worker opened it (its `결과`, with-hide/hide#2637). Absent on the
     /// Conductor's own link, on a link recorded before it was kept, and for
     /// a View no address can open again (an outside file's grant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1175,6 +1176,12 @@ pub struct MissionNode {
     /// What the node does now, its conclusion or its verification result.
     #[serde(default)]
     pub line: Option<String>,
+    /// The first line of its worker's last `report` letter to the
+    /// Conductor, which a done node's `결과` shows as its conclusion while
+    /// `line` is none (with-hide/hide#2637); replaced by the next report,
+    /// at most [`LINE_LIMIT`] bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported: Option<String>,
     /// What a replan changed in this node and why (B18).
     #[serde(default)]
     pub change: Option<String>,
@@ -2268,6 +2275,37 @@ pub(crate) fn mission_number(id: &str) -> u64 {
 }
 
 impl MissionBook {
+    /// The worker registered as `worker` sent its `report` letter `body`
+    /// to `recipient`: a node it works whose mission `recipient` conducts
+    /// keeps the letter's first line that says anything, at most
+    /// [`LINE_LIMIT`] bytes, as its `reported` conclusion, in place of the
+    /// last one (with-hide/hide#2637). Whether a node changed.
+    pub(crate) fn note_worker_report(
+        &mut self,
+        worker: &str,
+        recipient: &crate::delivery::Actor,
+        body: &str,
+    ) -> bool {
+        let Some(line) = report_line(body) else {
+            return false;
+        };
+        let mut changed = false;
+        for mission in &mut self.missions {
+            if !mission.conductor.actor.same_identity(recipient) {
+                continue;
+            }
+            for node in &mut mission.nodes {
+                if node.agent_id.as_deref() == Some(worker)
+                    && node.reported.as_deref() != Some(line.as_str())
+                {
+                    node.reported = Some(line.clone());
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     /// The line of a shelved mission `id`.
     pub(crate) fn shelf(&self, id: &str) -> Option<&MissionLine> {
         self.shelved.iter().find(|line| line.id == id)
@@ -2961,6 +2999,21 @@ fn valid_text(value: &str, limit: usize) -> bool {
             .any(|c| c.is_control() && c != '\n' && c != '\t')
 }
 
+/// A report's conclusion: its first line with anything but blanks and
+/// control characters, cut at a character boundary to [`LINE_LIMIT`] bytes.
+fn report_line(body: &str) -> Option<String> {
+    let line = body.lines().find_map(|line| {
+        let line: String = line.chars().filter(|c| !c.is_control()).collect();
+        let line = line.trim();
+        (!line.is_empty()).then(|| line.to_owned())
+    })?;
+    let mut end = line.len().min(LINE_LIMIT);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(line[..end].trim_end().to_owned())
+}
+
 fn valid_line(value: &Option<String>, limit: usize) -> bool {
     value
         .as_deref()
@@ -3135,6 +3188,7 @@ pub(crate) fn apply_plan(
                 attempts: 0,
                 views: Vec::new(),
                 line: None,
+                reported: None,
                 change: None,
                 review: None,
                 criteria: Vec::new(),
