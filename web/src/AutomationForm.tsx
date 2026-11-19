@@ -2,7 +2,7 @@ import { ChevronLeftIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { callAutomations, type SchedulePreview } from "./automationCall";
-import { addCall, draftOf, draftSchedule, editCall, emptyField, ownFolderLine, refusalField, refusalKey, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
+import { addCall, draftOf, draftSchedule, editCall, emptyField, exampleDraft, ownFolderLine, refusalField, refusalKey, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
 import { scheduleText, whenText, WEEKDAYS, weekdayText } from "./automationWords";
 import { AgentPicker } from "./components/agent-picker";
 import { useMinuteClock } from "./components/elapsed";
@@ -39,6 +39,12 @@ const KIND_KEY = {
   every_hours: "automationScreen.form.kind.everyHours",
   cron: "automationScreen.form.kind.cron",
 } as const satisfies Record<ScheduleKind, string>;
+/** The words of each starting point the empty screen offers (B2); the screen's list and the form read the same ones. */
+export const EXAMPLE_WORDS = {
+  issues: { name: "automationScreen.example.issues.name", task: "automationScreen.example.issues.task" },
+  deps: { name: "automationScreen.example.deps.name", task: "automationScreen.example.deps.task" },
+  ci: { name: "automationScreen.example.ci.name", task: "automationScreen.example.ci.task" },
+} as const satisfies Record<AutomationExample, { name: string; task: string }>;
 const HOURS = Array.from({ length: 12 }, (_, index) => index + 1);
 /** How long typing waits before the core reads the schedule, so a cron line is read once it is written, not per key. */
 const PREVIEW_WAIT_MS = 200;
@@ -53,10 +59,12 @@ function useFolders(): Workspace[] {
   return useMemo(() => listedWorkspaces(workspaces ?? []).filter((workspace) => workspace.device_id === local && !workspace.temporary), [workspaces, local]);
 }
 
-export function AutomationForm({ section, automation, actions }: { section: AutomationsSection; automation: Automation | null; actions: Actions }) {
+export function AutomationForm({ section, automation, example = null, actions }: { section: AutomationsSection; automation: Automation | null; example?: AutomationExample | null; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
-  const [draft, setDraft] = useState<FormDraft>(() => draftOf(automation, section.last_choice));
+  const [draft, setDraft] = useState<FormDraft>(() => (example && !automation
+    ? exampleDraft(example, section.last_choice, { name: t(EXAMPLE_WORDS[example].name), task: t(EXAMPLE_WORDS[example].task) })
+    : draftOf(automation, section.last_choice)));
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [sending, setSending] = useState(false);
   const [touched, setTouched] = useState({ name: false, task: false });

@@ -17,15 +17,15 @@ const section = (...items: Automation[]): AutomationsSection => ({ items, unseen
 
 describe("where the automation screen stands", () => {
   it("waits for an answered automation and its run when the answer comes before the section", () => {
-    const answered = { selected: "a1", run: 1, form: null, arriving: true };
+    const answered = { selected: "a1", run: 1, form: null, arriving: true, example: null };
     expect(settledPlace(answered, section())).toBeNull();
     expect(settledPlace(answered, section(automation("a1", [])))).toBeNull();
-    expect(settledPlace(answered, section(automation("a1", [1])))).toEqual({ ...answered, arriving: false });
+    expect(settledPlace(answered, section(automation("a1", [1])))).toEqual({ ...answered, arriving: false, example: null });
   });
 
   it("steps back from an automation or a run the section no longer holds", () => {
-    expect(settledPlace({ selected: "a1", run: null, form: "edit", arriving: false }, section())).toEqual({ selected: null, run: null, form: null, arriving: false });
-    expect(settledPlace({ selected: "a1", run: 2, form: null, arriving: false }, section(automation("a1", [1])))).toEqual({ selected: "a1", run: null, form: null, arriving: false });
-    expect(settledPlace({ selected: "a1", run: 1, form: null, arriving: false }, section(automation("a1", [1])))).toBeNull();
+    expect(settledPlace({ selected: "a1", run: null, form: "edit", arriving: false, example: null }, section())).toEqual({ selected: null, run: null, form: null, arriving: false, example: null });
+    expect(settledPlace({ selected: "a1", run: 2, form: null, arriving: false, example: null }, section(automation("a1", [1])))).toEqual({ selected: "a1", run: null, form: null, arriving: false, example: null });
+    expect(settledPlace({ selected: "a1", run: 1, form: null, arriving: false, example: null }, section(automation("a1", [1])))).toBeNull();
   });
 });

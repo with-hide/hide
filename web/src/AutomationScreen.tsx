@@ -1,13 +1,16 @@
-import { CheckIcon, ChevronLeftIcon, FolderOpenIcon, MinusIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, SquareIcon, Trash2Icon, XIcon } from "lucide-react";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FolderOpenIcon, InboxIcon, MinusIcon, PackageIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, RepeatIcon, SquareIcon, Trash2Icon, XIcon, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { callAutomations } from "./automationCall";
-import { AutomationForm } from "./AutomationForm";
+import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, type AutomationExample } from "./automationDraft";
+import { AutomationForm, EXAMPLE_WORDS } from "./AutomationForm";
 import { settledPlace } from "./automationPlace";
-import { lastResult, nextRun, nextRunText, recordText, scheduleText, whenText, type RecordTone } from "./automationWords";
-import { useMinuteClock } from "./components/elapsed";
+import { lastResult, pauseReasonText, recordText, scheduleText, whenText, type RecordTone } from "./automationWords";
+import { AgentLogo } from "./components/agent-logo";
+import { formatElapsed, useMinuteClock } from "./components/elapsed";
+import { EmptyWelcome } from "./components/empty-welcome";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -65,7 +68,7 @@ export function AutomationScreen({ actions }: { actions: Actions }) {
           <Skeleton />
         </>
       ) : place.form === "new" || (place.form === "edit" && editing) ? (
-        <AutomationForm key={editing?.id ?? "new"} section={section} automation={editing} actions={actions} />
+        <AutomationForm key={editing?.id ?? `new-${place.example ?? ""}`} section={section} automation={editing} example={place.example} actions={actions} />
       ) : selected ? (
         <Detail key={selected.id} automation={selected} run={place.run} actions={actions} />
       ) : (
@@ -79,24 +82,27 @@ export function AutomationScreen({ actions }: { actions: Actions }) {
   );
 }
 
-/** `자동화 · N개` and [+ 새 자동화] (B2, B4). */
+/** `자동화` with its count, what the screen holds in one quiet line, and [+ 새 자동화] (B2, B4); with none, the empty screen says it instead. */
 function Head({ count }: { count: number | null }) {
   const { t } = useInterfaceTranslation();
   return (
-    <header className="flex shrink-0 items-center gap-md border-b border-border px-lg py-sm" data-automation-screen-head="true">
-      <h1 className="flex min-w-0 flex-1 items-baseline gap-xs text-subhead">
-        <span className="shrink-0 font-semibold text-foreground">{t("automationScreen.title")}</span>
-        {count !== null && count > 0 ? <span className="text-body tabular-nums text-muted-foreground" data-automation-count={count}>· {t("automationScreen.count", { count })}</span> : null}
-      </h1>
+    <header className="flex shrink-0 items-center gap-md px-lg pt-lg pb-md" data-automation-screen-head="true">
+      <div className="flex min-w-0 flex-1 flex-col gap-xxs">
+        <h1 className="flex min-w-0 items-center gap-xs">
+          <span className="truncate text-headline font-semibold text-foreground">{t("automationScreen.title")}</span>
+          {count !== null && count > 0 ? <Badge className="tabular-nums" data-automation-count={count}>{count}</Badge> : null}
+        </h1>
+        <p className="truncate text-caption text-muted-foreground">{t("automationScreen.subtitle")}</p>
+      </div>
       {count !== null && count > 0 ? <NewButton /> : null}
     </header>
   );
 }
 
-function NewButton({ className }: { className?: string }) {
+function NewButton({ primary = false }: { primary?: boolean }) {
   const { t } = useInterfaceTranslation();
   return (
-    <Button variant="secondary" size="sm" className={className} onClick={() => useUiStore.getState().setAutomations({ selected: null, run: null, form: "new" })} data-automation-new="true">
+    <Button variant={primary ? "default" : "secondary"} size={primary ? "default" : "sm"} onClick={() => useUiStore.getState().setAutomations({ selected: null, run: null, form: "new" })} data-automation-new="true">
       <PlusIcon aria-hidden="true" />
       {t("automationScreen.new")}
     </Button>
@@ -124,17 +130,21 @@ function Skeleton() {
   );
 }
 
-/** The table's columns; a screen too narrow for every column leaves out the schedule and the folder and agent, which the detail names (B3). */
-const TABLE_COLUMNS = "grid grid-cols-[var(--size-icon-sm)_minmax(0,1fr)_var(--size-mission-table-project)_var(--size-mission-table-project)_var(--size-control-sm)] missions-split:grid-cols-[var(--size-icon-sm)_minmax(0,1fr)_var(--size-mission-table-project)_var(--size-mission-table-project)_var(--size-mission-table-project)_minmax(0,var(--size-mission-table-steps))_var(--size-control-sm)] items-center gap-x-md";
+/** The list's columns: the agent, the name over its schedule and folder, the next run, the last result and ▶; a screen too narrow for all leaves out the last result, which the detail lists (B3). */
+const LIST_COLUMNS = "grid grid-cols-[var(--size-icon-lg)_minmax(0,1fr)_var(--size-mission-table-steps)_var(--size-control-sm)] missions-split:grid-cols-[var(--size-icon-lg)_minmax(0,1fr)_var(--size-mission-table-steps)_var(--size-mission-table-steps)_var(--size-control-sm)] items-center gap-x-lg";
+
+/** Each starting point's mark on the empty screen. */
+const EXAMPLE_ICONS = { issues: InboxIcon, deps: PackageIcon, ci: CircleAlertIcon } as const satisfies Record<AutomationExample, LucideIcon>;
 
 /**
- * The table (B2, B3, B38): each automation in the core's order, its unseen
- * dot, name, schedule, next run, last result, folder and agent, and ▶ to run
- * it now; a paused one dimmed. With none, the empty line and [+ 새 자동화].
- * ↑ and ↓ move between the rows, Enter opens one.
+ * The list (B2, B3, B38): each automation in the core's order as a row of
+ * the agent's logo, its name with the unseen dot over its schedule and
+ * folder, the next run, the last result and ▶ to run it now; a paused one
+ * dimmed. With none, Hide AI's owl says what an automation does, with
+ * [+ 새 자동화] and three starting points. ↑ and ↓ move between the rows,
+ * Enter opens one.
  */
 function Table({ section, actions }: { section: AutomationsSection; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
   const box = useRef<HTMLDivElement>(null);
   // Back from a detail or the form, whose button is gone, the keys land on the first row or [+ 새 자동화] (B38).
   useEffect(() => {
@@ -144,10 +154,8 @@ function Table({ section, actions }: { section: AutomationsSection; actions: Act
   }, []);
   if (section.items.length === 0) {
     return (
-      <div ref={box} className="flex flex-col items-start gap-sm px-lg py-xl" data-automation-screen-state="empty">
-        <p className="text-body text-foreground">{t("automationScreen.empty")}</p>
-        <NewButton />
-        <p className="text-caption text-muted-foreground">{t("automationScreen.emptyTalk")}</p>
+      <div ref={box} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <Empty />
       </div>
     );
   }
@@ -161,39 +169,72 @@ function Table({ section, actions }: { section: AutomationsSection; actions: Act
     next.focus();
   };
   return (
-    <div ref={box} className="min-h-0 flex-1 overflow-y-auto pb-lg" onKeyDown={step} data-automation-screen-state="table">
-      <div className={cn(TABLE_COLUMNS, "sticky top-0 z-10 border-b border-border/60 bg-background px-[calc(var(--spacing-lg)+var(--spacing-xs))] py-xs text-caption text-muted-foreground")} aria-hidden="true">
-        <span />
-        <span>{t("automationScreen.col.name")}</span>
-        <span className="hidden missions-split:block">{t("automationScreen.col.schedule")}</span>
-        <span>{t("automationScreen.col.next")}</span>
-        <span>{t("automationScreen.col.last")}</span>
-        <span className="hidden missions-split:block">{t("automationScreen.col.where")}</span>
-        <span />
-      </div>
-      <div className="flex flex-col px-lg pt-xs">
+    <div ref={box} className="min-h-0 flex-1 overflow-y-auto px-lg pb-lg" onKeyDown={step} data-automation-screen-state="table">
+      <div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
         {section.items.map((automation) => <TableRow key={automation.id} automation={automation} actions={actions} />)}
       </div>
     </div>
   );
 }
 
+/** The empty screen (B2): the owl and what an automation does, [+ 새 자동화], three starting points the form opens on, and that an agent can make one when asked. */
+function Empty() {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  return (
+    <EmptyWelcome pose="ai" title={t("automationScreen.empty")} detail={t("automationScreen.emptyDetail")} data-automation-screen-state="empty">
+      <NewButton primary />
+      <div className="flex w-full max-w-(--size-task-table-wide) flex-col gap-xs pt-md text-left">
+        <span className="px-xs text-caption text-muted-foreground">{t("automationScreen.examples")}</span>
+        <div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border">
+          {AUTOMATION_EXAMPLE_KEYS.map((key) => {
+            const Icon = EXAMPLE_ICONS[key];
+            const name = t(EXAMPLE_WORDS[key].name);
+            return (
+              <RowButton key={key} className="gap-md rounded-none px-md py-sm" aria-label={t("automationScreen.exampleOpen", { name })}
+                onClick={() => useUiStore.getState().setAutomations({ selected: null, run: null, form: "new", example: key })} data-automation-example={key}>
+                <span aria-hidden="true" className="flex size-(--size-control-lg) shrink-0 items-center justify-center rounded-md bg-secondary text-subtle-foreground"><Icon className="size-(--size-icon)" /></span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-body font-medium text-foreground">{name}</span>
+                  <span className="truncate text-caption text-muted-foreground">{t(EXAMPLE_WORDS[key].task)}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-xxs text-caption text-subtle-foreground"><RepeatIcon aria-hidden="true" className="size-(--size-icon-sm)" />{scheduleText(AUTOMATION_EXAMPLES[key], language, t)}</span>
+              </RowButton>
+            );
+          })}
+        </div>
+      </div>
+      <p className="max-w-(--size-task-table-wide) break-keep text-caption text-muted-foreground">{t("automationScreen.emptyTalk")}</p>
+    </EmptyWelcome>
+  );
+}
+
 function TableRow({ automation, actions }: { automation: Automation; actions: Actions }) {
   const words = useWords();
   const { t } = words;
-  const last = lastResult(automation);
-  const lastWords = last ? recordText(last, words.now, words.zone, words.language, t) : null;
+  const agent = agentProductName(automation.agent.kind);
   return (
-    <div className={cn("relative min-w-0 rounded-xs px-xs py-sm", TABLE_COLUMNS, automation.paused && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
-      <RowOverlayButton aria-label={t("automationScreen.open", { name: automation.name })} onClick={() => actions.openAutomation(automation.id)} data-automation-open={automation.id} />
-      <span className="pointer-events-none relative flex justify-center">
-        {automation.unseen > 0 ? <span role="img" aria-label={t("automationScreen.unseen")} className="size-(--size-tab-status-dot) rounded-full bg-primary" data-automation-unseen={automation.unseen} /> : null}
+    <div className={cn("relative min-w-0 px-md py-sm", LIST_COLUMNS, automation.paused?.reason === "operator" && "opacity-(--opacity-dimmed)")} data-automation-row={automation.id} data-automation-row-paused={automation.paused ? automation.paused.reason : undefined}>
+      <RowOverlayButton className="rounded-none" aria-label={t("automationScreen.open", { name: automation.name })} onClick={() => actions.openAutomation(automation.id)} data-automation-open={automation.id} />
+      <span className="pointer-events-none relative flex"><AgentLogo agent={automation.agent.kind} label={agent} /></span>
+      <span className="pointer-events-none relative flex min-w-0 flex-col gap-xxs">
+        <span className="flex min-w-0 items-center gap-xs">
+          <span className="min-w-0 truncate text-body font-semibold text-foreground" title={automation.name}>{automation.name}</span>
+          {automation.unseen > 0 ? <span role="img" aria-label={t("automationScreen.unseen")} className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-primary" data-automation-unseen={automation.unseen} /> : null}
+          <StateBadge automation={automation} />
+        </span>
+        <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
+          <RepeatIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
+          <span className="shrink-0">{scheduleText(automation.reads_as, words.language, t)}</span>
+          <span aria-hidden="true" className="text-muted-foreground">·</span>
+          <Where automation={automation} />
+          <span className="sr-only">, {agent}</span>
+          <span aria-hidden="true" className="text-muted-foreground">·</span>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={automation.task}>{automation.task}</span>
+        </span>
       </span>
-      <span className="pointer-events-none relative min-w-0 truncate text-body font-semibold text-foreground" title={automation.name}>{automation.name}</span>
-      <span className="pointer-events-none relative hidden min-w-0 truncate text-caption text-subtle-foreground missions-split:block">{scheduleText(automation.reads_as, words.language, t)}</span>
-      <span className="pointer-events-none relative min-w-0"><NextRunWords automation={automation} words={words} /></span>
-      <span className="pointer-events-none relative min-w-0">{lastWords ? <RecordWords tone={lastWords.tone} text={lastWords.text} /> : null}</span>
-      <span className="pointer-events-none relative hidden min-w-0 items-center gap-xs text-caption text-subtle-foreground missions-split:flex"><Where automation={automation} /></span>
+      <Cell label={t("automationScreen.col.next")}><NextTime automation={automation} words={words} /></Cell>
+      <Cell label={t("automationScreen.recent")} className="hidden missions-split:flex"><RecentRuns automation={automation} words={words} /></Cell>
       <span className="relative flex justify-end">
         <RunNowButton automation={automation} actions={actions} icon />
       </span>
@@ -201,15 +242,59 @@ function TableRow({ automation, actions }: { automation: Automation; actions: Ac
   );
 }
 
-/** `● 도는 중`, `⏸ 멈춤` or the next time (B3, B25). */
-function NextRunWords({ automation, words }: { automation: Automation; words: Words }) {
-  const next = nextRun(automation);
-  const text = nextRunText(automation, words.now, words.zone, words.language, words.t);
+/** What the automation is doing, by its name: a run going, paused by the operator, or stopped for a person with why (B3, B23, B25); one that waits for its time says nothing. */
+function StateBadge({ automation }: { automation: Automation }) {
+  const { t } = useInterfaceTranslation();
+  if (automation.running) {
+    return (
+      <Badge variant="outline" className="text-agent-working" data-automation-state="running">
+        <span aria-hidden="true" className="size-(--size-tab-status-dot) rounded-full bg-agent-working" />
+        {t("automation.next.running")}
+      </Badge>
+    );
+  }
+  if (!automation.paused) return null;
+  if (automation.paused.reason === "operator") return <Badge data-automation-state="paused"><PauseIcon aria-hidden="true" />{t("automation.next.paused")}</Badge>;
+  return <Badge variant="outline" className="text-destructive" data-automation-state="stopped">{pauseReasonText(automation.paused.reason, t)}</Badge>;
+}
+
+/** `내일 09:00 · 15시간 뒤`; a paused automation or a schedule that never runs again has no next time (B3, B25). */
+function NextTime({ automation, words }: { automation: Automation; words: Words }) {
+  const at = automation.paused ? null : automation.next_run_at_unix_ms;
+  if (at == null) return <span className="text-caption text-muted-foreground" data-automation-next="none">{automation.paused ? "—" : words.t("automation.next.none")}</span>;
   return (
-    <span className={cn("flex min-w-0 items-center gap-xs text-caption", next.kind === "running" ? "text-agent-working" : "text-subtle-foreground")} data-automation-next={next.kind}>
-      {next.kind === "running" ? <span aria-hidden="true" className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-agent-working" /> : null}
-      {next.kind === "paused" ? <PauseIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" /> : null}
-      <span className="min-w-0 truncate">{text}</span>
+    <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next="at">
+      <span className="shrink-0 tabular-nums text-foreground">{whenText(at, words.now, words.zone, words.language, words.t)}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{words.t("automationScreen.inTime", { time: formatElapsed(words.language, at - words.now) })}</span>
+    </span>
+  );
+}
+
+/** How many of the newest results the list draws as marks. */
+const RECENT_MARKS = 5;
+
+/** The newest results as marks, oldest first (✓ ✗ – ■, ● while one goes), then the newest one's words (B3). */
+function RecentRuns({ automation, words }: { automation: Automation; words: Words }) {
+  const recent = automation.records.filter((record) => record.kind !== "missed").slice(0, RECENT_MARKS);
+  if (recent.length === 0) return <span className="text-caption text-muted-foreground">{words.t("automationScreen.noRunYet")}</span>;
+  const last = lastResult(automation);
+  const lastWords = last ? recordText(last, words.now, words.zone, words.language, words.t) : null;
+  return (
+    <span className="flex min-w-0 items-center gap-xs" data-automation-recent={recent.length}>
+      <span aria-hidden="true" className="flex shrink-0 items-center">
+        {[...recent].reverse().map((record, index) => <ToneMark key={index} tone={recordText(record, words.now, words.zone, words.language, words.t).tone} />)}
+      </span>
+      {lastWords ? <span className={cn("min-w-0 truncate text-caption", lastWords.tone === "failed" ? "text-destructive" : "text-subtle-foreground")} title={lastWords.text}>{lastWords.text}</span> : null}
+    </span>
+  );
+}
+
+/** A value of a row with its quiet name over it, so the list needs no header line. */
+function Cell({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <span className={cn("pointer-events-none relative flex min-w-0 flex-col gap-xxs", className)}>
+      <span className="truncate text-micro text-muted-foreground">{label}</span>
+      {children}
     </span>
   );
 }
@@ -249,16 +334,13 @@ function RecordWords({ tone, text }: { tone: RecordTone; text: string }) {
   );
 }
 
-/** `기본 폴더 · Claude`, `hide · Codex · 새 워크트리`. */
+/** `기본 폴더`, `hide · 새 워크트리`: where a run works; the row's logo names the agent. */
 function Where({ automation }: { automation: Automation }) {
   const { t } = useInterfaceTranslation();
   const folder = automation.folder.default ? t("automationScreen.ownFolder") : lastName(automation.folder.path);
   return (
     <>
-      <span className="min-w-0 truncate" title={automation.folder.path}>{folder}</span>
-      <span aria-hidden="true">·</span>
-      <AgentMark kind={automation.agent.kind} />
-      <span className="shrink-0">{agentProductName(automation.agent.kind)}</span>
+      <span className="max-w-(--size-mission-table-project) shrink-0 truncate" title={automation.folder.path}>{folder}</span>
       {automation.folder.worktree ? <span className="shrink-0">· {t("automationScreen.worktree")}</span> : null}
     </>
   );
@@ -324,6 +406,7 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
   const { t } = words;
   const canOpenFolder = hostBridge() !== null && actions.onCoreMachine();
   const agent = [agentProductName(automation.agent.kind), automation.agent.model ?? t("automationScreen.detail.agentDefault"), automation.agent.effort].filter(Boolean).join(" · ");
+  const runCount = automation.records.filter((record) => record.kind === "run").length;
   const back = useRef<HTMLDivElement>(null);
   // Opened from the table, the keys land in the detail, so Escape-less keyboard use goes on from its first action (B38).
   useEffect(() => {
@@ -332,63 +415,81 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
   }, []);
   return (
     <>
-      <div ref={back} className="flex shrink-0 flex-wrap items-center gap-x-sm gap-y-xs border-b border-border px-lg py-sm" data-automation-detail-head="true">
-        <BackButton label={t("automationScreen.back")} onBack={() => useUiStore.getState().setAutomations({ selected: null, run: null })} />
-        <h1 className="min-w-0 flex-1 truncate text-subhead font-semibold" title={automation.name}>{automation.name}</h1>
-        <span className="flex shrink-0 flex-wrap items-center gap-xs">
-          <RunNowButton automation={automation} actions={actions} />
-          {automation.paused ? (
-            <Button variant="secondary" size="sm" onClick={() => actions.automation("resume", automation.id)} data-automation-resume={automation.id}>
-              <PlayIcon aria-hidden="true" />
-              {t("automationScreen.resume")}
+      <div ref={back} className="flex shrink-0 flex-col gap-md px-lg pt-sm pb-md" data-automation-detail-head="true">
+        <div className="flex flex-wrap items-center gap-x-sm gap-y-xs">
+          <BackButton label={t("automationScreen.back")} onBack={() => useUiStore.getState().setAutomations({ selected: null, run: null })} />
+          <span className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-xs">
+            <RunNowButton automation={automation} actions={actions} />
+            {automation.paused ? (
+              <Button variant="secondary" size="sm" onClick={() => actions.automation("resume", automation.id)} data-automation-resume={automation.id}>
+                <PlayIcon aria-hidden="true" />
+                {t("automationScreen.resume")}
+              </Button>
+            ) : (
+              <Button variant="secondary" size="sm" onClick={() => actions.automation("pause", automation.id)} data-automation-pause={automation.id}>
+                <PauseIcon aria-hidden="true" />
+                {t("automationScreen.pause")}
+              </Button>
+            )}
+            <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setAutomations({ form: "edit" })} data-automation-edit={automation.id}>
+              <PencilIcon aria-hidden="true" />
+              {t("automationScreen.edit")}
             </Button>
-          ) : (
-            <Button variant="secondary" size="sm" onClick={() => actions.automation("pause", automation.id)} data-automation-pause={automation.id}>
-              <PauseIcon aria-hidden="true" />
-              {t("automationScreen.pause")}
-            </Button>
-          )}
-          <Button variant="secondary" size="sm" onClick={() => useUiStore.getState().setAutomations({ form: "edit" })} data-automation-edit={automation.id}>
-            <PencilIcon aria-hidden="true" />
-            {t("automationScreen.edit")}
-          </Button>
-          {canOpenFolder ? (
-            <Button variant="secondary" size="sm" onClick={() => actions.openOwnedFile(automation.folder.path)} data-automation-open-folder={automation.id}>
-              <FolderOpenIcon aria-hidden="true" />
-              {t("automationScreen.openFolder")}
-            </Button>
-          ) : null}
-          <RemoveButton automation={automation} actions={actions} />
-        </span>
+            {canOpenFolder ? (
+              <Button variant="secondary" size="sm" onClick={() => actions.openOwnedFile(automation.folder.path)} data-automation-open-folder={automation.id}>
+                <FolderOpenIcon aria-hidden="true" />
+                {t("automationScreen.openFolder")}
+              </Button>
+            ) : null}
+            <RemoveButton automation={automation} actions={actions} />
+          </span>
+        </div>
+        <div className="flex min-w-0 items-start gap-md">
+          <span className="flex pt-xxs"><AgentLogo agent={automation.agent.kind} label={agentProductName(automation.agent.kind)} /></span>
+          <div className="flex min-w-0 flex-1 flex-col gap-xs">
+            <h1 className="flex min-w-0 items-center gap-xs">
+              <span className="min-w-0 truncate text-headline font-semibold text-foreground" title={automation.name}>{automation.name}</span>
+              <StateBadge automation={automation} />
+            </h1>
+            <p className="max-w-(--size-editor-measure) whitespace-pre-wrap text-body text-subtle-foreground" data-automation-task="true">{automation.task}</p>
+          </div>
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-lg py-md">
-        <dl className="grid max-w-(--size-mission-panel-words) grid-cols-[max-content_minmax(0,1fr)] gap-x-lg gap-y-xs text-body" data-automation-facts="true">
-          <Fact label={t("automationScreen.detail.task")}><span className="whitespace-pre-wrap text-foreground" data-automation-task="true">{automation.task}</span></Fact>
-          <Fact label={t("automationScreen.detail.schedule")}>{scheduleText(automation.reads_as, words.language, t)}</Fact>
-          <Fact label={t("automationScreen.detail.next")}><NextRunWords automation={automation} words={words} /></Fact>
+      <div className="flex min-h-0 flex-1 flex-col gap-lg overflow-y-auto px-lg pb-lg">
+        <dl className="grid shrink-0 grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border missions-split:grid-cols-4" data-automation-facts="true">
+          <Fact label={t("automationScreen.detail.schedule")}>
+            <span className="flex min-w-0 items-center gap-xs"><RepeatIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /><span className="truncate">{scheduleText(automation.reads_as, words.language, t)}</span></span>
+          </Fact>
+          <Fact label={t("automationScreen.detail.next")}><NextTime automation={automation} words={words} /></Fact>
           <Fact label={t("automationScreen.detail.folder")}>
             <span className="flex min-w-0 flex-col">
-              <span>{automation.folder.default ? t("automationScreen.ownFolder") : lastName(automation.folder.path)}{automation.folder.worktree ? ` · ${t("automationScreen.worktree")}` : ""}</span>
-              <span className="truncate font-mono text-caption text-muted-foreground" title={automation.folder.path} data-automation-folder-path="true">{automation.folder.path}</span>
+              <span className="truncate">{automation.folder.default ? t("automationScreen.ownFolder") : lastName(automation.folder.path)}{automation.folder.worktree ? ` · ${t("automationScreen.worktree")}` : ""}</span>
+              <span className="truncate font-mono text-micro text-muted-foreground" title={automation.folder.path} data-automation-folder-path="true">{automation.folder.path}</span>
             </span>
           </Fact>
           <Fact label={t("automationScreen.detail.agent")}>
             <span className="flex min-w-0 items-center gap-xs"><AgentMark kind={automation.agent.kind} /><span className="truncate">{agent}</span></span>
           </Fact>
         </dl>
-        <h2 className="pt-lg pb-xs text-caption font-semibold text-muted-foreground">{t("automationScreen.detail.runs")}</h2>
-        <Runs automation={automation} actions={actions} words={words} />
+        <section className="flex min-w-0 flex-col gap-xs" aria-label={t("automationScreen.detail.runs")}>
+          <h2 className="flex items-center gap-xs text-subhead font-semibold text-foreground">
+            {t("automationScreen.detail.runs")}
+            {runCount > 0 ? <Badge className="tabular-nums">{runCount}</Badge> : null}
+          </h2>
+          <Runs automation={automation} actions={actions} words={words} />
+        </section>
       </div>
     </>
   );
 }
 
+/** One fact of the detail's card: its quiet name over its value. */
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <>
-      <dt className="text-caption text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-subtle-foreground">{children}</dd>
-    </>
+    <div className="flex min-w-0 flex-col gap-xxs bg-background px-md py-sm">
+      <dt className="text-micro text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-body text-foreground">{children}</dd>
+    </div>
   );
 }
 
@@ -401,7 +502,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 function Runs({ automation, actions, words }: { automation: Automation; actions: Actions; words: Words }) {
   const { t } = words;
   const box = useRef<HTMLDivElement>(null);
-  if (automation.records.length === 0) return <p className="text-caption text-muted-foreground" data-automation-runs="empty">{t("automationScreen.detail.noRuns")}</p>;
+  if (automation.records.length === 0) return <p className="rounded-lg border border-dashed border-border px-md py-md text-caption text-muted-foreground" data-automation-runs="empty">{t("automationScreen.detail.noRuns")}</p>;
   const step = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const rows = Array.from(box.current?.querySelectorAll<HTMLElement>("[data-automation-run-open]") ?? []);
@@ -412,7 +513,7 @@ function Runs({ automation, actions, words }: { automation: Automation; actions:
     next.focus();
   };
   return (
-    <div ref={box} className="flex max-w-(--size-task-table-wide) flex-col" onKeyDown={step} data-automation-runs={automation.records.length}>
+    <div ref={box} className="flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border" onKeyDown={step} data-automation-runs={automation.records.length}>
       {automation.records.map((record, index) => <RunRow key={record.kind === "run" ? `run-${record.number}` : `${record.kind}-${index}`} automation={automation} record={record} actions={actions} words={words} />)}
     </div>
   );
@@ -439,12 +540,13 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
     </>
   );
   const data = { "data-automation-record": record.kind, "data-automation-record-number": record.kind === "run" ? record.number : undefined, "data-automation-run-state": record.kind === "run" ? record.state : undefined, "data-automation-run-reason": record.kind === "run" ? record.reason : undefined };
-  if (record.kind !== "run") return <div className="flex min-w-0 items-center gap-sm px-xs py-xs" {...data}>{body}</div>;
+  if (record.kind !== "run") return <div className="flex min-w-0 items-center gap-md px-md py-sm" {...data}>{body}</div>;
   // The run's view opens a finished run's conversation again as it arrives (B17).
   const open = () => actions.openAutomation(automation.id, record.number);
   return (
-    <RowButton className="flex min-w-0 items-center gap-sm px-xs py-xs" aria-label={t("automationScreen.run.open", { when: whenWords ?? "" })} onClick={open} data-automation-run-open={record.number} {...data}>
+    <RowButton className="gap-md rounded-none px-md py-sm" aria-label={t("automationScreen.run.open", { when: whenWords ?? "" })} onClick={open} data-automation-run-open={record.number} {...data}>
       {body}
+      <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
     </RowButton>
   );
 }

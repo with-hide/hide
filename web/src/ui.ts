@@ -18,6 +18,7 @@ import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
+import type { AutomationExample } from "./automationDraft";
 
 export type { ViewFocusRequest } from "./viewLayout";
 
@@ -119,9 +120,11 @@ export type AutomationPlace = {
    * as removed, since the answer and the snapshot reach the window in no fixed order.
    */
   arriving: boolean;
+  /** The starting point a new automation's form opens on, picked on the empty screen (B2, B4); null opens it blank. */
+  example: AutomationExample | null;
 };
 
-export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false };
+export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false, example: null };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };
@@ -618,8 +621,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ browserDevices: next });
   },
   setMissions: (patch) => set({ missions: { ...get().missions, ...patch } }),
-  // Any move but the one that names an answered automation ends its wait.
-  setAutomations: (patch) => set({ automations: { ...get().automations, arriving: false, ...patch } }),
+  // Any move but the one that names an answered automation ends its wait, and any but the one that picks an example drops it.
+  setAutomations: (patch) => set({ automations: { ...get().automations, arriving: false, example: null, ...patch } }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   taskTable: { filter: "all", task: null },
   showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),

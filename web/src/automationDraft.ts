@@ -40,6 +40,24 @@ function scheduleDraft(schedule: AutomationSchedule): ScheduleDraft {
   }
 }
 
+/**
+ * The starting points the empty screen offers (PRD automations B2, B4): a
+ * schedule the form opens on, with the name and task the screen words; the
+ * operator reads, changes and makes it like any new automation.
+ */
+export type AutomationExample = "issues" | "deps" | "ci";
+export const AUTOMATION_EXAMPLES: Record<AutomationExample, AutomationSchedule> = {
+  issues: { kind: "weekdays", time: "09:00" },
+  deps: { kind: "weekly", days: ["mon"], time: "10:00" },
+  ci: { kind: "every_hours", hours: 6, time: "00:00" },
+};
+export const AUTOMATION_EXAMPLE_KEYS = Object.keys(AUTOMATION_EXAMPLES) as AutomationExample[];
+
+/** A new automation's form opened on an example: the agent last chosen, the example's words and schedule. */
+export function exampleDraft(example: AutomationExample, lastChoice: AutomationAgent | undefined, words: { name: string; task: string }): FormDraft {
+  return { ...draftOf(null, lastChoice), name: words.name, task: words.task, schedule: scheduleDraft(AUTOMATION_EXAMPLES[example]) };
+}
+
 function agentDraft(agent: AutomationAgent | undefined): FormDraft["agent"] {
   const kind = PROVIDER_KINDS.find((one) => one === agent?.kind) ?? PROVIDER_KINDS[0];
   if (!kind) throw new Error("No start adapter declared");
