@@ -17,7 +17,7 @@ import { agentPane } from "../../web/e2e/agent-pane";
 import { runInPane } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { toPage } from "../src/main/wirePath";
 import { fitWindow, hostLog, launchShell, screenshot, startStack, test, type Isolated, type Stack } from "./fixture";
 import { hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
@@ -258,6 +258,8 @@ test("hide file open and hide browser open of outside files open External tabs b
   fs.writeFileSync(report, "<!doctype html><title>Outside report</title><h1>Report</h1>");
   fs.mkdirSync(path.join(scratch!, "folder"));
   const { page, sent } = await start();
+  // An open from the operator's pane comes in front only while the lane is up (PRD lane-desk-pair-view B2).
+  await showExplorer(page);
 
   // An image opens in its viewer and an HTML page as a page of its own folder, each an External tab.
   expect(await shellHide(["file", "open", shot])).toMatchObject({ ok: true });
