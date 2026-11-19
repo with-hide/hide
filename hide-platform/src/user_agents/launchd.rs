@@ -16,8 +16,13 @@ use std::time::{Duration, Instant};
 use super::{Login, LoginAgent};
 
 /// How long one `launchctl` command may take that waits on nothing but
-/// launchd: `print`, `bootstrap`, `kickstart`; and how long `pmset` may take.
+/// launchd: `print`, `bootstrap`; and how long `pmset` may take.
 const COMMAND_WITHIN: Duration = Duration::from_secs(5);
+/// How long a `kickstart` may take: launchd holds a job's start back until
+/// its `ThrottleInterval` (10 s by default) has passed since its last start,
+/// and `kickstart` waits that out, so a start asked for right after the job
+/// exited (`hide stop`, then `hide connect`) takes up to 10 s.
+const STARTED_WITHIN: Duration = Duration::from_secs(15);
 /// How long an unload may take, from its `bootout` until launchd no longer
 /// knows the job: launchd allows a job its default `ExitTimeOut` (20 s)
 /// before it kills it, so a job that takes its time to stop is not reported
@@ -166,7 +171,7 @@ impl Launchd {
     /// `kickstart`s the loaded agent `label` when it is not running.
     pub(super) fn start(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         let name = format!("{}/{label}", self.domain);
-        let result = self.run(&["kickstart", &name], home, stop)?;
+        let result = self.run_within(&["kickstart", &name], home, stop, STARTED_WITHIN)?;
         if result.code != Some(0) {
             return Err(io::Error::other(format!(
                 "kickstart failed (exit {:?}): {}",

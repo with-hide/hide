@@ -578,7 +578,21 @@ fn a_login_agent_restarts_while_its_marker_exists_and_ends_when_removed() {
             Duration::from_secs(10),
             &|| !alive(third),
         );
-        starts()[3]
+        // A start asked for right after an exit, while launchd holds the
+        // job's restart back for its throttle: `hide stop` then `hide
+        // connect` does this, and the start waits the throttle out.
+        let fourth = starts()[3];
+        std::fs::remove_file(&marker).unwrap();
+        hide_platform::process::terminate(fourth).unwrap();
+        wait("the fourth's exit", Duration::from_secs(10), &|| {
+            !alive(fourth)
+        });
+        std::fs::write(&marker, "").unwrap();
+        agents.start(&label, home, &stop).unwrap();
+        wait("the asked-for start", Duration::from_secs(5), &|| {
+            starts().len() == 5
+        });
+        starts()[4]
     }));
     let removal = agents.remove(&label, home, &stop);
     let running = removed.unwrap_or_else(|panic| std::panic::resume_unwind(panic));
