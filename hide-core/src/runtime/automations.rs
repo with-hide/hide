@@ -42,6 +42,8 @@ const ABSENT_GRACE_MS: u64 = 30_000;
 /// The line a retry's resumed conversation is handed (D-17).
 const CONTINUE_PROMPT: &str = "이어서 해줘. 하던 일을 마저 끝내 줘.";
 const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long the core's own node may take to make an automation's folder.
+const FOLDER_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// One run, by its automation's id and its number.
 type RunKey = (String, u64);
@@ -496,20 +498,33 @@ impl Runtime {
             .find(id)
             .map(|automation| automation.name.clone())
             .unwrap_or_default();
-        let folder = path.to_owned();
+        // The core's own node makes it, as it makes a new project's folder.
+        let local = self.node.clone();
+        let node = match self.node_link(local.as_str()) {
+            Ok(node) => node,
+            Err(message) => {
+                crate::diagnostic!(json!({
+                    "component": "automations", "kind": "automation.folder_failed",
+                    "message": message,
+                }));
+                return;
+            }
+        };
+        let requested = path.to_owned();
+        let name = path.rsplit('/').next().unwrap_or_default().to_owned();
         let spawned = self.spawn_issue_worker(
             "automation-folder",
             move || {
-                hide_platform::path::from_wire(&folder)
-                    .map_err(|error| error.to_string())
-                    .and_then(|native| {
-                        hide_platform::fs::private::create_dir_all(&native)
-                            .map_err(|error| error.to_string())
-                    })
-                    .map(|()| folder)
+                crate::node_access::call_as::<hide_node_link::project::AutomationFolder>(
+                    node.as_ref(),
+                    hide_node_link::protocol::Call::AutomationFolder { name },
+                    FOLDER_WAIT,
+                )
+                .map(|made| made.path)
+                .map_err(|error| error.to_string())
             },
             move |runtime, made: Result<String, String>| match made {
-                Ok(folder) => runtime.register_made_folder(folder, label),
+                Ok(real) => runtime.register_made_folder(&requested, real, label),
                 Err(message) => {
                     crate::diagnostic!(json!({
                         "component": "automations", "kind": "automation.folder_failed",
@@ -528,10 +543,29 @@ impl Runtime {
     }
 
     /// The made folder is registered as Add a project would, as a plain
-    /// folder, so a run's spawn finds it among this machine's projects.
-    fn register_made_folder(&mut self, folder: String, label: String) -> bool {
+    /// folder, so a run's spawn finds it among this machine's projects. The
+    /// node answers its real path, which the automation keeps from then on,
+    /// so the registration and the automation name one folder.
+    fn register_made_folder(&mut self, requested: &str, folder: String, label: String) -> bool {
+        let mut moved = false;
+        for automation in &mut self.automations.book.automations {
+            if automation.folder.default
+                && automation.folder.path == requested
+                && requested != folder
+            {
+                automation.folder.path = folder.clone();
+                moved = true;
+            }
+        }
+        if moved {
+            // The registration asked for is the real path's now.
+            if let Some(since) = self.automations.registering.remove(requested) {
+                self.automations.registering.insert(folder.clone(), since);
+            }
+            self.automations_changed(true);
+        }
         let Some(context) = self.live.as_ref().cloned() else {
-            return false;
+            return moved;
         };
         let registered = self
             .snapshot
@@ -540,7 +574,7 @@ impl Runtime {
             .iter()
             .any(|row| row.device_id == self.node.as_str() && row.path == folder);
         if registered || !self.workspace_creations_in_flight.insert(folder.clone()) {
-            return false;
+            return moved;
         }
         if let Err(message) = crate::checkout_owner::open::spawn_workspace_creation(
             context,
@@ -557,7 +591,7 @@ impl Runtime {
                 "message": message,
             }));
         }
-        false
+        moved
     }
 
     /// Starts one attempt on a worker: a new conversation with the task for
@@ -631,20 +665,10 @@ impl Runtime {
                 return false;
             }
         };
-        let folder = match &command {
-            crate::coordination::Command::Spawn { repo, .. } => repo.clone(),
-            _ => None,
-        };
         let worker_key = key.clone();
         let result = self.spawn_issue_worker(
             "automation-start",
             move || {
-                // A folder that is gone is a person's to fix (D-17).
-                if folder.as_deref().is_some_and(|folder| {
-                    !hide_platform::path::from_wire(folder).is_ok_and(|native| native.is_dir())
-                }) {
-                    return Err("automation_folder_missing".to_owned());
-                }
                 crate::coordination::run(client, authority, actor, command).and_then(|view| {
                     view["id"]
                         .as_str()
@@ -739,9 +763,8 @@ impl Runtime {
                 let code = reason.split('\u{1f}').next().unwrap_or_default();
                 let failure = match code {
                     "agent_not_installed" => Failure::Person(PauseReason::AgentMissing),
-                    "automation_folder_missing" | "spawn_folder_unreadable" => {
-                        Failure::Person(PauseReason::FolderMissing)
-                    }
+                    // A folder that is gone is a person's to fix (D-17).
+                    "spawn_folder_unreadable" => Failure::Person(PauseReason::FolderMissing),
                     code => Failure::Transient(code.to_owned()),
                 };
                 self.attempt_failed(key, failure, now)

@@ -140,7 +140,7 @@ async fn an_automation_that_is_on_keeps_an_idle_daemon_until_none_is_on() {
 
     // Past the idle window with no screen and no pane: held by the
     // automation that is on.
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(Duration::from_secs(4)).await; // wait-ok: the 1 s idle window has passed with no screen and no pane
     assert!(
         serving(running.port).await,
         "the daemon ended with an automation on"
@@ -159,6 +159,6 @@ async fn an_automation_that_is_on_keeps_an_idle_daemon_until_none_is_on() {
             Instant::now() < deadline,
             "the daemon outlived its idle window with no automation on"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await; // wait-ok: the daemon has ended and closed its port
     }
 }

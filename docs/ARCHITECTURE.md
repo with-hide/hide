@@ -1078,7 +1078,7 @@ A run's agent starts under Hide's own identity `hide:automation` with no parent 
 Its intent carries the automation, the run and the attempt (`automation-<id>-r<n>-a<k>`), so a start asked again after a restart converges on one agent (B36).
 Its row leaves the operator's lists as a Hide AI task's does, and a View it opened reaches Needs You as well as a question or a block (`TaskHome::Automations`, `Ownership::HideAi { look_calls }`).
 It works in the project the operator chose, in a new worktree per run (`automation/<id>-r<n>`) when asked in a Git project, or else on the branch the project's folder has out.
-With no folder chosen, the core makes `~/hide/automations/<name>-<id>` off the lock and registers it as a plain folder project, which `hide_ai_checkouts` lists as the automation's, so no list shows it (D-08).
+With no folder chosen, the core's own node makes `~/hide/automations/<name>-<id>` with the folders above it (`Call::AutomationFolder`, node protocol 99) and the core registers it, by the real path the node answers, as a plain folder project, which `hide_ai_checkouts` lists as the automation's, so no list shows it (D-08).
 
 A run follows its agent's row.
 A finished turn records the result at once: the state, the answer's first paragraph (from `request.answer`, then from the whole answer read on a worker) and the native session id.
