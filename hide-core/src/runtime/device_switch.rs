@@ -31,6 +31,9 @@ pub(super) struct DeviceSwitch {
 /// What a helper device is switched from: how the core reaches it, and
 /// where its helper is.
 pub struct DeviceSwitchSource {
+    /// The device's id, which the one who asked may have named by its
+    /// alias.
+    pub device_id: String,
     pub ssh_alias: String,
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
@@ -81,17 +84,26 @@ impl DeviceSwitchPayload {
 }
 
 impl Runtime {
-    /// What hided switches `device_id` from, or the code of why it is not
-    /// a device that can be switched: only a device the core dials over
-    /// SSH under its machine's own id, which the paired machine's device
-    /// then has too.
+    /// What hided switches `device` from, or the code of why it is not a
+    /// device that can be switched: only a device the core dials over SSH
+    /// under its machine's own id, which the paired machine's device then
+    /// has too. `device` is its id, or the SSH alias it is dialed by, which
+    /// is what a terminal knows of a device it has just added.
     pub(crate) fn device_switch_source(
         &self,
-        device_id: &str,
+        device: &str,
     ) -> Result<DeviceSwitchSource, &'static str> {
         let registration = self
-            .device_registration(device_id)
+            .device_registration(device)
+            .or_else(|| {
+                self.snapshot
+                    .ui_state
+                    .device_registrations
+                    .iter()
+                    .find(|registration| registration.origin.ssh_alias() == Some(device))
+            })
             .ok_or("device_unknown")?;
+        let device_id = registration.id.as_str();
         let LinkOrigin::Dialed {
             ssh_alias,
             naming: crate::model::DeviceNaming::Named,
@@ -117,6 +129,7 @@ impl Runtime {
                 }) as Arc<dyn hide_node_link::device::SignIn>
             });
         Ok(DeviceSwitchSource {
+            device_id: device_id.to_owned(),
             ssh_alias: ssh_alias.clone(),
             helper_root: registration
                 .host_consent

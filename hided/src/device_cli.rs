@@ -559,7 +559,17 @@ fn add_alias(
         ),
         _ => {}
     }
-    core(env, command, wait)
+    // An SSH device is the old connection: the line says how it becomes the
+    // machine's own Hide, which the operator allows by running it (B41).
+    match core(env, command, wait)? {
+        Printed::Value(value, lines) => Ok(Printed::Value(
+            value,
+            format!(
+                "{lines}{alias} is on the old connection. Once it is connected, run hide device switch {alias} --install to start Hide there and connect the two as Hides.\n"
+            ),
+        )),
+        printed => Ok(printed),
+    }
 }
 
 /// One ask of this machine's daemon about pairing.

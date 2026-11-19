@@ -359,6 +359,8 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
+  /** The SSH alias a device was just added by: once that device connects, its switch to the new connection is asked once and this is cleared (PRD device-connect-iroh B41). */
+  switchAfterAdd: string | null;
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
@@ -443,6 +445,7 @@ type UiStore = {
   /** Opens Settings on Devices with the Add device dialog in front. */
   openAddDevice: () => void;
   clearAddDeviceRequest: () => void;
+  setSwitchAfterAdd: (alias: string | null) => void;
   /** Opens Settings › Devices with the move dialog at its give-up confirm, from the window's strip. */
   openMoveGiveUp: () => void;
   clearMoveGiveUpRequest: () => void;
@@ -531,6 +534,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  switchAfterAdd: null,
   moveGiveUpRequested: false,
   pendingClose: null,
   pendingArchive: null,
@@ -617,6 +621,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  setSwitchAfterAdd: (switchAfterAdd) => set({ switchAfterAdd }),
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
   clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),

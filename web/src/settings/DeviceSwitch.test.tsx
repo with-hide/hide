@@ -8,6 +8,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { NOTHING_UNDER_WAY, type PairingView } from "../pairing";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
 import type { DispatchFn } from "../ws";
 import { DeviceSwitchDialogs, DeviceSwitchStrip } from "./DeviceSwitch";
 
@@ -125,5 +126,19 @@ it("says what would be put on a machine with no Hide of its own, and starts it o
   await act(async () => { q('[data-device-switch-install-go="true"]')?.click(); });
   expect(switches(events).map((event) => event.payload.install)).toEqual([undefined, true]);
   expect(q("[data-device-switch-install]")).toBeNull();
+  await unmount();
+});
+
+it("asks for the switch of a device just added over SSH once its helper is connected, and only once (B41)", async () => {
+  const ready = { host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "ready", message: null, platform: "linux x86_64", helper_path: null } } as Partial<Device>;
+  const { events, show, unmount } = await mount(helper({ state: "unavailable" }));
+  await act(async () => { useUiStore.getState().setSwitchAfterAdd("mini"); });
+  // Not connected yet: nothing is asked.
+  expect(switches(events)).toHaveLength(0);
+  await show(helper(ready));
+  expect(switches(events).map((event) => ({ device: event.payload.device, install: event.payload.install }))).toEqual([{ device: "mini", install: undefined }]);
+  expect(useUiStore.getState().switchAfterAdd).toBeNull();
+  await show(helper({ ...ready, message: "again" }));
+  expect(switches(events)).toHaveLength(1);
   await unmount();
 });
