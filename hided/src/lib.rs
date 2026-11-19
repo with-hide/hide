@@ -32,7 +32,6 @@ mod herdr_transition;
 pub mod holder_restart;
 pub mod index;
 pub mod issue_cli;
-pub mod link_mux;
 pub mod login_item;
 pub mod mission_cli;
 mod mission_show;

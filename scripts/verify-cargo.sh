@@ -7,6 +7,7 @@
 #                  nextest-list [cargo nextest list arguments...] (the tests `nextest` would run, which the repeat lane counts)
 #                  fmt-check (cargo fmt --all --check alone)
 #                  hakari (workspace-hack is current; scripts/install-hakari.sh)
+#                  deny (licenses and advisories of the lockfile; deny.toml, scripts/install-cargo-deny.sh)
 #
 # The PRD harness runs each verify command with execvp and no shell, so an
 # `ENV=value cargo ...` binding fails with ENOENT at verify time rather than at
@@ -166,6 +167,15 @@ case "${1:-}" in
         cargo hakari generate --diff
         exec cargo hakari manage-deps --dry-run
         ;;
+    deny)
+        # Every crate the lockfile names carries a license Hide may ship
+        # under and no known vulnerability (deny.toml). It reads the advisory
+        # database from the network, so it runs where a dependency changed
+        # and nightly, never on a pull request that changed none.
+        # docs/BUILD.md, "Licenses and advisories".
+        report_toolchain
+        exec cargo deny --locked check licenses advisories
+        ;;
     lint)
         report_toolchain
         prepare_vt_inputs
@@ -187,7 +197,7 @@ case "${1:-}" in
         exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     *)
-        printf 'usage: %s test [args...]|lint|fmt-check|hakari|release|cli|test-scoped|check|build|clippy|metadata|nextest|nextest-list [args...]\n' "$0" >&2
+        printf 'usage: %s test [args...]|lint|fmt-check|hakari|deny|release|cli|test-scoped|check|build|clippy|metadata|nextest|nextest-list [args...]\n' "$0" >&2
         exit 2
         ;;
 esac

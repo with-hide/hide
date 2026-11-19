@@ -1,7 +1,7 @@
 //! A page on another machine's loopback, reached from this one: a device's
 //! through its node link, whichever link that is (PRD wsl-device B9), and
 //! the core machine's, from a node, through the node's connection to its
-//! core (`link_mux`). A listener on this machine's loopback whose every
+//! core (`hide_peer::mux`). A listener on this machine's loopback whose every
 //! connection is one stream to that machine's own loopback. The forward
 //! owns its listener; dropping it ends a device's connections with it,
 //! while a connection to the core's machine ends with its own ends. A link
@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use hide_node::ssh::{OpenError, RemoteHost};
 
-use crate::link_mux::Mux;
+use hide_peer::mux::Mux;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::{JoinHandle, JoinSet};

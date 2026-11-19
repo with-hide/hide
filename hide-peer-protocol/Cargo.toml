@@ -1,0 +1,22 @@
+[package]
+name = "hide-peer-protocol"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# What two Hide machines say to each other, and what a host says to the guest
+# node it runs: the first exchange, the stream kinds, the management
+# messages, the guest node's launch contract, its tap and its event box
+# (PRD device-connect-iroh D-62, D-65, D-77, D-79).
+# `contracts/peer-link.json` is the same contract as a file, and this
+# crate's `contract` test holds the two together.
+#
+# A leaf: types and codecs only, so `hide-node` and `hide-host` read these
+# shapes without the grant store, and nothing here knows a transport.
+# No `workspace-hack`, like the other protocol leaves.
+
+[dependencies]
+hex = "=0.4.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"

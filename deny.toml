@@ -1,0 +1,47 @@
+# What `cargo deny` holds the dependency tree to (`scripts/verify-cargo.sh
+# deny`, CONTRIBUTING.md, CI gates): every crate's license is one Hide may
+# ship under, and none has a known vulnerability.
+# It reads the whole lockfile, every platform and feature, so a crate only
+# the Windows or Linux package links is checked too.
+
+[graph]
+all-features = true
+
+[advisories]
+# A crate nobody maintains fails only when a member depends on it directly:
+# one deep in another crate's tree is that crate's to replace.
+unmaintained = "workspace"
+# An advisory is listed here only with the reason it does not reach Hide and
+# what removes the entry.
+ignore = [
+    { id = "RUSTSEC-2026-0386", reason = "tokio's AsyncFd constructors accept a descriptor the caller does not own; no member calls them. Six members pin tokio =1.53.2, and the pull request that moves that pin removes this entry." },
+    { id = "RUSTSEC-2026-0459", reason = "The bundled SQLite can leak page-cache memory when it opens a database whose -wal a less trusted party wrote; every database Hide opens is the account's own file. Six members pin rusqlite =0.32.1, and the pull request that moves that pin removes this entry." },
+]
+
+[licenses]
+# Permissive licenses only. A crate offered under several is taken under one
+# of these. A new license is added here in the pull request that brings its
+# crate, with the crate named in the description.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# The workspace's own crates are not published and carry the repository's
+# license (LICENSE), not a field cargo reads.
+ignore = true
