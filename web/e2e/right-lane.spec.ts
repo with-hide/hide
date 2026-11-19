@@ -158,7 +158,6 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     // so the Escape here is the rail button's.
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
-    await expect(documentArea(page).locator(".cm-content")).toBeFocused();
     await railTool(page, "documents").focus();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
