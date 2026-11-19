@@ -142,3 +142,21 @@ it("asks for the switch of a device just added over SSH once its helper is conne
   expect(switches(events)).toHaveLength(1);
   await unmount();
 });
+
+it("says once over a machine's screen what starts fresh there after its switch landed in this window (D-48)", async () => {
+  const machine = helper({ ssh_alias: null, peer_key: "ab".repeat(32), switch: null });
+  const { q, show, unmount } = await mount(helper({ switch: { state: "connecting" } }));
+  expect(q("[data-device-switched]")).toBeNull();
+  await show(machine);
+  expect(q('[data-device-switched="mini"]')?.textContent).toBe("Memory and standing instructions start fresh on this machine");
+  // Once: leaving the machine's screen ends it, and coming back says nothing.
+  await act(async () => { useShellStore.setState({ rest: { navigator: { focused_device_id: "local", devices: [LOCAL, machine], workspaces: [] }, status: { remote: [] }, ui_state: {} } } as never); });
+  await show(machine);
+  expect(q("[data-device-switched]")).toBeNull();
+  expect(useUiStore.getState().switchedDevices).toEqual([]);
+  await unmount();
+  // A machine switched before this window watched it says nothing.
+  const later = await mount(machine);
+  expect(later.q("[data-device-switched]")).toBeNull();
+  await later.unmount();
+});

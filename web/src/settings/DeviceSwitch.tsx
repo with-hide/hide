@@ -6,7 +6,7 @@
 // screen draw the same parts; the core owns where a switch stands
 // (`Device.switch`) and hided what a press is answered (`pairingResult`).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
@@ -108,7 +108,21 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const front = useShellStore((s) => frontDeviceId(s.rest));
   const device = devices?.find((row) => row.id === front);
-  if (!ownScreen || !device || !switchOffered(device)) return null;
+  const landed = useUiStore((s) => front != null && s.switchedDevices.includes(front));
+  // Said once: the line goes with the first look at the machine's screen.
+  useEffect(() => {
+    if (!landed || front == null) return;
+    return () => useUiStore.getState().clearSwitched(front);
+  }, [landed, front]);
+  if (!ownScreen || !device) return null;
+  if (landed && device.peer_key != null) {
+    return (
+      <div className="border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switched={device.id}>
+        <span className="break-keep">{t("devices.switch.fresh")}</span>
+      </div>
+    );
+  }
+  if (!switchOffered(device)) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switch-strip={device.id}>
       {device.switch ? (
@@ -133,6 +147,7 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
 export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   useSwitchAfterAdd(actions);
+  useSwitchLanded();
   const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && (s.pairingResult.switch === "held" || s.pairingResult.switch === "install_needed") ? s.pairingResult : null));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const count = useShellStore((s) => (answer?.device_id ? deviceTerminalCount(s.rest, answer.device_id) : 0));
@@ -192,6 +207,22 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+/**
+ * Notes each device whose switch lands while this window watches it: a
+ * device that was being switched and is its machine's now. Its screen then
+ * says once what starts fresh there (D-48).
+ */
+function useSwitchLanded() {
+  const devices = useShellStore((s) => s.rest?.navigator?.devices);
+  const switching = useRef(new Set<string>());
+  useEffect(() => {
+    for (const device of devices ?? []) {
+      if (device.switch && device.switch.state !== "failed") switching.current.add(device.id);
+      else if (switching.current.delete(device.id) && device.peer_key != null) useUiStore.getState().markSwitched(device.id);
+    }
+  }, [devices]);
 }
 
 /**

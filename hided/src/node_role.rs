@@ -1200,12 +1200,15 @@ fn split_from_core(
         crate::pairing_ssh::accept_on(
             upstream,
             &reach,
-            &placement.alias,
-            request,
-            &me,
-            key,
-            None,
-            grant,
+            &crate::pairing_ssh::Accept {
+                alias: &placement.alias,
+                request,
+                me: &me,
+                key,
+                helper: None,
+                projects: &[],
+                grant,
+            },
         )
     };
     let install = hide_host::kit::running_install();

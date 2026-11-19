@@ -1058,10 +1058,13 @@ pub const COMMANDS: &[Spec] = &[
     // the request it made: the target saves a grant that opens nothing
     // until that machine confirms it over the connection, and answers its
     // own ids and addresses. Run again with the same request, it answers
-    // the same. With --grant, the grant the asking machine gives this one,
-    // both are settled at once and this machine becomes that one's guest:
-    // taken only from a machine this core already runs work for, the node
-    // of a core moved here before 1.2.0 (PRD device-connect-iroh D-46).
+    // the same. Each `--project` is a folder of the account that machine
+    // had registered on its device there, which this machine's own Hide
+    // then lists as a project too. With --grant, the grant the asking
+    // machine gives this one, both are settled at once and this machine
+    // becomes that one's guest: taken only from a machine this core already
+    // runs work for, the node of a core moved here before 1.2.0 (PRD
+    // device-connect-iroh D-46).
     Spec {
         words: &["device", "accept-ssh"],
         arguments: &[],
@@ -1074,6 +1077,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--name", Text),
             switch("--wsl"),
             optional("--helper", Text),
+            repeated("--project", Text, hide_core::SWITCHED_PROJECTS),
             optional("--grant", Key),
         ],
         rest: None,
@@ -2493,6 +2497,13 @@ mod tests {
                 .take_while(|argument| argument["required"] != false)
             {
                 base.push(exported_sample(&argument["value"]));
+            }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
             }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();
