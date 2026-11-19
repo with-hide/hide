@@ -110,9 +110,32 @@ fn file(agent: &str, path: &Path) -> McpFile {
     .unwrap()
 }
 
+/// The agent's MCP file, its names joined one at a time below the home as
+/// an agent definition's place is, so it is spelled as Hide spells it on
+/// every system (a backslash between names on Windows).
 fn path_of(fixture: &Fixture, agent: &str) -> PathBuf {
     let (_, relative) = FILES.iter().find(|(id, _)| *id == agent).unwrap();
-    fixture.home().join(relative)
+    relative
+        .split('/')
+        .fold(fixture.home().to_path_buf(), |path, name| path.join(name))
+}
+
+/// The place a report lists `agent`'s copy of `name` at, which the screen
+/// sends back to take that copy over.
+fn listed_place(report: &StoreReport, name: &str, agent: &str) -> String {
+    report
+        .unmanaged
+        .iter()
+        .find(|found| found.name == name)
+        .and_then(|found| {
+            found
+                .copies
+                .iter()
+                .find(|copy| copy.agents.iter().any(|listed| listed == agent))
+        })
+        .unwrap_or_else(|| panic!("no listed copy of {name} for {agent}"))
+        .place
+        .clone()
 }
 
 /// What `agent`'s default file holds under `name`, read in its shape.
@@ -744,10 +767,7 @@ fn a_take_over_sets_each_other_copy_aside_whole_and_a_machine_leaving_puts_it_ba
         "[mcp_servers.github]\ncommand = \"docker\"\nargs = [\"run\", \"-i\", \"ghcr.io/github/github-mcp-server\"]\nenv = { GITHUB_TOKEN = \"ghp_theirs\" }\nenabled = false\n",
     );
 
-    let place = format!(
-        "mcp:claude-code:{}",
-        path_of(&fixture, "claude-code").display()
-    );
+    let place = listed_place(&store(&fixture, Vec::new()), "github", "claude-code");
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
@@ -891,7 +911,7 @@ fn the_same_server_with_two_keys_is_two_servers_and_a_take_over_keeps_both_keys(
         "ghp_omp_work"
     );
 
-    let place = format!("mcp:pi:{}", path_of(&fixture, "pi").display());
+    let place = listed_place(&refused, "github", "pi");
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
