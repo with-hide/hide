@@ -22,6 +22,18 @@ pub(crate) struct StartedAgent {
     pub(crate) task: Option<SpawnTask>,
 }
 
+/// A start Hide asked on this machine whose pane is made but whose agent
+/// has not registered yet: the pane is the start's from the moment it
+/// exists, so its row is Hide's before the registration says so. Whether
+/// the start is still asked is its asker's to say (an automation's run,
+/// `Runtime::automation_asking`); a start given up leaves this record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StartingPane {
+    pub(crate) intent: String,
+    pub(crate) pane_id: String,
+    pub(crate) task: Option<SpawnTask>,
+}
+
 /// A checkout Hide made for a spawn, on the machine the child lives on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StartedCheckout {
@@ -68,6 +80,7 @@ pub(crate) struct ToolWork {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HideStarted {
     pub(crate) agents: Vec<StartedAgent>,
+    pub(crate) starting: Vec<StartingPane>,
     pub(crate) checkouts: Vec<StartedCheckout>,
     /// What external tools started, apart from Hide AI's own: a tool's work
     /// is the tool's while its connection stands at Act, which the
@@ -145,6 +158,17 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
                     connection: connection.to_owned(),
                     name: name.to_owned(),
                 }),
+            });
+        }
+        if tool.is_none()
+            && spawn.child.is_none()
+            && spawn.machine.is_none()
+            && let Some(pane) = &spawn.pane
+        {
+            started.starting.push(StartingPane {
+                intent: spawn.intent.clone(),
+                pane_id: pane.clone(),
+                task: spawn.task.clone(),
             });
         }
         let Some(child) = spawn

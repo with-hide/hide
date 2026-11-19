@@ -28,9 +28,9 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::automations::{
-    AgentChoice, Automation, Call, Changes, Conversation, Draft, Entry, Folder, Notice, Opened,
-    Pause, PauseReason, RunState, RunWorktree, SkipReason, Stored, Trigger, attempt_intent,
-    open_intent, reason_code,
+    AgentChoice, Ask, Automation, Call, Changes, Conversation, Draft, Entry, Folder,
+    MACHINE_CHANGED, Notice, Opened, Pause, PauseReason, RunState, RunWorktree, SkipReason, Stored,
+    Trigger, Unreadable, attempt_intent, open_intent, reason_code,
 };
 use crate::latest_file::{LatestFile, read_capped};
 
@@ -50,9 +50,22 @@ const ABSENT_GRACE_MS: u64 = 30_000;
 /// How long after a start that stopped partway (its pane made) the same
 /// start is asked again, which continues it (docs/delivery.md).
 const RESUME_GAP_MS: u64 = 10_000;
+/// How long after a start refused because another start held this
+/// machine's start line (`spawn_busy`: nothing was started) it is asked
+/// again; a start holds the line for seconds.
+const BUSY_GAP_MS: u64 = 1_000;
+/// How long one start may find the line held before it is given up as a
+/// transient failure: the line is never held that long by starts alone.
+const BUSY_LIMIT_MS: u64 = 15 * 60 * 1000;
+/// The start's answer when another start holds this machine's start line.
+const SPAWN_BUSY: &str = "spawn_busy";
 /// The wait after a close's first failure, doubled each try up to the last.
 const CLEANUP_RETRY_MS: u64 = 5_000;
 const CLEANUP_RETRY_MAX_MS: u64 = 10 * 60 * 1000;
+/// Tries a close gets, about 70 minutes of them, before it is given up with
+/// a diagnostic: a worktree whose project folder was deleted never releases
+/// (engineering 15).
+const CLEANUP_TRIES: u32 = 12;
 /// Closes running at once.
 const CLEANUPS_AT_ONCE: usize = 4;
 /// How often the machine's time zone is read again, so a zone the machine
@@ -121,6 +134,10 @@ pub(crate) struct AutomationsRuntime {
     /// The agents of the runs whose terminal the section names, kept when
     /// the book changes so a snapshot read looks only these up.
     live_agents: Vec<String>,
+    /// The intents of the starts the book asks now, an attempt's or an
+    /// opening's: a pane such a start made is the run's before its agent
+    /// registers (`started::StartingPane`).
+    asking: HashSet<String>,
     /// The paths of this machine's automation folders, which no list shows.
     unlisted: HashSet<String>,
     last_tick_unix_ms: Option<u64>,
@@ -128,11 +145,17 @@ pub(crate) struct AutomationsRuntime {
     start: StartWork,
     /// Starts on a worker now, by run or opening.
     starting: HashSet<RunKey>,
-    /// When each attempt or opening began waiting for its agent or folder.
+    /// When each attempt began waiting for its folder or its start, or each
+    /// opening for its start, by this core: the start's deadline counts
+    /// from here, and once it started, the wait for its agent's row.
     attempt_since: HashMap<RunKey, u64>,
     /// A start that stopped partway with its pane made: its code, and when
     /// it is asked again.
     resume: HashMap<RunKey, (String, u64)>,
+    /// A start refused because the start line was held, nothing started:
+    /// since when the line has been found held, and when it is asked again.
+    /// The start's deadline does not run while it waits for the line.
+    busy: HashMap<RunKey, (u64, u64)>,
     /// Whether the attempt's agent was seen at work, so a stop with no
     /// answer after it is the end of its turn, not a start on its way.
     worked: HashSet<RunKey>,
@@ -146,8 +169,11 @@ pub(crate) struct AutomationsRuntime {
     /// Folders whose registration this core asked for, since when.
     registering: HashMap<String, u64>,
     /// The runs whose terminal a window shows in the automation screen,
-    /// since when it said so (`Call::RunViewing`).
+    /// since when it said so (`Call::RunViewing`), at most `VIEWING_CAP`.
     viewing: HashMap<RunKey, u64>,
+    /// Their panes, sorted: on screen as a shown tab's are, so they stay
+    /// attached and the nodes draw them (`viewed_panes`).
+    viewed_panes: Vec<String>,
     /// Whether any automation is on: hided reads it, never the book, to
     /// skip its idle exit (D-19).
     on: Arc<AtomicBool>,
@@ -155,9 +181,9 @@ pub(crate) struct AutomationsRuntime {
 
 /// The book's file, read before the runtime lock is taken, and the zone the
 /// schedules are read in. A file that cannot be read is set aside beside
-/// the store with the time in its name and the book starts empty; one that
-/// cannot be set aside either leaves the automations unavailable, so the
-/// file is never written over.
+/// the store with the time in its name and the book starts empty, saying
+/// so (`Stored::unreadable`); one that cannot be set aside either leaves the
+/// automations unavailable, so the file is never written over.
 pub(crate) fn restore(path: PathBuf) -> (Option<LatestFile<Stored>>, Stored, TimeZone) {
     let read = read_capped(&path, crate::automations::READ_CAP).and_then(|bytes| {
         bytes
@@ -167,13 +193,26 @@ pub(crate) fn restore(path: PathBuf) -> (Option<LatestFile<Stored>>, Stored, Tim
     let stored = match read {
         Ok(stored) => stored.unwrap_or_default(),
         Err(message) => {
-            match crate::latest_file::set_aside(&path, super::unix_milliseconds()) {
-                Ok(aside) => crate::diagnostic!(json!({
-                    "component": "automations",
-                    "kind": "automations_store.restore_failed",
-                    "message": message,
-                    "set_aside": aside.display().to_string(),
-                })),
+            let now = super::unix_milliseconds();
+            let file_name = |path: &std::path::Path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+            let mut stored = Stored::default();
+            match crate::latest_file::set_aside(&path, now) {
+                Ok(aside) => {
+                    crate::diagnostic!(json!({
+                        "component": "automations",
+                        "kind": "automations_store.restore_failed",
+                        "message": message,
+                        "set_aside": aside.display().to_string(),
+                    }));
+                    stored.unreadable = Some(Unreadable {
+                        file: file_name(&aside),
+                        at_unix_ms: now,
+                    });
+                }
                 Err(kept) => {
                     crate::diagnostic!(json!({
                         "component": "automations",
@@ -181,10 +220,14 @@ pub(crate) fn restore(path: PathBuf) -> (Option<LatestFile<Stored>>, Stored, Tim
                         "message": message,
                         "set_aside_failed": kept,
                     }));
-                    return (None, Stored::default(), TimeZone::system());
+                    stored.unreadable = Some(Unreadable {
+                        file: file_name(&path),
+                        at_unix_ms: now,
+                    });
+                    return (None, stored, TimeZone::system());
                 }
             }
-            Stored::default()
+            stored
         }
     };
     let file = LatestFile::new(
@@ -255,26 +298,21 @@ impl Runtime {
     ) {
         let now = super::unix_milliseconds();
         let here = self.node.as_str().to_owned();
-        let mut moved = false;
+        // A book that says it lost the one before is saved saying so.
+        let mut save = stored.unreadable.is_some();
+        for cleanup in &mut stored.cleanups {
+            if cleanup.machine.is_empty() {
+                cleanup.machine = here.clone();
+                save = true;
+            }
+        }
+        let mut left_elsewhere = Vec::new();
         for automation in &mut stored.automations {
             if automation.machine.is_empty() {
                 automation.machine = here.clone();
-                moved = true;
-            } else if automation.machine != here
-                && automation.paused.map(|pause| pause.reason) != Some(PauseReason::MachineChanged)
-            {
-                // Read by the core of another machine (a core move): it runs
-                // here only once a person resumes it (Decide 1).
-                automation.paused = Some(Pause {
-                    reason: PauseReason::MachineChanged,
-                    at_unix_ms: now,
-                });
-                automation.next_due_unix_ms = None;
-                moved = true;
-                crate::diagnostic!(json!({
-                    "component": "automations", "kind": "automation.machine_changed",
-                    "automation": automation.id, "made_on": automation.machine, "here": here,
-                }));
+                save = true;
+            } else if automation.machine != here {
+                save |= moved_here(automation, &here, now, &mut left_elsewhere);
             }
             // A book saved by an earlier run keeps its times; one on with no
             // time takes its next one now.
@@ -282,11 +320,14 @@ impl Runtime {
                 automation.next_due_unix_ms = automation.schedule.next_after(now, &zone);
             }
         }
+        for (automation, run, machine, (intents, worktree)) in left_elsewhere {
+            stored.clean_up(&automation, run, &machine, intents, worktree, now);
+        }
         self.automations.book = stored;
         self.automations.store = store;
         self.automations.zone = Some(zone);
         self.automations.next_zone_read_unix_ms = now.saturating_add(ZONE_READ_MS);
-        self.automations_changed(moved);
+        self.automations_changed(save);
     }
 
     /// The flag hided reads for its idle exit (D-19).
@@ -349,6 +390,30 @@ impl Runtime {
         self.automations
             .on
             .store(self.automations.book.any_on(), Ordering::SeqCst);
+        let asking: HashSet<String> = self
+            .automations
+            .book
+            .automations
+            .iter()
+            .flat_map(|automation| automation.runs())
+            .flat_map(|run| {
+                let attempt = (run.state == RunState::Starting)
+                    .then_some(run.ask.as_ref())
+                    .flatten();
+                let opening = run
+                    .opened
+                    .as_ref()
+                    .filter(|opened| opened.agent_id.is_none())
+                    .and_then(|opened| opened.ask.as_ref());
+                attempt.into_iter().chain(opening).filter_map(Ask::intent)
+            })
+            .map(str::to_owned)
+            .collect();
+        if asking != self.automations.asking {
+            self.automations.asking = asking;
+            // A start's pane changes hands: its row is laid again.
+            self.refresh_agent_lineage();
+        }
         let unlisted: HashSet<String> = self
             .automations
             .book
@@ -366,6 +431,7 @@ impl Runtime {
         if save {
             self.save_automations();
         }
+        self.sync_viewed_panes();
     }
 
     fn save_automations(&self) {
@@ -423,8 +489,64 @@ impl Runtime {
         }
         if changed {
             self.automations_changed(true);
+        } else {
+            // A window's word that lapsed changes no record.
+            changed |= self.sync_viewed_panes();
         }
         changed
+    }
+
+    /// The panes of the runs a window shows in the automation screen: on
+    /// screen as a shown tab's panes are (`track_visible_tab_attachments`),
+    /// though no tab of theirs is in front, so they are not released and
+    /// their nodes draw them (B16, B17).
+    /// Whether a start under `intent` is one the book asks now.
+    pub(super) fn automation_asking(&self, intent: &str) -> bool {
+        self.automations.asking.contains(intent)
+    }
+
+    pub(super) fn viewed_panes(&self) -> &[String] {
+        &self.automations.viewed_panes
+    }
+
+    /// Reads the viewed runs' panes again: the run's agent's while it runs or
+    /// its terminal is open, else its opened conversation's. When they moved
+    /// (a window looked or looked away, a new attempt or opening started),
+    /// the attachments follow. Whether a pane's state changed.
+    fn sync_viewed_panes(&mut self) -> bool {
+        if self.automations.viewing.is_empty() && self.automations.viewed_panes.is_empty() {
+            return false;
+        }
+        let ledger = self.delivery_state().ok();
+        let node = self.node.as_str();
+        let pane = |agent: Option<&String>| -> Option<String> {
+            let agent = agent?;
+            ledger
+                .as_ref()?
+                .agents
+                .iter()
+                .find(|record| &record.id == agent && !record.ended)
+                .map(|record| record.pane_on(node))
+        };
+        let mut panes: Vec<String> = self
+            .automations
+            .viewing
+            .keys()
+            .filter_map(|key| self.run_of(key))
+            .filter_map(|run| {
+                let live = run.state.active() || run.closing;
+                live.then(|| pane(run.agent_id.as_ref()))
+                    .flatten()
+                    .or_else(|| pane(run.opened.as_ref()?.agent_id.as_ref()))
+            })
+            .collect();
+        panes.sort();
+        panes.dedup();
+        if panes == self.automations.viewed_panes {
+            return false;
+        }
+        self.automations.viewed_panes = panes;
+        self.track_visible_tab_attachments()
     }
 
     /// Reads the machine's zone again on a worker; a zone that changed moves
@@ -587,6 +709,7 @@ impl Runtime {
     fn forget(&mut self, key: &RunKey) {
         self.automations.attempt_since.remove(key);
         self.automations.resume.remove(key);
+        self.automations.busy.remove(key);
         self.automations.worked.remove(key);
         self.automations.shown.remove(key);
         self.automations.absent_since.remove(key);
@@ -611,14 +734,15 @@ impl Runtime {
         run.ended_at_unix_ms = Some(now);
         run.reason = reason.map(reason_code);
         run.closing = close == Close::Idle;
+        run.ask = None;
         if close == Close::Now {
             self.clean_up_run(key, now);
         }
     }
 
-    /// Adds everything of the run to close: the terminal of each of its
-    /// attempts and of its conversation opened again, then its own
-    /// worktree. A start of an intent that made nothing closes nothing.
+    /// Adds everything of the run to close on this machine: the terminal of
+    /// each of its attempts and of its conversation opened again, then its
+    /// own worktree. A start of an intent that made nothing closes nothing.
     fn clean_up_run(&mut self, key: &RunKey, now: u64) {
         let Some(automation) = self.automations.book.find(&key.0) else {
             return;
@@ -626,18 +750,11 @@ impl Runtime {
         let Some(run) = automation.runs().find(|run| run.number == key.1) else {
             return;
         };
-        let intents: Vec<String> = (1..=run.attempt)
-            .map(|attempt| attempt_intent(&automation.id, run.number, attempt))
-            .chain(
-                run.opened
-                    .as_ref()
-                    .map(|opened| open_intent(&automation.id, run.number, opened.number)),
-            )
-            .collect();
-        let worktree = run_worktree(automation, run);
+        let (intents, worktree) = run_leftovers(automation, run);
+        let here = self.node.as_str().to_owned();
         self.automations
             .book
-            .clean_up(&key.0, key.1, intents, worktree, now);
+            .clean_up(&key.0, key.1, &here, intents, worktree, now);
     }
 
     /// Follows every run that is not done with its terminal: starts what is
@@ -700,12 +817,17 @@ impl Runtime {
 
     /// Starts the run's current attempt once its folder is ready (D-08), and
     /// once the close of the attempt before it was tried (a run is one
-    /// terminal, D-13). A start that stopped partway is asked again with the
-    /// same intent, which continues it, until the attempt's deadline.
+    /// terminal, D-13): its start is made then, once, and asked under its
+    /// intent until it leaves (`drive_ask`). The attempt's deadline counts
+    /// from its first look, the folder's wait included.
     fn drive_start(&mut self, key: &RunKey, now: u64) -> bool {
+        let here = self.node.as_str();
         if self.automations.starting.contains(key)
             || self.automations.book.cleanups.iter().any(|cleanup| {
-                cleanup.automation == key.0 && cleanup.run == key.1 && cleanup.tries == 0
+                cleanup.automation == key.0
+                    && cleanup.run == key.1
+                    && cleanup.machine == here
+                    && cleanup.tries == 0
             })
         {
             return false;
@@ -715,18 +837,12 @@ impl Runtime {
             .attempt_since
             .entry(key.clone())
             .or_insert(now);
-        // A folder that never got ready, or a start that could not leave or
-        // finish, fails the attempt like an agent that never showed.
-        let late = now.saturating_sub(since) > START_DEADLINE_MS;
-        let resume = self.automations.resume.get(key).cloned();
-        if let Some((code, at)) = &resume {
-            if late {
-                return self.attempt_failed(key, Failure::Transient(code.clone()), now);
-            }
-            if now < *at {
-                return false;
-            }
+        if self.run_of(key).is_some_and(|run| run.ask.is_some()) {
+            return self.drive_ask(key, now);
         }
+        // A folder that never got ready fails the attempt like an agent that
+        // never showed.
+        let late = now.saturating_sub(since) > START_DEADLINE_MS;
         let Some(automation) = self.automations.book.find(&key.0) else {
             return false;
         };
@@ -790,8 +906,11 @@ impl Runtime {
         if late {
             return self.attempt_failed(key, Failure::Transient("start_unavailable".into()), now);
         }
-        self.start_attempt(key, folder, branch, now);
-        false
+        self.make_attempt(key, folder, branch);
+        // Saved before it is asked, so a core that starts again asks the
+        // same start.
+        self.drive_ask(key, now);
+        true
     }
 
     /// The branch the project's own folder has out.
@@ -908,9 +1027,10 @@ impl Runtime {
         }
     }
 
-    /// Starts one attempt on a worker: a new conversation with the task for
-    /// the first, the same conversation resumed for a retry (D-10, D-17).
-    fn start_attempt(&mut self, key: &RunKey, folder: Folder, branch: Option<String>, now: u64) {
+    /// Makes the current attempt's start, once: a new conversation with the
+    /// task for the first, the same conversation resumed for a retry (D-10,
+    /// D-17). It is kept on the run (`Run::ask`) until the start ended.
+    fn make_attempt(&mut self, key: &RunKey, folder: Folder, branch: Option<String>) {
         let zone = self.zone();
         let Some(automation) = self.automations.book.find(&key.0) else {
             return;
@@ -953,7 +1073,79 @@ impl Runtime {
             profile: automation.agent.profile.clone(),
         };
         let worktree = folder.worktree.then_some(branch).flatten();
-        self.spawn_for_run(key, command, Spawned::Attempt { attempt, worktree }, now);
+        if let Some(run) = self.run_mut(key) {
+            run.ask = Some(Ask { command, worktree });
+        }
+    }
+
+    /// The start `track` waits on: the run's current attempt's while it is
+    /// starting, or the opening's until its agent registered.
+    fn pending_ask(&self, track: &RunKey) -> Option<(Purpose, Ask)> {
+        let run = self.run_of(&(track.0.clone(), track.1 & !OPEN_BIT))?;
+        if track.1 & OPEN_BIT != 0 {
+            let opened = run
+                .opened
+                .as_ref()
+                .filter(|opened| opened.agent_id.is_none())?;
+            return Some((Purpose::Open(opened.number), opened.ask.clone()?));
+        }
+        (run.state == RunState::Starting)
+            .then(|| Some((Purpose::Attempt(run.attempt), run.ask.clone()?)))
+            .flatten()
+    }
+
+    /// Asks a start under its intent, an attempt's or an opening's (D-13,
+    /// B36): asked again after one that stopped with its pane made, which
+    /// continues that start in its pane, never a second terminal, and after
+    /// one refused because another start held the line, which started
+    /// nothing. Past the deadline from its first ask by this core, the time
+    /// spent waiting for the line left out, its pane goes to the close and
+    /// the start ends as its purpose says (`ask_expired`).
+    fn drive_ask(&mut self, track: &RunKey, now: u64) -> bool {
+        if self.automations.starting.contains(track) {
+            return false;
+        }
+        let Some((purpose, ask)) = self.pending_ask(track) else {
+            return false;
+        };
+        let since = *self
+            .automations
+            .attempt_since
+            .entry(track.clone())
+            .or_insert(now);
+        let resume = self.automations.resume.get(track).cloned();
+        let busy = self.automations.busy.get(track).copied();
+        if busy.is_some_and(|(held_since, _)| now.saturating_sub(held_since) > BUSY_LIMIT_MS) {
+            return self.ask_expired(track, purpose, SPAWN_BUSY.to_owned(), now);
+        }
+        // The start's own time stands still while it waits for the line.
+        let clock = busy.map_or(now, |(held_since, _)| held_since);
+        if clock.saturating_sub(since) > START_DEADLINE_MS {
+            let code = resume.map_or_else(|| "start_unavailable".to_owned(), |(code, _)| code);
+            return self.ask_expired(track, purpose, code, now);
+        }
+        if busy.is_some_and(|(_, at)| now < at) || resume.is_some_and(|(_, at)| now < at) {
+            return false;
+        }
+        self.spawn_for_run(track, ask.command, purpose, now);
+        false
+    }
+
+    /// A start that did not leave by its deadline: the pane it made goes to
+    /// the close, then an attempt fails as a transient failure, tried again
+    /// up to three attempts, and an opening ends as a conversation that
+    /// could not be opened, which a person can open again (B18).
+    fn ask_expired(&mut self, track: &RunKey, purpose: Purpose, code: String, now: u64) -> bool {
+        let key = (track.0.clone(), track.1 & !OPEN_BIT);
+        crate::diagnostic!(json!({
+            "component": "automations", "kind": "automation.start_expired",
+            "automation": key.0, "run": key.1, "purpose": purpose.name(),
+            "number": purpose.number(), "reason": code,
+        }));
+        match purpose {
+            Purpose::Attempt(_) => self.attempt_failed(&key, Failure::Transient(code), now),
+            Purpose::Open(number) => self.end_opening(&key, number, true, now),
+        }
     }
 
     /// Runs a start on a worker; `track` names it among the starts going.
@@ -961,7 +1153,7 @@ impl Runtime {
         &mut self,
         track: &RunKey,
         command: crate::coordination::Command,
-        spawned: Spawned,
+        purpose: Purpose,
         now: u64,
     ) {
         let delivery = match self.hide_delivery(AUTOMATION_ROLE) {
@@ -979,18 +1171,13 @@ impl Runtime {
         let result = self.spawn_issue_worker(
             "automation-start",
             move || start(delivery, command),
-            move |runtime, started| runtime.apply_start(&worker_key, spawned, started),
+            move |runtime, started| runtime.apply_start(&worker_key, purpose, now, started),
         );
         match result {
             // The start's answer is applied under this lock, after it is
-            // released, so marking it now is in time. An attempt asked again
-            // keeps the deadline of its first ask.
+            // released, so marking it now is in time.
             Ok(()) => {
                 self.automations.starting.insert(track.clone());
-                self.automations
-                    .attempt_since
-                    .entry(track.clone())
-                    .or_insert(now);
             }
             Err(message) => {
                 crate::diagnostic!(json!({
@@ -1001,88 +1188,99 @@ impl Runtime {
         }
     }
 
-    /// A start's answer, applied to the run it was for. One for a run that
-    /// moved on meanwhile (a person ended it, the automation was removed)
-    /// changes nothing: that run's close names this start's intent and waits
-    /// for this answer.
+    /// A start's answer, applied to the start it was for. One for a start
+    /// no longer waited on (a person ended the run, the automation was
+    /// removed, the opening ended) changes nothing: the close of what it was
+    /// for names its intent and waits for this answer. A start that stopped
+    /// with its pane made, or found the line held by another start, is asked
+    /// again under its intent (`drive_ask`); `asked_at` is when it was asked.
     fn apply_start(
         &mut self,
         track: &RunKey,
-        spawned: Spawned,
+        purpose: Purpose,
+        asked_at: u64,
         started: Result<String, String>,
     ) -> bool {
         self.automations.starting.remove(track);
-        let now = super::unix_milliseconds();
-        let key = (track.0.clone(), track.1 & !OPEN_BIT);
-        let changed = match spawned {
-            Spawned::Attempt { attempt, worktree } => {
-                self.apply_attempt_start(&key, attempt, worktree, started, now)
-            }
-            Spawned::Open { number } => self.apply_open_start(&key, number, started, now),
-        };
-        if changed {
-            self.automations_changed(true);
-        }
-        changed
-    }
-
-    fn apply_attempt_start(
-        &mut self,
-        key: &RunKey,
-        attempt: u32,
-        worktree: Option<String>,
-        started: Result<String, String>,
-        now: u64,
-    ) -> bool {
-        let current = self
-            .run_of(key)
-            .is_some_and(|run| run.state == RunState::Starting && run.attempt == attempt);
-        if !current {
+        if self.pending_ask(track).map(|(waited, _)| waited) != Some(purpose) {
             return false;
         }
-        match started {
+        let now = super::unix_milliseconds();
+        let key = (track.0.clone(), track.1 & !OPEN_BIT);
+        if matches!(&started, Err(reason) if reason.split('\u{1f}').next() == Some(SPAWN_BUSY)) {
+            let held_since = match self.automations.busy.get(track) {
+                Some((held_since, _)) => *held_since,
+                None => {
+                    crate::diagnostic!(json!({
+                        "component": "automations", "kind": "automation.start_waits",
+                        "automation": key.0, "run": key.1, "purpose": purpose.name(),
+                        "number": purpose.number(), "reason": SPAWN_BUSY,
+                    }));
+                    asked_at
+                }
+            };
+            self.automations.busy.insert(
+                track.clone(),
+                (held_since, asked_at.saturating_add(BUSY_GAP_MS)),
+            );
+            return false;
+        }
+        if let Some((held_since, _)) = self.automations.busy.remove(track) {
+            // The wait for the line was no part of the start's own time.
+            if let Some(since) = self.automations.attempt_since.get_mut(track) {
+                *since = since.saturating_add(asked_at.saturating_sub(held_since));
+            }
+        }
+        let changed = match started {
             Ok(agent_id) => {
                 crate::diagnostic!(json!({
-                    "component": "automations", "kind": "automation.run_started",
-                    "automation": key.0, "run": key.1, "attempt": attempt, "agent": agent_id,
+                    "component": "automations", "kind": "automation.start_left",
+                    "automation": key.0, "run": key.1, "purpose": purpose.name(),
+                    "number": purpose.number(), "agent": agent_id,
                 }));
-                self.forget(key);
-                self.automations.attempt_since.insert(key.clone(), now);
-                let run = self.run_mut(key).expect("checked above");
-                run.agent_id = Some(agent_id);
-                run.state = RunState::Running;
-                run.branch = worktree;
+                self.forget(track);
+                self.automations.attempt_since.insert(track.clone(), now);
+                match purpose {
+                    Purpose::Attempt(_) => {
+                        let run = self.run_mut(&key).expect("waited on above");
+                        run.branch = run.ask.take().and_then(|ask| ask.worktree);
+                        run.agent_id = Some(agent_id);
+                        run.state = RunState::Running;
+                    }
+                    Purpose::Open(_) => {
+                        let opened = self
+                            .run_mut(&key)
+                            .and_then(|run| run.opened.as_mut())
+                            .expect("waited on above");
+                        opened.agent_id = Some(agent_id);
+                        opened.ask = None;
+                    }
+                }
                 true
             }
             Err(reason) => {
                 let code = reason.split('\u{1f}').next().unwrap_or_default().to_owned();
                 crate::diagnostic!(json!({
                     "component": "automations", "kind": "automation.start_failed",
-                    "automation": key.0, "run": key.1, "attempt": attempt, "reason": reason,
+                    "automation": key.0, "run": key.1, "purpose": purpose.name(),
+                    "number": purpose.number(), "reason": reason,
                 }));
-                // The start made its pane and stopped partway: the same
-                // intent continues it, never a second terminal (D-13).
                 if crate::coordination::INCOMPLETE_SPAWN.contains(&code.as_str()) {
                     self.automations
                         .resume
-                        .insert(key.clone(), (code, now.saturating_add(RESUME_GAP_MS)));
+                        .insert(track.clone(), (code, now.saturating_add(RESUME_GAP_MS)));
                     return false;
                 }
-                let failure = match code.as_str() {
-                    // The agent is not there to start, or its machine's kit
-                    // has it off or not set up: a person's to fix (B23).
-                    "agent_not_installed"
-                    | "agent_hook_off"
-                    | "agent_not_set_up"
-                    | "agent_hook_missing"
-                    | "agent_hook_untrusted" => Failure::Person(PauseReason::AgentMissing),
-                    // A folder that is gone is a person's to fix (D-17).
-                    "spawn_folder_unreadable" => Failure::Person(PauseReason::FolderMissing),
-                    _ => Failure::Transient(code),
-                };
-                self.attempt_failed(key, failure, now)
+                match purpose {
+                    Purpose::Attempt(_) => self.attempt_failed(&key, start_failure(code), now),
+                    Purpose::Open(number) => self.end_opening(&key, number, false, now),
+                }
             }
+        };
+        if changed {
+            self.automations_changed(true);
         }
+        changed
     }
 
     /// An attempt that ended without the task's answer (D-17): a transient
@@ -1114,20 +1312,22 @@ impl Runtime {
         run.attempt += 1;
         run.state = RunState::Starting;
         run.agent_id = None;
+        run.ask = None;
         // The failed attempt's terminal goes before the next one opens: a run
         // is one terminal (D-13). Its worktree stays for the next.
         let intent = attempt_intent(&key.0, key.1, failed);
+        let here = self.node.as_str().to_owned();
         self.automations
             .book
-            .clean_up(&key.0, key.1, vec![intent], None, now);
+            .clean_up(&key.0, key.1, &here, vec![intent], None, now);
         true
     }
 
     /// Reads a running run's agent (D-17, B22, B24): a finished turn is the
-    /// run's answer; a refused or vanished one a failed attempt, a refusal
-    /// for the usage limit a skipped run; a turn a person ended in the
-    /// terminal a stopped run; a question, an approval or a block waits on
-    /// the operator in their Needs You.
+    /// run's answer; a refused, vanished or causeless stopped one a failed
+    /// attempt, a refusal for the usage limit a skipped line; a turn a
+    /// person ended while looking at it a stopped run; a question, an
+    /// approval or a block waits on the operator in their Needs You.
     fn follow_run(&mut self, key: &RunKey, now: u64) -> bool {
         let Some(agent_id) = self.run_of(key).and_then(|run| run.agent_id.clone()) else {
             return self.attempt_failed(key, Failure::Transient("agent_unknown".into()), now);
@@ -1194,7 +1394,11 @@ impl Runtime {
                 // The account's limit: trying again before it resets would
                 // be refused the same (D-16).
                 hide_node_link::panes::RefusalKind::Limit => {
-                    self.finish_run(key, RunState::Skipped, Some("usage_limit"), Close::Now, now);
+                    self.finish_run(key, RunState::Failed, Some("usage_limit"), Close::Now, now);
+                    self.automations.viewing.remove(key);
+                    if let Some(automation) = self.automation_mut(&key.0) {
+                        automation.skip_run(key.1, now);
+                    }
                     true
                 }
                 // The provider refused the turn: tried again in the same
@@ -1207,17 +1411,27 @@ impl Runtime {
         if row.completed {
             return self.run_succeeded(key, &row, now) | changed;
         }
-        // The turn ended after work with no answer and no refusal: a person
-        // ended it in the run's terminal (Esc), which is theirs to do (B16).
+        // The turn ended after work with no answer and no refusal. A person
+        // ended it only when they were looking at the run's terminal in the
+        // automation screen (B16); otherwise it is a turn that stopped with
+        // no cause, as a refusal reads for an agent whose hooks do not say
+        // why (PRD Risks), tried again in the same conversation (D-17).
         if self.automations.worked.contains(key) {
-            self.finish_run(
+            if self.automations.viewing.contains_key(key) {
+                self.finish_run(
+                    key,
+                    RunState::Stopped,
+                    Some("stopped_by_person"),
+                    Close::Idle,
+                    now,
+                );
+                return true;
+            }
+            return self.attempt_failed(
                 key,
-                RunState::Stopped,
-                Some("stopped_by_person"),
-                Close::Idle,
+                Failure::Transient("stopped_without_answer".into()),
                 now,
             );
-            return true;
         }
         if now.saturating_sub(since) > START_DEADLINE_MS {
             return self.attempt_failed(key, Failure::Transient("agent_not_ready".into()), now);
@@ -1322,22 +1536,37 @@ impl Runtime {
     /// unseen, not on the operator's screen or in the automation screen,
     /// and no letter on its way to it, as an automatic sleep waits
     /// (`agent_sleep::Awake`).
+    /// A row missing for less than `ABSENT_GRACE_MS` holds the terminal as a
+    /// running run's does: an engine restart lists it again.
     fn drive_close(&mut self, key: &RunKey, now: u64) -> bool {
         if let Some(agent_id) = self.run_of(key).and_then(|run| run.agent_id.clone()) {
             match self.run_row(&agent_id) {
                 RowLook::Unknown => return false,
-                RowLook::Shown(row)
+                RowLook::Missing => {
+                    let absent = *self
+                        .automations
+                        .absent_since
+                        .entry(key.clone())
+                        .or_insert(now);
+                    if now.saturating_sub(absent) <= ABSENT_GRACE_MS {
+                        return false;
+                    }
+                }
+                RowLook::Shown(row) => {
+                    self.automations.absent_since.remove(key);
                     if crate::agent_state::rest_refusal(&row).is_some()
                         || row.blocked
                         || row.group == crate::agent_state::AgentGroup::NeedsYou.name()
                         || self.automations.viewing.contains_key(key)
-                        || self.run_held_awake(&row) =>
-                {
-                    return false;
+                        || self.run_held_awake(&row)
+                    {
+                        return false;
+                    }
                 }
-                RowLook::Shown(_) | RowLook::Gone | RowLook::Missing => {}
+                RowLook::Gone => {}
             }
         }
+        self.automations.absent_since.remove(key);
         if let Some(run) = self.run_mut(key) {
             run.closing = false;
         }
@@ -1345,10 +1574,15 @@ impl Runtime {
         true
     }
 
-    /// Whether the operator's screen shows the row's pane, or a letter is on
-    /// its way to it.
+    /// Whether a window draws the row's pane, or a letter is on its way to
+    /// it. With no window attached nothing is on screen, whatever pane the
+    /// core has selected (a window marking the run viewed is `drive_close`'s).
     fn run_held_awake(&self, row: &crate::model::SidebarAgentSnapshot) -> bool {
-        let on_screen = self.agent_sleep_on_screen(None);
+        let on_screen = if self.ui_attached() {
+            self.agent_sleep_on_screen(None)
+        } else {
+            HashSet::new()
+        };
         let letters = self
             .delivery_state()
             .map(|ledger| crate::agent_sleep::LetterWaits::of(&ledger))
@@ -1361,16 +1595,18 @@ impl Runtime {
         .holds(row, super::unix_milliseconds())
     }
 
-    /// Runs the closes that are due on workers: a run's own close waits for
-    /// a start of it still going, whose pane it may have to close.
+    /// Runs this machine's closes that are due on workers: a run's own close
+    /// waits for a start of it still going, whose pane it may have to close.
+    /// A close the book brought from another machine is that machine's.
     fn drive_cleanups(&mut self, now: u64) {
         let room = CLEANUPS_AT_ONCE.saturating_sub(self.automations.cleaning.len());
+        let here = self.node.as_str();
         let due: Vec<RunKey> = self
             .automations
             .book
             .cleanups
             .iter()
-            .filter(|cleanup| cleanup.next_at_unix_ms <= now)
+            .filter(|cleanup| cleanup.machine == here && cleanup.next_at_unix_ms <= now)
             .map(|cleanup| (cleanup.automation.clone(), cleanup.run))
             .filter(|key| {
                 !self.automations.cleaning.contains(key)
@@ -1387,14 +1623,7 @@ impl Runtime {
     /// Closes the panes the cleanup's starts made, by the spawn records of
     /// their intents, then releases the run's worktree, on a worker.
     fn run_cleanup(&mut self, key: &RunKey) {
-        let Some(cleanup) = self
-            .automations
-            .book
-            .cleanups
-            .iter()
-            .find(|cleanup| cleanup.automation == key.0 && cleanup.run == key.1)
-            .cloned()
-        else {
+        let Some(cleanup) = self.own_cleanup(key).cloned() else {
             return;
         };
         let generation = cleanup.generation;
@@ -1446,18 +1675,25 @@ impl Runtime {
         }
     }
 
+    /// This machine's close of the run.
+    fn own_cleanup(&self, key: &RunKey) -> Option<&crate::automations::Cleanup> {
+        self.automations.book.cleanups.iter().find(|cleanup| {
+            cleanup.automation == key.0
+                && cleanup.run == key.1
+                && cleanup.machine == self.node.as_str()
+        })
+    }
+
     /// A close's answer: done, unless more was added while it ran; a failure
-    /// is tried again later, spaced out, and kept across restarts.
+    /// is tried again later, spaced out, and kept across restarts, until its
+    /// last try, when it is given up with a diagnostic (engineering 15).
     fn apply_cleanup(&mut self, key: &RunKey, generation: u64, closed: Result<(), String>) -> bool {
         self.automations.cleaning.remove(key);
         let now = super::unix_milliseconds();
-        let Some(index) = self
-            .automations
-            .book
-            .cleanups
-            .iter()
-            .position(|cleanup| cleanup.automation == key.0 && cleanup.run == key.1)
-        else {
+        let here = self.node.as_str().to_owned();
+        let Some(index) = self.automations.book.cleanups.iter().position(|cleanup| {
+            cleanup.automation == key.0 && cleanup.run == key.1 && cleanup.machine == here
+        }) else {
             return false;
         };
         match closed {
@@ -1468,47 +1704,47 @@ impl Runtime {
             Err(message) => {
                 let cleanup = &mut self.automations.book.cleanups[index];
                 cleanup.tries = cleanup.tries.saturating_add(1);
-                let wait = CLEANUP_RETRY_MS
-                    .saturating_mul(1 << cleanup.tries.min(16))
-                    .min(CLEANUP_RETRY_MAX_MS);
-                cleanup.next_at_unix_ms = now.saturating_add(wait);
-                crate::diagnostic!(json!({
-                    "component": "automations", "kind": "automation.cleanup_failed",
-                    "automation": key.0, "run": key.1, "tries": cleanup.tries,
-                    "message": message,
-                }));
+                if cleanup.tries >= CLEANUP_TRIES {
+                    let dropped = self.automations.book.cleanups.remove(index);
+                    crate::diagnostic!(json!({
+                        "component": "automations", "kind": "automation.cleanup_abandoned",
+                        "automation": key.0, "run": key.1, "tries": dropped.tries,
+                        "intents": dropped.intents,
+                        "branch": dropped.worktree.map(|worktree| worktree.branch),
+                        "message": message,
+                    }));
+                } else {
+                    let wait = CLEANUP_RETRY_MS
+                        .saturating_mul(1 << cleanup.tries.min(16))
+                        .min(CLEANUP_RETRY_MAX_MS);
+                    cleanup.next_at_unix_ms = now.saturating_add(wait);
+                    crate::diagnostic!(json!({
+                        "component": "automations", "kind": "automation.cleanup_failed",
+                        "automation": key.0, "run": key.1, "tries": cleanup.tries,
+                        "message": message,
+                    }));
+                }
             }
         }
         self.save_automations();
         false
     }
 
-    /// Follows a finished run's conversation opened again (B17, B18): it
-    /// closes by Hide's sleep (its pane, once asleep), and one whose agent
-    /// left before it ever showed could not open the conversation. An
-    /// opening whose start a restart cut off is asked again under its
-    /// intent.
+    /// Follows a finished run's conversation opened again (B17, B18): its
+    /// start is asked under its intent as an attempt's is (`drive_ask`),
+    /// after a restart too; it closes by Hide's sleep (its pane, once
+    /// asleep), and one whose start never left or whose agent left before
+    /// it ever showed could not open the conversation.
     fn follow_opened(&mut self, key: &RunKey, now: u64) -> bool {
         let Some(opened) = self.run_of(key).and_then(|run| run.opened.clone()) else {
             return false;
         };
         let track = open_key(key);
         let Some(agent_id) = opened.agent_id else {
-            let resume_at = self.automations.resume.get(&track).map(|(_, at)| *at);
-            if !self.automations.starting.contains(&track)
-                && resume_at.is_none_or(|at| now >= at)
-                && let Some(command) = self.open_command(key, opened.number)
-            {
-                self.spawn_for_run(
-                    &track,
-                    command,
-                    Spawned::Open {
-                        number: opened.number,
-                    },
-                    now,
-                );
+            if opened.ask.is_none() {
+                return self.end_opening(key, opened.number, true, now);
             }
-            return false;
+            return self.drive_ask(&track, now);
         };
         let since = *self
             .automations
@@ -1555,9 +1791,11 @@ impl Runtime {
             .runs()
             .find(|run| run.number == key.1)
             .and_then(|run| run_worktree(automation, run));
+        let here = self.node.as_str().to_owned();
         self.automations.book.clean_up(
             &key.0,
             key.1,
+            &here,
             vec![open_intent(&key.0, key.1, number)],
             worktree,
             now,
@@ -1574,47 +1812,6 @@ impl Runtime {
         }
         run.conversation_missing |= missing;
         true
-    }
-
-    fn apply_open_start(
-        &mut self,
-        key: &RunKey,
-        number: u32,
-        started: Result<String, String>,
-        now: u64,
-    ) -> bool {
-        let current = self
-            .run_of(key)
-            .and_then(|run| run.opened.as_ref())
-            .is_some_and(|opened| opened.number == number);
-        match started {
-            Ok(agent_id) if current => {
-                self.automations.resume.remove(&open_key(key));
-                let opened = self
-                    .run_mut(key)
-                    .and_then(|run| run.opened.as_mut())
-                    .expect("checked above");
-                opened.agent_id = Some(agent_id);
-                true
-            }
-            // The run was removed or closed meanwhile: its terminal goes.
-            Ok(_) => self.end_opening(key, number, false, now),
-            Err(reason) => {
-                crate::diagnostic!(json!({
-                    "component": "automations", "kind": "automation.open_failed",
-                    "automation": key.0, "run": key.1, "opening": number, "reason": reason,
-                }));
-                let code = reason.split('\u{1f}').next().unwrap_or_default();
-                if current && crate::coordination::INCOMPLETE_SPAWN.contains(&code) {
-                    self.automations.resume.insert(
-                        open_key(key),
-                        (code.to_owned(), now.saturating_add(RESUME_GAP_MS)),
-                    );
-                    return false;
-                }
-                self.end_opening(key, number, false, now)
-            }
-        }
     }
 
     /// The start of the run's conversation opened again, the `opening`th
@@ -1671,7 +1868,8 @@ impl Runtime {
             Call::RunOpen { id, run } => self.open_run(&id, run, now),
             Call::Seen { id } => self.see_automation(&id),
             Call::RunViewing { id, run, on } => {
-                return (self.view_run(&id, run, on, now), false);
+                let answer = self.view_run(&id, run, on, now);
+                return (answer, self.sync_viewed_panes());
             }
             Call::List => {
                 return (Ok(json!({"items": self.automations_view().items})), false);
@@ -1855,6 +2053,9 @@ impl Runtime {
         });
         self.automations.book.automations.push(automation);
         self.automations.book.last_choice = Some(agent);
+        // The operator works in the screen that said the book before was
+        // lost: the line has been read.
+        self.automations.book.unreadable = None;
         // Made and run now (B8): the run is judged as [지금 실행] judges it.
         if draft.run_now {
             let run = self.run_now(&id, now)?;
@@ -2107,6 +2308,17 @@ impl Runtime {
         if run.closing || run.opened.is_some() {
             return Ok(json!({"id": id, "run": number}));
         }
+        // One opening of the automation starts at a time: a start is kept
+        // until it leaves, which bounds the book (engineering 15).
+        if self.automations.book.find(&id).is_some_and(|automation| {
+            automation.runs().any(|run| {
+                run.opened
+                    .as_ref()
+                    .is_some_and(|opened| opened.ask.is_some())
+            })
+        }) {
+            return Err("automation_opening");
+        }
         let opening = run.opens + 1;
         let command = self
             .open_command(&key, opening)
@@ -2116,15 +2328,14 @@ impl Runtime {
         run.opened = Some(Opened {
             number: opening,
             agent_id: None,
+            ask: Some(Ask {
+                command,
+                worktree: None,
+            }),
         });
         run.conversation_missing = false;
         run.seen = true;
-        self.spawn_for_run(
-            &open_key(&key),
-            command,
-            Spawned::Open { number: opening },
-            now,
-        );
+        self.drive_ask(&open_key(&key), now);
         Ok(json!({"id": id, "run": number}))
     }
 
@@ -2149,7 +2360,8 @@ impl Runtime {
     /// The `automations` section, made again only when the book or the
     /// ledger moved (a run's pane is read from its agent's registration).
     pub(super) fn refresh_automations(&mut self) {
-        if self.automations.store.is_none() {
+        // With no store, only a book that could not be read is shown.
+        if self.automations.store.is_none() && self.automations.book.unreadable.is_none() {
             return;
         }
         let ledger = self.delivery_state().ok();
@@ -2290,15 +2502,123 @@ fn close_and_release(
     }
 }
 
-/// What a start was for.
-enum Spawned {
-    Attempt {
-        attempt: u32,
-        worktree: Option<String>,
-    },
-    Open {
-        number: u32,
-    },
+/// What a start under an intent is for: the run's attempt, or an opening
+/// of its finished conversation, by its number.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Purpose {
+    Attempt(u32),
+    Open(u32),
+}
+
+impl Purpose {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Attempt(_) => "attempt",
+            Self::Open(_) => "open",
+        }
+    }
+
+    fn number(self) -> u32 {
+        match self {
+            Self::Attempt(number) | Self::Open(number) => number,
+        }
+    }
+}
+
+/// How an attempt's refused start fails: an agent not there to start, or
+/// one its machine's kit has off or not set up, and a folder that is gone
+/// are a person's to fix (B23, D-17); anything else is tried again.
+fn start_failure(code: String) -> Failure {
+    match code.as_str() {
+        "agent_not_installed"
+        | "agent_hook_off"
+        | "agent_not_set_up"
+        | "agent_hook_missing"
+        | "agent_hook_untrusted" => Failure::Person(PauseReason::AgentMissing),
+        "spawn_folder_unreadable" => Failure::Person(PauseReason::FolderMissing),
+        _ => Failure::Transient(code),
+    }
+}
+
+/// What a run leaves to close: the terminal of each of its attempts and of
+/// its conversation opened now, by their intents, and its own worktree.
+fn run_leftovers(
+    automation: &Automation,
+    run: &crate::automations::Run,
+) -> (Vec<String>, Option<RunWorktree>) {
+    let intents = (1..=run.attempt)
+        .map(|attempt| attempt_intent(&automation.id, run.number, attempt))
+        .chain(
+            run.opened
+                .as_ref()
+                .map(|opened| open_intent(&automation.id, run.number, opened.number)),
+        )
+        .collect();
+    (intents, run_worktree(automation, run))
+}
+
+/// What the runs left to close on another machine, as `left` keeps them:
+/// automation, run, machine and what to close there.
+type LeftElsewhere = Vec<(String, u64, String, (Vec<String>, Option<RunWorktree>))>;
+
+/// An automation the book brought from the core of another machine (a core
+/// move, Decide 1): it runs here only once a person resumes it, with its
+/// own Needs You line, unless the operator had paused it themselves, which
+/// stays as it was. A run that went there does not go on here: it ends
+/// stopped as the machine changed, and what it and any finished run left
+/// open is kept to close on that machine, never judged by this one's
+/// engine. Whether the book changed.
+fn moved_here(automation: &mut Automation, here: &str, now: u64, left: &mut LeftElsewhere) -> bool {
+    let made_on = automation.machine.clone();
+    let mut changed = false;
+    let id = automation.id.clone();
+    let mut leftovers = Vec::new();
+    for entry in &mut automation.records {
+        let Entry::Run(run) = entry else {
+            continue;
+        };
+        if !(run.state.active() || run.closing || run.opened.is_some()) {
+            continue;
+        }
+        if run.state.active() {
+            run.state = RunState::Stopped;
+            run.reason = Some(MACHINE_CHANGED.to_owned());
+            run.ended_at_unix_ms = Some(now);
+            run.ask = None;
+        }
+        leftovers.push(run.number);
+        changed = true;
+    }
+    for number in leftovers {
+        let run = automation
+            .runs()
+            .find(|run| run.number == number)
+            .expect("listed above");
+        left.push((
+            id.clone(),
+            number,
+            made_on.clone(),
+            run_leftovers(automation, run),
+        ));
+        let run = automation.run_mut(number).expect("listed above");
+        run.closing = false;
+        run.opened = None;
+    }
+    let operator = automation.paused.map(|pause| pause.reason) == Some(PauseReason::Operator);
+    let flagged = automation.paused.map(|pause| pause.reason) == Some(PauseReason::MachineChanged);
+    if !operator && !flagged {
+        automation.paused = Some(Pause {
+            reason: PauseReason::MachineChanged,
+            at_unix_ms: now,
+        });
+        automation.next_due_unix_ms = None;
+        changed = true;
+        crate::diagnostic!(json!({
+            "component": "automations", "kind": "automation.machine_changed",
+            "automation": id, "made_on": made_on, "here": here,
+        }));
+    }
+    changed
 }
 
 /// A run's agent's row as this core sees it now.
@@ -2336,7 +2656,7 @@ fn pause_code(reason: PauseReason) -> &'static str {
         PauseReason::FolderMissing => "automation_folder_missing",
         PauseReason::AgentMissing => "automation_agent_missing",
         PauseReason::FolderDetached => "automation_folder_detached",
-        PauseReason::MachineChanged => "automation_machine_changed",
+        PauseReason::MachineChanged => MACHINE_CHANGED,
         PauseReason::FolderInRepository => "automation_folder_in_repository",
     }
 }

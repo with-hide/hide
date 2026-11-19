@@ -624,9 +624,13 @@ impl Harness {
 
     /// An automation in the repository, a worktree per run, started now.
     fn run_now(&self) -> String {
+        self.run_now_named("Issues")
+    }
+
+    fn run_now_named(&self, name: &str) -> String {
         let added = self
             .call(json!({
-                "call": "add", "name": "Issues", "task": "Sort the new issues",
+                "call": "add", "name": name, "task": "Sort the new issues",
                 "schedule": {"kind": "daily", "time": later()}, "agent": {"kind": "claude"},
                 "folder": REPO, "worktree": true, "run_now": true,
             }))
@@ -635,8 +639,11 @@ impl Harness {
     }
 
     /// One tick `seconds` after the last, and every worker it started done.
+    /// The core reads the real clock for what a call or a worker's answer
+    /// schedules, so the tick is never before it: a test that waits out a
+    /// time is not undone by a slow machine.
     fn tick(&mut self, seconds: u64) {
-        self.clock += seconds * 1000;
+        self.clock = self.clock.max(unix_milliseconds()) + seconds * 1000;
         let now = self.clock;
         self.runtime.lock().unwrap().tick_automations(now);
         wait_for("the automation workers", || self.settled());
@@ -705,6 +712,17 @@ impl Harness {
         runtime.snapshot.navigator.agents.push(row);
     }
 
+    /// The row of the agent in `pane` is not listed, as while the engine
+    /// starts again.
+    fn vanish(&self, pane: &str) {
+        let mut runtime = self.runtime.lock().unwrap();
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .retain(|agent| agent.pane_id != pane);
+    }
+
     /// The agent in `pane` ended: its registration ends, as when its
     /// program exits.
     fn end(&self, pane: &str) {
@@ -722,6 +740,12 @@ impl Harness {
 fn working(row: &mut SidebarAgentSnapshot) {
     row.activity = "working".into();
     row.group = "working".into();
+}
+
+/// The turn ended with no answer and no refusal.
+fn stopped(row: &mut SidebarAgentSnapshot) {
+    row.activity = "stopped".into();
+    row.group = "seen".into();
 }
 
 fn answered(row: &mut SidebarAgentSnapshot) {
@@ -1101,13 +1125,21 @@ fn a_starting_run_converges_on_its_intent_after_a_restart() {
     before.answer(&first, &[Answer::Refused("native_identity_unavailable")]);
     before.tick(1);
     assert_eq!(before.run(&id).0, "starting");
-    let asked_before = before.asked();
+    let asked_before = before.starts.lock().unwrap().asked.clone();
     drop(before);
+    // The task edited while the core was off changes the next run's start,
+    // not this one's.
+    {
+        let path = state.path().join("automations.json");
+        let mut book = crate::automations::decode(&std::fs::read(&path).unwrap()).unwrap();
+        book.automations[0].task = "Something else".into();
+        std::fs::write(&path, crate::automations::encode(&book).unwrap()).unwrap();
+    }
 
     let mut after = Harness::on(&state, machine);
     after.tick(1);
-    assert_eq!(asked_before, [first.as_str()]);
-    assert_eq!(after.asked(), [first.as_str()]);
+    assert_eq!(asked_before.len(), 1);
+    assert_eq!(after.starts.lock().unwrap().asked, asked_before);
     assert_eq!(after.run(&id), (json!("running"), json!(1), Value::Null));
     assert_eq!(after.open(), HashSet::from([pane_of(&first)]));
 }
@@ -1233,11 +1265,46 @@ fn show_book(runtime: &Runtime) -> Vec<crate::automations::Automation> {
     runtime.automation_book()
 }
 
-/// B16: a turn the operator ended in the run's terminal (Esc) after the
-/// agent worked ends the run stopped by a person, with no retry; its
-/// terminal closes once nothing waits.
+/// B16: a turn that ended with no answer while the operator looked at the
+/// run's terminal in the automation screen is theirs: the run ends stopped
+/// by a person, with no retry, and its terminal closes once they look away.
 #[test]
-fn a_turn_a_person_ended_stops_the_run_without_a_retry() {
+fn a_turn_ended_while_the_operator_looked_at_it_stops_the_run() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+        .unwrap();
+    harness.tick(1);
+    harness.show(&pane, stopped);
+    harness.tick(1);
+    assert_eq!(
+        harness.run(&id),
+        (json!("stopped"), json!(1), json!("stopped_by_person"))
+    );
+    harness.tick(1);
+    assert!(
+        harness.closed().is_empty(),
+        "shown in the automation screen"
+    );
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": false}))
+        .unwrap();
+    harness.tick(1);
+    assert_eq!(harness.asked().len(), 1);
+    assert_eq!(harness.closed(), [pane]);
+}
+
+/// PRD Risks, D-17: a turn that stopped after work with no answer and no
+/// refusal while nobody looked at it, as a refusal reads for an agent whose
+/// hooks do not name one, is a failed attempt: its terminal closes and the
+/// next attempt resumes the same conversation.
+#[test]
+fn a_turn_that_stopped_unseen_without_an_answer_is_tried_again() {
     let state = tempfile::tempdir().unwrap();
     let mut harness = Harness::new(&state);
     let id = harness.run_now();
@@ -1245,23 +1312,28 @@ fn a_turn_a_person_ended_stops_the_run_without_a_retry() {
     let pane = pane_of(&intent(&id, 1, 1));
     harness.show(&pane, working);
     harness.tick(1);
-    harness.show(&pane, |row| {
-        row.activity = "stopped".into();
-        row.group = "seen".into();
-    });
+    harness.show(&pane, stopped);
     harness.tick(1);
     assert_eq!(
         harness.run(&id),
-        (json!("stopped"), json!(1), json!("stopped_by_person"))
+        (json!("starting"), json!(2), json!("stopped_without_answer"))
     );
-    harness.tick(1);
-    assert_eq!(harness.asked().len(), 1);
     assert_eq!(harness.closed(), [pane]);
+    harness.tick(1);
+    let starts = harness.starts.lock().unwrap();
+    assert_eq!(starts.asked.len(), 2);
+    assert_eq!(
+        starts.asked[1],
+        (
+            intent(&id, 1, 2),
+            Some("이어서 해줘. 하던 일을 마저 끝내 줘.".to_owned())
+        )
+    );
 }
 
 /// B21, D-16: a turn the provider refused for the account's usage limit
-/// ends the run skipped for the limit, with no retry, since a retry before
-/// the reset is refused the same.
+/// ends the run as the skipped line a time at the limit is, with no retry,
+/// since a retry before the reset is refused the same; its terminal closes.
 #[test]
 fn a_turn_refused_for_the_usage_limit_skips_the_run_without_a_retry() {
     use crate::agent_hooks::facts::TurnRefused;
@@ -1285,9 +1357,13 @@ fn a_turn_refused_for_the_usage_limit_skips_the_run_without_a_retry() {
         });
     });
     harness.tick(1);
+    let refused_at = harness.clock;
     assert_eq!(
-        harness.run(&id),
-        (json!("skipped"), json!(1), json!("usage_limit"))
+        harness.records(&id),
+        [json!({
+            "kind": "skipped", "at_unix_ms": refused_at,
+            "reason": {"kind": "usage_limit", "agent": "claude"},
+        })]
     );
     assert_eq!(harness.asked().len(), 1);
     assert_eq!(harness.closed(), [pane]);
@@ -1419,4 +1495,508 @@ fn a_default_folder_inside_a_repository_stops_the_automation_with_its_reason() {
         )
     );
     assert_eq!(needs_you(&mut runtime).0, vec![id]);
+}
+
+/// B18, B36: an opening whose start keeps stopping before its agent starts
+/// (a conversation whose session file is gone: the agent exits at once) is
+/// asked under its intent until the deadline, as an attempt is; then its
+/// pane closes, the run says its conversation could not be opened, and
+/// opening it again starts the next opening.
+#[test]
+fn an_opening_that_never_starts_ends_as_a_missing_conversation_and_opens_again() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.show(&pane, answered);
+    harness.tick(1);
+    harness.tick(1);
+    assert_eq!(harness.closed(), std::slice::from_ref(&pane));
+
+    let first = crate::automations::open_intent(&id, 1, 1);
+    harness.answer(&first, &[Answer::Refused("agent_not_started")]);
+    harness
+        .call(json!({"call": "run_open", "id": id, "run": 1}))
+        .unwrap();
+    wait_for("the opening's start", || harness.settled());
+    for _ in 0..15 {
+        harness.tick(11);
+        assert_eq!(harness.records(&id)[0]["opened"], true);
+        assert_eq!(harness.open(), HashSet::from([pane_of(&first)]));
+    }
+    let asked = harness.asked();
+    assert!(asked.len() > 10, "{asked:?}");
+    assert!(asked[1..].iter().all(|asked| *asked == first), "{asked:?}");
+    // The deadline passes.
+    harness.tick(20);
+    let record = harness.records(&id)[0].clone();
+    assert_eq!(
+        (&record["opened"], &record["conversation_missing"]),
+        (&json!(false), &json!(true)),
+        "{record}"
+    );
+    assert!(harness.closed().contains(&pane_of(&first)));
+    assert!(harness.open().is_empty());
+
+    harness
+        .call(json!({"call": "run_open", "id": id, "run": 1}))
+        .unwrap();
+    wait_for("the next opening's start", || harness.settled());
+    assert_eq!(
+        harness.asked().last(),
+        Some(&crate::automations::open_intent(&id, 1, 2))
+    );
+    assert_eq!(harness.records(&id)[0]["conversation_missing"], false);
+}
+
+/// D-15, B36: two automations due at the same time each start one agent.
+/// A start refused because the other held this machine's start line
+/// started nothing: it waits for the line and asks again under its intent,
+/// never a failed attempt, and the wait is no part of its deadline.
+#[test]
+fn two_automations_due_at_the_same_time_each_start_one_agent() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let first = harness.run_now();
+    let second = harness.run_now_named("Triage");
+    let held = intent(&second, 1, 1);
+    let mut answers = vec![Answer::Refused("spawn_busy"); 5];
+    answers.push(Answer::Agent);
+    harness.answer(&held, &answers);
+
+    harness.tick(1);
+    assert_eq!(
+        harness.run(&first),
+        (json!("running"), json!(1), Value::Null)
+    );
+    harness.show(&pane_of(&intent(&first, 1, 1)), working);
+    // The line stays held past the start's deadline.
+    for _ in 0..4 {
+        harness.tick(60);
+        assert_eq!(
+            harness.run(&second),
+            (json!("starting"), json!(1), Value::Null)
+        );
+    }
+    harness.tick(60);
+    assert_eq!(
+        harness.run(&second),
+        (json!("running"), json!(1), Value::Null)
+    );
+    let asked = harness.asked();
+    assert_eq!(asked.iter().filter(|asked| **asked == held).count(), 6);
+    assert_eq!(
+        harness.open(),
+        HashSet::from([pane_of(&intent(&first, 1, 1)), pane_of(&held)])
+    );
+}
+
+/// B18: an opening refused because another start held the start line
+/// waits for it and opens, rather than ending unopened.
+#[test]
+fn an_opening_that_finds_the_start_line_held_waits_and_opens() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.show(&pane, answered);
+    harness.tick(1);
+    harness.tick(1);
+    assert_eq!(harness.closed(), std::slice::from_ref(&pane));
+
+    let opening = crate::automations::open_intent(&id, 1, 1);
+    harness.answer(&opening, &[Answer::Refused("spawn_busy"), Answer::Agent]);
+    harness
+        .call(json!({"call": "run_open", "id": id, "run": 1}))
+        .unwrap();
+    wait_for("the opening's start", || harness.settled());
+    assert_eq!(harness.records(&id)[0]["opened"], true);
+    harness.tick(11);
+    assert_eq!(harness.asked()[1..], [opening.clone(), opening.clone()]);
+    assert_eq!(harness.open(), HashSet::from([pane_of(&opening)]));
+    let record = harness.records(&id)[0].clone();
+    assert_eq!(
+        (&record["opened"], &record["conversation_missing"]),
+        (&json!(true), &json!(false)),
+        "{record}"
+    );
+}
+
+/// The pane a run's start made is the run's from the moment it exists:
+/// before its agent registers, its row is Hide's, kept off the lists and
+/// out of Needs You as the registered run's row is.
+#[test]
+fn a_runs_pane_is_the_runs_row_before_its_agent_registers() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    let first = intent(&id, 1, 1);
+    harness.answer(&first, &[Answer::Refused("native_identity_unavailable")]);
+    harness.tick(1);
+    let pane = pane_of(&first);
+    harness.show(&pane, answered);
+
+    let mut runtime = harness.runtime.lock().unwrap();
+    runtime.refresh_agent_lineage();
+    let row = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|row| row.pane_id == pane)
+        .unwrap();
+    assert_eq!(
+        row.hide_ai
+            .as_ref()
+            .and_then(|mark| mark.task.as_ref())
+            .map(|task| task.kind.clone()),
+        Some(crate::coordination::TaskKind::Automation)
+    );
+    assert!(row.unlisted);
+    assert_eq!(needs_you(&mut runtime), (Vec::new(), 0));
+}
+
+/// Verify round 2 (N1): a finished run's terminal in the tab the core has
+/// in front is on screen only while a window draws it; with no window
+/// attached it closes, so the core can go idle.
+#[test]
+fn a_finished_runs_terminal_in_front_closes_while_no_window_draws_it() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs = vec![super::tab(
+            "w-repo",
+            "c-repo",
+            Some(super::pane(&pane, REPO)),
+        )];
+        runtime.snapshot.navigator.focused_checkout_id = Some("c-repo".into());
+        runtime
+            .visible_tab_ids
+            .insert("c-repo".into(), "c-repo:tab".into());
+    }
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.show(&pane, answered);
+    harness.tick(1);
+    assert_eq!(harness.run(&id).0, "succeeded");
+    harness.tick(1);
+    assert!(harness.open().contains(&pane), "a window draws it");
+
+    harness.runtime.lock().unwrap().ui_attached = false;
+    harness.tick(1);
+    assert_eq!(harness.closed(), [pane]);
+}
+
+/// Verify round 2 (N1): a window that opens with no checkout chosen never
+/// opens on an automation's own folder, whose run's terminal would become
+/// the selected pane; it opens on the first project a list shows, or none.
+#[test]
+fn the_window_never_opens_on_an_automations_own_folder() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    let folder = "/srv/hide/automations/Issues";
+    let mut own = workspace(
+        "w-auto",
+        "Issues",
+        folder,
+        vec![checkout(
+            "w-auto",
+            "c-auto",
+            folder,
+            Some(super::pane("w-auto:p1", folder)),
+        )],
+    );
+    own.unlisted = true;
+    runtime.snapshot.navigator.workspaces = vec![own];
+    runtime.snapshot.navigator.focused_checkout_id = None;
+    runtime.snapshot.ui_state.focused_checkout_id = None;
+    runtime.resync_navigator_focus();
+    assert_eq!(runtime.snapshot.navigator.focused_checkout_id, None);
+    assert_eq!(runtime.snapshot.terminal.pane_id, None);
+
+    runtime.snapshot.navigator.workspaces.push(workspace(
+        "w-project",
+        "project",
+        "/srv/project",
+        vec![checkout("w-project", "c-project", "/srv/project", None)],
+    ));
+    runtime.resync_navigator_focus();
+    assert_eq!(
+        runtime.snapshot.navigator.focused_checkout_id.as_deref(),
+        Some("c-project")
+    );
+}
+
+/// B36, engineering 11: a start asked again under its intent asks the start
+/// it made, though the task was edited meanwhile: an edit changes the next
+/// run's start, never one already made, so the same intent is never a
+/// different spawn.
+#[test]
+fn a_start_asked_again_is_the_start_it_made_though_the_task_changed() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    let first = intent(&id, 1, 1);
+    harness.answer(
+        &first,
+        &[
+            Answer::Refused("native_identity_unavailable"),
+            Answer::Agent,
+        ],
+    );
+    harness.tick(1);
+    harness
+        .call(json!({"call": "edit", "id": id, "task": "Something else"}))
+        .unwrap();
+    harness.tick(11);
+    assert_eq!(harness.run(&id).0, "running");
+    let starts = harness.starts.lock().unwrap();
+    assert_eq!(starts.asked.len(), 2);
+    assert_eq!(starts.asked[0], starts.asked[1]);
+    assert_eq!(starts.asked[0].1.as_deref(), Some("Sort the new issues"));
+}
+
+/// Engineering 15: a close that keeps failing, as a worktree whose project
+/// folder was deleted does, is given up after its last try with a
+/// diagnostic rather than tried for ever.
+#[test]
+fn a_close_that_keeps_failing_is_given_up_after_its_last_try() {
+    let state = tempfile::tempdir().unwrap();
+    let machine: Arc<Mutex<Machine>> = Arc::default();
+    machine.lock().unwrap().worktree_refused = true;
+    let mut harness = Harness::on(&state, Arc::clone(&machine));
+    let id = harness.run_now();
+    harness.tick(1);
+    harness
+        .call(json!({"call": "run_stop", "id": id, "run": 1}))
+        .unwrap();
+    harness.tick(1);
+    assert_eq!(harness.cleanups(), 1);
+    // Each try waits at most ten minutes after the one before.
+    for _ in 0..10 {
+        harness.tick(601);
+        assert_eq!(harness.cleanups(), 1);
+    }
+    harness.tick(601);
+    assert_eq!(harness.cleanups(), 0);
+    assert_eq!(machine.lock().unwrap().released.len(), 12);
+}
+
+/// B15: a finished run whose row is missing for a moment, as while the
+/// engine starts again, keeps its terminal as a running run does; a row
+/// missing past the grace closes it.
+#[test]
+fn a_finished_runs_terminal_waits_out_a_row_missing_for_a_moment() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.show(&pane, |row| {
+        answered(row);
+        row.group = "needs_you".into();
+    });
+    harness.tick(1);
+    assert_eq!(harness.run(&id).0, "succeeded");
+    harness.vanish(&pane);
+    harness.tick(1);
+    harness.tick(20);
+    assert!(harness.closed().is_empty(), "missing for a moment");
+    harness.show(&pane, |row| {
+        answered(row);
+        row.group = "needs_you".into();
+    });
+    harness.tick(1);
+    harness.vanish(&pane);
+    harness.tick(1);
+    harness.tick(29);
+    assert!(harness.closed().is_empty(), "the grace starts again");
+    harness.tick(2);
+    assert_eq!(harness.closed(), [pane]);
+}
+
+/// Decide 1: a run going when the core moved to another machine does not go
+/// on here: it ends stopped as the machine changed, and what it left open is
+/// kept to close on the machine it ran on, never judged by this machine's
+/// engine. An automation the operator had paused stays theirs, with no
+/// line.
+#[test]
+fn a_run_going_when_the_core_moved_ends_and_its_terminal_stays_the_old_machines() {
+    let state = tempfile::tempdir().unwrap();
+    let machine: Arc<Mutex<Machine>> = Arc::default();
+    let mut before = Harness::on(&state, Arc::clone(&machine));
+    let id = before.run_now();
+    let paused = before
+        .call(json!({
+            "call": "add", "name": "Paused", "task": "Check the release notes",
+            "schedule": {"kind": "daily", "time": later()}, "agent": {"kind": "claude"},
+            "folder": REPO,
+        }))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    before.call(json!({"call": "pause", "id": paused})).unwrap();
+    before.tick(1);
+    assert_eq!(before.run(&id).0, "running");
+    let path = state.path().join("automations.json");
+    wait_for("the running run on disk", || {
+        std::fs::read(&path).is_ok_and(|bytes| {
+            crate::automations::decode(&bytes).is_ok_and(|book| {
+                book.automations[0]
+                    .runs()
+                    .any(|run| run.state == crate::automations::RunState::Running)
+                    && book.automations[1].paused.is_some()
+            })
+        })
+    });
+    drop(before);
+    let mut book = crate::automations::decode(&std::fs::read(&path).unwrap()).unwrap();
+    for automation in &mut book.automations {
+        automation.machine = "another-machine".into();
+    }
+    std::fs::write(&path, crate::automations::encode(&book).unwrap()).unwrap();
+
+    let mut after = Harness::on(&state, Arc::clone(&machine));
+    after.tick(10);
+    assert_eq!(
+        after.run(&id),
+        (
+            json!("stopped"),
+            json!(1),
+            json!("automation_machine_changed")
+        )
+    );
+    assert!(after.asked().is_empty(), "nothing starts again here");
+    let cleanups = after.runtime.lock().unwrap().automation_cleanups();
+    assert_eq!(cleanups.len(), 1, "{cleanups:?}");
+    assert_eq!(
+        (
+            cleanups[0].machine.as_str(),
+            cleanups[0].intents.clone(),
+            cleanups[0].tries
+        ),
+        ("another-machine", vec![intent(&id, 1, 1)], 0)
+    );
+    assert!(machine.lock().unwrap().closed.is_empty());
+    let mut runtime = after.runtime.lock().unwrap();
+    assert_eq!(
+        show(&mut runtime, &id)["paused"]["reason"],
+        "machine_changed"
+    );
+    assert_eq!(show(&mut runtime, &paused)["paused"]["reason"], "operator");
+    assert_eq!(needs_you(&mut runtime).0, vec![id]);
+}
+
+/// A book that could not be read says so in the section, by the name it was
+/// set aside under, after a restart too, until the operator makes an
+/// automation again.
+#[test]
+fn a_book_that_could_not_be_read_says_so_until_an_automation_is_made() {
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("automations.json");
+    std::fs::write(&path, b"{ not a book").unwrap();
+    let unreadable = |runtime: &mut Runtime| {
+        runtime.snapshot_delta_payload(0);
+        let section = runtime.snapshot.automations.clone().expect("the section");
+        section.unreadable.clone().map(|unreadable| unreadable.file)
+    };
+    let mut runtime = automations_runtime(&state);
+    let file = unreadable(&mut runtime).expect("the set-aside file is named");
+    assert!(file.starts_with("automations.json.unreadable-"), "{file}");
+    assert!(state.path().join(&file).exists());
+    wait_for("the book saying so on disk", || {
+        std::fs::read(&path).is_ok_and(|bytes| {
+            crate::automations::decode(&bytes).is_ok_and(|book| book.unreadable.is_some())
+        })
+    });
+    drop(runtime);
+
+    let mut runtime = automations_runtime(&state);
+    assert_eq!(unreadable(&mut runtime), Some(file));
+    add(&mut runtime, "Issues");
+    assert_eq!(unreadable(&mut runtime), None);
+}
+
+/// B16, B17: the run's terminal a window shows in the automation screen is
+/// on screen though no tab of it is in front: it is attached again if it
+/// was released, its node is told it is shown, and it stays attached while
+/// the window looks; when the window looks away it is released as a tab
+/// that left the attach window is.
+#[test]
+fn a_run_shown_in_the_automation_screen_stays_attached_until_the_window_looks_away() {
+    use hide_node_link::terminal::TerminalControl;
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    let terminals = {
+        let mut runtime = harness.runtime.lock().unwrap();
+        let terminals = super::record_terminals(&mut runtime);
+        runtime
+            .snapshot
+            .pane_layouts
+            .push(crate::model::PaneLayoutSnapshot {
+                workspace_id: "w-auto".into(),
+                tab_id: "w-auto:t1".into(),
+                focused_pane_id: pane.clone(),
+                zoomed: false,
+                root: crate::model::PaneLayoutNodeSnapshot::Pane {
+                    pane_id: pane.clone(),
+                },
+            });
+        super::report_terminal(&mut runtime, &pane, super::terminal_state("controlling", 1));
+        runtime.track_visible_tab_attachments();
+        terminals
+    };
+    assert_eq!(
+        terminals.releases(),
+        std::slice::from_ref(&pane),
+        "a run's tab nobody shows is released"
+    );
+
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+        .unwrap();
+    let controls = terminals.take();
+    assert!(
+        controls.iter().any(
+            |control| matches!(control, TerminalControl::Attach { pane: attached, .. } if *attached == pane)
+        ),
+        "{controls:?}"
+    );
+    assert!(
+        controls.iter().any(
+            |control| matches!(control, TerminalControl::Shown { panes } if panes.contains(&pane))
+        ),
+        "{controls:?}"
+    );
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        super::report_terminal(&mut runtime, &pane, super::terminal_state("controlling", 2));
+        runtime.track_visible_tab_attachments();
+    }
+    harness.tick(1);
+    assert!(
+        terminals.releases().is_empty(),
+        "kept while the window looks"
+    );
+
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": false}))
+        .unwrap();
+    assert_eq!(terminals.releases(), [pane]);
 }

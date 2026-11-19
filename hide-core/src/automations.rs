@@ -134,11 +134,11 @@ pub enum RunState {
     /// Every attempt failed (D-17), or a failure a person fixes stopped it
     /// before its agent ran.
     Failed,
-    /// A person ended it (B16), from the screen or in its terminal.
+    /// It ended with no answer by a person's hand: [■ 멈추기], or a turn
+    /// they ended in the run's terminal while the automation screen showed
+    /// it (B16); or, with the code `automation_machine_changed`, the core
+    /// moved to another machine while it went.
     Stopped,
-    /// The provider refused the turn for the account's usage limit: not
-    /// tried again before the limit resets (D-16).
-    Skipped,
 }
 
 impl RunState {
@@ -156,6 +156,33 @@ pub struct Conversation {
     pub id: String,
 }
 
+/// A start under its intent, an attempt's or an opening's, as it was first
+/// made: every ask of it, after a start that stopped partway or by a core
+/// that started again, is this one spawn (B36, engineering 11). Fixed once
+/// made, so a first prompt that would read differently now (the last run's
+/// whole answer read since, an edited task) or an edited agent or folder
+/// never makes the same intent a different spawn. Kept until its agent
+/// registered or the start ended.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ask {
+    pub command: crate::coordination::Command,
+    /// The branch of the run's own worktree the start makes, when the
+    /// automation makes one per run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+}
+
+impl Ask {
+    /// The intent the start is asked under; an ask is always a spawn.
+    pub fn intent(&self) -> Option<&str> {
+        match &self.command {
+            crate::coordination::Command::Spawn { intent, .. } => Some(intent),
+            _ => None,
+        }
+    }
+}
+
 /// A finished run's conversation opened again in a terminal (B17): it does
 /// not count as running and holds the record from the cap (B28).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -165,6 +192,9 @@ pub struct Opened {
     pub number: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Its start, until its agent registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<Ask>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -212,6 +242,9 @@ pub struct Run {
     /// starts under its own intent (B18).
     #[serde(default)]
     pub opens: u32,
+    /// The current attempt's start, until its agent registered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask: Option<Ask>,
 }
 
 impl Run {
@@ -419,8 +452,27 @@ impl Automation {
             opened: None,
             conversation_missing: false,
             opens: 0,
+            ask: None,
         }));
         number
+    }
+
+    /// The run `number`, refused by the provider for the account's usage
+    /// limit after it started, becomes the skipped line a time at the limit
+    /// is before it starts (D-16): one record for both, which the screen and
+    /// the phone draw one way, and which the next run's prompt passes over.
+    pub fn skip_run(&mut self, number: u64, at_unix_ms: u64) {
+        let agent = self.agent.kind.clone();
+        if let Some(entry) = self
+            .records
+            .iter_mut()
+            .find(|entry| matches!(entry, Entry::Run(run) if run.number == number))
+        {
+            *entry = Entry::Skipped {
+                at_unix_ms,
+                reason: SkipReason::UsageLimit { agent },
+            };
+        }
     }
 
     /// The run's first prompt (D-10, B13): the task, then the last finished
@@ -437,8 +489,10 @@ impl Automation {
         let result = match last.state {
             RunState::Succeeded => "성공".to_owned(),
             RunState::Failed => format!("실패 · {}번 시도", last.attempt),
+            RunState::Stopped if last.reason.as_deref() == Some(MACHINE_CHANGED) => {
+                "멈춤 · 기계 바뀜".to_owned()
+            }
             RunState::Stopped => "멈춤 · 사람이 끝냄".to_owned(),
-            RunState::Skipped => "건너뜀 · 사용 한도".to_owned(),
             RunState::Starting | RunState::Running => unreachable!("a finished run"),
         };
         let mut prompt = format!("{}\n\n[지난 회차 · {when} · {result}]", self.task);
@@ -471,6 +525,10 @@ pub fn attempt_intent(automation: &str, run: u64, attempt: u32) -> String {
 pub fn open_intent(automation: &str, run: u64, number: u32) -> String {
     format!("automation-{automation}-r{run}-o{number}")
 }
+
+/// The code of a run that went while the core moved to another machine,
+/// and of the pause it leaves (`PauseReason::MachineChanged`).
+pub const MACHINE_CHANGED: &str = "automation_machine_changed";
 
 /// A failure's code, cut to what a run keeps.
 pub fn reason_code(code: &str) -> String {
@@ -617,18 +675,38 @@ pub struct Stored {
     /// finished later, and a removed automation's runs still close.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cleanups: Vec<Cleanup>,
+    /// The book before this one could not be read and was set aside: the
+    /// screen says so above the table until the operator makes an
+    /// automation again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<Unreadable>,
+}
+
+/// A book that could not be read, kept beside the store under `file` (its
+/// name in the state folder) rather than written over; `file` is the store's
+/// own name when it could not be set aside either.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unreadable {
+    pub file: String,
+    pub at_unix_ms: u64,
 }
 
 /// A run's terminals to close and its own worktree to release after them,
-/// one per run at a time. The terminals are named by the intents of the
-/// starts that made them, so a start that stopped partway, which has a pane
-/// and no agent, is closed like one whose agent registered; a pane that no
-/// longer runs the terminal its start recorded is left alone.
+/// one per run and machine at a time. The terminals are named by the
+/// intents of the starts that made them, so a start that stopped partway,
+/// which has a pane and no agent, is closed like one whose agent registered;
+/// a pane that no longer runs the terminal its start recorded is left alone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cleanup {
     pub automation: String,
     pub run: u64,
+    /// The node id of the machine whose engine holds the terminals and the
+    /// worktree. Only that machine's core closes it: one the book brought
+    /// from another machine (a core move) stays, named, for that machine.
+    #[serde(default)]
+    pub machine: String,
     pub intents: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<RunWorktree>,
@@ -658,6 +736,7 @@ impl Default for Stored {
             automations: Vec::new(),
             last_choice: None,
             cleanups: Vec::new(),
+            unreadable: None,
         }
     }
 }
@@ -689,21 +768,21 @@ impl Stored {
         self.automations.iter().any(Automation::on)
     }
 
-    /// Adds what a run leaves to close, `now`: to the run's waiting close
-    /// when it has one, so a run has one; past the cap the oldest goes.
+    /// Adds what a run leaves to close on `machine`, `now`: to the run's
+    /// waiting close there when it has one, so a run has one per machine;
+    /// past the cap the oldest goes.
     pub fn clean_up(
         &mut self,
         automation: &str,
         run: u64,
+        machine: &str,
         intents: Vec<String>,
         worktree: Option<RunWorktree>,
         now: u64,
     ) {
-        if let Some(cleanup) = self
-            .cleanups
-            .iter_mut()
-            .find(|cleanup| cleanup.automation == automation && cleanup.run == run)
-        {
+        if let Some(cleanup) = self.cleanups.iter_mut().find(|cleanup| {
+            cleanup.automation == automation && cleanup.run == run && cleanup.machine == machine
+        }) {
             for intent in intents {
                 if !cleanup.intents.contains(&intent) {
                     cleanup.intents.push(intent);
@@ -719,6 +798,7 @@ impl Stored {
         self.cleanups.push(Cleanup {
             automation: automation.to_owned(),
             run,
+            machine: machine.to_owned(),
             intents,
             worktree,
             tries: 0,
@@ -755,6 +835,10 @@ pub struct AutomationsSnapshot {
     /// default folder (B5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub own_folder_root: Option<String>,
+    /// The book before could not be read and was set aside under this file
+    /// name in the state folder: one line above the table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unreadable: Option<Unreadable>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -895,6 +979,7 @@ impl AutomationsSnapshot {
             last_choice: book.last_choice.clone(),
             zone: zone.iana_name().map(str::to_owned),
             own_folder_root,
+            unreadable: book.unreadable.clone(),
         }
     }
 }
@@ -1200,6 +1285,40 @@ mod tests {
         );
     }
 
+    /// D-16: a run the provider refused for the usage limit after it
+    /// started is the same skipped line as a time at the limit before it
+    /// starts, and the next run's prompt passes over both; a run that went
+    /// while the core moved says so to the next one.
+    #[test]
+    fn a_run_refused_for_the_limit_is_a_skipped_line_like_a_time_at_the_limit() {
+        let zone = seoul();
+        let now = at("2026-11-19T09:00");
+        let mut automation = automation(daily("09:00"), now);
+        let moved = automation.new_run(Trigger::Scheduled, Some(now), now);
+        let run = automation.run_mut(moved).unwrap();
+        run.state = RunState::Stopped;
+        run.reason = Some(MACHINE_CHANGED.into());
+        let refused = automation.new_run(Trigger::Manual, None, now + HOUR);
+        automation.skip_run(refused, now + 2 * HOUR);
+        assert_eq!(
+            automation.records[1],
+            Entry::Skipped {
+                at_unix_ms: now + 2 * HOUR,
+                reason: SkipReason::UsageLimit {
+                    agent: "claude".into()
+                },
+            }
+        );
+        let next = automation.new_run(Trigger::Manual, None, now + 3 * HOUR);
+        assert!(
+            automation
+                .prompt(next, &zone)
+                .ends_with("[지난 회차 · 2026-11-19 09:00 · 멈춤 · 기계 바뀜]"),
+            "{}",
+            automation.prompt(next, &zone)
+        );
+    }
+
     #[test]
     fn a_finished_run_counts_unseen_until_looked_at() {
         let now = at("2026-11-19T09:00");
@@ -1232,10 +1351,8 @@ mod tests {
             })
             .collect();
         let stored = Stored {
-            schema_version: 1,
             automations: vec![automation],
-            last_choice: None,
-            cleanups: Vec::new(),
+            ..Stored::default()
         };
         let read = decode(&encode(&stored).unwrap()).unwrap();
         assert_eq!(read.automations[0].records.len(), RECORD_CAP);
@@ -1266,10 +1383,47 @@ mod tests {
             at_unix_ms: u64::MAX,
         });
         let branch = full.run_branch(u64::MAX);
-        for _ in 0..RECORD_CAP {
+        // A start as the runtime makes it, each text at its longest: a
+        // first prompt is the task with the last run's line and answer.
+        let ask = |brief: Option<String>| Ask {
+            command: crate::coordination::Command::Spawn {
+                pick: None,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                parent: None,
+                machine: None,
+                name: format!("auto-{}-r{}-a{}", "i".repeat(16), u64::MAX, u32::MAX),
+                intent: attempt_intent(&"i".repeat(16), u64::MAX, u32::MAX),
+                kind: "opencode".into(),
+                repo: Some(wide(1024)),
+                branch: Some(branch.clone()),
+                path: None,
+                args: vec!["--session".into(), "c".repeat(256)],
+                launch: hide_agent_adapter::LaunchChoice {
+                    model: Some("m".repeat(128)),
+                    effort: Some("e".repeat(128)),
+                },
+                brief,
+                task: Some(crate::coordination::SpawnTask {
+                    kind: crate::coordination::TaskKind::Automation,
+                    target: Some("i".repeat(16)),
+                }),
+                beside: false,
+                profile: Some("p".repeat(128)),
+            },
+            worktree: Some(branch.clone()),
+        };
+        for index in 0..RECORD_CAP {
             let number = full.new_run(Trigger::Missed, Some(u64::MAX), u64::MAX);
             let run = full.run_mut(number).unwrap();
-            run.state = RunState::Skipped;
+            // One run goes at a time; it holds its attempt's start.
+            run.state = if index == 0 {
+                RunState::Starting
+            } else {
+                RunState::Stopped
+            };
+            run.ask = (index == 0).then(|| ask(Some(wide(TASK_CAP + 64 + ANSWER_CAP))));
             run.ended_at_unix_ms = Some(u64::MAX);
             run.reason = Some(reason_code(&wide(1000)));
             run.agent_id = Some("a".repeat(128));
@@ -1279,9 +1433,11 @@ mod tests {
             });
             run.answer = answer_paragraph(&wide(5000));
             run.branch = Some(branch.clone());
+            // One opening of an automation starts at a time.
             run.opened = Some(Opened {
                 number: u32::MAX,
                 agent_id: Some("a".repeat(128)),
+                ask: (index == 1).then(|| ask(None)),
             });
             run.opens = u32::MAX;
         }
@@ -1292,6 +1448,10 @@ mod tests {
                 automations,
                 last_choice: Some(choice.clone()),
                 cleanups,
+                unreadable: Some(Unreadable {
+                    file: wide(255),
+                    at_unix_ms: u64::MAX,
+                }),
             })
             .unwrap()
             .len() as u64
@@ -1299,6 +1459,7 @@ mod tests {
         let cleanup = Cleanup {
             automation: full.id.clone(),
             run: u64::MAX,
+            machine: "m".repeat(64),
             intents: (1..=MAX_ATTEMPTS)
                 .map(|attempt| attempt_intent(&full.id, u64::MAX, attempt))
                 .chain([open_intent(&full.id, u64::MAX, u32::MAX)])
