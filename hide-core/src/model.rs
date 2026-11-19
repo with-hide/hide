@@ -1140,6 +1140,46 @@ pub struct KitSnapshot {
     /// The machine's agent profiles as its node lists them (PRD
     /// agent-profiles D-04); `None` until they were first read.
     pub profiles: Option<ProfilesSnapshot>,
+    /// The machine's store of skills and MCP items as its kit last reported
+    /// it (PRD skill-mcp-manager): each kind's columns with the agents each
+    /// one covers, which the screen joins with `agents` to show only the
+    /// agents installed and switched on there; each item with its source,
+    /// version, update and one cell per column; what only an agent has; the
+    /// undo list; and the previews and update diffs waiting for a choice.
+    /// Each change's outcome is in `status.store_answer`, not here. `None`
+    /// until the machine was read.
+    pub store: Option<hide_kit::store::StoreReport>,
+    /// The cells whose change waits for a new session (B17): an agent
+    /// session of the cell's column that was running when the change landed
+    /// still is.
+    pub store_new_session: Vec<StoreCellRef>,
+}
+
+/// One cell of the store's table: an item and a column of its kind.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct StoreCellRef {
+    pub item: String,
+    pub column: String,
+}
+
+/// What the screen's last store request came to (`status.store_answer`),
+/// as `status.agent_profile_answer` does for profiles: the request id it
+/// carried and the machine, then each change's outcome in order once the
+/// machine's store ran it. `refused` with no outcomes is a request that never
+/// reached the store, and why is in the log.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoreAnswer {
+    pub request_id: String,
+    pub device_id: String,
+    pub state: crate::agent_profiles::AnswerState,
+    pub outcomes: Vec<hide_kit::store::ChangeOutcome>,
+    /// The request's changes, which its outcomes are matched by: they are
+    /// the last of the pass that carried them.
+    #[serde(skip)]
+    pub(crate) changes: Vec<hide_kit::store::StoreChange>,
+    /// A pass carrying the changes was handed to the machine.
+    #[serde(skip)]
+    pub(crate) sent: bool,
 }
 
 /// A machine's agent profiles: what its node lists, never a variable's
@@ -1590,6 +1630,8 @@ impl KitSnapshot {
             check_failed: None,
             refused: report.refused.as_deref().map(Into::into),
             profiles: None,
+            store: report.store.clone(),
+            store_new_session: Vec::new(),
         }
     }
 
@@ -7560,6 +7602,10 @@ pub struct StatusSnapshot {
     /// agent-profiles B2-B13); absent until one was made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer>,
+    /// What the store screen's last request came to (PRD skill-mcp-manager);
+    /// absent until one was made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store_answer: Option<StoreAnswer>,
     pub diagnostics: Vec<DiagnosticSnapshot>,
     pub last_error: Option<LastErrorSnapshot>,
     /// Core-owned operations which are waiting for a transport result or an
@@ -8374,6 +8420,7 @@ impl Snapshot {
                 ssh_hosts: SshHostsSnapshot::default(),
                 machine_profiles: MachineProfilesSnapshot::default(),
                 agent_profile_answer: None,
+                store_answer: None,
                 diagnostics: Vec::new(),
                 last_error: None,
                 async_operations: Vec::new(),
@@ -11530,6 +11577,85 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "peer_update", &updates);
             checked.insert("peer_update");
+        }
+
+        {
+            use hide_kit::store::{CellState, FileChangeKind, ItemKind, StoreRefusalCause};
+            let kinds = [ItemKind::Skill, ItemKind::Mcp];
+            for variant in kinds {
+                match variant {
+                    ItemKind::Skill | ItemKind::Mcp => {}
+                }
+            }
+            assert_wire(&contract, "store_item_kind", &kinds);
+            checked.insert("store_item_kind");
+
+            let cells = [
+                CellState::On,
+                CellState::Off,
+                CellState::Waiting,
+                CellState::HandWritten,
+                CellState::Failed,
+                CellState::Unsupported,
+                CellState::AgentOff,
+            ];
+            for variant in cells {
+                match variant {
+                    CellState::On
+                    | CellState::Off
+                    | CellState::Waiting
+                    | CellState::HandWritten
+                    | CellState::Failed
+                    | CellState::Unsupported
+                    | CellState::AgentOff => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_state", &cells);
+            checked.insert("store_cell_state");
+
+            let causes = [
+                StoreRefusalCause::NotFound,
+                StoreRefusalCause::NoSkills,
+                StoreRefusalCause::NoAccess,
+                StoreRefusalCause::Unreachable,
+                StoreRefusalCause::NoGit,
+                StoreRefusalCause::TooLarge,
+                StoreRefusalCause::NameTaken,
+                StoreRefusalCause::Differs,
+                StoreRefusalCause::TooMany,
+                StoreRefusalCause::Unsupported,
+                StoreRefusalCause::Failed,
+            ];
+            for variant in causes {
+                match variant {
+                    StoreRefusalCause::NotFound
+                    | StoreRefusalCause::NoSkills
+                    | StoreRefusalCause::NoAccess
+                    | StoreRefusalCause::Unreachable
+                    | StoreRefusalCause::NoGit
+                    | StoreRefusalCause::TooLarge
+                    | StoreRefusalCause::NameTaken
+                    | StoreRefusalCause::Differs
+                    | StoreRefusalCause::TooMany
+                    | StoreRefusalCause::Unsupported
+                    | StoreRefusalCause::Failed => {}
+                }
+            }
+            assert_wire(&contract, "store_refusal_cause", &causes);
+            checked.insert("store_refusal_cause");
+
+            let changes = [
+                FileChangeKind::Added,
+                FileChangeKind::Removed,
+                FileChangeKind::Modified,
+            ];
+            for variant in changes {
+                match variant {
+                    FileChangeKind::Added | FileChangeKind::Removed | FileChangeKind::Modified => {}
+                }
+            }
+            assert_wire(&contract, "store_file_change", &changes);
+            checked.insert("store_file_change");
         }
 
         let unchecked = contract

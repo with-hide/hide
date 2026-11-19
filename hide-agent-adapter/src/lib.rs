@@ -956,6 +956,11 @@ pub struct AgentAdapter {
     /// Hide installs nothing, has none.
     pub minimum: Option<MinimumVersion>,
     pub skill_location: SkillLocation,
+    /// Other skill folders the agent reads besides its own, as measured in
+    /// an isolated HOME (docs/agent-hooks.md, What the kit puts down): Grok
+    /// and omp also read `~/.claude/skills`, so a skill there reaches them
+    /// too (PRD skill-mcp-manager, the Claude cell's note).
+    pub skill_also_reads: &'static [SkillLocation],
     pub hook: HookInstall,
     pub guidance: Capability<ContextRoute>,
     /// The agent kind the engine reports the agent's panes as.
