@@ -881,6 +881,13 @@
       "required": ["declaration"],
       "properties": { "declaration": { "type": "string", "minLength": 1 } }
     },
+    "guestPaneClosePayload": {
+      "description": "Payload of the `guest_pane_close` client event, accepted only from an operator window and never sent to the core: the window ends a pane another machine's work runs in on this computer, named by its address here (`guest:<device>:pane:<pane>`). The daemon ends it through that machine's node on this computer whether or not the machine is connected, and refuses a pane it does not list (`pane_unavailable`). PRD device-connect-iroh B10, D-74.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pane_id"],
+      "properties": { "pane_id": { "type": "string", "minLength": 1 } }
+    },
     "desktopActivityPayload": {
       "description": "Desktop-only desktop_activity event, never dispatched to the core. The main host reports system use on connection, use transitions and input resumed after a five-second pause; disconnect withdraws it. A true report counts as computer input. hided rests phone pushes only while any desktop reports in_use, at least one wants Needs You notifications and no later accepted phone action has taken over.",
       "type": "object",

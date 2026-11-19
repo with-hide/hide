@@ -130,6 +130,7 @@ export type SnapshotSections =
   | AgentNotice
   | DesktopNoticesPayload
   | DesktopActivityPayload
+  | GuestPaneClosePayload
   | HumanTurnDonePayload;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
@@ -869,6 +870,12 @@ export interface DesktopNoticesPayload {
  */
 export interface DesktopActivityPayload {
   in_use: boolean;
+}
+/**
+ * Payload of the `guest_pane_close` client event, accepted only from an operator window and never sent to the core: the window ends a pane another machine's work runs in on this computer, named by its address here (`guest:<device>:pane:<pane>`). The daemon ends it through that machine's node on this computer whether or not the machine is connected, and refuses a pane it does not list (`pane_unavailable`). PRD device-connect-iroh B10, D-74.
+ */
+export interface GuestPaneClosePayload {
+  pane_id: string;
 }
 /**
  * Payload of the `human_turn_done` client event (PRD ask-human B18): the operator's Done on the person's turn whose declaration is `declaration` (a row's `human_turn.id`). The core sends the declaring agent one letter and takes the declaration down; a declaration that no longer stands is ignored, so a repeat from any surface sends nothing more.

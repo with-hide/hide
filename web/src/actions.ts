@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, GuestPaneClosePayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -3142,7 +3142,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const paneId = ui().guestClose;
       if (paneId === null) return;
       ui().setGuestClose(null);
-      dispatch({ schema_version: 2, kind: "guest_pane_close", payload: { pane_id: paneId } });
+      dispatch({ schema_version: 2, kind: "guest_pane_close", payload: { pane_id: paneId } satisfies GuestPaneClosePayload });
       const screen = ui().screen;
       if (screen?.kind === "guest" && screen.paneId === paneId) ui().setScreen({ kind: "main" });
     },
