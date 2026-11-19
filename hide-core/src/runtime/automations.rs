@@ -2073,6 +2073,64 @@ impl Runtime {
         Ok(json!({"id": id, "run": number, "on": on}))
     }
 
+    /// Puts on each run what its conversation spent, from the sessions the
+    /// usage ledger's last report priced (D-26, B39): read on the ledger's
+    /// worker, joined here by the conversation's session id when a report
+    /// lands, so nothing is read under the lock. A run the report does not
+    /// hold, older than its seven days or not read yet, keeps what it had.
+    pub(super) fn price_automation_runs(&mut self) -> bool {
+        let Some(projects) = self.ledger_spends.clone() else {
+            return false;
+        };
+        let wanted: HashSet<&str> = self
+            .automations
+            .book
+            .automations
+            .iter()
+            .flat_map(|automation| automation.runs())
+            .filter_map(|run| run.conversation.as_ref())
+            .map(|conversation| conversation.id.as_str())
+            .collect();
+        if wanted.is_empty() {
+            return false;
+        }
+        let mut spends: HashMap<String, crate::automations::Spend> = HashMap::new();
+        // A session that worked in two projects is priced in each.
+        for spend in projects.iter().flat_map(|project| &project.spends) {
+            if wanted.contains(spend.session_id.as_str()) {
+                spends.entry(spend.session_id.clone()).or_default().add(
+                    crate::automations::Spend {
+                        tokens: spend.tokens,
+                        micro_usd: spend.micro_usd,
+                        unpriced: spend.unpriced,
+                    },
+                );
+            }
+        }
+        let mut changed = false;
+        for automation in &mut self.automations.book.automations {
+            for entry in &mut automation.records {
+                let crate::automations::Entry::Run(run) = entry else {
+                    continue;
+                };
+                let read = run
+                    .conversation
+                    .as_ref()
+                    .and_then(|conversation| spends.get(&conversation.id));
+                if let Some(read) = read
+                    && run.spend.as_ref() != Some(read)
+                {
+                    run.spend = Some(*read);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.automations_changed(true);
+        }
+        changed
+    }
+
     /// The form's preview (B5, B6). `own_folder` is where an automation of
     /// `name` with no folder of its own works, its id still to come
     /// (`ID_TO_COME`), so the form names it by the core's rule; none while

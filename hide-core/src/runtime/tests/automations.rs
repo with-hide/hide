@@ -1176,6 +1176,85 @@ fn an_opened_conversation_typed_into_sleeps_and_closes_once_the_screen_looks_awa
     assert!(harness.closed().contains(&opened));
 }
 
+/// D-26, B39: a run carries what its conversation spent as the usage
+/// ledger read it, and its automation the runs' total; a run the ledger's
+/// seven days no longer hold keeps what it had.
+#[test]
+fn a_run_carries_what_its_conversation_spent_as_the_ledger_read_it() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    let report = |sessions: &[(&str, u64, u64, bool)]| {
+        let spends = sessions
+            .iter()
+            .map(|(session, tokens, micro_usd, unpriced)| {
+                crate::usage_ledger::project_cost::SessionSpend {
+                    agent: "claude".into(),
+                    session_id: (*session).into(),
+                    tokens: *tokens,
+                    micro_usd: *micro_usd,
+                    unpriced: *unpriced,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        crate::usage::consumption::Publication {
+            projects: crate::usage_ledger::project_cost::ProjectCosts {
+                built: Some(Arc::new(vec![
+                    crate::usage_ledger::project_cost::ProjectCost {
+                        workspace_id: "w-repo".into(),
+                        spends,
+                        ..Default::default()
+                    },
+                ])),
+                failed: false,
+                hide_ai_micro_usd: None,
+            },
+            history: None,
+            agents: Vec::new(),
+        }
+    };
+    let spend = |harness: &Harness| {
+        let shown = show(&mut harness.runtime.lock().unwrap(), &id);
+        (
+            shown["records"][0]["spend"].clone(),
+            shown["recent_spend"].clone(),
+        )
+    };
+    assert_eq!(spend(&harness), (Value::Null, Value::Null), "not read yet");
+
+    harness.runtime.lock().unwrap().ingest_ledger(report(&[
+        (CONVERSATION, 12_300, 420_000, false),
+        ("other", 9, 9, true),
+    ]));
+    assert_eq!(
+        spend(&harness),
+        (
+            json!({"tokens": 12_300, "micro_usd": 420_000, "unpriced": false}),
+            json!({"tokens": 12_300, "micro_usd": 420_000, "unpriced": false, "runs": 1}),
+        )
+    );
+    harness
+        .runtime
+        .lock()
+        .unwrap()
+        .ingest_ledger(report(&[(CONVERSATION, 20_000, 0, true)]));
+    assert_eq!(
+        spend(&harness).0,
+        json!({"tokens": 20_000, "micro_usd": 0, "unpriced": true})
+    );
+    harness.runtime.lock().unwrap().ingest_ledger(report(&[]));
+    assert_eq!(
+        spend(&harness).0["tokens"],
+        20_000,
+        "kept past the seven days"
+    );
+}
+
 #[test]
 fn a_run_stopped_before_its_row_is_read_opens_its_conversation_again() {
     let state = tempfile::tempdir().unwrap();
