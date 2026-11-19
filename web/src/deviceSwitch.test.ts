@@ -5,17 +5,16 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { deviceTerminalCount, SWITCH_STEPS, switchFailureKey, switchOffered, switchStep } from "./deviceSwitch";
 import type { Device, DeviceSwitch, SnapshotRest } from "./snapshot";
 
-const device = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id: "mini", label: "Mac mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini", agent_count: 0, test: null, ...over });
+const device = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id: "mini", label: "Mac mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini", agent_count: 0, test: null, switchable: true, ...over });
 
 describe("which device offers the switch (B35)", () => {
-  it("is a helper device the core dials over SSH, and no other", () => {
+  it("is the device the core says can be switched, and no other", () => {
     expect(switchOffered(device())).toBe(true);
     // Not connected now: the press itself says whether SSH reaches it.
     expect(switchOffered(device({ state: "unavailable" }))).toBe(true);
-    expect(switchOffered(device({ peer_key: "a".repeat(64) }))).toBe(false);
-    expect(switchOffered(device({ dials_in: true }))).toBe(false);
-    expect(switchOffered(device({ ssh_alias: null, wsl_distro: "Ubuntu" }))).toBe(false);
-    expect(switchOffered(device({ id: "local", kind: "local", ssh_alias: null }))).toBe(false);
+    // A device that never connected, a paired machine's and an older daemon's row carry no such word.
+    expect(switchOffered(device({ switchable: false }))).toBe(false);
+    expect(switchOffered(device({ switchable: undefined }))).toBe(false);
   });
 });
 
@@ -33,6 +32,9 @@ describe("what a switch reads as (B36, B41)", () => {
     expect(switchFailureKey("ssh_hide_not_running")).toBe("pairing.ssh.notRunning");
     expect(switchFailureKey("switch_not_connected")).toBe("devices.switch.failed.notConnected");
     expect(switchFailureKey("ssh_core_not_started")).toBe("devices.switch.failed.notStarted");
+    expect(switchFailureKey("ssh_mac_signed_out")).toBe("pairing.ssh.signInMac");
+    expect(switchFailureKey("ssh_mac_from_mac_only")).toBe("devices.switch.failed.macOnly");
+    expect(switchFailureKey("switch_not_saved")).toBe("devices.switch.failed.notSaved");
     expect(switchFailureKey("a_code_of_a_newer_daemon")).toBe("devices.switch.failed.other");
     expect(switchFailureKey(null)).toBe("devices.switch.failed.other");
   });

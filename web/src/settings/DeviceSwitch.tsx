@@ -116,8 +116,14 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
   }, [landed, front]);
   if (!ownScreen || !device) return null;
   if (landed && device.peer_key != null) {
+    const left = device.not_carried ?? 0;
     return (
-      <div className="border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switched={device.id}>
+      <div className="flex flex-col gap-xxs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switched={device.id}>
+        {left > 0 ? (
+          <Status tone="warn" data-device-not-carried={String(left)}>
+            {t("devices.switch.notCarried", { count: left })}
+          </Status>
+        ) : null}
         <span className="break-keep">{t("devices.switch.fresh")}</span>
       </div>
     );
@@ -156,11 +162,18 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const deviceId = answer?.device_id;
   if (!answer || !deviceId || !answer.request_id || answer.request_id === closed) return null;
   const close = () => setClosed(answer.request_id ?? null);
+  // Leaving the question leaves the device as it was; one that was added
+  // for this switch is taken off again, since nothing was started on its
+  // machine and no new device stays on the old connection (B41).
+  const cancel = () => {
+    close();
+    if (devices?.find((row) => row.id === deviceId)?.switch_first) void actions.removeDevice(deviceId);
+  };
   const name = machineName(devices, deviceId, t);
   if (answer.switch === "install_needed") {
     const parts: InstallPart[] = answer.system === "linux" ? ["core", "autostart", "linger"] : ["core", "autostart"];
     return (
-      <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
+      <Dialog open onOpenChange={(next) => { if (!next) cancel(); }}>
         <DialogContent data-device-switch-install={deviceId}>
           <DialogHeader>
             <DialogTitle>{t("devices.installTitle", { name })}</DialogTitle>
@@ -175,7 +188,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
             <p className="break-keep text-body text-foreground">{t("devices.switch.install.grant", { name: machineName(devices, windowDeviceId(devices), t) })}</p>
           </DialogBody>
           <DialogFooter>
-            <Button variant="secondary" onClick={close}>{t("common.cancel")}</Button>
+            <Button variant="secondary" onClick={cancel}>{t("common.cancel")}</Button>
             <Button
               data-device-switch-install-go="true"
               onClick={() => {
@@ -192,7 +205,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   }
   const by = answer.by ?? "";
   return (
-    <AlertDialog open onOpenChange={(next) => { if (!next) close(); }}>
+    <AlertDialog open onOpenChange={(next) => { if (!next) cancel(); }}>
       <AlertDialogContent data-device-switch-held={deviceId}>
         <AlertDialogHeader>
           <AlertDialogTitle>{t("devices.switch.heldTitle", { name })}</AlertDialogTitle>
@@ -200,7 +213,13 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-          <AlertDialogAction data-device-switch-held-go="true" onClick={() => askSwitch(actions, deviceId, { ownFolder: true })}>
+          <AlertDialogAction
+            data-device-switch-held-go="true"
+            onClick={() => {
+              close();
+              askSwitch(actions, deviceId, { ownFolder: true });
+            }}
+          >
             {t("devices.switch.go")}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -226,23 +245,21 @@ function useSwitchLanded() {
 }
 
 /**
- * A device just added over SSH goes on to the new connection (B41): once its
- * helper is connected its switch is asked, once. A machine whose own Hide
- * runs is then connected as a Hide; one with none answers with what would be
- * installed there, which the operator allows or leaves.
+ * A device added over SSH goes on to the new connection (B41): the core
+ * keeps that it was added for its switch (`Device.switch_first`), and once
+ * its helper is connected this window asks that switch, once. A machine
+ * whose own Hide runs is then connected as a Hide; one with none answers
+ * with what would be installed there, which the operator allows or leaves.
  */
 function useSwitchAfterAdd(actions: Actions) {
-  const alias = useUiStore((s) => s.switchAfterAdd);
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
-  const ready = useShellStore((s) => {
-    const device = alias === null ? undefined : s.rest?.navigator?.devices?.find((row) => row.ssh_alias === alias);
-    return device && switchOffered(device) && device.state === "ready" && device.host?.state === "ready" && !device.switch ? device.id : null;
-  });
+  const ready = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.switch_first === true && switchOffered(device) && device.state === "ready" && device.host?.state === "ready" && !device.switch)?.id ?? null);
+  const asked = useRef(new Set<string>());
   useEffect(() => {
-    if (alias === null || ready === null || !ownScreen) return;
-    useUiStore.getState().setSwitchAfterAdd(null);
+    if (ready === null || !ownScreen || asked.current.has(ready)) return;
+    asked.current.add(ready);
     askSwitch(actions, ready);
-  }, [actions, alias, ready, ownScreen]);
+  }, [actions, ready, ownScreen]);
 }
 
 /** What is put on a machine that runs no Hide of its own; linger is Linux's alone. */

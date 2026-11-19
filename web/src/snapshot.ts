@@ -2192,6 +2192,12 @@ export type Device = {
   switch?: DeviceSwitch | null;
   /** What the Hide this core started on the device's machine over SSH still needs to stay reachable (`DeviceSnapshot::needs`); absent when it needs nothing. */
   needs?: DeviceNeeds | null;
+  /** Whether the switch to its machine's own Hide is offered on this device (`DeviceSnapshot::switchable`): a helper device dialed over SSH that has connected. */
+  switchable?: boolean;
+  /** How many of the device's terminals its switch could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
+  not_carried?: number | null;
+  /** Added over SSH to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
+  switch_first?: boolean;
 };
 
 /**
@@ -3605,6 +3611,8 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
+    /** The device the last Add over SSH did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
+    device_not_added?: { label: string; reason: string } | null;
     /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
     peers?: import("./pairing").Peer[];
     /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */

@@ -18,7 +18,7 @@ vi.hoisted(() => {
 });
 
 const LOCAL: Device = { agent_scope: emptyScope(), id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
-const helper = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id: "mini", label: "Mac mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini", agent_count: 0, test: null, ...over });
+const helper = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id: "mini", label: "Mac mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini", agent_count: 0, test: null, switchable: true, ...over });
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -65,7 +65,7 @@ it("offers the switch over a helper device's screen, and a press asks hided for 
 it("draws no strip over this computer's own screen, a paired machine's, or on a screen that is not this computer's own window (B52)", async () => {
   for (const [device, over] of [
     [helper(), { front: "local" }],
-    [helper({ peer_key: "a".repeat(64) }), {}],
+    [helper({ peer_key: "a".repeat(64), switchable: false }), {}],
     [helper(), { pairing: null }],
   ] as const) {
     const { q, unmount } = await mount(device, over);
@@ -129,17 +129,37 @@ it("says what would be put on a machine with no Hide of its own, and starts it o
   await unmount();
 });
 
-it("asks for the switch of a device just added over SSH once its helper is connected, and only once (B41)", async () => {
+it("asks for the switch of a device added over SSH once its helper is connected, and only once (B41)", async () => {
   const ready = { host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "ready", message: null, platform: "linux x86_64", helper_path: null } } as Partial<Device>;
-  const { events, show, unmount } = await mount(helper({ state: "unavailable" }));
-  await act(async () => { useUiStore.getState().setSwitchAfterAdd("mini"); });
-  // Not connected yet: nothing is asked.
+  // The core keeps that it was added for its switch; it has not connected yet, so it is not offered.
+  const { events, show, unmount } = await mount(helper({ state: "unavailable", switch_first: true, switchable: false }));
   expect(switches(events)).toHaveLength(0);
-  await show(helper(ready));
+  await show(helper({ ...ready, switch_first: true }));
   expect(switches(events).map((event) => ({ device: event.payload.device, install: event.payload.install }))).toEqual([{ device: "mini", install: undefined }]);
-  expect(useUiStore.getState().switchAfterAdd).toBeNull();
-  await show(helper({ ...ready, message: "again" }));
+  await show(helper({ ...ready, switch_first: true, message: "again" }));
   expect(switches(events)).toHaveLength(1);
+  // A helper device that was there before is never asked on its own.
+  await show(helper({ ...ready, id: "older" }));
+  expect(switches(events)).toHaveLength(1);
+  await unmount();
+});
+
+it("takes a device added for its switch off again when the install question is left, and leaves an older one as it was (B41)", async () => {
+  for (const [switchFirst, removed] of [[true, ["mini"]], [false, []]] as const) {
+    const { events, q, answer, unmount } = await mount(helper({ switch_first: switchFirst }));
+    await act(async () => { q('[data-device-switch="mini"]')?.click(); });
+    await answer({ ok: true, switch: "install_needed", system: "linux", device_id: "mini" });
+    await act(async () => { (Array.from(q('[data-device-switch-install="mini"]')?.querySelectorAll("button") ?? []).find((button) => !button.hasAttribute("data-device-switch-install-go") && button.textContent === "Cancel") as HTMLElement | undefined)?.click(); });
+    expect(q("[data-device-switch-install]")).toBeNull();
+    expect(events.filter((event) => event.kind === "remove_device").map((event) => event.payload.device_id)).toEqual(removed);
+    await unmount();
+  }
+});
+
+it("says once how many terminals a landed switch could not take over (B36)", async () => {
+  const { q, show, unmount } = await mount(helper({ switch: { state: "connecting" } }));
+  await show(helper({ ssh_alias: null, peer_key: "a".repeat(64), switchable: false, not_carried: 2 }));
+  expect(q('[data-device-switched="mini"] [data-device-not-carried="2"]')?.textContent).toContain("2 terminals could not be taken over · AI conversations can be resumed");
   await unmount();
 });
 
