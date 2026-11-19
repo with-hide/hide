@@ -23,13 +23,19 @@ pub use hide_memory::hook::{PROMPT_LIMIT_BYTES, prefix};
 
 /// The answer for a hook whose Memory cannot be read, carrying only the Hide
 /// global instruction a session start still gets (PRD memory-self-improve
-/// D-31) and the open questions a prompt still gets.
-pub fn without_memory(global: Option<String>, asks: Option<String>) -> HookContext {
+/// D-31), the open questions a prompt still gets and the Project's other
+/// sessions a session start still gets.
+pub fn without_memory(
+    global: Option<String>,
+    asks: Option<String>,
+    sessions: Option<String>,
+) -> HookContext {
     HookContext {
         context: None,
         outcome: HookOutcome::Unavailable,
         global,
         asks,
+        sessions,
     }
 }
 
@@ -60,6 +66,12 @@ impl Ask {
     /// instruction beside Memory (PRD memory-self-improve D-29).
     pub fn starts_session(&self) -> bool {
         self.event == HookEvent::SessionStart
+    }
+
+    /// The session the hook names, when it starts one: a start is when the
+    /// agent is given the Project's other sessions (`links::session_brief`).
+    pub fn start_session(&self) -> Option<&str> {
+        self.starts_session().then_some(self.session.as_str())
     }
 
     /// The session the hook names, when it asks at a prompt: a prompt is
@@ -132,6 +144,7 @@ where
         outcome,
         global: None,
         asks: None,
+        sessions: None,
     };
     // A store that does not exist yet costs no node call.
     if !scope.store.is_file() {

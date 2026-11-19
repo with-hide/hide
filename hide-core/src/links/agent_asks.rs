@@ -88,7 +88,7 @@ pub fn render(asks: &[MissedWork]) -> Option<String> {
 
 /// A question's line as JSON text, with no mark that could close or open a
 /// block of the agent's context.
-fn escaped(text: &str) -> String {
+pub(super) fn escaped(text: &str) -> String {
     serde_json::to_string(text)
         .unwrap_or_default()
         .replace('<', "\\u003c")

@@ -1420,6 +1420,21 @@ impl Core {
         lock_recover(&self.runtime).session_scope(context)
     }
 
+    /// What a session start in `pane` reads the Project's other sessions
+    /// from, which the daemon then reads off this thread
+    /// (`links::session_brief`); none for a delegated session.
+    pub fn brief_scope(
+        &self,
+        context: &crate::workspace_control::Context,
+        pane: &str,
+        own_session_id: &str,
+    ) -> Option<crate::links::session_brief::BriefScope> {
+        if !check_owner_thread(self, "brief_scope") {
+            return None;
+        }
+        lock_recover(&self.runtime).brief_scope(context, pane, own_session_id)
+    }
+
     /// The native session the registered agent `id` runs.
     pub fn agent_session(&self, id: &str) -> Option<crate::links::ledger::SessionIdentity> {
         if !check_owner_thread(self, "agent_session") {
