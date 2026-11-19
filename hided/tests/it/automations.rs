@@ -198,7 +198,7 @@ fn wall_clock_at(value: &Value, time: &str) -> bool {
 /// PRD automations c1 (B9, B10): the CLI makes, reads, changes, pauses,
 /// resumes and removes an automation through the core, answers what its
 /// schedule reads as and when it runs next, the screen's section shows it
-/// at once, and a period under an hour or a cron line that is none is
+/// at once, and a period under five minutes or a cron line that is none is
 /// refused with why and what to do.
 // The daemon runs on this test's runtime while the tool's `hide` blocks a
 // thread of it, so it needs threads of its own.
@@ -287,11 +287,12 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
             "codex",
         ])
     };
-    let under_hour = refused(
-        &draft("cron */30 * * * *", "Half-hourly"),
-        "schedule_under_hour",
+    let too_often = refused(&draft("cron */4 * * * *", "Too often"), "schedule_too_often");
+    assert!(too_often.contains("at most every five minutes"), "{too_often}");
+    refused(
+        &draft("every 7m", "Seven minutes"),
+        "schedule_minutes_out_of_range",
     );
-    assert!(under_hour.contains("at most once an hour"), "{under_hour}");
     refused(
         &draft("cron 0 9 * *", "Four fields"),
         "schedule_cron_invalid",
@@ -353,6 +354,17 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
         preview.json()["value"]["reads_as_text"],
         "weekdays at 09:00"
     );
+    // Every N minutes is a choice too, and the cron line it equals reads as
+    // it (B6, D-16).
+    for schedule in ["every 10m", "cron */10 * * * *"] {
+        let preview = tool.run(&["automation", "preview", "--schedule", schedule]);
+        assert!(preview.ok, "{}", preview.out);
+        assert_eq!(
+            preview.json()["value"]["reads_as_text"],
+            "every 10 minutes",
+            "{schedule}"
+        );
+    }
 
     // Read by its name or its id.
     let shown = tool.run(&["automation", "show", "Morning issues"]);

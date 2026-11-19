@@ -279,7 +279,7 @@
     "example": "hide automation help"
   },
   "automation add": {
-    "line": "Makes an automation: at each time of its schedule Hide starts one agent on the task, in the automation's own folder under ~/hide/automations unless --folder names a project. An automation runs at most once an hour.",
+    "line": "Makes an automation: at each time of its schedule Hide starts one agent on the task, in the automation's own folder under ~/hide/automations unless --folder names a project. An automation runs at most every five minutes.",
     "example": "hide automation add --name 'Morning issues' --task 'Sort the new issues' --schedule 'weekdays 09:00' --kind claude"
   },
   "automation list": {

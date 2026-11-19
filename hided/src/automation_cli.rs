@@ -21,7 +21,7 @@ pub const HELP: &str = include_str!("../assets/automation/help.md");
 pub const USAGE: &str = "hide automation help\nhide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]\nhide automation list\nhide automation show <id|name>\nhide automation run <id|name>\nhide automation pause <id|name>\nhide automation resume <id|name>\nhide automation edit <id|name> [--name <name>] [--task <text>] [--schedule <when>] [--kind <kind> [--profile <name>] [--model <model>] [--effort <effort>]] [--folder <path> | --own-folder] [--worktree | --no-worktree]\nhide automation remove <id|name>\nhide automation preview --schedule <when>";
 
 /// The forms `--schedule` takes, as a refusal and the guide name them.
-const SCHEDULE_FORMS: &str = "Give --schedule as one of: \"daily 09:00\", \"weekdays 09:00\", \"weekly mon,thu 09:00\", \"every 3h 09:00\" (every 1 to 12 hours from that time) or \"cron <minute> <hour> <day> <month> <weekday>\", such as \"cron 0 9 * * 1-5\"; times are HH:MM on a 24-hour clock in the zone of the machine that runs Hide";
+const SCHEDULE_FORMS: &str = "Give --schedule as one of: \"daily 09:00\", \"weekdays 09:00\", \"weekly mon,thu 09:00\", \"every 15m\" (every 5, 10, 15 or 30 minutes from the hour), \"every 3h 09:00\" (every 1 to 12 hours from that time) or \"cron <minute> <hour> <day> <month> <weekday>\", such as \"cron 0 9 * * 1-5\"; times are HH:MM on a 24-hour clock in the zone of the machine that runs Hide";
 
 /// The flags each verb reads, valued and switches: the contract's table
 /// names the same (`cli_contract`, held by its test).
@@ -316,9 +316,9 @@ pub fn parse(args: &[String]) -> Result<AutomationCli, String> {
 }
 
 /// Reads a `--schedule` value into the core's schedule (B6). The words are
-/// read here; whether the schedule may run (an hour apart at least, a cron
-/// line that names a real time, 1 to 12 hours) is the core's check, the one
-/// the form makes too.
+/// read here; whether the schedule may run (five minutes apart at least, a
+/// cron line that names a real time, a period the form offers) is the
+/// core's check, the one the form makes too.
 pub fn read_schedule(text: &str) -> Result<Schedule, &'static str> {
     let text = text.trim();
     let (form, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
@@ -351,6 +351,11 @@ pub fn read_schedule(text: &str) -> Result<Schedule, &'static str> {
             })
         }
         "every" => {
+            // "every 15m" counts from each hour's start and takes no time.
+            if let Some(minutes) = rest.strip_suffix('m') {
+                let minutes = minutes.parse::<u8>().map_err(|_| "schedule_unreadable")?;
+                return Ok(Schedule::EveryMinutes { minutes });
+            }
             let (hours, at) = rest
                 .split_once(char::is_whitespace)
                 .ok_or("schedule_unreadable")?;
@@ -372,8 +377,11 @@ pub fn read_schedule(text: &str) -> Result<Schedule, &'static str> {
 pub fn next_action(code: &str) -> &'static str {
     match code {
         "schedule_unreadable" => SCHEDULE_FORMS,
-        "schedule_under_hour" => {
-            "An automation runs at most once an hour: give a cron line one minute and a whole-hour pattern, such as \"cron 0 * * * *\" (hourly) or \"cron 30 9 * * 1-5\", or a daily, weekdays, weekly or every-N-hours schedule"
+        "schedule_too_often" => {
+            "An automation runs at most every five minutes: give a cron line whose times are five minutes apart or more, such as \"cron */5 * * * *\", or \"every 5m\""
+        }
+        "schedule_minutes_out_of_range" => {
+            "Every N minutes takes 5, 10, 15 or 30 minutes, such as \"every 15m\"; for longer use \"every 1h 00:00\""
         }
         "schedule_cron_invalid" => {
             "Give five cron fields, minute hour day month weekday, with numbers, *, ranges, lists and steps, such as \"cron 0 9 * * 1-5\" for weekdays at 09:00"
@@ -664,6 +672,7 @@ fn schedule_words(schedule: &Value) -> Option<String> {
                 .collect();
             format!("every {} at {}", days.join(", "), clock(time))
         }
+        Schedule::EveryMinutes { minutes } => format!("every {minutes} minutes"),
         Schedule::EveryHours { hours, time } => {
             format!("every {hours} hours from {}", clock(time))
         }
@@ -863,6 +872,10 @@ mod tests {
             })
         );
         assert_eq!(
+            read_schedule("every 15m"),
+            Ok(Schedule::EveryMinutes { minutes: 15 })
+        );
+        assert_eq!(
             read_schedule("cron 0 9 * * 1-5"),
             Ok(Schedule::Cron {
                 expr: "0 9 * * 1-5".into()
@@ -877,6 +890,8 @@ mod tests {
             Err("schedule_unreadable")
         );
         assert_eq!(read_schedule("every 3 09:00"), Err("schedule_unreadable"));
+        // Every N minutes counts from the hour and takes no time.
+        assert_eq!(read_schedule("every 15m 09:00"), Err("schedule_unreadable"));
         assert_eq!(read_schedule("cron"), Err("schedule_unreadable"));
         assert_eq!(
             read_schedule("weekly 09:00"),
@@ -1038,7 +1053,8 @@ mod tests {
         assert!(next_action("schedule_unreadable").contains("\"cron 0 9 * * 1-5\""));
         // Every reason the core gives for a schedule has its own sentence.
         for code in [
-            "schedule_under_hour",
+            "schedule_too_often",
+            "schedule_minutes_out_of_range",
             "schedule_cron_invalid",
             "schedule_never",
             "schedule_time_invalid",

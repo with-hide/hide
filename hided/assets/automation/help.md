@@ -17,10 +17,12 @@ hide automation remove <id|name>
   - `daily 09:00`: every day at 09:00.
   - `weekdays 09:00`: Monday to Friday at 09:00.
   - `weekly mon,thu 09:00`: on the days named (`sun` `mon` `tue` `wed` `thu` `fri` `sat`).
+  - `every 15m`: every 5, 10, 15 or 30 minutes, counted from each hour's start (:00, :15, :30 and :45 here).
   - `every 3h 09:00`: every 1 to 12 hours, counted from that time (00:00, 03:00, ..., 21:00 here).
   - `cron 0 9 * * 1-5`: a five-field cron line, minute hour day month weekday.
-- An automation runs at most once an hour: a cron line names one minute (`0 * * * *` is hourly; `*/30 * * * *` is refused).
-  When the operator wants an unattended repeat more often than that, tell them the shortest period is an hour and offer hourly.
+- An automation runs at most every five minutes: a cron line whose times come closer than that is refused (`*/5 * * * *` runs; `*/4 * * * *` does not).
+  When the operator wants an unattended repeat more often than that, tell them the shortest period is five minutes and offer `every 5m`.
+  A run still going when the next time comes keeps going, and that time is skipped.
 - `hide automation preview --schedule <when>` answers what a schedule reads as and when it runs next, without making anything.
 - `--kind`, `--profile`, `--model` and `--effort` name the agent each run starts, as `hide agent spawn` takes them (`hide agent catalog` lists what a machine has).
   Use the agent, model and effort the operator named; when they named none, your own kind with the model and effort you run with.
@@ -38,7 +40,7 @@ Each command prints one line, `{"ok":true,"value":…}` or `{"ok":false,"error":
 - `list` answers each automation with its newest record as `last_record`; `remove` answers which one went and how many records with it.
 - An automation stopped for something a person fixes (`paused.reason` other than `operator`: a sign-in that ended, a folder that is gone, an agent not set up) carries `fix`, one sentence of what to do; tell the operator that, then `resume` it once they have.
   A `run` or an `add --run-now` that could not start for such a reason answers `paused.code` and `paused.fix` the same way.
-- A refusal's `message` says what to change: relay it to the operator in plain words when it is theirs to choose (a period under an hour, a name already taken, a folder Hide does not know), and fix your own command when it is yours.
+- A refusal's `message` says what to change: relay it to the operator in plain words when it is theirs to choose (a period under five minutes, a name already taken, a folder Hide does not know), and fix your own command when it is yours.
 
 ## Changing and removing
 - Name an automation by its id or its exact name; `list` shows both.
