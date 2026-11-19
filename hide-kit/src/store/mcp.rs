@@ -455,6 +455,10 @@ impl Applier for McpApplier {
         Ok(true)
     }
 
+    fn leave_copy(&self, _place: &Place, _name: &str, _files: &Path) -> Result<(), String> {
+        Err("Hide cannot leave an MCP server's copy yet".to_owned())
+    }
+
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {
         // The keys are in the item's folder, which the store removes with it.
         Ok(())
@@ -617,6 +621,7 @@ pub(super) fn add(
         latest: None,
         folder_missing: false,
         fingerprint: None,
+        adopted: false,
         body: ItemBody::Mcp(McpBody {
             server: server.clone(),
         }),

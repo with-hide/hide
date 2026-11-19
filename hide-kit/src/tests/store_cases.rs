@@ -798,58 +798,109 @@ fn removing_the_machine_takes_hides_copies_and_the_store_out() {
     assert!(!crate::layout::store_dir(fixture.home()).exists());
 }
 
+/// The store holds the only original of a skill the operator had and Hide
+/// took over, however the switches moved it since (B30).
 #[test]
 fn removing_the_machine_leaves_the_operators_adopted_skills_where_they_were() {
     let fixture = every_agent();
     let claude = fixture.home().join(".claude/skills");
-    write(&claude.join("mine/SKILL.md"), &skill_md("mine", "Mine."));
-    // A skill the operator cloned: its `.git` is no part of Hide's copy.
-    let cloned = claude.join("cloned");
-    write(&cloned.join("SKILL.md"), &skill_md("cloned", "Clone."));
-    write(&cloned.join(".git/HEAD"), "ref: refs/heads/main\n");
+    // Two plain skills and two the operator cloned, whose `.git` is no part
+    // of Hide's copy.
+    for name in ["mine", "left_off", "cloned", "forgotten"] {
+        write(
+            &claude.join(name).join("SKILL.md"),
+            &skill_md(name, "Mine."),
+        );
+    }
+    for name in ["cloned", "forgotten"] {
+        write(
+            &claude.join(name).join(".git/HEAD"),
+            "ref: refs/heads/main\n",
+        );
+    }
     let adopt = |name: &str| StoreChange::Adopt {
         kind: ItemKind::Skill,
         name: name.to_owned(),
         from: None,
     };
-    let adopted = store(&fixture, vec![adopt("mine"), adopt("cloned")]);
-    assert_eq!(cells(&adopted, "skill:mine"), all(CellState::On));
-    assert_eq!(cells(&adopted, "skill:cloned"), all(CellState::On));
-    // The clone went to the undo list whole, and Hide's copy stands there.
-    assert!(!cloned.join(".git").exists());
-    assert!(
+    let adopted = store(
+        &fixture,
+        ["mine", "left_off", "cloned", "forgotten"]
+            .into_iter()
+            .map(adopt)
+            .collect(),
+    );
+    for name in ["mine", "left_off", "cloned", "forgotten"] {
+        assert_eq!(
+            cells(&adopted, &format!("skill:{name}")),
+            all(CellState::On)
+        );
+    }
+    // A clone went to the undo list whole, and Hide's copy stands there.
+    assert!(!claude.join("cloned/.git").exists());
+    let set_aside = |name: &str| {
         adopted
             .trash
             .iter()
-            .any(|entry| entry.name == "cloned"
-                && matches!(entry.cause, TrashCause::Replaced { .. }))
-    );
-    // Claude's column off and on again: Hide's copy goes and comes back.
-    let set = |on: bool| StoreChange::Set {
-        item: "skill:cloned".to_owned(),
+            .find(|entry| entry.name == name && matches!(entry.cause, TrashCause::Replaced { .. }))
+            .unwrap_or_else(|| panic!("{name} was not set aside: {:#?}", adopted.trash))
+            .id
+            .clone()
+    };
+    let column = |name: &str, on: bool| StoreChange::Set {
+        item: format!("skill:{name}"),
         column: Some("claude".to_owned()),
         on,
     };
-    store(&fixture, vec![set(false)]);
-    assert!(!cloned.exists());
-    store(&fixture, vec![set(true)]);
-    assert!(cloned.join("SKILL.md").is_file());
+    let whole = |name: &str, on: bool| StoreChange::Set {
+        item: format!("skill:{name}"),
+        column: None,
+        on,
+    };
+    // Claude's column off and on, then the item's own switch off and on:
+    // Hide's copy goes and comes back each time.
+    for name in ["mine", "cloned"] {
+        store(&fixture, vec![column(name, false)]);
+        assert!(!claude.join(name).exists());
+        store(&fixture, vec![column(name, true), whole(name, false)]);
+        assert!(!claude.join(name).exists());
+        store(&fixture, vec![whole(name, true)]);
+        assert!(claude.join(name).join("SKILL.md").is_file());
+    }
+    // One is left off, and one's clone is forgotten from the undo list
+    // with its column left off: the store alone holds them.
+    store(
+        &fixture,
+        vec![
+            whole("left_off", false),
+            StoreChange::Forget {
+                entry: set_aside("forgotten"),
+            },
+            column("forgotten", false),
+        ],
+    );
+    assert!(!claude.join("left_off").exists());
+    assert!(!claude.join("forgotten").exists());
 
     let removed = remove(&fixture.target);
 
-    // Hide put the other folders' copies there; the operator's stay.
+    // Each stands where the operator had it: kept, put back with its
+    // `.git`, or written back from the store.
+    for name in ["mine", "left_off", "cloned", "forgotten"] {
+        assert_eq!(
+            std::fs::read_to_string(claude.join(name).join("SKILL.md")).unwrap(),
+            skill_md(name, "Mine."),
+            "{name}"
+        );
+    }
     assert_eq!(
-        std::fs::read_to_string(claude.join("mine/SKILL.md")).unwrap(),
-        skill_md("mine", "Mine.")
-    );
-    assert_eq!(
-        std::fs::read_to_string(cloned.join(".git/HEAD")).unwrap(),
+        std::fs::read_to_string(claude.join("cloned/.git/HEAD")).unwrap(),
         "ref: refs/heads/main\n"
     );
-    assert!(cloned.join("SKILL.md").is_file());
     for folder in &folders(&fixture)[1..] {
-        assert!(!folder.join("mine").exists(), "{}", folder.display());
-        assert!(!folder.join("cloned").exists(), "{}", folder.display());
+        for name in ["mine", "left_off", "cloned", "forgotten"] {
+            assert!(!folder.join(name).exists(), "{}", folder.display());
+        }
     }
     assert!(
         removed
