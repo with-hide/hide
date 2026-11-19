@@ -1055,7 +1055,12 @@ pub const COMMANDS: &[Spec] = &[
         ],
         rest: None,
         answers: &["pane_read"],
-        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "pane_unavailable",
+            "guest_pane_read",
+        ],
     },
     Spec {
         words: &["pane", "send"],
@@ -1104,6 +1109,7 @@ pub const COMMANDS: &[Spec] = &[
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_keys",
         ],
     },
     Spec {

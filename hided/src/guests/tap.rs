@@ -418,6 +418,25 @@ impl TerminalNode for GuestTap {
         }
     }
 
+    /// Whether the guest's node is there to take input for a pane it
+    /// lists: the tap is connected and the pane is in the list.
+    fn input_permit(
+        &self,
+        pane: &str,
+        _bytes: usize,
+        reply: hide_node_link::terminal::InputPermitReply,
+    ) {
+        let taken = {
+            let state = lock(&self.state);
+            state.writer.is_some() && state.panes.contains_key(pane)
+        };
+        reply(if taken {
+            Ok(())
+        } else {
+            Err(hide_node_link::terminal::InputPermitError::Unavailable)
+        });
+    }
+
     fn key(&self, target: KeyTarget, bytes: Vec<u8>, _typed_at_unix_ms: u64) {
         if let KeyTarget::Pane(pane) = target {
             self.send(&ToNode::Input { pane, bytes });
@@ -583,6 +602,14 @@ pub(crate) mod tests {
             "a grid is no change of the list"
         );
 
+        // A send from this machine's CLI asks first whether the node is
+        // there for the pane.
+        let permitted = |pane: &str| {
+            hide_node_link::terminal::wait_for_input_permit(tap.as_ref(), pane, 3).is_ok()
+        };
+        assert!(permitted("w1:p1"));
+        assert!(!permitted("w9:p9"), "a pane the guest does not have");
+
         // What a screen of this machine does reaches the node by the
         // node's own pane id.
         tap.key(KeyTarget::Pane("w1:p1".to_owned()), b"ls\n".to_vec(), 0);
@@ -641,6 +668,10 @@ pub(crate) mod tests {
         // The node ends; the list is the file's, for the next start of
         // this daemon.
         tap.detach();
+        assert!(
+            !hide_node_link::terminal::wait_for_input_permit(tap.as_ref(), "w1:p2", 3).is_ok(),
+            "a pane whose node is away takes no input"
+        );
         let (again, _drawn, _changed) = self::tap(&file);
         let listed = again.panes();
         assert_eq!(listed.len(), 1);

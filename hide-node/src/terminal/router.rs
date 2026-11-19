@@ -416,10 +416,10 @@ impl TerminalNode for Router {
     ) {
         match self.route(pane) {
             Route::Local => self.local.input_permit(pane, bytes, reply),
-            Route::Device { node, pane, .. } => node.input_permit(&pane, bytes, reply),
-            Route::Guest { .. } | Route::Unrouted => {
-                reply(Err(hide_node_link::terminal::InputPermitError::Unavailable))
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
+                node.input_permit(&pane, bytes, reply)
             }
+            Route::Unrouted => reply(Err(hide_node_link::terminal::InputPermitError::Unavailable)),
         }
     }
 
@@ -929,6 +929,14 @@ mod tests {
             [(KeyTarget::Pane("w1:p1".into()), b"a".to_vec())]
         );
         assert_eq!(tap.controls.lock().unwrap().as_slice(), [attach("w1:p1")]);
+        assert_eq!(
+            hide_node_link::terminal::wait_for_input_permit(&router, "guest:macbook:pane:w1:p1", 3),
+            Ok(())
+        );
+        assert_eq!(
+            tap.permits.lock().unwrap().as_slice(),
+            [("w1:p1".to_owned(), 3)]
+        );
         assert!(device.keys.lock().unwrap().is_empty());
         assert!(local.keys.lock().unwrap().is_empty());
 

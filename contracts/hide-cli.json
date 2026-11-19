@@ -5572,7 +5572,8 @@
             "refusals": [
                 "pane_required",
                 "lines_out_of_range",
-                "pane_unavailable"
+                "pane_unavailable",
+                "guest_pane_read"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5655,7 +5656,8 @@
                 "composer_not_empty",
                 "keys_not_sent",
                 "send_unconfirmed",
-                "operator_typing"
+                "operator_typing",
+                "guest_pane_keys"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7416,7 +7418,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:136df9ed40861177eaa7f8391d2d0598c3fe604c8d249584668c0f26246cd234",
+    "digest": "sha256:745031dce515ea23a2932add350d26eed8c4eed197c772919fa86e4bc44ab529",
     "envelopes": {
         "access": {
             "answer": "value",
