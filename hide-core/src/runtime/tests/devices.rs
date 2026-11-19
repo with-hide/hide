@@ -1679,7 +1679,11 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
         }
         row.insert("inbound".to_owned(), true.into());
         std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
-        assert_eq!(crate::dialing_nodes(&path).unwrap(), [id.clone()], "{tag}");
+        assert_eq!(
+            crate::dialing_nodes(&path).unwrap(),
+            std::slice::from_ref(&id),
+            "{tag}"
+        );
 
         // The store is read by the start itself, so what is in front and
         // every other record is the folder's own.
