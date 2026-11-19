@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -40,7 +40,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 
 use crate::gate::{CLOSED, Gate, Guarded};
 use crate::limits;
-use crate::store::{Change, Grant, Grants, Known, KnownState, StoreError, Via};
+use crate::store::{Change, Grant, Grants, Host, Known, KnownState, StoreError, Via};
 use crate::transport::{PeerConn, PeerTransport, TransportError};
 use crate::wire;
 
@@ -197,7 +197,7 @@ impl Clock {
         Self(Arc::new(now_unix_ms))
     }
 
-    fn now(&self) -> u64 {
+    pub fn now(&self) -> u64 {
         (self.0)()
     }
 }
@@ -258,6 +258,11 @@ pub fn decide(
     }
 }
 
+/// Whether this machine holds its side of host `key` back.
+fn held_back(known: &Known, key: &PeerKey) -> bool {
+    known.of(key).is_some_and(|host| host.state.held_back())
+}
+
 fn state_tag(state: GrantState) -> u8 {
     match state {
         GrantState::None => 0,
@@ -315,7 +320,13 @@ struct LinkInner<C: PeerConn> {
     /// The grant this machine gives the peer: gates what the peer opens.
     inbound: Arc<Gate>,
     /// The grant the peer gives this machine: gates what is opened there.
+    /// It is shut while this machine holds its own side back
+    /// ([`KnownState::held_back`]), whatever the peer grants.
     outbound: Arc<Gate>,
+    /// The generation the peer last said its grant runs under, shut when
+    /// the grant is not active: what `outbound` opens to again when this
+    /// machine stops holding back.
+    heard: AtomicU64,
     granted: AtomicU8,
     counts: Arc<Counts>,
     /// Streams whose header is still being read.
@@ -641,6 +652,41 @@ impl<T: PeerTransport> Peers<T> {
         self.grants(|grants, now| grants.state_of(key, now))
     }
 
+    /// The time the records are stamped with, as Unix milliseconds.
+    pub fn now(&self) -> u64 {
+        self.inner.clock.now()
+    }
+
+    /// The host this machine is a guest of under `key`.
+    pub fn host(&self, key: &PeerKey) -> Option<Host> {
+        lock(&self.inner.known).of(key).cloned()
+    }
+
+    /// Every host this machine is a guest of.
+    pub fn hosts(&self) -> Vec<Host> {
+        lock(&self.inner.known).list().to_vec()
+    }
+
+    /// Moves a host this machine is a guest of to `state`: saved first,
+    /// then the streams opened there end when this machine now holds its
+    /// side back, and open again under what the host last granted when it
+    /// no longer does (B25).
+    pub fn set_host(&self, key: &PeerKey, state: KnownState) -> Result<(), StoreError> {
+        {
+            let mut known = lock(&self.inner.known);
+            known.set_state(key, state)?;
+            if let Some(link) = lock(&self.inner.table).live.get(key) {
+                link.inner.outbound.set(if state.held_back() {
+                    CLOSED
+                } else {
+                    link.inner.heard.load(Ordering::Acquire)
+                });
+            }
+        }
+        self.inner.relation_changed();
+        Ok(())
+    }
+
     /// Reads or changes the guest's record.
     pub fn known<R>(&self, change: impl FnOnce(&mut Known) -> R) -> R {
         let changed = change(&mut lock(&self.inner.known));
@@ -663,17 +709,21 @@ impl<T: PeerTransport> Peers<T> {
         Ok(grant)
     }
 
-    /// The guest's confirm of grant `id`.
+    /// The guest's confirm of grant `id`. One that changes nothing (the
+    /// grant is settled already, or is not there) touches no connection, so
+    /// its answer reaches the guest on the stream it asked on.
     pub fn confirm(&self, key: &PeerKey, id: &str) -> Result<ConfirmState, StoreError> {
-        let state = {
+        let (state, changed) = {
             let mut grants = lock(&self.inner.grants);
             let (state, change) = grants.confirm(key, id, self.inner.clock.now())?;
             if let Some(change) = change {
                 self.inner.move_gate(change);
             }
-            state
+            (state, change.is_some())
         };
-        self.inner.settle(key);
+        if changed {
+            self.inner.settle(key);
+        }
         Ok(state)
     }
 
@@ -703,7 +753,9 @@ impl<T: PeerTransport> Peers<T> {
 
     /// Saves a change of the grant given to `key`, then moves that
     /// direction's generation, then tells the peer. The save is first: a
-    /// failed one moves nothing.
+    /// failed one moves nothing. A request that changes nothing tells
+    /// nobody and closes nothing: a machine that asks for the removal of a
+    /// grant it does not hold is answered on the stream it asked on.
     fn change(
         &self,
         key: &PeerKey,
@@ -711,11 +763,12 @@ impl<T: PeerTransport> Peers<T> {
     ) -> Result<(), StoreError> {
         {
             let mut grants = lock(&self.inner.grants);
-            if let Some(change) = save(&mut grants)? {
-                // Under the lock that saved it, so two changes move the
-                // gate in the order they were saved.
-                self.inner.move_gate(change);
-            }
+            let Some(change) = save(&mut grants)? else {
+                return Ok(());
+            };
+            // Under the lock that saved it, so two changes move the gate
+            // in the order they were saved.
+            self.inner.move_gate(change);
         }
         self.inner.settle(key);
         Ok(())
@@ -1090,6 +1143,7 @@ impl<T: PeerTransport> Inner<T> {
                     agreed,
                     inbound: Gate::new(granting.generation),
                     outbound: Gate::new(CLOSED),
+                    heard: AtomicU64::new(CLOSED),
                     granted: AtomicU8::new(state_tag(GrantState::None)),
                     counts,
                     headers: Arc::new(Semaphore::new(limits::MAX_STREAMS)),
@@ -1169,7 +1223,17 @@ impl<T: PeerTransport> Inner<T> {
                     } else {
                         CLOSED
                     };
-                    link.inner.outbound.set(generation);
+                    {
+                        // Under the guest's lock, as `set_host` is: the
+                        // gate is opened by whichever of the two ran last.
+                        let known = lock(&self.known);
+                        link.inner.heard.store(generation, Ordering::Release);
+                        link.inner.outbound.set(if held_back(&known, &key) {
+                            CLOSED
+                        } else {
+                            generation
+                        });
+                    }
                     self.emit(PeerEvent::Granted { key, state });
                 }
                 Ok(Some(HelloFrame::Update)) => {
@@ -1333,10 +1397,11 @@ impl<T: PeerTransport> Inner<T> {
         let mut woke = self.woke.subscribe();
         let mut wait = limits::REDIAL_FIRST;
         loop {
-            // A host this machine forgot or paused is not dialed.
+            // A host this machine forgot or paused, or one that dropped the
+            // pairing, is not dialed.
             let Some(to) = lock(&self.known)
                 .of(&key)
-                .filter(|host| host.state != KnownState::PausedByMe)
+                .filter(|host| host.state.dialed())
                 .map(|host| PeerAddr::new(key, host.candidates.clone()))
             else {
                 return;

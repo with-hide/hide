@@ -5,6 +5,14 @@
 //! and sends [`Pairing::Confirm`], which makes the grant `active`.
 //! A confirm is accepted with no offer open, answers the same however often
 //! it is sent, and never revives a pause or a removal.
+//!
+//! Who asks first decides which pairing it is. A guest with a link sends
+//! [`Pairing::Pair`], and the host answers [`Pairing::Asking`] once the
+//! secret is the offer's, so both operators compare the same words while
+//! the host's decides. A machine that already hosts the other sends
+//! [`Pairing::Request`] over the connection they share to be let in the
+//! other way; no words are compared, because that connection is already
+//! each side's proof of the other (D-51).
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +25,19 @@ pub enum Pairing {
     /// The guest's key comes from the connection, never from this message.
     Pair {
         secret: String,
+        device: String,
+        name: String,
+    },
+    /// Host to guest: the secret is the offer's and the host's operator is
+    /// being asked. It names the host and the word list both screens show
+    /// the confirmation words from.
+    Asking {
+        device: String,
+        name: String,
+        words: String,
+    },
+    /// A machine that hosts this one asks to be let in the other way.
+    Request {
         device: String,
         name: String,
     },
@@ -40,7 +61,15 @@ pub enum Pairing {
 }
 
 impl Pairing {
-    pub const TYPES: [&'static str; 5] = ["pair", "granted", "refused", "confirm", "confirmed"];
+    pub const TYPES: [&'static str; 7] = [
+        "pair",
+        "asking",
+        "request",
+        "granted",
+        "refused",
+        "confirm",
+        "confirmed",
+    ];
 
     /// `None` for a type this build does not know.
     pub fn parse(body: &[u8]) -> Result<Option<Self>, FrameError> {
@@ -59,6 +88,8 @@ pub enum PairRefusal {
     Declined,
     /// The host already holds its limit of connected machines (B6).
     Full,
+    /// Nobody answered within the time an operator is given.
+    Unanswered,
     #[serde(other)]
     Other,
 }

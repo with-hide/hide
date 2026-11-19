@@ -117,6 +117,8 @@ fn pairing_messages() -> Vec<Pairing> {
     fn exhaustive(message: &Pairing) {
         match message {
             Pairing::Pair { .. }
+            | Pairing::Asking { .. }
+            | Pairing::Request { .. }
             | Pairing::Granted { .. }
             | Pairing::Refused { .. }
             | Pairing::Confirm { .. }
@@ -128,6 +130,15 @@ fn pairing_messages() -> Vec<Pairing> {
     vec![
         Pairing::Pair {
             secret: text(),
+            device: text(),
+            name: text(),
+        },
+        Pairing::Asking {
+            device: text(),
+            name: text(),
+            words: text(),
+        },
+        Pairing::Request {
             device: text(),
             name: text(),
         },
@@ -289,7 +300,7 @@ pub fn shape() -> Value {
             .collect::<Vec<_>>(),
         "pairing": {
             "messages": messages(&Pairing::TYPES, &pairing_messages()),
-            "refusals": names!(PairRefusal: NoOffer, Declined, Full, Other),
+            "refusals": names!(PairRefusal: NoOffer, Declined, Full, Unanswered, Other),
             "confirm_states": names!(ConfirmState: Active, Paused, Unknown),
         },
         "revoke": { "messages": messages(&Revoke::TYPES, &revoke_messages()) },

@@ -11,7 +11,7 @@ use hide_peer::wire::{read_message, write_message};
 
 use crate::{Machine, granted, within};
 
-async fn read(stream: &mut hide_peer::PeerStream<hide_peer::loopback::LoopConn>) -> Pairing {
+pub async fn read(stream: &mut hide_peer::PeerStream<hide_peer::loopback::LoopConn>) -> Pairing {
     let body = within(
         "a pairing message",
         read_message(&mut stream.recv, MAX_MESSAGE),
