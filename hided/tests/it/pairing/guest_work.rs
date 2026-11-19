@@ -463,6 +463,19 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
         Ok(in_folder(&shown[0]["panes"][0]["folder"]).then_some(()))
     })
     .unwrap_or_else(|error| panic!("{error:#}: {shown}"));
+    // D-50: the guest may open the host, so the host's core tells it its
+    // own Needs You and Done on the stream the two cores talk on, and the
+    // guest's screen holds them under the host. Nothing waits on the host,
+    // so the counts are zero; the host, which may not open the guest, is
+    // told nothing of the guest's.
+    let mut told = Value::Null;
+    wait_within("the host's own work on the guest's screen", WITHIN, || {
+        told = guest.screen().snapshot()?["navigator"]["peer_work"].clone();
+        Ok((told[0]["key"].is_string() && told[0]["needs_you"] == 0).then_some(()))
+    })
+    .unwrap_or_else(|error| panic!("{error:#}: {told}"));
+    let of_guest = host.screen().snapshot().unwrap()["navigator"]["peer_work"].clone();
+    assert!(of_guest.as_array().is_none_or(Vec::is_empty), "{of_guest}");
     // B54, D-55: `hide` at a terminal of the host outside every pane, in the
     // folder only the guest's pane lives in, is the guest's own `hide`. The
     // guest's core answers it with the pane of that folder, which the
