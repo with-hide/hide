@@ -289,7 +289,7 @@ mod tests {
             "/s/g/0123456789abcdef/i/current/hided",
             "/s/g/0123456789abcdef/i/00112233445566FF/hided",
             "/s/g/fedcba9876543210/i/00112233445566ff/hided",
-            "/home/a/.hide/remote-helper/00112233445566ff/hided",
+            "/home/example/.hide/remote-helper/00112233445566ff/hided",
             "/s/g/0123456789abcdef/i/hided",
         ] {
             assert_eq!(
