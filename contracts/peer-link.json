@@ -47,6 +47,7 @@
       "agent",
       "pane"
     ],
+    "max_clear_tags": 64,
     "messages": {
       "call": {
         "fields": [
@@ -91,8 +92,56 @@
           "recipient"
         ],
         "since": 1
+      },
+      "notice": {
+        "fields": [
+          "id",
+          "notice"
+        ],
+        "since": 1
+      },
+      "notice_answer": {
+        "fields": [
+          "id",
+          "taken"
+        ],
+        "since": 1
+      },
+      "notice_clear": {
+        "fields": [
+          "tags"
+        ],
+        "since": 1
+      },
+      "seat": {
+        "fields": [
+          "input_ms",
+          "phone_ms",
+          "shows"
+        ],
+        "since": 1
+      },
+      "work": {
+        "fields": [
+          "work"
+        ],
+        "since": 1
       }
     },
+    "notice_fields": [
+      "detail",
+      "device_id",
+      "pane_id",
+      "place",
+      "state",
+      "status_code",
+      "subject",
+      "title"
+    ],
+    "notice_states": [
+      "needs_you",
+      "done"
+    ],
     "party_fields": [
       "id",
       "item",

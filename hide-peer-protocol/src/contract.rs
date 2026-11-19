@@ -249,7 +249,12 @@ fn core_messages() -> Vec<CoreMessage> {
             | CoreMessage::LetterTaken { .. }
             | CoreMessage::LetterRefused { .. }
             | CoreMessage::Call { .. }
-            | CoreMessage::CallAnswer { .. } => {}
+            | CoreMessage::CallAnswer { .. }
+            | CoreMessage::Work { .. }
+            | CoreMessage::Seat { .. }
+            | CoreMessage::Notice { .. }
+            | CoreMessage::NoticeAnswer { .. }
+            | CoreMessage::NoticeClear { .. } => {}
         }
     }
     let _ = exhaustive;
@@ -284,7 +289,35 @@ fn core_messages() -> Vec<CoreMessage> {
             answer: Some(json!({})),
             refused: Some(text()),
         },
+        CoreMessage::Work { work: json!({}) },
+        CoreMessage::Seat {
+            input_ms: Some(0),
+            shows: false,
+            phone_ms: Some(0),
+        },
+        CoreMessage::Notice {
+            id: 0,
+            notice: sample_notice(),
+        },
+        CoreMessage::NoticeAnswer {
+            id: 0,
+            taken: false,
+        },
+        CoreMessage::NoticeClear { tags: vec![text()] },
     ]
+}
+
+fn sample_notice() -> crate::core::Notice {
+    crate::core::Notice {
+        device_id: String::new(),
+        pane_id: String::new(),
+        title: String::new(),
+        state: String::new(),
+        status_code: Some(String::new()),
+        detail: Some(String::new()),
+        subject: Some(json!({})),
+        place: String::new(),
+    }
 }
 
 fn sample_party() -> Party {
@@ -479,6 +512,9 @@ pub fn shape() -> Value {
         "core": {
             "messages": messages(&CoreMessage::TYPES, &core_messages()),
             "party_fields": fields(&sample_party()),
+            "notice_fields": fields(&sample_notice()),
+            "notice_states": ["needs_you", "done"],
+            "max_clear_tags": crate::core::MAX_CLEAR_TAGS,
             "items": names!(Item: Agent, Pane),
             "asks": names!(Ask: Delivery, Pane),
         },
