@@ -89,7 +89,7 @@ async fn an_event_resent_after_a_lost_acknowledgement_is_applied_once() {
     let mut host = Machine::new(&net, "windows-pc");
     let mut guest = Machine::new(&net, "macbook");
     pair(&host, &guest);
-    let inbox_dir = layout::peer_inbox(guest.dir.path(), &host.key().short());
+    let inbox_dir = layout::peer_inbox(guest.dir.path(), &host.key());
     let mut inbox = Inbox::open(&inbox_dir).unwrap();
     let mut letters = Letters::default();
 
