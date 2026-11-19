@@ -1034,7 +1034,10 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
         let payload = runtime.snapshot_delta_payload(have);
         let frame: serde_json::Value =
             serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
-        (payload.revision, frame["rest"]["navigator"]["peers"].clone())
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["peers"].clone(),
+        )
     };
     let (seen, peers) = sent(&mut runtime, 0);
     assert_eq!(peers[0]["device_id"], "windows-pc");
