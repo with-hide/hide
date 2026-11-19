@@ -97,14 +97,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
         return (
           <Fragment key={arrow.id}>
             <path id={path} d={arrow.d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={look?.dashed ? "4 3" : undefined} className={tone} markerEnd={`url(#${marker}-${tones.indexOf(look?.tone ?? "")})`} data-dependency-edge={arrow.id} data-edge-dashed={look?.dashed || undefined} data-edge-dimmed={look?.dimmed || undefined} />
-            {look?.label ? (
-              // The words ride the edge's middle, lifted off the line, in the edge's own colour.
-              <text dy={-4} className={cn(tone, "fill-current text-micro")} data-edge-label={arrow.id}>
-                <textPath href={`#${path}`} startOffset="50%" textAnchor="middle">
-                  {look.label}
-                </textPath>
-              </text>
-            ) : null}
+            {look?.label ? <EdgeLabel path={path} d={arrow.d} label={look.label} id={arrow.id} dimmed={look.dimmed} /> : null}
           </Fragment>
         );
       })}
@@ -131,6 +124,30 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
       ))}
       {svg}
     </div>
+  );
+}
+
+/** The gap between an edge and the words beside its middle, in px. */
+const LABEL_GAP = 4;
+
+/**
+ * An edge's words, level, just above and right of its middle, clear of a
+ * vertical edge and of a level one alike, in the muted text colour rather than the line's,
+ * which is too faint to read words in. The middle is measured from the drawn
+ * path; until it is (or where the browser cannot measure it), nothing shows.
+ */
+function EdgeLabel({ path, d, label, id, dimmed }: { path: string; d: string; label: string; id: string; dimmed?: boolean }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const drawn = document.getElementById(path) as SVGPathElement | null;
+    if (!drawn || typeof drawn.getTotalLength !== "function") return;
+    const middle = drawn.getPointAtLength(drawn.getTotalLength() / 2);
+    setAt({ x: middle.x, y: middle.y });
+  }, [path, d]);
+  return (
+    <text x={(at?.x ?? 0) + LABEL_GAP} y={(at?.y ?? 0) - LABEL_GAP} visibility={at ? undefined : "hidden"} className={cn("fill-current text-micro text-muted-foreground", dimmed && "opacity-(--opacity-dimmed)")} data-edge-label={id}>
+      {label}
+    </text>
   );
 }
 
