@@ -1158,6 +1158,7 @@ The core takes its part in owned copies under the lock, each bounded by what was
 A session file whose path names a credential file, a secrets folder or `.git` is refused before anything is read (`credential_path_refused`), as no investigation read reads one; a number past the session, or 0, is `out_of_range` with the valid range in its next action; a record past one of its caps says a retry gives the same answer; a device with no ready node is `device_unavailable`, an agent with no conversation reader `session_unreadable`, a gone file `session_file_missing` and a node that does not answer within 60 s `read_timeout`.
 Every refusal logs `session_cli` `session.refused` with the verb, the session id (by its length alone when the id itself was refused), the device and the code, and never a word of the conversation.
 Each `list` line names the session's agent by its product (`agent_name`), and the text form of `list` and `record` turns every line break and control character inside a value into a space, so a title cannot draw a line of its own.
+A session the operator starts is given the same scope's other root sessions at its start, each with its newest topics and its delegated sessions folded in (`links/session_brief.rs`, read through `session_command::scoped`, so the start and the commands agree on what belongs to the Project); what it carries and its bounds are [agent-hooks.md: What the hook returns and reports back](agent-hooks.md#what-the-hook-returns-and-reports-back).
 
 
 ### Session work records

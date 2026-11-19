@@ -312,58 +312,88 @@ pub(crate) fn memory(
     ask: &hide_core::memory_hook::Ask,
 ) -> Result<Value, Failure> {
     let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
-    let asks = ask
-        .prompt_session()
-        .map(|session| (cap.pane_id.clone(), session.to_owned()));
-    let (scope, give) = core.hook_scope(&cap.context, asks, deadline);
+    let mine = |session: &str| (cap.pane_id.clone(), session.to_owned());
+    let (scope, give, brief) = core.hook_scope(
+        &cap.context,
+        ask.prompt_session().map(mine),
+        ask.start_session().map(mine),
+        deadline,
+    );
     let scope = scope.map_err(|reason| {
         hide_core::diagnostic!(json!({"component":"memory","kind":"hook.unavailable","pane":cap.pane_id,"device":cap.context.device_id,"reason":reason}));
     });
-    // The session's open questions are read beside Memory, on a thread of
-    // their own that ends with its read, and left out when they miss the
-    // answer's deadline: the next prompt gives them, since a question counts
-    // as given only once its receipt comes back from the session's record.
-    let asks = give.and_then(|give| {
+    // The session's open questions are read beside Memory and left out when
+    // they miss the answer's deadline: the next prompt gives them, since a
+    // question counts as given only once its receipt comes back from the
+    // session's record.
+    let asks = beside(
+        &cap.pane_id,
+        "asks.give",
+        deadline,
+        give.map(|give| move || give.context()),
+    );
+    // The Project's other sessions, read the same way; a start that misses
+    // them starts without them.
+    let sessions = beside(
+        &cap.pane_id,
+        "brief.give",
+        deadline,
+        brief.map(|brief| move || hide_core::links::session_brief::for_session_start(&brief)),
+    );
+    memory_answer(core.state_dir(), scope, ask, deadline, asks, sessions)
+}
+
+/// `read` on a thread of its own that ends with it, while Memory is read on
+/// this one; the closure it returns waits for its answer until `deadline`,
+/// and gives none past it, with the late read logged under `name`.
+fn beside(
+    pane: &str,
+    name: &'static str,
+    deadline: Instant,
+    read: Option<impl FnOnce() -> Option<String> + Send + 'static>,
+) -> impl FnOnce() -> Option<String> {
+    let receive = read.and_then(|read| {
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         std::thread::Builder::new()
-            .name("hook-asks".to_owned())
+            .name(format!("hook-{name}"))
             .spawn(move || {
-                let _ = send.send(give.context());
+                let _ = send.send(read());
             })
             .map(|_| receive)
             .map_err(|error| {
-                hide_core::diagnostic!(json!({"component":"session","kind":"asks.give_unstarted","pane":cap.pane_id,"error":error.to_string()}));
+                hide_core::diagnostic!(json!({"component":"session","kind":format!("{name}_unstarted"),"pane":pane,"error":error.to_string()}));
             })
             .ok()
     });
-    let pane = cap.pane_id.clone();
-    let asks = move || {
-        asks.and_then(|receive| {
+    let pane = pane.to_owned();
+    move || {
+        receive.and_then(|receive| {
             match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(asks) => asks,
+                Ok(answer) => answer,
                 Err(_) => {
                     hide_core::diagnostic!(
-                        json!({"component":"session","kind":"asks.give_late","pane":pane})
+                        json!({"component":"session","kind":format!("{name}_late"),"pane":pane})
                     );
                     None
                 }
             }
         })
-    };
-    memory_answer(core.state_dir(), scope, ask, deadline, asks)
+    }
 }
 
 /// A hook's answer: Memory's context when its scope was found, on a session
 /// start the Hide global instruction whatever Memory answers (off,
-/// unresolved or unreachable; PRD memory-self-improve D-31), and at a prompt
-/// the session's open questions `asks` reads, whatever Memory answers too.
-/// The global read is one small bounded file, outside Memory's deadline.
+/// unresolved or unreachable; PRD memory-self-improve D-31) and the
+/// Project's other sessions `sessions` reads, and at a prompt the session's
+/// open questions `asks` reads, both whatever Memory answers too. The global
+/// read is one small bounded file, outside Memory's deadline.
 fn memory_answer(
     state_dir: &std::path::Path,
     scope: Result<hide_core::memory_hook::Scope, ()>,
     ask: &hide_core::memory_hook::Ask,
     deadline: Instant,
     asks: impl FnOnce() -> Option<String>,
+    sessions: impl FnOnce() -> Option<String>,
 ) -> Result<Value, Failure> {
     let global = ask
         .starts_session()
@@ -372,19 +402,22 @@ fn memory_answer(
     let memory = scope
         .ok()
         .map(|scope| hide_core::memory_hook::answer(&scope, ask, deadline));
-    let answer = match (memory, global, asks()) {
-        (Some(memory), global, asks) => hide_core::memory_hook::HookContext {
+    let answer = match (memory, global, asks(), sessions()) {
+        (Some(memory), global, asks, sessions) => hide_core::memory_hook::HookContext {
             global,
             asks,
+            sessions,
             ..memory
         },
-        (None, None, None) => {
+        (None, None, None, None) => {
             return Err((
                 "memory_unavailable".to_owned(),
                 "Continue without Project Memory",
             ));
         }
-        (None, global, asks) => hide_core::memory_hook::without_memory(global, asks),
+        (None, global, asks, sessions) => {
+            hide_core::memory_hook::without_memory(global, asks, sessions)
+        }
     };
     serde_json::to_value(answer).map_err(|_| {
         (
@@ -441,6 +474,7 @@ mod tests {
                 Err(()),
                 &ask("SessionStart"),
                 deadline,
+                || None,
                 || None
             )
             .unwrap_err()
@@ -457,6 +491,7 @@ mod tests {
             Err(()),
             &ask("SessionStart"),
             deadline,
+            || None,
             || None,
         )
         .unwrap();
@@ -480,6 +515,7 @@ mod tests {
                 Err(()),
                 &ask("UserPromptSubmit"),
                 deadline,
+                || None,
                 || None
             )
             .unwrap_err()
@@ -500,9 +536,30 @@ mod tests {
             &ask("UserPromptSubmit"),
             deadline,
             || Some("<hide-open-questions>".to_owned()),
+            || None,
         )
         .unwrap();
         assert_eq!(answer["context"], Value::Null);
         assert_eq!(answer["asks"], "<hide-open-questions>");
+    }
+
+    /// A session start's other sessions reach the agent whether or not
+    /// Memory answers, in their own slot beside the global instruction.
+    #[test]
+    fn a_session_start_gets_the_projects_other_sessions_without_memory() {
+        let state = tempfile::tempdir().unwrap();
+        let deadline = Instant::now() + hide_core::memory_hook::WITHIN;
+        let answer = memory_answer(
+            state.path(),
+            Err(()),
+            &ask("SessionStart"),
+            deadline,
+            || None,
+            || Some("<hide-project-sessions>".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(answer["context"], Value::Null);
+        assert_eq!(answer["global"], Value::Null);
+        assert_eq!(answer["sessions"], "<hide-project-sessions>");
     }
 }
