@@ -62,6 +62,10 @@ impl Runtime {
                 .entry(id.clone())
                 .or_insert_with(|| spent.reason.clone());
         }
+        // And those another machine's core refused (`core_calls`).
+        for (id, reason) in self.core_letters_refused() {
+            failed.entry(id.clone()).or_insert_with(|| reason.clone());
+        }
         failed
     }
 

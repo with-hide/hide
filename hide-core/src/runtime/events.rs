@@ -2663,6 +2663,7 @@ impl Runtime {
                     self.drop_unreachable_peer_work();
                     self.reconcile_peer_devices(&before);
                 }
+                self.core_machines_told();
                 changed
             }
             Event::AiSettings(payload) => self.apply_ai_settings(payload),

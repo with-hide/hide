@@ -2,7 +2,8 @@
 //!
 //! It is small and grows by capability: a fixed first exchange ([`hello`]),
 //! the stream kinds one connection carries ([`stream`]), the management
-//! messages ([`manage`]), pairing ([`pairing`]), and what a host says to the
+//! messages ([`manage`]), what the two cores say to each other ([`core`]),
+//! pairing ([`pairing`]), and what a host says to the
 //! guest node process it runs ([`launch`], [`tap`], [`panes`], [`event`]).
 //! A reader ignores a field it does not know; a sender acts only on a
 //! capability the peer announced.
@@ -15,6 +16,7 @@ pub mod addr;
 pub mod build;
 pub mod close;
 pub mod contract;
+pub mod core;
 pub mod event;
 pub mod frame;
 pub mod hello;

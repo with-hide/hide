@@ -1439,9 +1439,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "force_target_asleep" => {
             "The recipient is asleep; send it again without --force, and a request or block wakes it"
         }
-        "machine_not_permitted" => {
-            "Run the command from an agent on the machine that runs Hide, or leave out --machine"
-        }
+        "machine_not_permitted" => hide_core::access::MACHINE_NOT_PERMITTED_NEXT,
         // A letter neither sent by the caller nor to it (nor one its mission
         // node lets it read), or one gone from the ledger: the same refusal
         // as for an id that never was, so it says no more than that.

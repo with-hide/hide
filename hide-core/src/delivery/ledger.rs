@@ -160,7 +160,31 @@ pub struct Letter {
     /// kept no such count; an older build drops the field at its next save.
     #[serde(default)]
     pub bell_ended: Option<u8>,
+    /// The id the sending core's ledger gives this letter, on a letter an
+    /// agent of another core sent (PRD device-connect-iroh D-72): on the
+    /// link a letter is named by its sender's machine and that id, so a
+    /// reply to this one names it. Absent on every other letter; an older
+    /// build drops the field at its next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_id: Option<String>,
 }
+
+/// A start an agent of this core asked of another machine's core with no
+/// parent (PRD device-connect-iroh D-59, D-71): the work is that machine's,
+/// and this core keeps only who asked and where. A machine this one opens
+/// writes nothing here first, so the result report of what was started
+/// there is taken from it by this record alone (`access::core_admit`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreStart {
+    pub origin: Actor,
+    /// The other machine's device id.
+    pub machine: String,
+    pub at_unix_ms: u64,
+}
+
+/// The most starts on other cores the ledger remembers; at the cap the
+/// oldest goes, and its machine's report then reaches no one.
+pub const CORE_STARTS: usize = 256;
 
 /// A bell that failed: the doorbell's code for it, and whether the engine
 /// had been asked to type the line, so it may be in the agent's input
@@ -356,7 +380,7 @@ impl Letter {
     /// recipient's machine was reachable since then, while `clocks` keeps one
     /// for it, and wall time otherwise (this core's own machine).
     pub(crate) fn intake_waited(&self, clocks: &BTreeMap<String, NodeClock>, now: u64) -> u64 {
-        match clocks.get(&self.recipient.device_id) {
+        match clocks.get(self.recipient.reach()) {
             Some(clock) => clock
                 .reading(now)
                 .saturating_sub(self.intake_from.unwrap_or_default()),
@@ -487,6 +511,11 @@ pub struct Ledger {
     /// bound it. Left out of the file while there are none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub human_turns: BTreeMap<String, crate::coordination::human_turn::HumanTurn>,
+    /// The starts this core's agents asked of other cores ([`CoreStart`]),
+    /// oldest first and [`CORE_STARTS`] at most. Left out of the file while
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_starts: Vec<CoreStart>,
 }
 
 impl Default for Ledger {
@@ -502,6 +531,7 @@ impl Default for Ledger {
             spawn_placement_revision: 0,
             node_clocks: BTreeMap::new(),
             human_turns: BTreeMap::new(),
+            core_starts: Vec::new(),
         }
     }
 }
@@ -569,7 +599,7 @@ impl Ledger {
                 // A letter waiting on a machine's clock knows where on it.
                 || (letter.awaiting_intake()
                     && letter.intake_from.is_none()
-                    && self.node_clocks.contains_key(&letter.recipient.device_id))
+                    && self.node_clocks.contains_key(letter.recipient.reach()))
             {
                 return Err("ledger_unavailable".into());
             }
@@ -681,7 +711,7 @@ impl Ledger {
             let waited = letter.intake_waited(&self.node_clocks, now);
             let slept = now.saturating_sub(sleeper.since.max(letter.created_at_unix_ms));
             let kept = waited.saturating_sub(slept);
-            let from = match self.node_clocks.get(&letter.recipient.device_id) {
+            let from = match self.node_clocks.get(letter.recipient.reach()) {
                 Some(clock) => clock.reading(now).saturating_sub(kept),
                 None => now.saturating_sub(kept),
             };
@@ -710,7 +740,7 @@ impl Ledger {
             {
                 continue;
             }
-            letter.intake_from = Some(match self.node_clocks.get(&letter.recipient.device_id) {
+            letter.intake_from = Some(match self.node_clocks.get(letter.recipient.reach()) {
                 Some(clock) => clock.reading(now),
                 None => now,
             });
@@ -742,6 +772,94 @@ impl Ledger {
         changed
     }
 
+    /// The core of `machine` took letter `id`, which this core's agent
+    /// wrote to an agent of that core (PRD device-connect-iroh D-72): the
+    /// letter is delivered, and its recipient takes `name`, what that agent
+    /// is called there, in place of what its sender called it. Who the
+    /// recipient is does not change, so the same send asked again is the
+    /// same letter. Only a letter still waiting to be handed over to
+    /// `machine` moves, so an answer that comes twice, or from another
+    /// machine, changes nothing. A refusal ends the letter another way
+    /// ([`Ledger::fail_undeliverable`]). Returns whether it moved.
+    pub fn settle_core(&mut self, id: &str, machine: &str, name: &str, now: u64) -> bool {
+        let Some(letter) = self.letters.iter_mut().find(|letter| {
+            letter.id == id
+                && letter.state == State::Pending
+                && letter
+                    .recipient
+                    .core_address()
+                    .is_some_and(|address| address.device == machine)
+        }) else {
+            return false;
+        };
+        if super::valid_key(name) {
+            letter.recipient.name = name.to_owned();
+        }
+        letter.hook_confirmed = Some(true);
+        letter.state = State::Delivered;
+        if !letter.open() {
+            letter.finished_at_unix_ms = Some(now);
+        }
+        true
+    }
+
+    /// Stamps letter `id`, which an agent of another core sent, with the
+    /// id its sender's core gives it (`Letter::core_id`). Returns whether
+    /// the ledger changed.
+    pub fn name_core_letter(&mut self, id: &str, core_id: &str) -> bool {
+        match self.letters.iter_mut().find(|letter| letter.id == id) {
+            Some(letter) if letter.core_id.as_deref() != Some(core_id) => {
+                letter.core_id = Some(core_id.to_owned());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forgets the starts asked of machines not among `machines`, which
+    /// this core is paired with no longer. Returns whether any went.
+    pub fn forget_core_starts(&mut self, machines: &[String]) -> bool {
+        let before = self.core_starts.len();
+        self.core_starts
+            .retain(|start| machines.contains(&start.machine));
+        self.core_starts.len() != before
+    }
+
+    /// Remembers that `origin` asked `machine`'s core for a start
+    /// ([`CoreStart`]). One record per asker and machine, the newest ask's
+    /// time; past [`CORE_STARTS`] the oldest goes. Returns whether the
+    /// ledger changed.
+    pub fn note_core_start(&mut self, origin: &Actor, machine: &str, now: u64) -> bool {
+        if self
+            .core_starts
+            .iter()
+            .any(|start| start.machine == machine && start.origin.same_identity(origin))
+        {
+            return false;
+        }
+        if self.core_starts.len() >= CORE_STARTS {
+            let dropped = self.core_starts.remove(0);
+            crate::diagnostic!(serde_json::json!({
+                "component": "delivery", "kind": "core_start.dropped",
+                "machine": dropped.machine, "pane_id": dropped.origin.pane_id,
+            }));
+        }
+        self.core_starts.push(CoreStart {
+            origin: origin.clone(),
+            machine: machine.to_owned(),
+            at_unix_ms: now,
+        });
+        true
+    }
+
+    /// Whether `origin` asked `machine`'s core for a start this ledger
+    /// still remembers.
+    pub fn core_started(&self, origin: &Actor, machine: &str) -> bool {
+        self.core_starts
+            .iter()
+            .any(|start| start.machine == machine && start.origin.same_identity(origin))
+    }
+
     /// Brings the machines' clocks to what `reach` says at `now` (PRD
     /// core-host-node-move B13): a machine with a letter awaiting intake and
     /// no clock gets one, a stretch starts when the machine becomes
@@ -757,7 +875,7 @@ impl Ledger {
             .letters
             .iter()
             .filter(|letter| letter.awaiting_intake())
-            .map(|letter| letter.recipient.device_id.clone())
+            .map(|letter| letter.recipient.reach().to_owned())
             .collect();
         let ended: Vec<String> = self
             .node_clocks
@@ -803,7 +921,7 @@ impl Ledger {
         let waited_on = |device: &str| {
             self.letters
                 .iter()
-                .any(|letter| letter.awaiting_intake() && letter.recipient.device_id == device)
+                .any(|letter| letter.awaiting_intake() && letter.recipient.reach() == device)
         };
         self.node_clocks
             .iter()
@@ -831,7 +949,7 @@ impl Ledger {
             .letters
             .iter()
             .enumerate()
-            .filter(|(_, letter)| letter.awaiting_intake() && letter.recipient.device_id == device)
+            .filter(|(_, letter)| letter.awaiting_intake() && letter.recipient.reach() == device)
             .map(|(index, letter)| (index, letter.intake_waited(&self.node_clocks, now)))
             .collect();
         let start = waits
@@ -858,7 +976,7 @@ impl Ledger {
             .letters
             .iter()
             .enumerate()
-            .filter(|(_, letter)| letter.recipient.device_id == device)
+            .filter(|(_, letter)| letter.recipient.reach() == device)
             .map(|(index, letter)| (index, letter.intake_waited(&self.node_clocks, now)))
             .collect();
         self.node_clocks.remove(device);
@@ -1182,6 +1300,53 @@ mod tests {
         assert_eq!(ledger.letters[0].state, State::Undelivered);
         ledger.observe_reach(&reach("mini", true), 180 * MINUTE);
         assert!(ledger.node_clocks.is_empty());
+    }
+
+    /// PRD device-connect-iroh D-72: a letter to an agent of another core
+    /// waits on the connection between the two cores, not on this core's
+    /// own node on that machine. Its deadline stands still while the
+    /// connection is down, whatever that node does; the other core taking
+    /// it delivers it under the name the agent has there, and an answer
+    /// from another machine, or a second one, moves nothing.
+    #[test]
+    fn a_letter_to_another_cores_agent_waits_on_the_connection_between_the_cores() {
+        let mut ledger = letter_to("local", 0);
+        let address =
+            crate::address::CoreAddress::new("mini", crate::address::CoreItem::Agent, "agent-7");
+        ledger.letters[0].recipient = Actor::core(address, "Mac mini", "agent-7", "local");
+        assert_eq!(ledger.letters[0].recipient.reach(), "core:mini");
+        assert_eq!(ledger.letters[0].recipient.machine(), "mini");
+        let both = |core: bool| -> Reach {
+            [("mini".to_owned(), true), ("core:mini".to_owned(), core)].into()
+        };
+        ledger.observe_reach(&both(false), 0);
+        ledger.expire(130 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Pending);
+        ledger.observe_reach(&both(true), 130 * MINUTE);
+        ledger.expire(189 * MINUTE);
+        assert_eq!(ledger.letters[0].state, State::Pending);
+
+        assert!(!ledger.settle_core(
+            "letter-1",
+            "studio",
+            "hide:core:Studio:worker",
+            189 * MINUTE
+        ));
+        assert!(ledger.settle_core(
+            "letter-1",
+            "mini",
+            "hide:core:Mac mini:worker",
+            189 * MINUTE
+        ));
+        let letter = &ledger.letters[0];
+        assert_eq!(letter.state, State::Delivered);
+        assert_eq!(letter.recipient.name, "hide:core:Mac mini:worker");
+        assert_eq!(letter.recipient.reach(), "core:mini", "the same agent");
+        assert!(letter.waiting_answer && letter.finished_at_unix_ms.is_none());
+        assert!(!ledger.settle_core("letter-1", "mini", "hide:core:Mac mini:other", 190 * MINUTE));
+        ledger.observe_reach(&both(true), 190 * MINUTE);
+        assert!(ledger.node_clocks.is_empty());
+        ledger.validate().unwrap();
     }
 
     /// PRD mission-worker-sleep D-13: the deadline does not run while the

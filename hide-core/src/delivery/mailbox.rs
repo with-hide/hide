@@ -303,11 +303,12 @@ pub(crate) fn send(
         input_noticed_at_unix_ms: 0,
         bell_failure: None,
         bell_ended: Some(0),
+        core_id: None,
         // A letter to a machine with a clock waits on that clock from now;
         // the store gives one to a machine a letter waits on.
         intake_from: ledger
             .node_clocks
-            .get(&recipient.device_id)
+            .get(recipient.reach())
             .map(|clock| clock.reading(now)),
     };
     ledger.letters.push(letter.clone());

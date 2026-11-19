@@ -18,15 +18,15 @@ use serde_json::{Value, json};
 const PANES: [&str; 2] = ["worker", "other"];
 const KEY: &str = "5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5d1c0ffee5";
 
-struct Fixture {
-    runtime: Arc<Mutex<Runtime>>,
-    ids: std::collections::HashMap<&'static str, String>,
+pub(super) struct Fixture {
+    pub(super) runtime: Arc<Mutex<Runtime>>,
+    pub(super) ids: std::collections::HashMap<&'static str, String>,
     _worker: Worker,
     _root: tempfile::TempDir,
 }
 
 impl Fixture {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
         let native = |pane: &str| {
@@ -107,7 +107,7 @@ impl Fixture {
     }
 
     /// A command of the agent in `pane`.
-    fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
+    pub(super) fn agent(&self, pane: &str, command: Command) -> Result<Value, String> {
         let context = authority(&Actor {
             pane_id: pane.into(),
             name: pane.into(),
@@ -738,7 +738,10 @@ fn the_agent_list_names_no_tools_own_identity() {
         names
     };
     let list = || Command::Agents {
-        command: crate::coordination::Command::List { live: false },
+        command: crate::coordination::Command::List {
+            live: false,
+            machine: None,
+        },
     };
     assert_eq!(
         names(fixture.agent("worker", list()).unwrap()),

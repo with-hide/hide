@@ -961,6 +961,9 @@ impl Runtime {
                 let reachable = self.device_engine(id).is_some() && !self.device_host_ended(id);
                 (registration.id.clone(), reachable)
             })
+            // A letter to an agent of another core waits on the connection
+            // between the two cores (`Actor::reach`).
+            .chain(self.core_reach())
             .collect()
     }
 
@@ -1595,7 +1598,7 @@ impl Runtime {
 
     /// What a delivery command of `actor` does, once who that is has been
     /// settled.
-    fn prepare_as(
+    pub(super) fn prepare_as(
         &mut self,
         device: &str,
         caller: &str,
@@ -1616,6 +1619,24 @@ impl Runtime {
             && let Some(name) = machine.as_mut()
         {
             *name = self.machine_named(name)?;
+        }
+        // A read or a start another machine's core runs is asked of it,
+        // and nothing of it is prepared here (D-59, D-72).
+        if let Some((forward, start)) = self.core_delivery_forward(&actor, &command)? {
+            actor.require_native_identity()?;
+            return Ok(Prepared::new(
+                self.delivery_client.clone().ok_or("delivery_unavailable")?,
+                Authority {
+                    caller: caller.to_owned(),
+                    context,
+                    also_reads: Vec::new(),
+                    proven,
+                },
+                actor,
+                None,
+                command,
+            )
+            .forwarded(forward, start));
         }
         let actor_pane = actor.pane_id.as_str();
         // A prompt hook's digest is the agent's own record of the prompt it
@@ -1832,6 +1853,10 @@ impl Runtime {
                     |stored| {
                         qualify(target) == stored.pane_id
                             || *target == stored.name
+                            // Another core's agent, by its address.
+                            || stored.core_address().is_some_and(|address| {
+                                address.to_string() == *target
+                            })
                             || crate::coordination::resolve_registered(ledger, target)
                                 .is_some_and(|registered| registered.same_identity(stored))
                     },
@@ -1842,8 +1867,16 @@ impl Runtime {
             },
             _ => false,
         };
+        // An agent of another core is no pane of this one: it is found by
+        // its address, and judged by how its machine stands.
+        let core_target = if repeated {
+            None
+        } else {
+            self.core_send_target(&actor, &command)?
+        };
         let target = match &command {
             Command::Send { .. } if repeated => None,
+            Command::Send { .. } if core_target.is_some() => core_target,
             // A tool event's ask is judged by the caller's own pane: whether
             // it works, and since when.
             Command::Pull {
@@ -2270,6 +2303,7 @@ impl Runtime {
         // A child's report to its parent asks it to sleep at its next rest.
         let previous = self.delivery_ledger.as_ref().ok().map(Arc::clone);
         self.note_reports(previous.as_deref(), &ledger);
+        self.note_core_outbox(&ledger);
         self.delivery_ledger = Ok(ledger);
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
@@ -2305,6 +2339,10 @@ impl Runtime {
                 .is_some_and(|(level, current)| {
                     level == crate::access::Level::Act && current.same_identity(actor)
                 });
+        }
+        // Another core's agent acts while its machine stands (D-72).
+        if actor.core_address().is_some() {
+            return caller == actor.pane_id && self.core_actor_current(actor);
         }
         caller == actor.pane_id
             && (*actor == Actor::hide(crate::delivery::HIDE_MEMORY_ROLE, self.node.as_str())
@@ -5145,7 +5183,10 @@ pub(crate) mod tests {
                 actor: None,
             },
             Command::Agents {
-                command: crate::coordination::Command::List { live: false },
+                command: crate::coordination::Command::List {
+                    live: false,
+                    machine: None,
+                },
             },
         ];
         let mut guard = runtime.lock().unwrap();

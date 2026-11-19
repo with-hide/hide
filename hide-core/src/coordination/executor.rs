@@ -764,7 +764,10 @@ pub(crate) fn run(
     command: Command,
 ) -> Result<Value, String> {
     match command {
-        Command::List { live } => {
+        // Another machine's list is asked of its core before this runs
+        // (`Runtime::core_delivery_forward`); a machine named here is this
+        // core's own.
+        Command::List { live, .. } => {
             let (ledger, sleeping) = registrations(&client)?;
             Ok(json!(crate::delivery::answer::AgentList {
                 // A code-owned identity (Hide's own, such as Desk's, an
