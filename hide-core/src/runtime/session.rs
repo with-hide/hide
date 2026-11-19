@@ -1391,12 +1391,15 @@ impl Runtime {
             // The catalog's first checkout, passing over one whose folder
             // the node found gone: a restored pane's row stays while its
             // folder is missing, and with no activity its place in the order
-            // is its id's, so the window would open on it by chance.
+            // is its id's, so the window would open on it by chance. A
+            // project no list shows (an automation's folder) is never opened
+            // on: its run's terminal would become the selected pane.
             let starts = || {
                 self.snapshot
                     .navigator
                     .workspaces
                     .iter()
+                    .filter(|workspace| !workspace.unlisted)
                     .flat_map(|workspace| workspace.checkouts.iter())
                     .filter(|checkout| checkout.exists)
             };
