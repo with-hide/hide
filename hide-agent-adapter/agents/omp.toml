@@ -27,6 +27,8 @@ sessions = { default = "~/.omp/agent/sessions", profile = "~/.omp/profiles/{acco
 login = { default = "~/.omp/agent/agent.db", profile = "~/.omp/profiles/{account}/agent/agent.db" }
 state = { default = "~/.omp/agent", profile = "~/.omp/profiles/{account}/agent" }
 usage = false
+mcp = { default = "~/.omp/agent/mcp.json", profile = "~/.omp/profiles/{account}/agent/mcp.json" }
+mcp_format = "claude"
 
 [account.forbid]
 vars = ["PI_CODING_AGENT_DIR", "PI_PROFILE", "PI_CONFIG_DIR"]

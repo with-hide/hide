@@ -583,7 +583,7 @@ fn an_account_rule_names_every_place_and_only_its_own_variables() {
         "schema = 1\nid = \"acct\"\nname = \"A\"\nexecutables = [\"acct\"]\nhooks = \"none\"\n";
     let all = |state: &str, skills: &str| {
         format!(
-            "[account]\nby = \"folder\"\n[account.vars]\nACCT_HOME = {{ default = \"~/.acct\", profile = \"{{account}}\" }}\n[account.paths]\nhooks = false\nhook_trust = false\nplugins = false\nskills = {skills}\nfolder_trust = false\nsessions = \"{{ACCT_HOME}}/sessions\"\nlogin = false\nstate = {state}\nusage = false\n"
+            "[account]\nby = \"folder\"\n[account.vars]\nACCT_HOME = {{ default = \"~/.acct\", profile = \"{{account}}\" }}\n[account.paths]\nhooks = false\nhook_trust = false\nplugins = false\nskills = {skills}\nfolder_trust = false\nsessions = \"{{ACCT_HOME}}/sessions\"\nlogin = false\nstate = {state}\nusage = false\nmcp = false\n"
         )
     };
     let good = all("\"{ACCT_HOME}\"", "\"shared\"");
@@ -591,6 +591,22 @@ fn an_account_rule_names_every_place_and_only_its_own_variables() {
     assert!(catalog.rejected.is_empty(), "{:?}", catalog.rejected);
     let cases: Vec<(String, &str)> = vec![
         (good.replace("usage = false\n", ""), "not a definition file"),
+        (good.replace("mcp = false\n", ""), "not a definition file"),
+        (
+            good.replace("mcp = false\n", "mcp = \"~/.acct/mcp.json\"\n"),
+            "mcp_format names the shape of .paths.mcp",
+        ),
+        (
+            format!("{good}mcp_format = \"claude\"\n"),
+            "mcp_format is for an agent whose .paths.mcp is a file",
+        ),
+        (
+            good.replace(
+                "mcp = false\n",
+                "mcp = \"~/.acct/mcp.json\"\nmcp_format = \"vscode\"\n",
+            ),
+            "not a definition file",
+        ),
         (format!("{good}unknown = false\n"), "not a definition file"),
         (
             all("\"shared\"", "false"),

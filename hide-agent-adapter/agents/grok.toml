@@ -37,6 +37,8 @@ sessions = "{GROK_HOME}/sessions"
 login = "{GROK_HOME}/auth.json"
 state = "{GROK_HOME}"
 usage = false
+mcp = "{GROK_HOME}/config.toml"
+mcp_format = "grok"
 
 [screen]
 version = "2026.10.05.1"

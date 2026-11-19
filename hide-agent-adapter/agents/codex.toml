@@ -38,6 +38,8 @@ sessions = "{CODEX_HOME}/sessions"
 login = "{CODEX_HOME}/auth.json"
 state = "{CODEX_HOME}"
 usage = "{CODEX_HOME}/archived_sessions"
+mcp = "{CODEX_HOME}/config.toml"
+mcp_format = "codex"
 
 [account.forbid]
 vars = ["CODEX_SQLITE_HOME"]

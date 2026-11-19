@@ -562,9 +562,11 @@ fn written_by(place: AccountPath) -> Option<PieceKind> {
         // account the start's profile runs in, and a going target takes
         // Hide's entries out (docs/agent-hooks.md, Profile accounts).
         AccountPath::FolderTrust => Some(PieceKind::FolderTrust),
-        AccountPath::Sessions | AccountPath::Login | AccountPath::State | AccountPath::Usage => {
-            None
-        }
+        AccountPath::Sessions
+        | AccountPath::Login
+        | AccountPath::State
+        | AccountPath::Usage
+        | AccountPath::Mcp => None,
     }
 }
 
