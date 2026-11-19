@@ -1028,6 +1028,8 @@ export type Workspace = {
   registered: boolean;
   temporary: boolean;
   pinned: boolean;
+  /** An automation's own folder, registered only so its runs start there: no list draws it (PRD automations D-08, B30). Absent while false. */
+  unlisted?: boolean;
   last_activity_unix_ms?: number | null;
   /** What `Remove project…` would close, counted by the core (D-10). */
   removal?: { pane_count: number; running_agent_count: number };
@@ -3243,6 +3245,95 @@ export type AccessConnection = {
   /** How many live agents the tool started, and how many open missions those agents conduct. */
   agent_count: number;
   mission_count: number;
+};
+
+/** A day of the week as a schedule names it (`contracts/snapshot-wire-enums.json` `automation_weekday`). */
+export type AutomationWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/**
+ * When an automation runs (PRD automations D-06, B6): one of the form's
+ * choices or a five-field cron line, `HH:MM` in the zone of the machine that
+ * runs it. The core reads a cron line that equals a choice as that choice
+ * (`reads_as`); the screen only words it.
+ */
+export type AutomationSchedule =
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
+  | { kind: "weekly"; days: AutomationWeekday[]; time: string }
+  | { kind: "every_hours"; hours: number; time: string }
+  | { kind: "cron"; expr: string };
+
+/** The agent, profile, model and effort every run starts with (D-07), as the agent start names them. */
+export type AutomationAgent = { kind: string; profile?: string; model?: string; effort?: string };
+
+/** Why an automation does not run on schedule (`automation_pause_reason`): only `operator` is quiet; the rest are its own Needs You line (D-12). */
+export type AutomationPauseReason = "operator" | "login_expired" | "folder_missing" | "agent_missing" | "folder_detached" | "machine_changed" | "folder_in_repository";
+
+export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped" | "skipped";
+
+export type AutomationRun = {
+  number: number;
+  trigger: "scheduled" | "manual" | "missed";
+  due_unix_ms?: number;
+  started_at_unix_ms: number;
+  ended_at_unix_ms?: number;
+  state: AutomationRunState;
+  /** The attempt going now or last (D-17), from 1. */
+  attempt: number;
+  /** Why the last attempt failed or the run ended, a code the screen words. */
+  reason?: string;
+  /** The terminal the screen shows for the run: its agent's pane while it runs or its terminal is open, else its conversation's opened again (B16, B17). */
+  pane_id?: string;
+  /** Its conversation is open again: `이어서 대화 중` (B17). */
+  opened: boolean;
+  /** Its conversation can be opened again. */
+  resumable: boolean;
+  conversation_missing: boolean;
+  branch?: string;
+  seen: boolean;
+};
+
+/** One record of an automation, newest first: a run, a skipped time, or the times missed while nothing could run them (D-15). */
+export type AutomationRecord =
+  | ({ kind: "run" } & AutomationRun)
+  | { kind: "skipped"; at_unix_ms: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
+  | { kind: "missed"; first_unix_ms: number; last_unix_ms: number; count: number; reason: "core_off" | "asleep" };
+
+export type Automation = {
+  id: string;
+  name: string;
+  task: string;
+  /** As chosen, which the form opens on. */
+  schedule: AutomationSchedule;
+  /** The choice it reads as. */
+  reads_as: AutomationSchedule;
+  /** None while it is paused. */
+  next_run_at_unix_ms: number | null;
+  agent: AutomationAgent;
+  /** Its own folder (`default`) or a project's; `worktree` makes one per run. */
+  folder: { path: string; default: boolean; worktree: boolean };
+  paused?: { reason: AutomationPauseReason; at_unix_ms: number };
+  /** A run goes now: [지금 실행] is refused (B19). */
+  running: boolean;
+  unseen: number;
+  records: AutomationRecord[];
+};
+
+/**
+ * The `automations` section (PRD automations D-02): the automations of this
+ * window's core, which runs them on its own machine (D-21). Its own section,
+ * absent until the core restored its book.
+ */
+export type AutomationsSection = {
+  items: Automation[];
+  /** Finished runs not looked at, over every automation: the sidebar row's number (B1). */
+  unseen: number;
+  /** The agent last chosen, the form's default (D-07). */
+  last_choice?: AutomationAgent;
+  /** The zone the schedules are read in, by its IANA name. */
+  zone?: string;
+  /** `~/hide/automations` on this machine, which the form names under its default folder (B5). */
+  own_folder_root?: string;
 };
 
 /** The `desk` section: absent until hided starts Desk. */
