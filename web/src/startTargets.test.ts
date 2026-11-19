@@ -2,6 +2,7 @@ import { emptyScope } from "../test/legacyAgentScope";
 import { describe, expect, it } from "vitest";
 import type { Checkout, Device, SnapshotRest, Workspace } from "./snapshot";
 import { initializeInterfaceI18n } from "./i18n/instance";
+import { contextWorkspaces } from "./remote";
 import { checkoutKey, projectKey, projectOf, resolveTarget, startTargets as targetsWith, worktreeKey } from "./startTargets";
 import type { Screen } from "./ui";
 
@@ -211,5 +212,17 @@ describe("the where row: which project, then which branch", () => {
     expect(sasu!.worktree).toBeNull();
     expect(projectOf(targets, resolveTarget(targets, worktreeKey("local", "/hide")))?.key).toBe(hide!.key);
     expect(projectOf(targets, resolveTarget(targets, checkoutKey("local", "/hide.worktrees/rail")))?.key).toBe(hide!.key);
+  });
+});
+
+describe("an automation's own folder (PRD automations B30)", () => {
+  it("is offered nowhere a project is picked, and the sidebar's list of it stays one array", () => {
+    const snapshot = rest();
+    const own = checkout("c-auto", "w-auto", "/srv/hide/automations/a-1", { is_primary: true });
+    snapshot.navigator!.workspaces!.push(workspace("w-auto", "a-1", "local", [own], { unlisted: true }));
+    expect(keys(snapshot, { kind: "main" }).flat()).not.toContain(checkoutKey("local", "/srv/hide/automations/a-1"));
+    const listed = contextWorkspaces(snapshot);
+    expect(listed.map((row) => row.id)).toEqual(["w-hide", "w-sasu"]);
+    expect(contextWorkspaces(snapshot)).toBe(listed);
   });
 });

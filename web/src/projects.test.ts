@@ -392,15 +392,15 @@ describe("a mission in Needs You (PRD mission-node-simple D-19, B14)", () => {
   const ask = { mission: { id: "m1", title: "Ship it" }, node: { key: "a", title: "API" }, attention: { reason: "pr_closed", pr: 7, to: "operator", since_unix_ms: 1, on_row: false, choices: ["leave", "drop"] }, more: 0 } as unknown as MissionAsk;
 
   it("opens Needs You for a mission no row carries, above the projects, with no agent raised", () => {
-    const rows = listRows([], {}, [], null, [], [ask]);
-    expect(rows[0]).toEqual({ kind: "raised", group: "needs_you", agents: [], more: [], expanded: false, missions: [ask] });
+    const rows = listRows([], {}, [], null, [], [{ kind: "mission", ask }]);
+    expect(rows[0]).toEqual({ kind: "raised", group: "needs_you", agents: [], more: [], expanded: false, asks: [{ kind: "mission", ask }] });
   });
 
   it("lists another device's Needs You rows after the front device's own, each device's fold behind 더 보기, and opens Needs You for them alone", () => {
     const far = (id: string) => ({ agent: { pane_id: id } as AgentRow, device: "Mac mini", chip: "Mac mini" });
     const elsewhere = { shown: [far("m1")], more: [far("m2")] };
     const [needsYou] = listRows([], {}, [], null, [], [], elsewhere);
-    expect(needsYou).toMatchObject({ kind: "raised", group: "needs_you", missions: [] });
+    expect(needsYou).toMatchObject({ kind: "raised", group: "needs_you", asks: [] });
     const raised = needsYou as Extract<typeof needsYou, { kind: "raised" }>;
     expect([raised.agents.map((row) => row.chip), raised.more.map((row) => row.agent.pane_id)]).toEqual([["Mac mini"], ["m2"]]);
   });

@@ -2,7 +2,9 @@ import type { TFunction } from "i18next";
 import { agentProductName } from "./agentAdapters";
 import { formatElapsed } from "./components/elapsed";
 import type { InterfaceLanguage } from "./i18n/locale";
-import type { Automation, AutomationPauseReason, AutomationRecord, AutomationRun, AutomationSchedule, AutomationWeekday } from "./snapshot";
+import { pricedUsd } from "./projectStatus";
+import type { Automation, AutomationPauseReason, AutomationRecord, AutomationRun, AutomationSchedule, AutomationSpend, AutomationWeekday } from "./snapshot";
+import { compactTokens } from "./usageHistory";
 
 // The words of an automation (PRD automations B3, B6, B11, B16-B23, B34),
 // one set for the desktop screen and the phone's tab: what a schedule reads
@@ -24,7 +26,7 @@ export function weekdayText(language: InterfaceLanguage, day: AutomationWeekday)
   return new Intl.DateTimeFormat(language, { weekday: "short", timeZone: "UTC" }).format(A_SUNDAY + DAY_INDEX[day] * 86_400_000);
 }
 
-/** `매일 09:00`, `평일 09:00`, `매주 월·수 09:00`, `3시간마다 · 09:00 기준`, or the cron line itself when it equals no choice (B3, B6). */
+/** `매일 09:00`, `평일 09:00`, `매주 월·수 09:00`, `15분마다`, `3시간마다 · 09:00 기준`, or the cron line itself when it equals no choice (B3, B6). */
 export function scheduleText(schedule: AutomationSchedule, language: InterfaceLanguage, t: Translate): string {
   switch (schedule.kind) {
     case "daily":
@@ -35,6 +37,8 @@ export function scheduleText(schedule: AutomationSchedule, language: InterfaceLa
       const days = WEEKDAYS.filter((day) => schedule.days.includes(day)).map((day) => weekdayText(language, day));
       return t("automation.schedule.weekly", { days: days.join("·"), time: schedule.time });
     }
+    case "every_minutes":
+      return t("automation.schedule.everyMinutes", { minutes: schedule.minutes });
     case "every_hours":
       return t("automation.schedule.everyHours", { count: schedule.hours, time: schedule.time });
     case "cron":
@@ -119,7 +123,7 @@ const PAUSE_CODES: Record<string, AutomationPauseReason> = {
 /** How a record's mark reads (B3, B16, B20, B22): ✓, ✗, –, ● or ■. */
 export type RecordTone = "ok" | "failed" | "skipped" | "running" | "stopped";
 
-/** A record's mark and its words after the time: `✓ 12분`, `✗ 실패 · 3번 시도`, `✗ 로그인 만료`, `■ 멈춤 · 사람이 끝냄`, `– 건너뜀 · Claude 사용 한도`, `– 어제 10:00 ~ 오늘 08:00 · 놓침 24회 · Hide가 꺼져 있었음`. */
+/** A record's mark and its words after the time: `✓ 12분`, `✗ 실패 · 3번 시도`, `✗ 로그인 만료`, `■ 멈춤 · 사람이 끝냄`, `– 건너뜀 · Claude 사용 한도`, `– 건너뜀 · 이전 회차 진행 중 · 12번 · 오늘 14:00–18:55`, `– 어제 10:00 ~ 오늘 08:00 · 놓침 24회 · Hide가 꺼져 있었음`. */
 export type RecordText = { tone: RecordTone; text: string };
 
 /** The fields of a run its words are read from; the phone's frame carries only these, never a path, a branch, a pane or a conversation. */
@@ -131,13 +135,14 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
   switch (record.kind) {
     case "run":
       return runText(record, language, t);
-    case "skipped":
-      return {
-        tone: "skipped",
-        text: record.reason.kind === "previous_running"
-          ? t("automation.record.skippedPrevious")
-          : t("automation.record.skippedLimit", { agent: agentProductName(record.reason.agent) }),
-      };
+    case "skipped": {
+      const what = record.reason.kind === "previous_running"
+        ? t("automation.record.skippedPrevious")
+        : t("automation.record.skippedLimit", { agent: agentProductName(record.reason.agent) });
+      if (!skippedFolded(record)) return { tone: "skipped", text: what };
+      const span = spanText(record.at_unix_ms, record.last_unix_ms, now, zone, language, t);
+      return { tone: "skipped", text: t("automation.record.skippedFolded", { what, times: record.count, span }) };
+    }
     case "missed":
       return {
         tone: "skipped",
@@ -149,6 +154,35 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
         }),
       };
   }
+}
+
+/**
+ * What a run spent, `토큰 12.3K · $0.42` (D-26, B39), in the usage screen's
+ * token form and the project tool's money (`pricedUsd`): a price some calls
+ * lacked is a lower bound, `≥ $0.42`, and with no priced call the tokens
+ * stand alone, since a cost is said only for a model whose price is known.
+ */
+export function spendText(spend: AutomationSpend, language: InterfaceLanguage, t: Translate): string {
+  const tokens = compactTokens(spend.tokens, language);
+  const cost = pricedUsd(spend, language);
+  return cost === null ? t("automation.spendTokens", { tokens }) : t("automation.spend", { tokens, cost });
+}
+
+/** `최근 5회 · 토큰 61.5K · $2.10`: what the runs the ledger read among those kept spent together (B39). */
+export function recentSpendText(recent: AutomationSpend & { runs: number }, language: InterfaceLanguage, t: Translate): string {
+  return t("automation.recentSpend", { count: recent.runs, spend: spendText(recent, language, t) });
+}
+
+/** Whether a skipped line holds several times, which then say their own span as a missed line does, with no time of their own. */
+export function skippedFolded(record: Extract<AutomationRecord, { kind: "skipped" }>): boolean {
+  return record.count > 1;
+}
+
+/** `오늘 14:00–18:55` within one day, else `어제 23:30 ~ 오늘 01:10`. */
+function spanText(first: number, last: number, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
+  const from = whenText(first, now, zone, language, t);
+  const end = wall(last, zone);
+  return wall(first, zone).day === end.day ? `${from}–${end.time}` : `${from} ~ ${whenText(last, now, zone, language, t)}`;
 }
 
 /** A run's mark and words (B16, B22, B24): its length when it finished the task, else why it did not. */
@@ -165,9 +199,8 @@ export function runText(run: RunFacts, language: InterfaceLanguage, t: Translate
       return { tone: "failed", text: pause ? pauseReasonText(pause, t) : t("automation.record.failed", { count: run.attempt }) };
     }
     case "stopped":
-      return { tone: "stopped", text: t("automation.record.stopped") };
-    case "skipped":
-      return { tone: "skipped", text: t("automation.record.skippedRunLimit") };
+      // A person ended it, or the core of another machine read it and stopped it.
+      return { tone: "stopped", text: run.reason === "automation_machine_changed" ? t("automation.record.stoppedMachine") : t("automation.record.stopped") };
   }
 }
 

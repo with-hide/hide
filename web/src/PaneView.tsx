@@ -162,6 +162,7 @@ export const PaneView = memo(function PaneView({
   zoomed,
   local = true,
   offline = false,
+  owned = false,
 }: {
   pane: PaneRow;
   transport: TerminalPane | undefined;
@@ -184,6 +185,8 @@ export const PaneView = memo(function PaneView({
   local?: boolean;
   /** True while that device's connection is down. */
   offline?: boolean;
+  /** True where a screen owns the pane's life, as an automation's run terminal (PRD automations B16): its head carries no ⋯ menu and no ✕. */
+  owned?: boolean;
 }) {
   const { t } = useInterfaceTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -381,7 +384,7 @@ export const PaneView = memo(function PaneView({
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          paneMenu.openAt(event.clientX, event.clientY);
+          if (!owned) paneMenu.openAt(event.clientX, event.clientY);
         }}
       >
         {/* The header's first row is this pane: its state on the left, what can be done to it on the right, each in a place that does not move.
@@ -470,6 +473,8 @@ export const PaneView = memo(function PaneView({
             </Button>
           </Hint>
         ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        {owned ? null : (
+        <>
         <Hint label={t("panes.actions", { name: title })}>
           <Button
             variant="ghost"
@@ -497,6 +502,8 @@ export const PaneView = memo(function PaneView({
           </Button>
         </Hint>
         {paneMenu.menu}
+        </>
+        )}
       </header>
       <div className="h-[var(--size-hairline)] shrink-0 bg-border" />
       <div className="relative min-h-0 flex-1">

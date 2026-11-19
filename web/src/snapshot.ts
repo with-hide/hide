@@ -100,9 +100,10 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
+ * A Memory promotion or a suggestion's home is the Hide AI tool's 제안 tab, where it is one of the rows (PRD hide-ai-suggestions D-02, B2);
+ * an automation run's is the automation screen, where its terminal is (PRD automations D-11, B15).
  */
-export type HideAiHome = "suggestions";
+export type HideAiHome = "suggestions" | "automations";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 /** `branch_ready`: the agent committed on its branch and the operator decides (PRD hide-ai-branch-first-apply B3). */
@@ -3260,6 +3261,7 @@ export type AutomationSchedule =
   | { kind: "daily"; time: string }
   | { kind: "weekdays"; time: string }
   | { kind: "weekly"; days: AutomationWeekday[]; time: string }
+  | { kind: "every_minutes"; minutes: number }
   | { kind: "every_hours"; hours: number; time: string }
   | { kind: "cron"; expr: string };
 
@@ -3269,7 +3271,7 @@ export type AutomationAgent = { kind: string; profile?: string; model?: string; 
 /** Why an automation does not run on schedule (`automation_pause_reason`): only `operator` is quiet; the rest are its own Needs You line (D-12). */
 export type AutomationPauseReason = "operator" | "login_expired" | "folder_missing" | "agent_missing" | "folder_detached" | "machine_changed" | "folder_in_repository";
 
-export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped" | "skipped";
+export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped";
 
 export type AutomationRun = {
   number: number;
@@ -3291,12 +3293,23 @@ export type AutomationRun = {
   conversation_missing: boolean;
   branch?: string;
   seen: boolean;
+  /** What its conversation spent, absent until Hide's usage ledger read it (D-26, B39). */
+  spend?: AutomationSpend;
 };
 
-/** One record of an automation, newest first: a run, a skipped time, or the times missed while nothing could run them (D-15). */
+/**
+ * What a run's conversation spent as Hide's usage ledger read it from the agent's own records (D-26, B39): its new
+ * tokens and their price in millionths of a dollar; `unpriced` when some calls had no price, so the price is a lower bound.
+ */
+export type AutomationSpend = { tokens: number; micro_usd: number; unpriced: boolean };
+
+/**
+ * One record of an automation, newest first: a run, the times skipped one after another for the same reason
+ * (`count` from `at_unix_ms` to `last_unix_ms`, one time when 1), or the times missed while nothing could run them (D-15).
+ */
 export type AutomationRecord =
   | ({ kind: "run" } & AutomationRun)
-  | { kind: "skipped"; at_unix_ms: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
+  | { kind: "skipped"; at_unix_ms: number; last_unix_ms: number; count: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
   | { kind: "missed"; first_unix_ms: number; last_unix_ms: number; count: number; reason: "core_off" | "asleep" };
 
 export type Automation = {
@@ -3316,6 +3329,8 @@ export type Automation = {
   /** A run goes now: [지금 실행] is refused (B19). */
   running: boolean;
   unseen: number;
+  /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
+  recent_spend?: AutomationSpend & { runs: number };
   records: AutomationRecord[];
 };
 
@@ -3334,6 +3349,8 @@ export type AutomationsSection = {
   zone?: string;
   /** `~/hide/automations` on this machine, which the form names under its default folder (B5). */
   own_folder_root?: string;
+  /** The saved automations could not be read and were set aside as `file`; gone once an automation is made. */
+  unreadable?: { file: string; at_unix_ms: number };
 };
 
 /** The `desk` section: absent until hided starts Desk. */
@@ -3863,6 +3880,29 @@ export function focusedCheckout(rest: SnapshotRest | null): Checkout | null {
  */
 export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
+}
+
+const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
+
+/**
+ * The projects a person picks from: every one but an automation's own
+ * folder, which the core registers only so its runs can start there (PRD
+ * automations D-08, B30). The same array while none is unlisted, and one
+ * kept list per source array, so a store selector that returns it is stable.
+ */
+export function listedWorkspaces(workspaces: Workspace[]): Workspace[] {
+  if (!workspaces.some((workspace) => workspace.unlisted)) return workspaces;
+  let listed = listedOf.get(workspaces);
+  if (!listed) {
+    listed = workspaces.filter((workspace) => !workspace.unlisted);
+    listedOf.set(workspaces, listed);
+  }
+  return listed;
+}
+
+/** `catalogWorkspaces` as a person picks from it: every project but an automation's own folder (`listedWorkspaces`). */
+export function listedCatalog(rest: SnapshotRest | null): Workspace[] {
+  return listedWorkspaces(catalogWorkspaces(rest));
 }
 
 /** `catalogWorkspaces` from the two fields it reads, for a component that subscribes to those alone. */

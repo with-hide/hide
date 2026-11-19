@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { drawnInTree, hideAiCheckoutOf, hideAiPlace, hideAiWords, homeOpening, homeTurnLine, originLine, taskLine } from "./hideAiOrigin";
+import { automationNames, automationOpening, drawnInTree, hideAiCheckoutOf, hideAiPlace, hideAiWords, homeOpening, homeTurnLine, originLine, taskLine } from "./hideAiOrigin";
 import { rowAccessibleName } from "./agentRow";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { createInterfaceI18n } from "./i18n/instance";
-import type { AgentRow, Checkout, HideAiCheckout, SnapshotRest } from "./snapshot";
+import type { AgentRow, AutomationsSection, Checkout, HideAiCheckout, SnapshotRest } from "./snapshot";
 
 const MEMORY = { kind: "memory_promote", target: "m72" };
 const device = { device_id: "mac" };
@@ -82,5 +82,27 @@ describe("a project's tree draws a checkout Hide AI made only while it matters (
     expect(hideAiCheckoutOf(listed, { device_id: "mini" }, made)).toBeNull();
     expect(drawnInTree(undefined, device, lookalike, false, false)).toBe(true);
     expect(drawnInTree(listed, { device_id: "mini" }, made, false, false)).toBe(true);
+  });
+});
+
+describe("an automation run's row (PRD automations B15)", () => {
+  const section = {
+    unseen: 0,
+    items: [{ id: "a1", name: "아침 이슈 정리", records: [{ kind: "run", number: 4, pane_id: "p9" }] }],
+  } as unknown as AutomationsSection;
+  const run = { pane_id: "p9", hide_ai: { task: { kind: "automation", target: "a1" }, home: "automations" as const } };
+
+  it("names the automation that started it, and only the kind while the name is not known", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    expect(taskLine(t, run.hide_ai.task, automationNames(section))).toBe("↻ 자동화: 아침 이슈 정리");
+    expect(taskLine(t, run.hide_ai.task)).toBe("↻ 자동화");
+    expect(automationNames(section)).toBe(automationNames(section));
+  });
+
+  it("opens the run whose terminal is the row's pane, and nothing for another row", () => {
+    expect(automationOpening(section, run)).toEqual({ id: "a1", run: 4 });
+    expect(automationOpening(section, { ...run, pane_id: "p1" })).toEqual({ id: "a1", run: null });
+    expect(automationOpening(section, { pane_id: "p9", hide_ai: { task: MEMORY } })).toBeNull();
+    expect(automationOpening(null, run)).toBeNull();
   });
 });

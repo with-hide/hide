@@ -20,7 +20,7 @@ import { contextWorkspaces, contextAgents } from "./remote";
 import { areasOf, findArea } from "./areaLayout";
 import type { AgentLayout } from "./agentLayout";
 import { DIGITS, type Digit } from "./shortcuts";
-import { catalogWorkspaces, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
+import { listedCatalog, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
 import { frontTool, toolProjectChoice, toolSidebarProjects, toolTaskList } from "./toolCells";
 import { boardProjects } from "./navigation";
@@ -144,7 +144,7 @@ export function numberedList(rest: SnapshotRest | null): "projects" | "tasks" {
 export function taskListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, taskFoldsOpen: readonly string[]): string[] {
   const { rest } = state;
   const view = rest?.ui_state?.task_view ?? "status";
-  const list = taskList(deviceScope(rest, frontDeviceId(rest))?.tasks, frontDeviceId(rest), agentsByPane(everyPaneAgent(state.agents, rest?.status?.remote)), catalogWorkspaces(rest), view);
+  const list = taskList(deviceScope(rest, frontDeviceId(rest))?.tasks, frontDeviceId(rest), agentsByPane(everyPaneAgent(state.agents, rest?.status?.remote)), listedCatalog(rest), view);
   return drawnTasks(taskSections(list, view, new Set(taskFoldsOpen))).map(({ agent }) => agent.pane_id);
 }
 

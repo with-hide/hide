@@ -40,6 +40,8 @@ export type AgentScope = {
   overview_needs_you: number;
   /** On a device's scope, the missions that are their own Needs You item (no Conductor or worker row carries what waits on the operator, PRD mission-node-simple B14), oldest first; counted in `overview_needs_you` and `groups.needs_you`. Absent when there are none. */
   mission_asks?: string[];
+  /** On the scope of the machine that runs them, the automations stopped for a person to fix, each its own Needs You line (PRD automations D-12, B23), oldest first; counted in `overview_needs_you` and `groups.needs_you` as a mission's own ask is. Absent when there are none. */
+  automation_asks?: string[];
   has_working: boolean;
   relations: Record<string, { issues: string[]; project_id: string; checkout_id: string; rows: { pane_id: string; occurrence: number; depth: number; tag: "here" | "parent" | null; caption_parent: string | null }[] }[]>;
   listed: { pane_id: string; device_id: string; device_label: string | null; remote: boolean; index: number }[];

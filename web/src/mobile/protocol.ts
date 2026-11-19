@@ -178,7 +178,7 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
 };
 
 /** One run as the phone gets it (`hide-core` phone `PhoneRun`): no pane, branch, conversation or answer. */
-export type PhoneAutomationRun = Pick<AutomationRun, "number" | "trigger" | "started_at_unix_ms" | "ended_at_unix_ms" | "state" | "attempt" | "reason" | "seen">;
+export type PhoneAutomationRun = Pick<AutomationRun, "number" | "trigger" | "started_at_unix_ms" | "ended_at_unix_ms" | "state" | "attempt" | "reason" | "seen" | "spend">;
 
 export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exclude<AutomationRecord, { kind: "run" }>;
 
