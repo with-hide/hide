@@ -305,6 +305,7 @@ impl Runtime {
             return false;
         };
         let mut budget = ends_left(&self.snapshot.ui_state.agent_sleep);
+        let letters = crate::agent_sleep::LetterWaits::of(&ledger);
         let mut on_screen: HashMap<Option<String>, HashSet<String>> = HashMap::new();
         let mut changed = false;
         let mut kept = Vec::new();
@@ -334,7 +335,7 @@ impl Runtime {
                     None => {}
                 }
             }
-            let verdict = self.mission_sleep_verdict(&actor, &mut on_screen);
+            let verdict = self.mission_sleep_verdict(&actor, &letters, &mut on_screen, now_unix_ms);
             match verdict {
                 Verdict::Keep => kept.push(mark),
                 Verdict::Drop(why) => {
@@ -361,12 +362,16 @@ impl Runtime {
     }
 
     /// Whether the agent `actor` registers may be put to sleep now for its
-    /// mark (D-18): the pane menu's rules, off the operator's screen, the
-    /// same session still in its pane.
+    /// mark (D-18): the pane menu's rules, the same session still in its
+    /// pane, and nothing that keeps every automatic sleep off it
+    /// (`agent_sleep::Awake`: the operator's screen, a letter waiting for it)
+    /// but a refused end's hour, which a mark does not wait (D-19).
     fn mission_sleep_verdict(
         &self,
         actor: &crate::delivery::Actor,
+        letters: &crate::agent_sleep::LetterWaits,
         on_screen: &mut HashMap<Option<String>, HashSet<String>>,
+        now_unix_ms: u64,
     ) -> Verdict {
         if actor.code_owned() {
             return Verdict::Drop("code_owned");
@@ -420,7 +425,12 @@ impl Runtime {
         let shown = on_screen
             .entry(device.map(str::to_owned))
             .or_insert_with(|| self.agent_sleep_on_screen(device));
-        if shown.contains(pane) || self.pane_move_holds_pane(pane) {
+        let awake = crate::agent_sleep::Awake {
+            on_screen: shown,
+            backoff_until: &HashMap::new(),
+            letters,
+        };
+        if awake.holds(agent, now_unix_ms) || self.pane_move_holds_pane(pane) {
             return Verdict::Keep;
         }
         Verdict::Sleep(pane.clone())

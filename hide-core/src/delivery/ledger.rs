@@ -226,11 +226,13 @@ impl Sleeper {
     }
 
     /// The sleeper whose wake `letter` waits for, its deadline paused (D-13).
-    /// A letter that wakes (`Letter::wakes_a_sleeper`) whose bell rang, or
-    /// whose one wake started before this sleep, wakes no one now, so its
-    /// hour runs as it would for an awake agent; any other `report` or
-    /// `progress` wakes no one at all and waits for the next wake paused,
-    /// rung or not (B3).
+    /// A letter that wakes (`Letter::wakes_a_sleeper`) that a prompt hook
+    /// took (`handed`), or whose one wake started before this sleep, wakes no
+    /// one now, so its hour runs as it would for an awake agent; any other
+    /// `report` or `progress` wakes no one at all and waits for the next wake
+    /// paused, rung or not (B3). A bell that was only typed is not taken: a
+    /// screen of the agent's own can take what is typed (`delivery::typed`),
+    /// so such a letter still waits for, and starts, the one wake it has.
     pub(crate) fn pausing<'a>(
         asleep: &'a Asleep,
         woken: &Woken,
@@ -238,7 +240,7 @@ impl Sleeper {
     ) -> Option<&'a Self> {
         let wakes = letter.wakes_a_sleeper();
         Self::of(asleep, letter).filter(|sleeper| {
-            !(wakes && letter.bell_sent)
+            !(wakes && letter.handed)
                 && woken
                     .get(&letter.id)
                     .is_none_or(|started| *started >= sleeper.since)
@@ -266,6 +268,48 @@ impl Ledger {
                 && !letter.answer_overdue(now)
                 && letter.sender.pane_id == pane_id
                 && letter.sender.session.as_deref() == session
+        })
+    }
+
+    /// The pending letters no bell has named to their recipient yet: none of
+    /// their own was typed, no prompt hook was handed them, and no bell was
+    /// typed into the same recipient's pane since they were queued. A bell at
+    /// rest names every letter waiting for its recipient (` · and N more`,
+    /// `doorbell::Hold::Announced`), and the prompt hook that takes it is
+    /// handed them all as one bundle; a kind with no prompt hook, or whose
+    /// line names `hide inbox` (Codex, Grok), gets the others when it runs
+    /// `hide inbox`. A bell typed while the agent works names the rest too;
+    /// no automatic sleep takes a working agent, and its hook hands the same
+    /// bundle. The bell's time is when it was typed, after its line was
+    /// worded, so a letter queued in those seconds counts as named though the
+    /// line did not count it; the hook still hands it with the rest. After a
+    /// bell typed and not taken, a later sleep leaves a waking letter its
+    /// wake (`Sleeper::pausing`), unless it already woke its recipient once;
+    /// that one's sender was told the input was not taken (`delivery::typed`)
+    /// and it waits out its hour.
+    pub(crate) fn unannounced(&self) -> impl Iterator<Item = &Letter> {
+        // The recipient as `agent_sleep::LetterWaits` keys it: its pane and
+        // the session the letter addresses.
+        fn recipient(letter: &Letter) -> (&str, Option<&str>) {
+            (
+                &letter.recipient.pane_id,
+                letter.recipient.session.as_deref(),
+            )
+        }
+        let mut last_bell = BTreeMap::new();
+        for letter in &self.letters {
+            if let Some(typed) = letter.bell_typed_at_unix_ms {
+                let last: &mut u64 = last_bell.entry(recipient(letter)).or_default();
+                *last = (*last).max(typed);
+            }
+        }
+        self.letters.iter().filter(move |letter| {
+            letter.state == State::Pending
+                && !letter.bell_sent
+                && !letter.handed
+                && last_bell
+                    .get(&recipient(letter))
+                    .is_none_or(|typed| *typed < letter.created_at_unix_ms)
         })
     }
 }
@@ -1208,9 +1252,10 @@ mod tests {
         assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 
-    /// A letter that already rang, or whose one wake started before this
-    /// sleep, wakes no one now, so its hour runs through the sleep; one whose
-    /// wake is this sleep's waits it out.
+    /// A letter a prompt hook already took, or whose one wake started before
+    /// this sleep, wakes no one now, so its hour runs through the sleep; one
+    /// whose wake is this sleep's, or whose bell was typed and not taken,
+    /// waits it out.
     #[test]
     fn only_a_letter_waiting_for_its_recipients_wake_pauses_its_hour() {
         let sleeper = Sleeper {
@@ -1219,17 +1264,26 @@ mod tests {
             since: 50 * MINUTE,
         };
         let asleep: Asleep = [("recipient".to_owned(), sleeper)].into();
-        let mut rung = letter_to("local", 0);
-        rung.letters[0].bell_sent = true;
-        let mut rung_report = rung.clone();
-        rung_report.letters[0].kind = "report".into();
-        rung.expire_awake(60 * MINUTE, &asleep, &Woken::new());
-        assert_eq!(rung.letters[0].state, State::Undelivered);
-        rung_report.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        let mut taken = letter_to("local", 0);
+        taken.letters[0].bell_sent = true;
+        taken.letters[0].handed = true;
+        let mut taken_report = taken.clone();
+        taken_report.letters[0].kind = "report".into();
+        let mut typed = letter_to("local", 0);
+        typed.letters[0].bell_sent = true;
+        taken.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        assert_eq!(taken.letters[0].state, State::Delivered);
+        taken_report.expire_awake(60 * MINUTE, &asleep, &Woken::new());
         assert_eq!(
-            rung_report.letters[0].state,
+            taken_report.letters[0].state,
             State::Pending,
             "a report waits for the wake"
+        );
+        typed.expire_awake(60 * MINUTE, &asleep, &Woken::new());
+        assert_eq!(
+            typed.letters[0].state,
+            State::Pending,
+            "a bell typed and not taken leaves it the wake"
         );
         let mut woke_before = letter_to("local", 0);
         let id = woke_before.letters[0].id.clone();
