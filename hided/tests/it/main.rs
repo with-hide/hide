@@ -13,6 +13,8 @@ mod connect_build;
 mod connect_stop;
 mod core_move_checks;
 mod device_own_engine;
+mod fixtures;
+mod guest_node;
 mod handshake;
 mod held_letter_notice;
 mod mobile;

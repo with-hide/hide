@@ -178,6 +178,25 @@ fn reported(reason: String) -> String {
 }
 
 pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
+    bootstrap_pane(env, one_shot).map_err(|reason| {
+        // In a pane of a guest's node whose core is away nothing answers
+        // for the pane, and the node says why (PRD device-connect-iroh
+        // B12): the caller hears that, not that Hide is gone.
+        let unanswered = matches!(
+            reason.as_str(),
+            "hide_unavailable" | "bridge_unavailable" | NOT_LINKED
+        );
+        if unanswered
+            && crate::guest_node::away::ask(&env.state_dir, env.pane_id.as_deref(), None).is_some()
+        {
+            crate::guest_node::away::OWNER_OFFLINE.to_owned()
+        } else {
+            reason
+        }
+    })
+}
+
+fn bootstrap_pane(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     // A caller with no pane id (a daemon first started from a plain terminal)
     // still bootstraps: hided binds it to the registered checkout holding
     // its cwd, or refuses with the reason the caller can act on.
