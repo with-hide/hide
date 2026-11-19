@@ -1134,15 +1134,11 @@ fn a_guests_installation_leaves_an_entry_that_names_no_installation() {
         let state = fixture.home().join("state");
         let nameless = HookTarget::new(&fixture.helper, &state).unwrap();
         super::install(agent, fixture.home(), nameless).unwrap();
+        assert!(
+            matches_install(agent, fixture.home(), nameless),
+            "{agent:?}"
+        );
         let before = fixture.read(agent);
-        let named = |document: &Value, helper: &Path| {
-            document
-                .to_string()
-                .matches(helper.to_str().unwrap())
-                .count()
-        };
-        let own_entries = named(&before, &fixture.helper);
-        assert!(own_entries > 0, "{agent:?}");
 
         let root = state.join("g").join("0123456789abcdef").join("i");
         let guest_helper = root.join("current").join("hide-agent-hooks");
@@ -1155,9 +1151,10 @@ fn a_guests_installation_leaves_an_entry_that_names_no_installation() {
             .unwrap();
 
         super::install(agent, fixture.home(), guest).unwrap();
-        let both = fixture.read(agent);
-        assert_eq!(named(&both, &fixture.helper), own_entries, "{agent:?}");
-        assert!(named(&both, &guest_helper) > 0, "{agent:?}");
+        // Everything the file held is still there, and the guest's own
+        // entries are beside it.
+        let added = crate::install::strings_added(&before, &fixture.read(agent));
+        assert!(!added.is_empty(), "{agent:?}");
         assert!(matches_install(agent, fixture.home(), guest), "{agent:?}");
 
         let removed = super::remove(agent, fixture.home(), Some(&name)).unwrap();

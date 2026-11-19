@@ -979,6 +979,34 @@ pub(crate) fn powershell_commands(guard: &str, helper: &Path) -> Vec<String> {
 }
 
 #[cfg(test)]
+/// The strings `after` holds beyond those `before` held, every one of which
+/// must still be there, an entry's command among them: what a pass added to
+/// a settings file, and that it rewrote nothing of what was there. Whole
+/// strings are compared and no path is looked for in the file, because a
+/// path is spelled there as its system and shell write it.
+pub(crate) fn strings_added(before: &Value, after: &Value) -> Vec<String> {
+    fn strings(value: &Value, into: &mut Vec<String>) {
+        match value {
+            Value::String(text) => into.push(text.clone()),
+            Value::Array(items) => items.iter().for_each(|item| strings(item, into)),
+            Value::Object(fields) => fields.values().for_each(|field| strings(field, into)),
+            _ => {}
+        }
+    }
+    let (mut kept, mut left) = (Vec::new(), Vec::new());
+    strings(before, &mut kept);
+    strings(after, &mut left);
+    for text in kept {
+        let at = left
+            .iter()
+            .position(|held| *held == text)
+            .unwrap_or_else(|| panic!("the file no longer holds {text}"));
+        left.swap_remove(at);
+    }
+    left
+}
+
+#[cfg(test)]
 #[path = "install/byte_contract_tests.rs"]
 mod byte_contract_tests;
 
@@ -1585,15 +1613,11 @@ mod tests {
             let fixture = Fixture::new("guest-nameless");
             let own = helper(&fixture);
             install(runtime, fixture.home(), &own).unwrap();
+            assert!(
+                matches_install(runtime, fixture.home(), &own),
+                "{runtime:?}"
+            );
             let before = fixture.read(runtime);
-            let named = |document: &Value, helper: &Path| {
-                document
-                    .to_string()
-                    .matches(helper.to_str().unwrap())
-                    .count()
-            };
-            let own_entries = named(&before, &own);
-            assert!(own_entries > 0, "{runtime:?}");
 
             let state = fixture.home().join("state");
             let root = state.join("g").join("0123456789abcdef").join("i");
@@ -1610,9 +1634,14 @@ mod tests {
             fs::remove_file(&own).unwrap();
 
             install(runtime, fixture.home(), guest).unwrap();
-            let both = fixture.read(runtime);
-            assert_eq!(named(&both, &own), own_entries, "{runtime:?}");
-            assert!(named(&both, &guest_helper) > 0, "{runtime:?}");
+            // Everything the file held is still there, and the guest's own
+            // entries are beside it.
+            let added = strings_added(&before, &fixture.read(runtime));
+            assert!(!added.is_empty(), "{runtime:?}");
+            assert!(
+                matches_install(runtime, fixture.home(), guest),
+                "{runtime:?}"
+            );
 
             let removed = remove(runtime, fixture.home(), Some(&name)).unwrap();
             assert!(removed.removed_entries > 0, "{runtime:?}");
