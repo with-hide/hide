@@ -1060,6 +1060,37 @@ A gate may instead ask before its node starts (PRD node-presets D-06, `when: sta
 A plan cannot put a start gate on a node that already started (`mission_gate_node_started`), and a general node's preset may bring one when the plan names no gate (`missions::PRESETS`, the one table of presets with each one's name key, icon key and default gate, which the snapshot reads for `NodeView.preset` and `icon`).
 A known limit: the 24 hours of a gate's long wait count from when it was asked, or raised with no Conductor, so a gate that reached its node while another gate held the decision counts from when its own question stands, not from when it was reached.
 
+## Automations
+
+An automation starts an agent on a schedule with no person present (PRD automations).
+The core of the machine it runs on owns the book: each automation's name, task, schedule, agent choice, folder, pause, next time and its last 50 records.
+The book is saved off the lock to `automations.json` in the state folder (`hide_kit::layout::automations_store`, a `LatestFile`) and moves with the core; it names no machine, and a run's agent is named by its ledger id.
+`hide-core/src/automations.rs` holds the types, the record cap, a run's prompt and the snapshot; `automations/schedule.rs` holds the choices and a five-field cron, read in the machine's zone with `jiff`, and refuses a schedule that can run more often than once an hour; `runtime/automations.rs` drives them.
+
+The clock is the local coordinator's tick (about 250 ms, wall-clock milliseconds; `tick_automations`): a time that came is taken once, so a sleep or a core that was off is noticed at the first tick after it.
+Times that passed while the core was off (the first tick) or the machine slept (a gap over 60 s), or one noticed more than two minutes late, become one missed line and one run (D-15).
+Runs are followed at most once a second, and a core waiting for its move's link starts nothing.
+
+One run goes at a time: a time that comes while the automation's run is starting or running is a skipped line (D-14), and a finished run whose terminal is still open does not hold the next time.
+Before a run starts, the default account of its agent is judged from the usage the core already reads: signed out or not installed stops the automation for a person (D-12, D-17), and 100% before its reset skips a scheduled time; an account it cannot read, and a profile's account, run (D-16).
+
+A run's agent starts under Hide's own identity `hide:automation` with no parent (`coordination::run`, `Command::Spawn` with task kind `automation`), on a worker with the lock released.
+Its intent carries the automation, the run and the attempt (`automation-<id>-r<n>-a<k>`), so a start asked again after a restart converges on one agent (B36).
+Its row leaves the operator's lists as a Hide AI task's does, and a View it opened reaches Needs You as well as a question or a block (`TaskHome::Automations`, `Ownership::HideAi { look_calls }`).
+It works in the project the operator chose, in a new worktree per run (`automation/<id>-r<n>`) when asked in a Git project, or else on the branch the project's folder has out.
+With no folder chosen, the core makes `~/hide/automations/<name>-<id>` off the lock and registers it as a plain folder project, which `hide_ai_checkouts` lists as the automation's, so no list shows it (D-08).
+
+A run follows its agent's row.
+A finished turn records the result at once: the state, the answer's first paragraph (from `request.answer`, then from the whole answer read on a worker) and the native session id.
+A provider refusal, an agent that exited, one that stopped after work with no finished turn, and a start that does not leave within three minutes are transient failures, tried again in the same conversation up to three attempts (D-17).
+A sign-in that ended, a folder that is gone or an agent that is not installed stops the automation and ends the run failed, and the automation raises its own Needs You line (`Scope::automation_asks`, counted as a mission's own ask is), which turning it on again clears.
+The terminal of a finished run closes only when nothing in it waits on the operator: no refusal it rests on, no block, nothing in Needs You, not on the operator's screen and no letter on its way (`agent_sleep::Awake`); a run's own worktree is released after it when nothing was left in it (`release_branch_worktree`).
+A finished run's conversation opens again in a new terminal on request (`automation_run_open`).
+
+The window events (`automation_add`, `automation_edit`, `automation_pause`, `automation_resume`, `automation_run`, `automation_remove`, `automation_run_stop`, `automation_run_open`, `automation_seen`) and `Core::automation` take the same `automations::Call`, and an automation is named by its id or its unique name.
+The `automations` snapshot section lists each automation with its reading of the schedule, its next time, its pause, whether a run goes, its unseen count and its records newest first, with the pane of a run whose terminal is open.
+`hided` skips its idle exit while any automation is on (`Core::automations_on`, read without the owner thread), so a time comes with no window open (D-19); after a reboot nothing runs until the app starts the daemon, which then takes the missed times as above.
+
 ## Session plans
 
 A session's own plan (PRD hide-plan) is a core-owned record keyed by the native session, `hide-core/src/plans.rs` for the model and its rules and `runtime/plans.rs` for the commands, the published view, the review question and the hook's summary ([delivery.md: Plans](delivery.md#plans)).
@@ -2806,7 +2837,7 @@ With `probe=1` in the page URL it also installs `window.__hideProbe`, the only w
 
 `hided` stays up while a pane holder of its machine may still run, with or without a window or phone, so letters, agent states and labels keep going when the app is closed (PRD labels-in-hided D-18): the holders outlive the daemon by design, and the daemon is what keeps their letters and states moving.
 The idle exit still counts ten minutes (`idle_secs`), but only while no client is connected and no holder pane may run; the daemon counts its machine's holder records every five seconds off the async thread (`hide_kit::panes::Panes::live`, `watch_idle` in `hided/src/server.rs`), a record it cannot read counts as running, and a count that fails keeps the daemon, since ending it would leave panes with no core.
-`--keep-alive` and the paired-phone rule behave as before.
+`--keep-alive` and the paired-phone rule behave as before, and an automation that is on holds the daemon as a paired phone does ([Automations](#automations)).
 `SIGTERM` still ends the daemon gracefully, which cancels the running label analysis and its provider process before it exits.
 
 A build is the SHA-256 of the `hided` executable's bytes (`hided/src/build_id.rs`), hashed once when the daemon starts and reported as `build` on `/health`.
@@ -4689,6 +4720,8 @@ A folder that stays keeps its marker through the first call; its answer (`kept`,
 A cleanup a helper tried and could not finish (an unreadable marker, a refused permission, a file or folder it cannot read, a session store it cannot read) leaves the project named `hide` as well (B11).
 When only the marker is left and nothing keeps the folder, Hide first records, in its own store (`~/.hide/home-retiring.json`, written durably), the name it will set the folder aside under (`~/.hide-home-retiring-<token>`), the folder's identity and the marker's text, and then renames `~/hide` to that name without replacing anything; the marker and that folder are removed there. The record, and the folder still being the recorded one, is the only claim Hide has on a folder of that name: a stop after the rename is finished by the next run, which finds no `~/hide`, while a folder that merely has such a name, or took the name before the rename, is the operator's and stays (the stale record is dropped). A leftover that is empty or holds only the marker goes; one that also holds a file that arrived, even after the marker was removed, goes back to `~/hide` whole with its marker (written whole to Hide's own file beside the record and renamed into the empty slot without replacing; a link or any non-file in that slot is never followed or replaced, and fails the call), so the call still answers marked and kept until the core has saved the new name. A `~/hide` that exists again is never replaced: the folder and the record stay, the call fails and a later run finishes the return.
 A `~/hide` with no marker, empty or not, is never removed.
+The automations' own folder `~/hide/automations` is Hide's, not the operator's: a folder whose only other entry is the marker loses the marker, stays where it is and is answered not kept, so its registration goes and no `hide` project appears (PRD automations D-09, B31).
+A marker-less `~/hide` that holds only that folder is answered the same and left untouched, so a stop after the marker went converges.
 The answer (`HomeRetired`: the folder, whether it is `kept`, whether it was `marked`, and the `removed` and `changed` entries) settles the registration: a folder that is gone takes its registration with it, and a folder with no marker changes nothing (B8).
 Each retirement holds an exclusive lock on the account's home folder, waits at most 20 s for another and then answers `busy`; the folder is owner-only.
 A failure (an unreadable marker, a refused permission, a file or folder it cannot read, a session store it cannot read, a timeout) keeps the project, reaches only the diagnostic log (`home.retire_failed`, design principle 13) and is asked again at the next launch; a refusal is not asked again in the same launch.
