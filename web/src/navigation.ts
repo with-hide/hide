@@ -15,7 +15,7 @@ import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { hideAiPlace } from "./hideAiOrigin";
-import { focusedRemoteDevice, frontCheckout, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
+import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
 import { startAnswer } from "./startAnswer";
 
@@ -232,10 +232,10 @@ export function mainSections(rest: SnapshotRest | null, deviceId?: string): Devi
 export function allProjectsCount(rest: SnapshotRest | null, deviceId?: string): number {
   const devices = (rest?.navigator?.devices ?? []).filter((device) => deviceId === undefined || device.id === deviceId);
   const registrations = rest?.ui_state?.workspace_registrations ?? [];
-  let count = devices.some((device) => device.kind !== "remote") ? (rest?.navigator?.workspaces ?? []).length : 0;
+  let count = devices.some((device) => device.kind !== "remote") ? listedWorkspaces(rest?.navigator?.workspaces ?? []).length : 0;
   for (const device of devices.filter((row) => row.kind === "remote")) {
     const session = rest?.status?.remote?.find((row) => row.target_id === device.id)?.session ?? null;
-    count += session ? session.workspaces.length : registrations.filter((row) => row.device_id === device.id).length;
+    count += session ? listedWorkspaces(session.workspaces).length : registrations.filter((row) => row.device_id === device.id).length;
   }
   return count;
 }
@@ -253,13 +253,13 @@ export function boardProjects(rest: SnapshotRest | null, localAgents: AgentRow[]
   const away = (id: string) => (id === windowDeviceId(devices) ? null : machineName(devices, id, translate));
   const projects: BoardProject[] =
     deviceId === undefined || deviceId === localId
-      ? (rest?.navigator?.workspaces ?? []).map((workspace) => ({ workspace, agents: localAgents, device: away(localId) }))
+      ? listedWorkspaces(rest?.navigator?.workspaces ?? []).map((workspace) => ({ workspace, agents: localAgents, device: away(localId) }))
       : [];
   for (const status of rest?.status?.remote ?? []) {
     const session = status.session;
     if (!session || (deviceId !== undefined && status.target_id !== deviceId)) continue;
     const device = away(status.target_id);
-    for (const workspace of session.workspaces) projects.push({ workspace, agents: session.agents, device });
+    for (const workspace of listedWorkspaces(session.workspaces)) projects.push({ workspace, agents: session.agents, device });
   }
   return projects;
 }

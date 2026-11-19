@@ -80,7 +80,7 @@ export function SidebarProjectFilter({ deviceId, actions }: { deviceId: string; 
   const rest = useShellStore((s) => s.rest);
   const localAgents = useShellStore((s) => s.agents);
   const [open, setOpen] = useState(false);
-  const projects = useMemo(() => catalogWorkspaces(rest).filter((row) => row.device_id === deviceId), [rest, deviceId]);
+  const projects = useMemo(() => catalogWorkspaces(rest).filter((row) => row.device_id === deviceId && !row.unlisted), [rest, deviceId]);
   // Only the menu and `+N` read the counts, so an unnarrowed list with the menu shut builds no second list.
   const counted = open || filter !== null;
   const counts = useMemo(() => (counted ? deviceCounts(rest, localAgents, deviceId) : NO_COUNTS), [counted, rest, localAgents, deviceId]);

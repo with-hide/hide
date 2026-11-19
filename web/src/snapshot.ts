@@ -3863,6 +3863,24 @@ export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
 }
 
+const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
+
+/**
+ * The projects a person picks from: every one but an automation's own
+ * folder, which the core registers only so its runs can start there (PRD
+ * automations D-08, B30). The same array while none is unlisted, and one
+ * kept list per source array, so a store selector that returns it is stable.
+ */
+export function listedWorkspaces(workspaces: Workspace[]): Workspace[] {
+  if (!workspaces.some((workspace) => workspace.unlisted)) return workspaces;
+  let listed = listedOf.get(workspaces);
+  if (!listed) {
+    listed = workspaces.filter((workspace) => !workspace.unlisted);
+    listedOf.set(workspaces, listed);
+  }
+  return listed;
+}
+
 /** `catalogWorkspaces` from the two fields it reads, for a component that subscribes to those alone. */
 export function catalogOf(workspaces: Workspace[] | undefined, remote: RemoteStatus[] | undefined): Workspace[] {
   return [...(workspaces ?? []), ...(remote ?? []).flatMap((row) => row.session?.workspaces ?? [])];

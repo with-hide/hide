@@ -81,7 +81,8 @@ function groupOf(rest: SnapshotRest, device: Pick<Device, "id" | "kind">, name: 
   const prefix = front ? "" : `${name} · `;
   const projects: StartProject[] = [];
   for (const workspace of workspaces) {
-    if (workspace.temporary) continue;
+    // An automation's own folder is no project to start in (PRD automations B30).
+    if (workspace.temporary || workspace.unlisted) continue;
     const branches: StartTarget[] = [];
     for (const checkout of workspace.checkouts) {
       if (!checkout.exists) continue;
