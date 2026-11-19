@@ -1,6 +1,5 @@
 import { ExternalDisplay } from "./ExternalDisplay";
 import { useExternalGrant } from "./externalFiles";
-import { ProjectLanePin } from "./ProjectLanePin";
 import { GlobeIcon, Link2Icon, LoaderCircleIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
@@ -15,6 +14,8 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { revealHost } from "./host";
 import { CommentCount, FeedbackRow } from "./ViewComments";
+import { CardBody, DetailIcon, useCardTitle } from "./CardBody";
+import { cardTitle } from "./cardTitle";
 import { StatusMark } from "./components/status-mark";
 import { DisplayEditor, DocumentKeeper, PendingDocumentHeader } from "./Editor";
 import { fileIcon } from "./fileIcons";
@@ -133,7 +134,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   const adapter: AreaAdapter<ViewDisplaySnapshot> = {
     words: VIEW_WORDS,
     keyboardArea: owner.kind === "view" && owner.workspace === checkoutId ? owner.areaId : null,
-    label: (display) => display.label,
+    label: (display) => tabLabel(display, t),
     sameContent: showsSameDocument,
     tab: (display, interaction) => <DisplayTab display={display} workspace={workspace} interaction={interaction} actions={actions} />,
     body: (display) => (
@@ -143,7 +144,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
       </div>
     ),
     empty: () => <AreaEmpty state="no-view" text={t("documents.view.empty")} />,
-    floating: (display) => <>{displayMark(display)}<span className={`truncate ${display.preview ? "italic" : ""}`}>{display.label}</span></>,
+    floating: (display) => <>{displayMark(display)}<span className={`truncate ${display.preview ? "italic" : ""}`}>{tabLabel(display, t)}</span></>,
     menu: (id, geometry, sizes) => [{ id: "new_tab", icon: "add", label: t("panes.area.newTab"), unavailable: null }, ...displayMenu(layout, geometry, sizes, id, { host: revealHost(), device: workspace.device_id, node: windowDeviceId(useShellStore.getState().rest?.navigator?.devices) })],
     runMenu: (id, displayId) => id === "new_tab" ? actions.openBrowser("", workspace, locateDisplay(layout.root, displayId)?.area.id) : actions.runViewMenu(id as ViewMenuId, displayId),
     focus: actions.focusView,
@@ -156,7 +157,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <ProjectLanePin column="view" actions={actions} /> },
+    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" } },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };
@@ -170,6 +171,7 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
   const { t } = useInterfaceTranslation();
   if (display.kind === "browser") return <BrowserDisplay display={display} workspace={workspace} actions={actions} />;
   if (display.kind === "external") return <ExternalDisplay display={display} workspace={workspace} actions={actions} />;
+  if (display.kind === "card") return display.card ? <CardBody item={display.card} actions={actions} /> : <AreaEmpty state="view-unavailable" text={display.reason ?? ""} />;
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} />;
   }
@@ -193,7 +195,10 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
 }
 
 /** One display's tab: its kind's mark, italic while a preview, its save marks, and its whole identity (B2, B21). */
-export function DisplayTab({ display, workspace, interaction, actions }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions }) {
+export function DisplayTab({ display: sent, workspace, interaction, actions }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions }) {
+  // A card's name is the shell's to give (`cardTitle`).
+  const named = useCardTitle(sent.card ?? null);
+  const display = sent.kind === "card" ? { ...sent, label: named } : sent;
   const { selected, areaActive } = interaction;
   const fit = tabFit(selected, interaction.fit);
   const { t } = useInterfaceTranslation();
@@ -308,8 +313,14 @@ function ExternalBadge({ path }: { path: string | null }) {
   );
 }
 
-/** A file's type mark or the diff's comparison mark; never colour alone (D-15). */
-export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label">) {
+/** A display's name on its tab, a card's from what the shell holds of its subject. */
+function tabLabel(display: ViewDisplaySnapshot, t: Parameters<typeof cardTitle>[1]): string {
+  return display.kind === "card" ? cardTitle(useShellStore.getState(), t, display.card ?? null) : display.label;
+}
+
+/** A file's type mark, the diff's comparison mark or a card's own; never colour alone (D-15). */
+export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label" | "card">) {
+  if (display.kind === "card" && display.card) return <DetailIcon item={display.card} className="size-(--size-icon) shrink-0 text-muted-foreground" />;
   if (display.kind === "browser") return <GlobeIcon aria-hidden="true" data-view-mark="browser" className="size-(--size-icon) shrink-0 text-muted-foreground" />;
   if (display.kind === "diff") {
     return (
@@ -322,6 +333,6 @@ export function displayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label">
 }
 
 /** The minimum-density identity choice lives here so review can replace it without changing the fit curve. */
-function collapsedDisplayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label">) {
+function collapsedDisplayMark(display: Pick<ViewDisplaySnapshot, "kind" | "label" | "card">) {
   return displayMark(display);
 }

@@ -6,7 +6,7 @@ import { TOUR_WORLD, type TourModel } from "../worlds/tour";
 export default chapter<TourModel>({
   id: "overview",
   number: 1,
-  version: 5,
+  version: 6,
   world: TOUR_WORLD,
   quest: true,
   preview: "zones",
@@ -19,8 +19,6 @@ export default chapter<TourModel>({
     { id: "center", target: "[data-agent-area]", side: "right" },
     // The lane starts closed; the tool rail opens it on the tool pressed.
     { id: "lane", quest: true, target: '[data-lane-tool="project"]', side: "left", gesture: { click: true }, done: (model) => model.tool === "project" },
-    // Pinned, the lane docks beside the agents, which narrow; unpinned, it is drawn over them.
-    { id: "pin", quest: true, target: "[data-lane-pin]", side: "left", gesture: { click: true }, done: (model) => model.pinned },
     { id: "tools", target: "[data-lane-tool]", side: "left" },
     { id: "devices", target: "[data-device-rail]", side: "right" },
     { id: "end", zones: true, side: "center" },

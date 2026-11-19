@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Checkout, StripTab } from "./snapshot";
 import type { ViewDisplaySnapshot, ViewLayoutSnapshot } from "./snapshot";
-import type { DetailSlot } from "./snapshot";
 import { agentEntries, columnLanding, laneFrame, laneLanding, laneViewOf, NO_CALLS_SEEN, pageCalled, pageLaneWidth, readCalls, TOOLS, TOOL_SCOPES, type LaneColumn, type LaneInput, type LaneSizes } from "./workspace";
 
 const strip: StripTab[] = [
@@ -26,7 +25,7 @@ describe("the Workspace strips", () => {
 const sizes: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
 
 const frame = (input: Partial<Omit<LaneInput, "sizes">> & { body: number }) =>
-  laneFrame({ open: true, view: "none", tool: null, pinned: false, documentWidth: null, detailWidth: null, explorerWidth: null, panelWidth: null, expanded: false, front: "view", ...input, sizes });
+  laneFrame({ open: true, view: "none", tool: null, pinned: false, documentWidth: null, explorerWidth: null, panelWidth: null, expanded: false, front: "view", ...input, sizes });
 
 const column = (field: LaneColumn["field"], width: number, min: number): LaneColumn => ({ field, width, min });
 
@@ -43,10 +42,9 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
   });
 
   it("draws each column from its own width, docked or drawn over (B17, D-09)", () => {
-    const widths = { documentWidth: 900, detailWidth: 600, explorerWidth: 300, panelWidth: 440 };
+    const widths = { documentWidth: 900, explorerWidth: 300, panelWidth: 440 };
     for (const placed of [{}, { pinned: true }]) {
       expect(frame({ view: "documents", ...placed, ...widths, body: 2400 }).view).toEqual(column("document_width", 900, 360));
-      expect(frame({ view: "detail", ...placed, ...widths, body: 2400 }).view).toEqual(column("detail_width", 600, 360));
       expect(frame({ tool: "explorer", ...placed, ...widths, body: 2400 }).tool).toEqual(column("explorer_width", 300, 180));
       for (const tool of ["project", "changes"] as const) {
         expect(frame({ tool, ...placed, ...widths, body: 2400 }).tool).toEqual(column("panel_width", 440, 360));
@@ -54,7 +52,6 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     }
     // A wide document leaves a column never resized at its default.
     expect(frame({ tool: "project", documentWidth: 900, body: 1600 }).width).toBe(400);
-    expect(frame({ view: "detail", documentWidth: 900, body: 1600 }).width).toBe(520);
     expect(frame({ view: "documents", panelWidth: 440, body: 1600 }).width).toBe(520);
   });
 
@@ -134,8 +131,7 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: over, sizes })).toEqual({ document_width: 620 });
     expect(laneLanding({ x: 0, body: 1600, frame: over, sizes })).toEqual({ document_width: 1600 - 8 });
     expect(laneLanding({ x: 1590, body: 1600, frame: over, sizes })).toEqual({ document_width: 360 });
-    // The 보기 slot and a tool alone land their own widths.
-    expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: frame({ view: "detail", documentWidth: 900, body: 1600 }), sizes })).toEqual({ detail_width: 620 });
+    // A tool alone lands its own width.
     expect(laneLanding({ x: 1600 - 400 - 8 - 100, body: 1600, frame: frame({ tool: "project", documentWidth: 900, body: 1600 }), sizes })).toEqual({ panel_width: 500 });
   });
 
@@ -150,14 +146,12 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(columnLanding({ x: 100, frame: frame({ view: "documents", body: 1600 }) })).toEqual({});
   });
 
-  it("reads what the viewing column shows: the 보기 slot in front, else the documents while there are any (D-04, B12)", () => {
-    const detail = { shown: true, items: [{ kind: "pr", repo: "/repo", number: 1 }] } as unknown as DetailSlot;
-    expect(laneViewOf({ documents: true }, detail, true)).toBe("detail");
-    expect(laneViewOf({ documents: true }, { ...detail, shown: false }, true)).toBe("documents");
-    expect(laneViewOf({ documents: true }, { shown: true, items: [] } as unknown as DetailSlot, true)).toBe("documents");
-    expect(laneViewOf({ documents: true }, null, false)).toBe("none");
-    expect(laneViewOf({ documents: false }, null, true)).toBe("none");
-    expect(laneViewOf(null, null, true)).toBe("none");
+  it("reads what the viewing column shows: the front tab's desk while it is shown and has a tab (PRD lane-desk-pair-view D-06)", () => {
+    const tray = (shown: boolean) => ({ tray: { tab_id: "t1", shown, count: 1 } });
+    expect(laneViewOf(tray(true), true)).toBe("documents");
+    expect(laneViewOf(tray(true), false)).toBe("none");
+    expect(laneViewOf(tray(false), true)).toBe("none");
+    expect(laneViewOf(null, true)).toBe("none");
   });
 });
 

@@ -20,8 +20,8 @@ const ANSWER = `[data-mission-recommended], body:not(:has([data-mission-recommen
 const SEND = `[data-mission-answer-send], body:not(:has([data-mission-answer-send])) ${CHIP}`;
 /** The sign-in screen's worker, the one that runs longest: the list holds it once the survey is done. */
 const SCREEN = "ui";
-/** The 보기 slot's ✕, which puts the mission's card away. */
-const CLOSE = '[data-lane="detail"] [data-detail-close]';
+/** The card tab's ✕, which puts the mission's card away. */
+const CLOSE = '[role="tab"][data-tab-kind="card"] button';
 
 export default chapter<MissionModel>({
   id: "mission",
@@ -36,7 +36,7 @@ export default chapter<MissionModel>({
     // The screen is seen alone a moment first, since it is the first a newcomer meets.
     { id: "intro", quest: true, target: PANE, side: "center", scene: 2400, gesture: { type: { pane: CONDUCTOR, words: "practice.mission.world.example" } }, done: (model) => model.stage >= 1 },
     { id: "thinking", target: PANE, side: "center", wait: true, done: (model) => model.stage >= 2 },
-    // The chip opens the whole plan as a card in the 보기 slot, beside the pane; a first plan also opens the chip's popover once.
+    // The chip opens the whole plan as a card tab on the desk, beside the pane; a first plan also opens the chip's popover once.
     { id: "chip", quest: true, target: CHIP, side: "right", gesture: { click: true }, done: missionShown },
     { id: "plan", target: "[data-mission]", side: "left" },
     // The go is said to the Conductor in the terminal, because Hide has no button that starts a mission.

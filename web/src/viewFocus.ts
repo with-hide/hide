@@ -13,7 +13,6 @@ export type KeyboardOwner =
   | { kind: "view"; workspace: string; areaId: string }
   | { kind: "pane"; workspace: string; paneId: string }
   | { kind: "tool"; workspace: string }
-  | { kind: "detail"; workspace: string }
   | { kind: "agent"; workspace: string; areaId?: string }
   | { kind: "none" };
 
@@ -74,16 +73,15 @@ function ownerOf(target: Element | null): KeyboardOwner | null {
   const workspace = target?.closest<HTMLElement>("[data-workspace-screen]")?.dataset.workspaceScreen;
   if (!target || !workspace) return { kind: "none" };
   // The viewing column holds the View areas inside the lane, so an area is
-  // asked first; the 보기 slot is its own owner, and the tool column (its
-  // header, the Explorer, another tool) is the tool's (PRD lane-two-columns
-  // B13, B16).
+  // asked first, a card tab's body included; the tool column (its header,
+  // the Explorer, another tool) is the tool's (PRD lane-two-columns B13,
+  // B16; PRD lane-desk-pair-view D-13).
   const areaId = target.closest<HTMLElement>("[data-view-area-id]")?.dataset.viewAreaId;
   if (areaId && target.closest('input, textarea, [data-browser-toolbar], [data-document-header], [data-view-feedback-row]')) return { kind: "tool", workspace };
   const lane = target.closest<HTMLElement>("[data-lane]")?.dataset.lane;
   const agentArea = target.closest<HTMLElement>("[data-agent-area-id]")?.dataset.agentAreaId;
   const paneId = target.closest<HTMLElement>("[data-pane-view]")?.dataset.paneView;
   return areaId ? { kind: "view", workspace, areaId }
-    : lane === "detail" ? { kind: "detail", workspace }
     : lane ? { kind: "tool", workspace }
     : paneId ? { kind: "pane", workspace, paneId }
     : agentArea ? { kind: "agent", workspace, areaId: agentArea }
@@ -144,7 +142,7 @@ export function installKeyboardOwner(): () => void {
     const rest = useShellStore.getState().rest;
     const view = workspaceViewOf(rest);
     const checkout = frontCheckout(rest);
-    if (!view?.layout || !checkout || !(view.open && view.documents) || workspaceKey(view) !== event.workspace) return;
+    if (!view?.layout || !checkout || !(view.open && view.tray.shown) || workspaceKey(view) !== event.workspace) return;
     const located = locateDisplay(view.layout.root, event.id);
     if (!located) return;
     inputRevision++;
@@ -181,7 +179,6 @@ export function installKeyboardOwner(): () => void {
 export type CloseShortcutTarget =
   | { kind: "view"; id: string }
   | { kind: "pane"; id: string }
-  | { kind: "detail" }
   | { kind: "nothing"; reason: string };
 
 /** Close the keyboard's unit, never fall through to a larger unit. */
@@ -190,20 +187,14 @@ export function closeShortcutPolicy(input: {
   workspace: string | null;
   displayId: string | null;
   paneIds: readonly string[];
-  /** The lane draws the 보기 slot in the Workspace in front. */
-  detailShown: boolean;
 }): CloseShortcutTarget {
-  const { owner, workspace, displayId, paneIds, detailShown } = input;
-  // The 보기 slot closes with the keyboard in it, or with the keyboard nowhere
-  // (the sidebar row or the rail that opened it), where the slot is the one
-  // closable thing drawn; the tool column closes nothing (PRD
-  // lane-two-columns B13, B16). A pane or a View keeps its own.
-  if (detailShown && (owner.kind === "none" || (owner.kind === "detail" && owner.workspace === workspace))) return { kind: "detail" };
+  const { owner, workspace, displayId, paneIds } = input;
+  // A card tab closes like any View tab; the tool column closes nothing (PRD
+  // lane-two-columns B13, B16; PRD lane-desk-pair-view D-13).
   if (owner.kind === "none") return { kind: "nothing", reason: "no keyboard owner" };
   if (owner.workspace !== workspace) return { kind: "nothing", reason: "keyboard owner is outside the front Workspace" };
   if (owner.kind === "agent") return { kind: "nothing", reason: "the Agent controls own the keyboard" };
   if (owner.kind === "tool") return { kind: "nothing", reason: "the lane's tool owns the keyboard" };
-  if (owner.kind === "detail") return { kind: "nothing", reason: "the detail slot owns the keyboard but shows nothing" };
   if (owner.kind === "view") return displayId
     ? { kind: "view", id: displayId }
     : { kind: "nothing", reason: "the focused View area has no visible display" };

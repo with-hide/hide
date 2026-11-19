@@ -12,7 +12,6 @@ import { useMemoryProject } from "./MemoryTab";
 import { ProjectTool } from "./ProjectTool";
 import { frontProject } from "./projectStatus";
 import { memoryTabCount } from "./suggestionList";
-import { DetailIcon, DetailPanel, useDetailTitle } from "./DetailPanel";
 import { DividerGuide, LaneDivider } from "./LaneDivider";
 import { commandLabel } from "./shortcutLabels";
 import type { CommandId } from "./shortcuts";
@@ -21,8 +20,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
 import { workspaceKey } from "./viewLayout";
-import { TOOLS, TOOL_SCOPES, type LaneFrame, type LaneSizes, type LaneView, type Tool, type WorkspaceView } from "./workspace";
-import { ProjectLanePin } from "./ProjectLanePin";
+import { TOOLS, TOOL_SCOPES, type LaneFrame, type LaneSizes, type Tool, type WorkspaceView } from "./workspace";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 
@@ -63,10 +61,10 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
 }
 
 /**
- * The tool rail (B2, B3, B11, B14): above the rule the viewing column's
- * buttons, the 보기 slot's while it holds something and the documents' with
- * the open views counted, each pressed while its column shows it and
- * folding the column when pressed again; below it one icon per tool, its
+ * The tool rail (B2, B3, B11, B14): above the rule the desk's button with
+ * the front Agent tab's desk counted (PRD lane-desk-pair-view D-29), pressed
+ * while the viewing column shows it and folding the column when pressed
+ * again; below it one icon per tool, its
  * name, scope and chord in its hint, pressed while the tool column shows
  * it, opening the tool column on it or closing the column when it already
  * shows it. The Project tool counts its project's 흘린 것 and the Hide AI
@@ -77,7 +75,7 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
 export function ToolRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const checkout = useShellStore((s) => frontCheckout(s.rest));
-  const views = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.layout?.display_count ?? 0);
+  const views = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.tray.count ?? 0);
   const drawn = useUiStore((s) => s.drawnLane);
   const strays = useShellStore((s) => frontProject(s.rest)?.agent_scope.status?.strays_total ?? 0);
   // The Hide AI tool's number is the core's: its 제안 and its Memory tab's own, none while its switch is off (PRD hide-ai-suggestions D-01, B3).
@@ -95,7 +93,6 @@ export function ToolRail({ actions }: { actions: Actions }) {
   useMemoryProject(actions);
   return (
     <nav className="flex w-(--size-tool-rail) shrink-0 flex-col items-center gap-xxs border-l border-border bg-sidebar py-xs" aria-label={t("panes.lane.rail")} data-tool-rail="true">
-      <DetailSlotButton actions={actions} pressed={up && drawn.view === "detail"} />
       <Hint label={views > 0 ? `${t("panes.lane.documents")} · ${scope("documents")} · ${t("panes.workspace.viewsOpen", { count: views })}` : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
         <button
           type="button"
@@ -161,30 +158,6 @@ export function ToolRail({ actions }: { actions: Actions }) {
   );
 }
 
-/** The rail's 보기 slot (B2, B11): its item's mark, pressed while the viewing column draws it; absent while the slot is empty. */
-function DetailSlotButton({ actions, pressed }: { actions: Actions; pressed: boolean }) {
-  const { t } = useInterfaceTranslation();
-  const item = useShellStore((s) => s.rest?.ui_state?.detail?.items.at(-1) ?? null);
-  const title = useDetailTitle();
-  if (!item) return null;
-  return (
-    <Hint label={title || t("detail.slot")} side="left">
-      <button
-        type="button"
-        aria-pressed={pressed}
-        aria-label={title || t("detail.slot")}
-        className={cn(RAIL_BUTTON, pressed ? "bg-secondary font-medium text-foreground" : "text-muted-foreground")}
-        data-lane-tool="detail"
-        data-detail-slot={item.kind}
-        onClick={() => actions.toggleDetail()}
-      >
-        {pressed ? <span aria-hidden="true" className="absolute -left-xxs inset-y-sm w-(--size-tab-indicator) rounded-full bg-primary" data-lane-tool-bar="true" /> : null}
-        <DetailIcon item={item} className="size-(--size-icon-lg)" />
-      </button>
-    </Hint>
-  );
-}
-
 /** The rail's `…`: Expand, which moves both columns together (B15); with the lane down it has nothing to offer and is off. */
 function LaneMenu() {
   const { t } = useInterfaceTranslation();
@@ -215,22 +188,20 @@ function LaneMenu() {
 /**
  * The lane's two columns (B1, B6, B9, B14, B17): the viewing column at the
  * left, the tool column at the right, a divider between them while both are
- * drawn. The documents stay mounted under the 보기 slot and while folded, so
- * their tabs, scroll and previews are as they were when they come back,
- * laid out out of sight at their own width (`documents`).
+ * drawn. The desk stays mounted while folded, so its tabs, scroll and
+ * previews are as they were when it comes back, laid out out of sight at its
+ * own width (`documents`).
  */
 export function Lane({ view, frame, documents, sizes, checkout, actions }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; sizes: LaneSizes; checkout: Checkout; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [body, setBody] = useState<HTMLElement | null>(null);
   const [guide, setGuide] = useState<number | null>(null);
-  const shows: LaneView = frame.view === null ? "none" : frame.view.field === "detail_width" ? "detail" : "documents";
   const both = frame.view !== null && frame.tool !== null;
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1">
       {frame.view !== null ? (
         <div className={cn("relative flex min-h-0 min-w-0 flex-col", both ? "shrink-0" : "flex-1")} style={both ? { width: frame.view.width } : undefined} data-lane-column="view">
-          {shows === "detail" ? <DetailPanel actions={actions} /> : null}
-          <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col bg-card", shows === "documents" ? undefined : "absolute inset-y-0 right-0")} style={shows === "documents" ? undefined : { width: documents.view?.width ?? frame.view.width }} inert={shows !== "documents"} data-lane-hidden={shows === "documents" ? undefined : "true"} role="region" aria-label={t("panes.lane.documents")} data-view-area={shows === "documents" ? "true" : undefined}>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card" role="region" aria-label={t("panes.lane.documents")} data-view-area="true">
             <ViewAreas actions={actions} />
           </div>
         </div>
@@ -271,7 +242,6 @@ function ToolColumn({ tool, width, checkout, actions }: { tool: Tool; width: num
             {scope(tool)}
           </span>
         </span>
-        <ProjectLanePin column="tool" actions={actions} />
         <Hint label={t("panes.lane.closeTool")}>
           <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.closeTool")} data-lane-tool-close={tool} onClick={() => actions.closeTool()}>
             <XIcon />

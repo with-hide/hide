@@ -7,7 +7,7 @@
 // areas' own rules are `viewLayout.ts`.
 
 import { findArea } from "./areaLayout";
-import type { Checkout, DetailSlot, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
+import type { Checkout, DetailItem, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
 
 export { TOOLS, type Tool } from "./laneTools";
 import type { Tool } from "./laneTools";
@@ -17,16 +17,14 @@ export type ToolScope = "project" | "checkout";
 export const TOOL_SCOPES: Record<Tool, ToolScope> = { project: "project", memory: "project", explorer: "checkout", changes: "checkout" };
 
 /**
- * What the viewing column shows (PRD lane-two-columns D-01, D-04): the 보기
- * slot while the core says it is shown and holds something, else the
- * checkout's documents while the Workspace shows them and has a view, else
+ * What the viewing column shows (PRD lane-desk-pair-view D-06): the desk of
+ * the Agent tab in front while the core says it is shown and has a tab, else
  * nothing. Read with the lane closed too, so a closed lane's shape is known.
  */
-export type LaneView = "documents" | "detail" | "none";
+export type LaneView = "documents" | "none";
 
-export function laneViewOf(view: Pick<WorkspaceView, "documents"> | null, detail: DetailSlot | null | undefined, hasViews: boolean): LaneView {
-  if (detail?.shown && detail.items.length > 0) return "detail";
-  return view?.documents && hasViews ? "documents" : "none";
+export function laneViewOf(view: Pick<WorkspaceView, "tray"> | null, hasViews: boolean): LaneView {
+  return view?.tray.shown && hasViews ? "documents" : "none";
 }
 
 /** The front Workspace's presentation as the core published it. */
@@ -36,16 +34,10 @@ export type WorkspaceView = {
   git?: CheckoutGitHeader | null;
   /** Whether the lane is open; closed, its columns keep their shape for ⌘E (B15). */
   open: boolean;
-  /** Whether the viewing column shows the checkout's documents; false while it is folded or the last view closed (B11, B12). */
-  documents: boolean;
   /** The tool column's tool, or null while there is none. */
   tool: Tool | null;
-  /** Whether the lane is pinned beside Agent Views rather than drawn over it (PRD right-lane D-03). */
-  pinned: boolean;
   /** The documents' width in CSS pixels, or null for the default until it is resized (D-09). */
   document_width: number | null;
-  /** The 보기 slot's width, the same way, so a wide document leaves it as it was. */
-  detail_width: number | null;
   /** The Explorer column's width, the same way. */
   explorer_width: number | null;
   /** The width the Project tool and Changes share, the same way. */
@@ -60,7 +52,11 @@ export type WorkspaceView = {
   lane_called_side: LaneSide;
   /** The Workspace the operator last chose, now or before a restart, so the page opens on it (PRD right-lane D-11). */
   resumed?: boolean;
-  /** The View areas (S7); absent only from a core that predates them. */
+  /** The desk of the Agent tab in front (PRD lane-desk-pair-view D-06): its tab, whether the lane shows it, how many Views are on it (the rail's number, D-29) and its pair view. `layout` is its View areas. */
+  tray: TraySnapshot;
+  /** Every Agent tab of the checkout in pair view, so the strip and the sidebar mark them (D-17); absent while none is. */
+  pairs?: PairView[];
+  /** The View areas (S7) of the desk in front; absent only from a core that predates them. */
   layout?: ViewLayoutSnapshot;
   /** Null on a device this core dials, whose engine shows one tab. */
   agent_layout?: import("./agentLayout").AgentLayout | null;
@@ -69,6 +65,11 @@ export type WorkspaceView = {
   /** For each pane of the checkout, the Views of unsaved documents its close would close with its session (PRD session-files D-14); absent while there are none. */
   session_drafts?: SessionDrafts[];
 };
+
+/** One Agent tab's desk as the screen draws it. */
+export type TraySnapshot = { tab_id: string; shown: boolean; count: number; pair?: PairView | null };
+/** An Agent tab in pair view: the pane drawn beside its desk. */
+export type PairView = { tab_id: string; pane_id: string };
 
 /** The Views of unsaved documents one pane's session alone opened. */
 export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };
@@ -146,7 +147,7 @@ export type LaneSizes = {
 export type LaneMode = "closed" | "overlay" | "docked" | "expanded";
 
 /** The Workspace widths the columns draw from (D-09). */
-export type LaneWidthField = "document_width" | "detail_width" | "explorer_width" | "panel_width";
+export type LaneWidthField = "document_width" | "explorer_width" | "panel_width";
 
 /** Which of the two columns a rail button or a stack brings in front. */
 export type LaneSide = "view" | "tool";
@@ -177,7 +178,6 @@ export type LaneInput = {
   tool: Tool | null;
   pinned: boolean;
   documentWidth: number | null;
-  detailWidth: number | null;
   explorerWidth: number | null;
   panelWidth: number | null;
   expanded: boolean;
@@ -193,7 +193,6 @@ type Want = { field: LaneWidthField; want: number; min: number };
 function viewWant(input: LaneInput): Want | null {
   const { sizes } = input;
   if (input.view === "documents") return { field: "document_width", want: Math.max(sizes.viewMin, input.documentWidth ?? sizes.viewIdeal), min: sizes.viewMin };
-  if (input.view === "detail") return { field: "detail_width", want: Math.max(sizes.viewMin, input.detailWidth ?? sizes.viewIdeal), min: sizes.viewMin };
   return null;
 }
 
@@ -344,6 +343,14 @@ export function pageLaneWidth(input: { width: number | null; beside: number | nu
 
 export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null {
   return (rest?.workspace_view as WorkspaceView | undefined) ?? null;
+}
+
+/** The card in front of the area in use of the desk in front (PRD lane-desk-pair-view D-13), or null. */
+export function frontCard(view: Pick<WorkspaceView, "layout"> | null): DetailItem | null {
+  const layout = view?.layout;
+  if (!layout) return null;
+  const area = findArea(layout.root, layout.active_area);
+  return area?.displays.find((display) => display.id === area.active)?.card ?? null;
 }
 
 /** Engine tabs: the Agent area's strip, in the core's order. */

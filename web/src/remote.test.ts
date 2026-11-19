@@ -148,12 +148,10 @@ function deviceViews(views: boolean): WorkspaceView {
     device_id: "studio",
     path: "/home/remote/app",
     open: views,
-    documents: views,
+    tray: { tab_id: "t1", shown: views, count: 0 },
     tool: null,
     
-    pinned: true,
     document_width: null,
-    detail_width: null,
     explorer_width: null,
     panel_width: null,
     lane_called: 0, lane_calls: 0, lane_called_side: "view",
