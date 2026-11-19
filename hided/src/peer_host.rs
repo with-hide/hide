@@ -26,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
 use hide_peer::protocol::{Candidate, StreamKind};
-use hide_peer::store::{Grant, Grants, Host, Known, KnownState};
+use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
@@ -61,17 +61,21 @@ pub struct Settings {
 }
 
 impl Settings {
-    fn endpoint(&self) -> Options {
+    /// The endpoint's set-up; the product's binds `port` on every
+    /// interface, the state folder's (`hide_peer::port`).
+    fn endpoint(&self, port: Option<u16>) -> Options {
         match self.direct {
             Some(address) => Options {
                 relay: None,
                 mdns: false,
                 bind: Some(address),
+                port: None,
             },
             None => Options {
                 relay: Some(DEVICE_RELAY_URL.to_owned()),
                 mdns: true,
                 bind: None,
+                port,
             },
         }
     }
@@ -122,6 +126,29 @@ fn recorded(state_dir: &Path) -> io::Result<(Vec<Grant>, Vec<Host>)> {
         grants.list(now_unix_ms()).cloned().collect(),
         known.list().to_vec(),
     ))
+}
+
+/// Whether `state_dir` has finished a pairing in either direction (PRD
+/// device-connect-iroh D-41): a grant the guest confirmed, active or
+/// paused, or a host this machine is a confirmed guest of, active or paused
+/// here. Unlike [`endpoint_wanted`], which opens the endpoint while a pairing still
+/// waits, a pending grant, a confirm not yet answered, a removal on its way
+/// and a host that holds this machine no more count as none, so a pairing
+/// that is declined or runs out never leaves a login item behind. What
+/// keeps a paired core on (`always_on`) asks this.
+pub fn pairing_confirmed(state_dir: &Path) -> io::Result<bool> {
+    let grants = Grants::open(layout::peer_grants(state_dir))?;
+    if grants
+        .list(now_unix_ms())
+        .any(|grant| matches!(grant.state, GrantStatus::Active | GrantStatus::Paused))
+    {
+        return Ok(true);
+    }
+    let known = Known::open(layout::peer_known(state_dir))?;
+    Ok(known
+        .list()
+        .iter()
+        .any(|host| matches!(host.state, KnownState::Active | KnownState::PausedByMe)))
 }
 
 impl PeerHost {
@@ -207,15 +234,52 @@ impl PeerHost {
             ));
         }
         let key_file = layout::machine_key(&self.settings.state_dir);
+        let state_dir = self.settings.state_dir.clone();
         // The machine id is asked of the system, on macOS through a
-        // program, and the key is a file: neither on a runtime thread.
-        let (key, loaded) = tokio::task::spawn_blocking(move || {
+        // program, and the key and the port are files: none on a runtime
+        // thread.
+        let ((key, loaded), port) = tokio::task::spawn_blocking(move || {
             let machine = hide_platform::host::machine_id()?;
-            MachineKey::load_or_create(&key_file, &machine)
+            let key = MachineKey::load_or_create(&key_file, &machine)?;
+            io::Result::Ok((key, hide_peer::port::of(&state_dir)))
         })
         .await
         .map_err(io::Error::other)??;
-        let transport = IrohTransport::open(&key.secret(), self.settings.endpoint()).await?;
+        // The folder's port is what the Windows firewall rule lets in; a
+        // machine whose port cannot be had still connects, through the
+        // relay and the addresses it learns, and the log says why.
+        let port = port
+            .inspect_err(|error| {
+                hide_core::diagnostic!(json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.port_unavailable",
+                    "message": error.to_string(),
+                }));
+            })
+            .ok();
+        let transport = match IrohTransport::open(&key.secret(), self.settings.endpoint(port)).await
+        {
+            // Another process holds the folder's port: a new one is chosen
+            // and saved as the folder's, so the firewall rule, which names
+            // the old one, reads as missing and Settings > Devices offers to
+            // allow the new one (O3, D-38).
+            Err(error) if port.is_some() => {
+                let state_dir = self.settings.state_dir.clone();
+                let replaced =
+                    tokio::task::spawn_blocking(move || hide_peer::port::replace(&state_dir))
+                        .await
+                        .map_err(io::Error::other)?;
+                hide_core::diagnostic!(json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.port_replaced",
+                    "port": port,
+                    "replaced_by": replaced.as_ref().ok(),
+                    "message": error.to_string(),
+                }));
+                IrohTransport::open(&key.secret(), self.settings.endpoint(replaced.ok())).await?
+            }
+            opened => opened?,
+        };
         let (peers, incoming) = Peers::start(
             transport,
             Config {
@@ -403,10 +467,75 @@ pub(crate) mod fixture {
 #[cfg(test)]
 mod tests {
     use hide_peer::protocol::{CloseCode, PeerKey};
+    use hide_peer::store::Via;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::fixture::*;
     use super::*;
+
+    fn guest() -> PeerKey {
+        PeerKey::from_bytes([7; 32])
+    }
+
+    /// A machine that first paired through a grant it gave: pending is no
+    /// pairing yet, the guest's confirm pairs it, a pause keeps it, and the
+    /// removal of the last grant unpairs it.
+    #[test]
+    fn only_a_confirmed_grant_is_a_finished_pairing() {
+        let state = tempfile::tempdir().unwrap();
+        assert!(!pairing_confirmed(state.path()).unwrap());
+        let mut grants = Grants::open(layout::peer_grants(state.path())).unwrap();
+        let grant = grants
+            .grant_pending(guest(), "d1", "Laptop", Via::Link, now_unix_ms())
+            .unwrap();
+        assert!(
+            !pairing_confirmed(state.path()).unwrap(),
+            "a pending grant is no finished pairing"
+        );
+        assert!(
+            endpoint_wanted(state.path()).unwrap(),
+            "it opens the endpoint"
+        );
+        grants.confirm(&guest(), &grant.id, now_unix_ms()).unwrap();
+        assert!(pairing_confirmed(state.path()).unwrap());
+        grants.pause(&guest()).unwrap();
+        assert!(
+            pairing_confirmed(state.path()).unwrap(),
+            "a paused grant is still a pairing"
+        );
+        grants.revoke(&guest(), None, now_unix_ms()).unwrap();
+        assert!(!pairing_confirmed(state.path()).unwrap());
+    }
+
+    /// A machine that is a guest: only a host it is confirmed with, active
+    /// or paused here, is a finished pairing.
+    #[test]
+    fn only_a_confirmed_host_is_a_finished_pairing() {
+        let state = tempfile::tempdir().unwrap();
+        let mut known = Known::open(layout::peer_known(state.path())).unwrap();
+        let host = |state| Host {
+            key: guest(),
+            device: "d2".to_owned(),
+            name: "Mac".to_owned(),
+            grant: "g".to_owned(),
+            state,
+            candidates: Vec::new(),
+        };
+        for (state_now, finished) in [
+            (KnownState::Confirming, false),
+            (KnownState::Active, true),
+            (KnownState::PausedByMe, true),
+            (KnownState::RevokePending, false),
+            (KnownState::Unpaired, false),
+        ] {
+            known.put(host(state_now)).unwrap();
+            assert_eq!(
+                pairing_confirmed(state.path()).unwrap(),
+                finished,
+                "{state_now:?}"
+            );
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_machine_paired_with_nothing_opens_no_endpoint_and_makes_no_key() {

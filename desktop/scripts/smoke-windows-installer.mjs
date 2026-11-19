@@ -67,6 +67,19 @@ function appsEntries() {
   return output("pwsh", ["-NoProfile", "-Command", script], process.env).split(/\r?\n/).filter(Boolean);
 }
 
+/**
+ * [appsEntries] while an uninstaller may be deleting a key the read lists:
+ * PowerShell then exits 1 for the key it could not read, which is no answer
+ * yet, so it is `null` and the wait asks again.
+ */
+function appsEntriesWhileChanging() {
+  try {
+    return appsEntries();
+  } catch {
+    return null;
+  }
+}
+
 /** The records hided wrote to its Logs file in `stateDir`, oldest first. */
 function daemonRecords(stateDir) {
   const file = path.join(stateDir, "Logs", "core.jsonl");
@@ -139,7 +152,7 @@ try {
   // the installer wrote into from %USERPROFILE%.
   const uninstalling = { ...isolated, USERPROFILE: process.env.USERPROFILE };
   execFileSync(path.join(installDir, "Uninstall hide.exe"), ["/S"], { env: uninstalling, stdio: "inherit", timeout: 300_000 });
-  await until("the uninstaller removing the app", () => !fs.existsSync(path.join(installDir, "hide.exe")) && appsEntries().length === 0);
+  await until("the uninstaller removing the app", () => !fs.existsSync(path.join(installDir, "hide.exe")) && appsEntriesWhileChanging()?.length === 0);
   await until("the daemon stopping", () => !isAlive(connected.pid), 30_000);
   check("uninstalling removes the app and stops the daemon", () => {
     if (fs.existsSync(startMenuEntry)) throw new Error("the Start menu entry is still there");

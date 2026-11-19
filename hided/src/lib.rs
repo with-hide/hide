@@ -2,6 +2,7 @@ pub mod access;
 pub mod access_cli;
 pub mod agent_cli;
 pub mod agent_exec;
+pub mod always_on;
 pub mod attach;
 pub mod attachments;
 pub mod backoff;
@@ -623,9 +624,17 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         }),
     );
     guests.serve(&peers, shutdown.clone());
+    // A paired machine's login item follows the peer records (PRD
+    // device-connect-iroh D-41).
+    let always_on = always_on::Follower::new(
+        env.home.clone(),
+        env.state_dir.clone(),
+        env.starter_program.is_some(),
+    );
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
         Arc::clone(&core),
+        always_on.clone(),
         hide_peer::pairing::Me {
             name: host_name()
                 .as_deref()
@@ -771,6 +780,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         shutdown.clone(),
     ));
     let idle = server::mount(&seat, app);
+    // A paired machine's login item is put in, or an unpaired one's taken
+    // out, as the peer records stand now: the pairing tells it of a change
+    // only once its endpoint is open, which a machine unpaired since its
+    // last start never opens.
+    always_on.peers_changed();
     // The save the core offers on the screen is imported when the operator
     // asks, and the core role starts again with it (PRD
     // engine-bundle-4-herdr-removal D-7, D-8).
@@ -918,7 +932,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             clients: Arc::clone(&daemon.state.clients),
             last_client_gone: Arc::clone(&daemon.state.last_client_gone),
             shutdown: shutdown.clone(),
-            live_panes: Arc::new(move || {
+            live_work: Arc::new(move || {
                 hide_kit::panes::Panes::open(
                     &node_home,
                     &hide_kit::layout::device_node_state(&node_home),
