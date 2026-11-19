@@ -485,6 +485,11 @@ fn clone(
     let into_text = into.display().to_string();
     let depth = depth.to_string();
     let mut args = vec!["clone", "--quiet", "--no-tags", "--depth", depth.as_str()];
+    // The files as the commit holds them, whatever the account's git says
+    // about line endings (Git for Windows turns LF into CRLF by default):
+    // the same commit is then the same skill, digest and all, on every
+    // machine. A repository's own `.gitattributes` still applies.
+    args.extend(["--config", "core.autocrlf=false", "--config", "core.eol=lf"]);
     if let Some(reference) = &address.reference {
         args.extend(["--branch", reference.as_str()]);
     }

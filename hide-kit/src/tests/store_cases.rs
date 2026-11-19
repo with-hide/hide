@@ -78,8 +78,14 @@ fn skill_md(name: &str, line: &str) -> String {
 }
 
 /// A repository with two skills under `skills/`, one with a script, and
-/// its address.
+/// its address. The account's git turns line endings into the system's on
+/// checkout, as Git for Windows does by default; the store still takes the
+/// files as the commit holds them.
 fn repository(fixture: &Fixture) -> (PathBuf, String) {
+    write(
+        &fixture.home().join(".gitconfig"),
+        "[core]\n\tautocrlf = true\n",
+    );
     let repo = fixture.root.join("upstream");
     write(
         &repo.join("skills/archify/SKILL.md"),
@@ -842,6 +848,10 @@ fn a_copy_carries_each_skill_with_its_files_to_another_machines_store_once() {
     let script = source.join("scripts/run.sh");
     write(&script, "#!/bin/sh\necho hi\n");
     hide_platform::fs::permissions::mark_executable(&script).unwrap();
+    assert_eq!(
+        hide_platform::fs::permissions::is_executable(&script).unwrap(),
+        cfg!(unix)
+    );
     install(
         &here,
         SourceSpec::Folder {
@@ -894,9 +904,12 @@ fn a_copy_carries_each_skill_with_its_files_to_another_machines_store_once() {
             std::fs::read_to_string(folder.join("writer/SKILL.md")).unwrap(),
             skill_md("writer", "Write.")
         );
-        assert!(
+        // Runnable there as it is here, as each system reads it: a bit on
+        // Unix, the extension on Windows.
+        assert_eq!(
             hide_platform::fs::permissions::is_executable(&folder.join("writer/scripts/run.sh"))
-                .unwrap()
+                .unwrap(),
+            hide_platform::fs::permissions::is_executable(&script).unwrap()
         );
     }
     assert!(!there.home().join(".gemini/config/skills/writer").exists());
