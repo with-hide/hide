@@ -1231,6 +1231,30 @@ mod tests {
         assert_eq!(automation.next_due_unix_ms, Some(at("2026-11-19T09:00")));
     }
 
+    /// D-16: a week asleep under a five-minute schedule is still one line
+    /// and one run, its times counted.
+    #[test]
+    fn a_week_missed_every_five_minutes_is_one_line_and_one_run() {
+        let mut automation = automation(
+            Schedule::EveryMinutes { minutes: 5 },
+            at("2026-11-12T08:58"),
+        );
+        let due = automation
+            .take_due(at("2026-11-19T09:02"), &seoul(), Notice::AfterGap)
+            .unwrap();
+        assert_eq!(due.due_unix_ms, at("2026-11-19T09:00"));
+        assert_eq!(
+            due.missed,
+            Some(Entry::Missed {
+                first_unix_ms: at("2026-11-12T09:00"),
+                last_unix_ms: at("2026-11-19T09:00"),
+                count: 7 * 24 * 12 + 1,
+                reason: MissedReason::Asleep,
+            })
+        );
+        assert_eq!(automation.next_due_unix_ms, Some(at("2026-11-19T09:05")));
+    }
+
     /// One time noticed long after it came, as after a sleep, is missed too.
     #[test]
     fn one_time_noticed_late_after_a_sleep_is_a_missed_line() {
