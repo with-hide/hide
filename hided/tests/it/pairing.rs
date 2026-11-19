@@ -24,6 +24,9 @@ use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[cfg(unix)]
+mod guest_work;
+
 /// The machine id the guest daemon runs under, so one host is two machines.
 const GUEST: &str = "pairing-guest";
 
@@ -62,19 +65,21 @@ struct Window(Socket);
 
 impl Window {
     async fn open(running: &hided::RunningDaemon, kind: &str) -> Self {
-        let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
+        Self::open_at(running.port, &running.token, kind).await
+    }
+
+    /// A screen of `kind` on the daemon that listens on `port`.
+    async fn open_at(port: u16, token: &str, kind: &str) -> Self {
+        let mut request = format!("ws://127.0.0.1:{port}/ws")
             .into_client_request()
             .unwrap();
-        request.headers_mut().insert(
-            ORIGIN,
-            format!("http://127.0.0.1:{}", running.port)
-                .parse()
-                .unwrap(),
-        );
+        request
+            .headers_mut()
+            .insert(ORIGIN, format!("http://127.0.0.1:{port}").parse().unwrap());
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         socket
             .send(Message::Text(
-                json!({"token": running.token, "schema_version": 2, "client_kind": kind})
+                json!({"token": token, "schema_version": 2, "client_kind": kind})
                     .to_string()
                     .into(),
             ))
