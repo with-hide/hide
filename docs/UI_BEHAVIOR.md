@@ -1271,21 +1271,22 @@ When the core set its saved book aside as unreadable (`automations.unreadable`),
 [+ 새 자동화] and [편집] open the form in the screen: name, task, the agent, model and effort from the list an agent's start uses (the last choice by default), the folder, and the schedule (B4, B26).
 The folder is `폴더 없음 · 기본 폴더에서` by default with `~/hide/automations/<name>-…` under it, or one of this machine's listed projects; a Git project adds `회차마다 새 워크트리에서` (B5).
 The schedule is 매일, 평일, 매주 (days), N시간마다 (1 to 12) or a cron line; 200 ms after typing stops, the core reads it back as `<schedule> · 다음: <when> · 이 기계 시간대` (B6).
-What the core refuses (a cron under an hour or unreadable, a week with no day, an empty task, a name taken) is a red line under its field, and [만들기] is off (B7).
-[만들기] opens the new automation's detail, and [만들고 지금 실행] opens the manual run it started (B8); an edit sends only what changed.
+What the core refuses (a cron under an hour or unreadable, a week with no day, an empty task, a name taken) is a red line under its field, and [만들기] is off (B7); an empty name or task has its line once the field is left.
+[만들기] opens the new automation's detail, and [만들고 지금 실행] opens the manual run it started (B8), waiting for the snapshot that holds them when the answer comes first; an answer after the form was cancelled moves nothing, and back on the table the keys are on its first row.
+An edit sends only what changed: the worktree choice is sent only when the folder or the box moved.
 The preview, the make, the edit and a run's reopen are one `automation_call` each, answered to that window alone by an `automation_result` frame; every other press is a window event whose result the snapshot shows.
 
 The detail shows the task, the schedule, the next run, the folder, the agent with its model and effort, [지금 실행], [멈춤] or [다시 켜기], [편집], [폴더 열기] (in the desktop app on the core's own machine only) and delete, then the runs newest first (B11, B25).
 Opening it marks its unseen runs seen, so the sidebar's number drops.
 A run reads its time, its result, and the tags `수동`, `놓친 회차`, `이어서 대화 중` and `대화를 찾을 수 없음`; a skipped time and missed times are lines of their own.
-A run going opens its terminal in the screen, live and typed into, with [■ 멈추기], which ends it as `멈춤 · 사람이 끝냄` (B16).
-While a run's terminal shows, the window tells the core (`automation_run_viewing`), which keeps that terminal attached and open, and reads a turn that stops there with no cause as the operator's.
+A run going opens its terminal in the screen, live and typed into, with [■ 멈추기], which ends it as `멈춤 · 사람이 끝냄` (B16); the run owns that pane, so its head has no ⋯ menu and no ✕.
+While a run's terminal shows, the window tells the core (`automation_run_viewing`) and tells it again every five minutes, inside the core's 30-minute hold; the core keeps that terminal attached and open, and reads a turn that stops there with no cause as the operator's.
 Pressing a finished run whose terminal is closed asks the core to open its conversation again in the screen (B17); a terminal that slept while shown says so with [다시 열기] (B18), a conversation the core cannot resume says `대화를 찾을 수 없음` and opens nothing, and a refused opening (another opening of the automation still starting, `automation_opening`) is a line above [다시 열기].
 Delete asks `<name> 자동화와 회차 기록 N개를 지울까요? 작업 폴더와 결과 파일은 남아요`, adds `도는 회차도 멈춰요` when a run goes or is open, and offers [자동화 지우기] and [그대로 두기] with neither chosen (B27).
 
 An automation the core stopped for a person is its own Needs You row in the 프로젝트 list, the 태스크 list's 내 차례 and the Overview: its name with the Needs You mark, `<reason> · 고치고` and [다시 켜기], which turns it on and takes the row away; the row opens its detail (B23).
 A run's agent row reads `↻ 자동화: <name>` where a task's origin stands, and when it asks, is blocked or opened a View it stands in Needs You like any agent; pressing it opens the run's terminal in the screen, or the View it opened (B15).
-An automation's own folder is a workspace the core marks `unlisted`: no sidebar project, project filter, start target, search row or Overview project shows it, and its checkout's place reads as the run's origin (B30).
+An automation's own folder is a workspace the core marks `unlisted`: every list a person picks a project from reads the one listed filter (`listedWorkspaces`), so no sidebar project, project filter, start target, search row, recent move, Overview project or 프로젝트별 group of the 태스크 list shows it, and its checkout's place reads as the run's origin (B30).
 
 ## Terminal image attachment boundary
 
