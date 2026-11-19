@@ -8,7 +8,8 @@
 ; keep-alive marker and the builds under ~\.hide\core (`hide always-on
 ; remove`), and the firewall rules for same-network machines, which need an
 ; administrator, so Windows asks through its permission prompt; declined,
-; the rules stay and one line says so. A Herdr server an earlier build left
+; the rules stay and one line says so, as it does when the item could not
+; be taken out. A Herdr server an earlier build left
 ; running and its panes are not stopped: they may hold the operator's
 ; agents, and docs/INSTALL.md gives the command that ends them. An update
 ; runs this uninstaller too (`--updated`), and then nothing is stopped or
@@ -19,6 +20,9 @@
     Pop $0
     nsExec::Exec '"$INSTDIR\resources\hide.exe" always-on remove'
     Pop $0
+    ${if} $0 != 0
+      MessageBox MB_OK|MB_ICONINFORMATION "Hide's background core could not be taken out. Delete the tasks under Hide in Task Scheduler and the folder .hide\core in your user folder." /SD IDOK
+    ${endIf}
     nsExec::Exec '"$INSTDIR\resources\hide.exe" always-on firewall ask-remove'
     Pop $0
     ${if} $0 != 0

@@ -10,9 +10,14 @@
 import type { FirewallAnswer, FirewallState } from "../../../web/src/host";
 import type { ChildResult } from "./spawn";
 
-/** How long reading the rules may take, and how long the prompt may stay open. */
+/** How long reading the rules may take. */
 export const FIREWALL_CLI_TIMEOUT_MS = 30_000;
-export const FIREWALL_PROMPT_TIMEOUT_MS = 10 * 60_000;
+/**
+ * How long the ask may take: the CLI gives Windows's prompt
+ * `hide_platform::firewall::PROMPT_WITHIN` (10 minutes) and answers itself,
+ * so this waits a minute past it for that answer.
+ */
+export const FIREWALL_PROMPT_TIMEOUT_MS = 11 * 60_000;
 
 export type RunChild = (file: string, args: readonly string[], timeoutMs: number) => Promise<ChildResult>;
 

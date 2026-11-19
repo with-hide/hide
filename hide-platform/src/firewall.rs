@@ -29,6 +29,11 @@ pub fn rule_name(port: u16) -> String {
 #[cfg(windows)]
 const COMMAND_WITHIN: Duration = Duration::from_secs(60);
 
+/// How long Windows's permission prompt may stay open before the ask is
+/// given up: long enough for an account that is not an administrator to
+/// have one type a password. The desktop app waits a little past it.
+pub const PROMPT_WITHIN: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 /// Whether both rules for `port` are in place.
 pub fn allowed(port: u16) -> io::Result<bool> {
     #[cfg(windows)]
@@ -152,11 +157,14 @@ pub fn run_elevated(program: &std::path::Path, arguments: &[&str]) -> io::Result
         let quoted = |value: &str| format!("'{}'", value.replace('\'', "''"));
         let arguments: Vec<String> = arguments.iter().map(|argument| quoted(argument)).collect();
         let script = format!(
-            "try {{ $p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode }} catch {{ exit {DECLINED_EXIT} }}",
+            // Only a declined prompt is a decline: Windows says it with
+            // ERROR_CANCELLED inside the exception Start-Process throws, and
+            // any other failure to start is a failure.
+            "try {{ $p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode }} catch {{ $e = $_.Exception; while ($e) {{ if ($e -is [System.ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq {DECLINED_EXIT}) {{ exit {DECLINED_EXIT} }}; $e = $e.InnerException }}; exit 1 }}",
             quoted(&program.to_string_lossy()),
             arguments.join(","),
         );
-        let finished = powershell(&script)?;
+        let finished = powershell_within(&script, PROMPT_WITHIN)?;
         Ok(match finished.code {
             Some(0) => Elevated::Done,
             Some(DECLINED_EXIT) => Elevated::Declined,
@@ -196,6 +204,12 @@ fn checked(script: &str, done: &str) -> io::Result<()> {
 /// auto-loading can first build a cache of every module (docs/TESTING.md).
 #[cfg(windows)]
 fn powershell(script: &str) -> io::Result<crate::process::Finished> {
+    powershell_within(script, COMMAND_WITHIN)
+}
+
+/// [`powershell`] given up `within` from now.
+#[cfg(windows)]
+fn powershell_within(script: &str, within: Duration) -> io::Result<crate::process::Finished> {
     let system = crate::host::variable("SystemRoot")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| io::Error::other("SystemRoot is not set"))?;
@@ -215,7 +229,7 @@ fn powershell(script: &str) -> io::Result<crate::process::Finished> {
         "-Command",
         &format!("$PSModuleAutoLoadingPreference = 'None'; Import-Module NetSecurity; {script}"),
     ]);
-    crate::process::run_to_end(&mut command, COMMAND_WITHIN, &Default::default())
+    crate::process::run_to_end(&mut command, within, &Default::default())
         .map_err(|error| io::Error::other(format!("PowerShell did not answer: {error:?}")))
 }
 
