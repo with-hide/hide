@@ -9,7 +9,7 @@ import chartTemplate from "./demoChart.svg?raw";
 import guideTemplate from "./demoGuide.html?raw";
 import { card, pr, project } from "./prFixture";
 import type {
-  AgentGroup, ConversationMessage, GroupRow, LookRow, PhoneAgent, PhoneDevice, PhoneMission, PhoneMissionNode, PhonePr, PhonePrFeedback, ServerFrame, StartCatalog,
+  AgentGroup, ConversationMessage, GroupRow, LookRow, PhoneAgent, PhoneAutomation, PhoneAutomationRecord, PhoneDevice, PhoneMission, PhoneMissionNode, PhonePr, PhonePrFeedback, ServerFrame, StartCatalog,
 } from "./protocol";
 
 type T = TFunction<"translation">;
@@ -35,9 +35,14 @@ export type DemoState = {
   feedback: { requestId: string; pr: string } | null;
   seenLooks: readonly string[];
   said: Readonly<Record<string, readonly Said[]>>;
+  /** The sample automations paused this visit, and the manual runs it started, each with when it started and whether it finished. */
+  pausedAutomations: readonly string[];
+  manualRuns: readonly DemoRun[];
 };
 
-export const START_STATE: DemoState = { t0: 0, started: [], answered: false, merged: [], feedback: null, seenLooks: [], said: {} };
+export type DemoRun = { automation: string; at: number; done: boolean };
+
+export const START_STATE: DemoState = { t0: 0, started: [], answered: false, merged: [], feedback: null, seenLooks: [], said: {}, pausedAutomations: ["auto-deps"], manualRuns: [] };
 
 /**
  * The kind of every sample agent and conductor is the word "agent" in the phone's language: a kind Hide has no adapter for,
@@ -284,6 +289,38 @@ function work(over: Partial<NonNullable<PhonePr["work"]>>): NonNullable<PhonePr[
 
 /** The pull request that fails a check, which the hand-over sheet opens on. */
 export const FAILED_PR_NUMBER = 2088;
+
+/** The sample automations: one each morning with a run history, one weekly that is paused; a press this visit adds a manual run or pauses it. */
+export function automationsFrame(t: T, state: DemoState): ServerFrame {
+  const day = new Date(state.t0);
+  const at = (daysAgo: number, hour: number) => new Date(day.getFullYear(), day.getMonth(), day.getDate() - daysAgo, hour).getTime();
+  const run = (number: number, started: number, minutes: number, trigger: "scheduled" | "manual" | "missed" = "scheduled"): PhoneAutomationRecord => ({
+    kind: "run", number, trigger, started_at_unix_ms: started, ended_at_unix_ms: started + minutes * MINUTE, state: "succeeded", attempt: 1, seen: true,
+  });
+  const sample = (id: string, name: string, base: Omit<PhoneAutomation, "id" | "name" | "running" | "records">, history: PhoneAutomationRecord[]): PhoneAutomation => {
+    const manual = state.manualRuns.filter((entry) => entry.automation === id);
+    const runs: PhoneAutomationRecord[] = manual.map((entry, index) => ({
+      kind: "run", number: history.length + index + 1, trigger: "manual", started_at_unix_ms: entry.at,
+      ...(entry.done ? { ended_at_unix_ms: entry.at + 2 * MINUTE, state: "succeeded" as const } : { state: "running" as const }),
+      attempt: 1, seen: !entry.done,
+    }));
+    const paused = state.pausedAutomations.includes(id) ? { paused: { reason: "operator" as const, at_unix_ms: state.t0 - 2 * HOUR }, next_run_at_unix_ms: null } : {};
+    return { id, name, ...base, ...paused, running: manual.some((entry) => !entry.done), records: [...runs.reverse(), ...history] };
+  };
+  const items = [
+    sample("auto-issues", t("mobile.demo.auto1.name"), { schedule: { kind: "weekdays", time: "09:00" }, next_run_at_unix_ms: at(-1, 9), unseen: 1 }, [
+      { ...run(4, at(0, 9), 3), seen: false } as PhoneAutomationRecord,
+      run(3, at(1, 10) + 31 * MINUTE, 4, "missed"),
+      { kind: "missed", first_unix_ms: at(2, 9), last_unix_ms: at(2, 9), count: 1, reason: "asleep" },
+      { kind: "skipped", at_unix_ms: at(3, 9), reason: { kind: "previous_running" } },
+      run(1, at(4, 9), 5),
+    ]),
+    sample("auto-deps", t("mobile.demo.auto2.name"), { schedule: { kind: "weekly", days: ["mon"], time: "08:00" }, next_run_at_unix_ms: at(-3, 8), unseen: 0 }, [
+      run(1, at(7, 8), 6),
+    ]),
+  ];
+  return { type: "automations", items, omitted: 0 };
+}
 
 /** The `prs` frame; titles, branches and files are the repository's own text, so they are not translated. */
 export function prsFrame(t: T, state: DemoState): ServerFrame {

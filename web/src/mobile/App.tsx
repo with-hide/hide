@@ -8,6 +8,8 @@ import { useEffect, useState } from "react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
 import { closeDetail, openStartSheet, pairNow } from "./connection";
+import { AutomationDetail } from "./AutomationDetail";
+import { AutomationsScreen } from "./AutomationsScreen";
 import { Detail } from "./Detail";
 import { GroupRows } from "./ListRows";
 import { MissionDetail } from "./MissionDetail";
@@ -55,6 +57,7 @@ function Screens() {
   const tab = usePhone((s) => s.tab);
   const missionOpen = usePhone((s) => s.missionOpen);
   const prOpen = usePhone((s) => s.prOpen);
+  const automationOpen = usePhone((s) => s.automationOpen);
   const pendingOpen = usePhone((s) => s.pendingOpen);
   const unreachable = usePhone((s) => s.unreachable);
   const relayError = usePhone((s) => s.relayError);
@@ -69,6 +72,7 @@ function Screens() {
   // A worker or a Conductor opened from a mission step is the agent's own detail, on either tab (B36).
   if (detail) return <Detail onBack={closeDetail} />;
   if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;
+  if (tab === "automations") return automationOpen ? <AutomationDetail /> : <AutomationsScreen />;
   if (tab === "prs") return prOpen ? <PrDetail /> : <PrsScreen />;
   if (tab === "settings") return <SettingsScreen />;
   return <ListScreen />;

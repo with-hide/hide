@@ -9,6 +9,7 @@
 
 import {
   MAX_MESSAGES,
+  automationFailure,
   credentialHash,
   inputFailure,
   listedAgents,
@@ -23,6 +24,7 @@ import {
   sameKey,
   sleepTarget,
   type AgentKey,
+  type AutomationAction,
   type DetailTab,
   type DetailView,
   type LookRow,
@@ -319,6 +321,10 @@ function connect(): void {
       onPrResult(frame);
       return;
     }
+    if (frame.type === "automation_result") {
+      onAutomationResult(frame);
+      return;
+    }
     if (frame.type === "missions") {
       applyFrame(frame);
       settleMissionReopen();
@@ -359,6 +365,7 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
   if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
+  if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
   if (state.prDelegate?.pending) patch({ prDelegate: { ...state.prDelegate, pending: null, error: startFailure("offline") } });
   patch({ connected: false, unreachable: !refused || state.refusal === "mobile_off" });
   if (!refused || state.refusal === "mobile_off") scheduleRetry();
@@ -902,6 +909,32 @@ export function confirmMerge(): boolean {
   });
   patch(sent ? { prPending: { requestId, key: confirm.key }, prNotice: null } : { prNotice: { key: confirm.key, notice: prFailure("offline") } });
   return sent;
+}
+
+let lastAutomation: { intent: string; requestId: string } | null = null;
+
+/**
+ * [지금 실행], [멈춤] or [다시 켜기] from the automations tab (PRD automations B34): one press at a time, sent again under the same
+ * request id while hided has not taken it, so a repeat reaches the core once (B36). What the core did comes back on the automation.
+ */
+export function pressAutomation(id: string, action: AutomationAction): boolean {
+  const state = usePhone.getState();
+  if (state.automationPending) return false;
+  const intent = JSON.stringify([id, action]);
+  const requestId = lastAutomation?.intent === intent ? lastAutomation.requestId : newRequestId();
+  lastAutomation = { intent, requestId };
+  const sent = send({ type: "automation", request_id: requestId, action, id });
+  patch(sent ? { automationPending: { requestId, id, action }, automationNotice: null } : { automationNotice: { id, notice: automationFailure("offline") } });
+  return sent;
+}
+
+function onAutomationResult(frame: Extract<ServerFrame, { type: "automation_result" }>): void {
+  const pending = usePhone.getState().automationPending;
+  // Only the answer to the press the tab is waiting on.
+  if (!pending || frame.request_id !== pending.requestId) return;
+  // Taken, or refused for a reason a new press would meet again: the next press is a new one.
+  if (frame.ok || (frame.reason !== "in_flight" && frame.reason !== "offline")) lastAutomation = null;
+  patch({ automationPending: null, automationNotice: frame.ok ? null : { id: pending.id, notice: automationFailure(frame.reason) } });
 }
 
 function onPrResult(frame: Extract<ServerFrame, { type: "pr_result" }>): void {

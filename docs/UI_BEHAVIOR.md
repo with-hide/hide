@@ -3397,7 +3397,18 @@ A press repeated, from a slow connection or a second tap, reaches GitHub once; t
 Away from the Mac the page keeps its last content dimmed under the unreachable line, and `머지`, `맡기기` and `다시 확인` are off.
 Left out on purpose: a `초록 N개 머지` chip on the list and the `머지 순서` line on a page, since merging many pull requests in order is the lead's and the desktop's job (D-12).
 
-The phone's bottom bar has four places, 에이전트, 미션, PR and 설정, and the last is the Settings tab (`web/src/mobile/SettingsScreen.tsx`).
+The 자동화 tab lists the automations the computer's core runs, in its order (PRD automations B34, B35, `web/src/mobile/AutomationsScreen.tsx`).
+Each row shows the unseen dot when a finished run was not looked at, the name, then the schedule as it reads and the next run (`평일 09:00 · 내일 09:00`), or `● 도는 중` while a run goes, or `⏸` with why it is paused; an automation that stopped for a person to fix says why in the warning colour, and a paused row is dimmed.
+A row on carries `▶` (지금 실행), off while a run goes, and `⏸` (멈춤); a paused row carries one `▶` (다시 켜기).
+A press on the row opens its page: the name, the same schedule line, `▶ 지금 실행` and `⏸ 멈춤`, which turns into `다시 켜기`, and the runs newest first, each with its mark (✓, ✗, a spinner, –), its start time with `수동` or `놓친 회차`, its result (`끝남 · 3분`, `실패 · 3번 시도`, `건너뜀 · 이전 회차 진행 중`, `<처음> ~ <마지막> · 놓침 N회 · <이유>`), and the unseen dot; the phone lists the newest 20, and `이전 회차 N개는 데스크톱에서 보세요` counts the rest.
+How a schedule, a next run and a record read is `web/src/automationWords.ts`, shared with the desktop's automation screen.
+A press goes to the core as the desktop's own button does, once per press however often it is sent again; what the core did comes back on the automation, and a refusal (a run already going, an automation that is gone, the computer out of reach) is one line under the page's buttons.
+The phone has no button to make, edit or remove an automation: that is said to an agent, on the phone as on the desktop.
+With none, the tab says `자동화가 아직 없어요` and `에이전트에게 말로 만들 수 있어요`.
+Away from the computer the tab keeps its last list dimmed under the unreachable line, as the other tabs do, and its buttons are off; the list is filled again on reconnect.
+An automation's own folder is no project the phone lists: the start sheet and the PR tab leave out a project the core marks `unlisted`.
+
+The phone's bottom bar has five places, 에이전트, 미션, 자동화 (once the computer sends automations), PR and 설정, and the last is the Settings tab (`web/src/mobile/SettingsScreen.tsx`).
 It replaces the gear and its sheet that the list's header carried, and it reads top to bottom as the computers this phone is connected to, 알림, 표시, 정보.
 Each is a group as the desktop's Settings draws one (`Group`, `web/src/components/settings-rows.tsx`): its heading, a card of rows split by hairlines, each row one thing to read or press and a touch target tall, and a group's note under the card; a row carries a line under its name only where the desktop's has one, which on the phone is the notification row's.
 연결된 컴퓨터 lists each paired computer with its state and counts; a press switches to it, `다른 기기 연결` opens the QR scan and paste page, and the trash on a row asks `컴퓨터 이름: 이 폰에서 연결을 지울까요? 다시 연결하려면 새 QR이 필요해요.` before it removes the computer from this phone.

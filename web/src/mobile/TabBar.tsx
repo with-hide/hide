@@ -4,7 +4,7 @@
 // count in `useBadges`; the bar is drawn on the lists only, never over a
 // detail.
 
-import { FlagIcon, GitPullRequestIcon, ListIcon, SettingsIcon, type LucideIcon } from "lucide-react";
+import { FlagIcon, GitPullRequestIcon, ListIcon, RepeatIcon, SettingsIcon, type LucideIcon } from "lucide-react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import type { MessageKey } from "../i18n/catalogs";
@@ -15,23 +15,30 @@ import { setTab, usePhone, type PhoneTab } from "./store";
 export const PHONE_TABS: readonly { id: PhoneTab; icon: LucideIcon; label: MessageKey }[] = [
   { id: "agents", icon: ListIcon, label: "mobile.tab.agents" },
   { id: "missions", icon: FlagIcon, label: "mobile.tab.missions" },
+  { id: "automations", icon: RepeatIcon, label: "mobile.tab.automations" },
   { id: "prs", icon: GitPullRequestIcon, label: "mobile.tab.prs" },
   { id: "settings", icon: SettingsIcon, label: "mobile.tab.settings" },
 ];
 
-/** What waits on the operator in each place: the agent list's 내 차례 rows, and the missions with anything in theirs; the PR and Settings tabs have no count (B28). */
+/**
+ * What waits on the operator in each place: the agent list's 내 차례 rows, and the missions with anything in theirs; the automations, PR and
+ * Settings tabs have no count (B28): an automation that stopped for a person comes as its own 내 차례 line (PRD automations D-12).
+ */
 function useBadges(): Record<PhoneTab, number> {
   const agents = usePhone((s) => s.groups?.find((group) => group.group === "needs_you")?.count ?? 0);
   const missions = useMissionBadge();
-  return { agents, missions, prs: 0, settings: 0 };
+  return { agents, missions, automations: 0, prs: 0, settings: 0 };
 }
 
 export function TabBar({ active }: { active: PhoneTab }) {
   const { t } = useInterfaceTranslation();
   const badges = useBadges();
+  // A Hide before automations sends no `automations` frame, so its tab stays away (docs/ARCHITECTURE.md, an addition keeps the number).
+  const automations = usePhone((s) => s.automations !== null);
+  const tabs = PHONE_TABS.filter(({ id }) => id !== "automations" || automations);
   return (
     <nav aria-label={t("mobile.tabs")} className="phone-safe-bottom sticky bottom-0 mt-auto grid grid-flow-col auto-cols-fr border-t border-border bg-background" data-phone-tabs={active}>
-      {PHONE_TABS.map(({ id, icon: Icon, label }) => {
+      {tabs.map(({ id, icon: Icon, label }) => {
         const count = badges[id];
         const here = id === active;
         return (

@@ -1,0 +1,204 @@
+// @vitest-environment jsdom
+// The phone's automations tab and an automation's page (docs/UI_BEHAVIOR.md,
+// The phone app; PRD automations B34, B35): the list with its schedule, next
+// run, unseen dot and buttons, the runs newest first, a press that reaches
+// the computer once, the empty line, and what stays when the computer cannot
+// be reached. No button makes, edits or removes an automation.
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import type { PhoneAutomation, ServerFrame } from "./protocol";
+
+vi.hoisted(() => {
+  HTMLCanvasElement.prototype.getContext = () => null;
+});
+
+class FakeSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static instances: FakeSocket[] = [];
+  readyState = 1;
+  sent: Record<string, unknown>[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor() {
+    FakeSocket.instances.push(this);
+  }
+  send(data: string) {
+    this.sent.push(JSON.parse(data) as Record<string, unknown>);
+  }
+  close() {}
+}
+
+const ZONE = "UTC";
+// 2026-11-19 08:00 UTC, a Thursday.
+const NOW = Date.UTC(2026, 10, 19, 8, 0);
+const HOUR = 3_600_000;
+
+function automation(id: string, over: Partial<PhoneAutomation> = {}): PhoneAutomation {
+  return {
+    id,
+    name: `Automation ${id}`,
+    schedule: { kind: "weekdays", time: "09:00" },
+    next_run_at_unix_ms: NOW + HOUR,
+    running: false,
+    unseen: 0,
+    records: [],
+    ...over,
+  };
+}
+
+/** A phone paired and connected to a fake hided; `automations` is the first frame's list, or none for a Hide before automations. */
+async function connect(automations: PhoneAutomation[] | null) {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("WebSocket", FakeSocket);
+  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
+  FakeSocket.instances = [];
+  vi.resetModules();
+  const { App } = await import("./App");
+  const connection = await import("./connection");
+  const store = await import("./store");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  store.patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
+  connection.pairNow();
+  const socket = FakeSocket.instances[0]!;
+  const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
+  await act(async () => socket.onopen?.());
+  await serve({ type: "hello", mac_name: "Mac", phone_id: "phone-a", name: null, vapid_public_key: "key", notifications: "off" });
+  await serve({ type: "agents", groups: [], devices: [], interface_language: "en", color_theme: null });
+  const list = (items: PhoneAutomation[]) => serve({ type: "automations", items, zone: ZONE });
+  if (automations) await list(automations);
+  await act(async () => root.render(<App />));
+  const q = (selector: string) => container.querySelector<HTMLElement>(selector);
+  const click = (selector: string) => act(async () => q(selector)!.click());
+  const sent = () => socket.sent.filter((message) => message.type === "automation");
+  const lose = () => act(async () => socket.onclose?.());
+  return { container, serve, list, q, click, sent, lose, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
+}
+
+// The first import of the app transforms its whole module graph; that cost is paid here, with the hook's own budget.
+beforeAll(async () => {
+  vi.stubGlobal("WebSocket", FakeSocket);
+  await import("./App");
+  vi.unstubAllGlobals();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+it("shows no automations tab against a Hide that sends none, and the one empty line once it does", async () => {
+  const { container, list, click, unmount } = await connect(null);
+  try {
+    expect(container.querySelector('[data-phone-tab="automations"]')).toBeNull();
+    await list([]);
+    expect([...container.querySelectorAll("[data-phone-tab]")].map((tab) => tab.getAttribute("data-phone-tab"))).toEqual(["agents", "missions", "automations", "prs", "settings"]);
+    await click('[data-phone-tab="automations"]');
+    expect(container.querySelector('[data-phone-automations-state="empty"]')!.textContent).toBe("No automations yetYou can create one by asking an agent");
+  } finally {
+    await unmount();
+  }
+});
+
+it("lists each automation's schedule and next run in the computer's zone, its unseen dot, and only run, pause or resume", async () => {
+  const { container, click, unmount } = await connect([
+    automation("on", { unseen: 2 }),
+    automation("going", { running: true }),
+    automation("off", { paused: { reason: "operator", at_unix_ms: NOW }, next_run_at_unix_ms: null }),
+    automation("signed-out", { paused: { reason: "login_expired", at_unix_ms: NOW }, next_run_at_unix_ms: null }),
+  ]);
+  try {
+    await click('[data-phone-tab="automations"]');
+    const row = (id: string) => container.querySelector(`[data-phone-automation="${id}"]`)!;
+    const presses = (id: string) => [...row(id).querySelectorAll("[data-phone-automation-press]")].map((button) => [button.getAttribute("data-phone-automation-press"), (button as HTMLButtonElement).disabled]);
+    expect(row("on").querySelector("[data-phone-automation-next]")!.textContent).toBe("Weekdays 09:00 · Today 09:00");
+    expect(row("on").querySelector("[data-phone-automation-unseen]")).not.toBeNull();
+    expect(presses("on")).toEqual([["run", false], ["pause", false]]);
+    // A run going turns the next-run cell and takes [지금 실행] away (B19).
+    expect(row("going").querySelector("[data-phone-automation-next]")!.getAttribute("data-phone-automation-next")).toBe("running");
+    expect(presses("going")).toEqual([["run", true], ["pause", false]]);
+    expect(presses("off")).toEqual([["resume", false]]);
+    expect(row("signed-out").querySelector("[data-phone-automation-paused]")!.textContent).toBe("⏸ Signed out");
+    // Nothing on the tab makes, edits or removes one (D-20).
+    expect(container.querySelectorAll("[data-phone-automation-press]").length).toBe(6);
+  } finally {
+    await unmount();
+  }
+});
+
+it("opens an automation's runs newest first with their marks, tags and results, and closes the page when it leaves", async () => {
+  const records: PhoneAutomation["records"] = [
+    { kind: "run", number: 4, trigger: "manual", started_at_unix_ms: NOW - HOUR, state: "running", attempt: 2, seen: false },
+    { kind: "run", number: 3, trigger: "missed", started_at_unix_ms: NOW - 24 * HOUR, ended_at_unix_ms: NOW - 24 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, seen: false },
+    { kind: "skipped", at_unix_ms: NOW - 48 * HOUR, reason: { kind: "previous_running" } },
+    { kind: "run", number: 2, trigger: "scheduled", started_at_unix_ms: NOW - 72 * HOUR, ended_at_unix_ms: NOW - 71 * HOUR, state: "failed", attempt: 3, seen: true },
+  ];
+  const { container, list, click, unmount } = await connect([automation("a", { records, records_omitted: 30 })]);
+  try {
+    await click('[data-phone-tab="automations"]');
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    const lines = [...container.querySelectorAll("[data-phone-automation-record]")].map((line) => [
+      line.getAttribute("data-phone-automation-record-tone"),
+      line.querySelector("[data-phone-automation-tag]")?.getAttribute("data-phone-automation-tag") ?? null,
+      line.querySelector("[data-phone-automation-result]")!.textContent,
+    ]);
+    expect(lines).toEqual([
+      ["running", "manual", "Try 2"],
+      ["ok", "missed", "12m"],
+      ["skipped", null, "Skipped · the last run was still going"],
+      ["failed", null, "Failed · 3 tries"],
+    ]);
+    expect(container.querySelector("[data-phone-automation-older]")!.getAttribute("data-phone-automation-older")).toBe("30");
+    await list([]);
+    expect(container.querySelector("[data-phone-automation-page]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+it("sends a press once under one request id, waits for hided's answer, and says why it was refused", async () => {
+  const { container, serve, click, sent, unmount } = await connect([automation("a")]);
+  try {
+    await click('[data-phone-tab="automations"]');
+    await click('[data-phone-automation="a"] [data-phone-automation-press="run"]');
+    const [first] = sent();
+    expect(first).toMatchObject({ type: "automation", action: "run", id: "a" });
+    // While hided has not answered, no second press goes out.
+    expect((container.querySelector('[data-phone-automation="a"] [data-phone-automation-press="pause"]') as HTMLButtonElement).disabled).toBe(true);
+    await serve({ type: "automation_result", request_id: first!.request_id as string, action: "run", id: "a", ok: false, reason: "running" });
+    // The refusal is one line under the row, and stays under the page's buttons when it opens.
+    expect(container.querySelector('[data-phone-automation="a"] [data-phone-automation-notice]')!.textContent).toBe("A run is already going.");
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    expect(container.querySelector("[data-phone-automation-notice]")!.textContent).toBe("A run is already going.");
+    // A refused press sent nothing the core kept, so the next one is a new press.
+    await click('[data-phone-automation-page] [data-phone-automation-press="run"]');
+    const second = sent()[1]!;
+    expect(second.request_id).not.toBe(first!.request_id);
+    expect(container.querySelector("[data-phone-automation-notice]")).toBeNull();
+    await serve({ type: "automation_result", request_id: second.request_id as string, action: "run", id: "a", ok: true, reason: null });
+    expect(container.querySelector("[data-phone-automation-notice]")).toBeNull();
+  } finally {
+    await unmount();
+  }
+});
+
+it("keeps the last list dimmed under the unreachable line with its buttons off, and says a press in flight did not arrive", async () => {
+  const { container, click, lose, unmount } = await connect([automation("a")]);
+  try {
+    await click('[data-phone-tab="automations"]');
+    await click('[data-phone-automation="a"] [data-phone-automation-press="pause"]');
+    await lose();
+    expect(container.querySelector("[data-phone-unreachable]")).not.toBeNull();
+    expect(container.querySelector('[data-phone-automations="true"] [aria-busy="true"] [data-phone-automation="a"]')).not.toBeNull();
+    expect([...container.querySelectorAll<HTMLButtonElement>("[data-phone-automation-press]")].every((button) => button.disabled)).toBe(true);
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    expect(container.querySelector("[data-phone-automation-notice]")!.textContent).toBe("The computer can't be reached right now. Try again once connected.");
+  } finally {
+    await unmount();
+  }
+});
