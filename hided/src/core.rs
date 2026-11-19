@@ -40,10 +40,12 @@ type ReleaseSourceAnswer =
     Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
 
 /// What a hook's answer is read from: Memory's scope or why there is none,
-/// and the open questions' when the hook asks at a prompt.
+/// the open questions' when the hook asks at a prompt, and the Project's
+/// other sessions' when it starts a session.
 pub type HookScope = (
     Result<hide_core::memory_hook::Scope, &'static str>,
     Option<hide_core::links::agent_asks::GiveScope>,
+    Option<hide_core::links::session_brief::BriefScope>,
 );
 
 enum Command {
@@ -298,6 +300,8 @@ enum Command {
         context: Context,
         /// The pane and the prompt's session, when the hook asks at a prompt.
         asks: Option<(String, String)>,
+        /// The pane and the session it starts, when the hook starts one.
+        brief: Option<(String, String)>,
         reply: Sender<HookScope>,
     },
     FoldAsk {
@@ -1304,21 +1308,24 @@ impl CoreHandle {
     /// caller's blocking task. The owner's answer is waited for until the
     /// hook's `deadline` at most, the one its node call and store read share.
     /// What a hook's answer is read from, in one trip to the owner thread:
-    /// Memory's scope, and at a prompt the session's open questions' (`asks`
-    /// names the pane and the session the hook names).
+    /// Memory's scope, at a prompt the session's open questions' (`asks`
+    /// names the pane and the session the hook names) and at a session start
+    /// the Project's other sessions' (`brief`, the same pair).
     pub fn hook_scope(
         &self,
         context: &Context,
         asks: Option<(String, String)>,
+        brief: Option<(String, String)>,
         deadline: std::time::Instant,
     ) -> HookScope {
         let (reply, rx) = mpsc::channel();
-        let failed = |reason| (Err(reason), None);
+        let failed = |reason| (Err(reason), None, None);
         if self
             .commands
             .send(Command::MemoryScope {
                 context: context.clone(),
                 asks,
+                brief,
                 reply,
             })
             .is_err()
@@ -2015,12 +2022,15 @@ fn owner_loop(
             Command::MemoryScope {
                 context,
                 asks,
+                brief,
                 reply,
             } => {
                 let give = asks.and_then(|(pane, session)| {
                     core.asks_give_scope(&context.device_id, &pane, &session)
                 });
-                let _ = reply.send((core.memory_scope(&context), give));
+                let brief =
+                    brief.and_then(|(pane, session)| core.brief_scope(&context, &pane, &session));
+                let _ = reply.send((core.memory_scope(&context), give, brief));
             }
             Command::FoldAsk {
                 device_id,
