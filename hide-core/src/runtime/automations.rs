@@ -1720,10 +1720,7 @@ impl Runtime {
         if self.automations.viewing.contains_key(key) {
             return Some("viewing");
         }
-        if self.ui_attached()
-            && !self.front_unlisted()
-            && self.agent_sleep_on_screen(None).contains(&row.pane_id)
-        {
+        if self.ui_attached() && self.agent_sleep_on_screen(None).contains(&row.pane_id) {
             return Some("on_screen");
         }
         let letters = self
@@ -1731,25 +1728,6 @@ impl Runtime {
             .map(|ledger| crate::agent_sleep::LetterWaits::of(&ledger))
             .unwrap_or_default();
         letters.holds(row).then_some("letter")
-    }
-
-    /// Whether the checkout in front is in a project no list shows (an
-    /// automation's own folder). No Workspace draws it: the keys typed into
-    /// a run's terminal in the automation screen put the focus there, and it
-    /// stays once the screen looks away, so only `viewing` says the run is
-    /// shown (B17).
-    fn front_unlisted(&self) -> bool {
-        let navigator = &self.snapshot.navigator;
-        let Some(front) = navigator.focused_checkout_id.as_deref() else {
-            return false;
-        };
-        navigator.workspaces.iter().any(|workspace| {
-            workspace.unlisted
-                && workspace
-                    .checkouts
-                    .iter()
-                    .any(|checkout| checkout.id == front)
-        })
     }
 
     /// Runs this machine's closes that are due on workers: a run's own close

@@ -768,6 +768,42 @@ impl Harness {
             .retain(|agent| agent.pane_id != pane);
     }
 
+    /// The operator typed into `pane` in the automation screen: the core's
+    /// focus moved to its tab, in the automation's own folder, which no list
+    /// shows.
+    fn focus_in_own_folder(&self, pane: &str) {
+        let folder = "/home/u/hide/automations/Issues-a1";
+        let mut runtime = self.runtime.lock().unwrap();
+        let mut own = workspace(
+            "w-own",
+            "Issues-a1",
+            folder,
+            vec![checkout("w-own", "c-own", folder, None)],
+        );
+        own.unlisted = true;
+        own.checkouts[0].tabs = vec![super::tab(
+            "w-own",
+            "c-own",
+            Some(super::pane(pane, folder)),
+        )];
+        let workspaces = &mut runtime.snapshot.navigator.workspaces;
+        workspaces.retain(|workspace| workspace.id != "w-own");
+        workspaces.push(own);
+        runtime.snapshot.navigator.focused_checkout_id = Some("c-own".into());
+        runtime
+            .visible_tab_ids
+            .insert("c-own".into(), "c-own:tab".into());
+    }
+
+    /// Whether `pane` is on screen as the sleep and a run's close read it.
+    fn on_screen(&self, pane: &str) -> bool {
+        self.runtime
+            .lock()
+            .unwrap()
+            .agent_sleep_on_screen(None)
+            .contains(pane)
+    }
+
     /// The agent in `pane` ended: its registration ends, as when its
     /// program exits.
     fn end(&self, pane: &str) {
@@ -1074,27 +1110,7 @@ fn a_finished_runs_terminal_closes_once_the_screen_looks_away_though_the_focus_s
         .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
         .unwrap();
     harness.tick(1);
-    {
-        let folder = "/home/u/hide/automations/Issues-a1";
-        let mut runtime = harness.runtime.lock().unwrap();
-        let mut own = workspace(
-            "w-own",
-            "Issues-a1",
-            folder,
-            vec![checkout("w-own", "c-own", folder, None)],
-        );
-        own.unlisted = true;
-        own.checkouts[0].tabs = vec![super::tab(
-            "w-own",
-            "c-own",
-            Some(super::pane(&pane, folder)),
-        )];
-        runtime.snapshot.navigator.workspaces.push(own);
-        runtime.snapshot.navigator.focused_checkout_id = Some("c-own".into());
-        runtime
-            .visible_tab_ids
-            .insert("c-own".into(), "c-own:tab".into());
-    }
+    harness.focus_in_own_folder(&pane);
     harness.show(&pane, answered);
     harness.tick(1);
     assert_eq!(harness.run(&id).0, "succeeded");
@@ -1106,6 +1122,58 @@ fn a_finished_runs_terminal_closes_once_the_screen_looks_away_though_the_focus_s
         .unwrap();
     harness.tick(1);
     assert_eq!(harness.closed(), [pane]);
+}
+
+/// B17, B18 (review of the screen e2e fix): the operator types into a
+/// conversation opened again, which leaves the focus in the automation's own
+/// folder; once the screen looks away its terminal is no longer on screen,
+/// so Hide's sleep may take it, and asleep it closes.
+#[test]
+fn an_opened_conversation_typed_into_sleeps_and_closes_once_the_screen_looks_away() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.show(&pane, answered);
+    harness.tick(1);
+    harness.tick(1);
+    assert_eq!(harness.closed(), [pane]);
+
+    harness
+        .call(json!({"call": "run_open", "id": id, "run": 1}))
+        .unwrap();
+    wait_for("the opening's start", || harness.settled());
+    let opened = pane_of(&crate::automations::open_intent(&id, 1, 1));
+    harness.show(&opened, answered);
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": true}))
+        .unwrap();
+    harness.focus_in_own_folder(&opened);
+    harness.tick(1);
+    assert!(harness.on_screen(&opened), "the automation screen shows it");
+
+    harness
+        .call(json!({"call": "run_viewing", "id": id, "run": 1, "on": false}))
+        .unwrap();
+    harness.tick(1);
+    assert!(!harness.on_screen(&opened), "no Workspace draws its folder");
+    assert_eq!(harness.records(&id)[0]["opened"], true);
+    harness.show(&opened, |row| {
+        answered(row);
+        row.sleep = Some(crate::model::AgentSleepSnapshot {
+            state: "sleeping".into(),
+            reason: None,
+            since_unix_ms: 0,
+            progress: None,
+            cause: None,
+        });
+    });
+    harness.tick(1);
+    assert_eq!(harness.records(&id)[0]["opened"], false);
+    assert!(harness.closed().contains(&opened));
 }
 
 #[test]
