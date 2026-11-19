@@ -1,13 +1,12 @@
 //! When an automation runs (PRD automations D-06, B6, B7): one of the form's
-//! choices (every day, weekdays, chosen days of the week, every N hours from
-//! a time) or a five-field cron line, read in the zone of the machine that
-//! runs it.
+//! choices (every day, weekdays, chosen days of the week, every N minutes,
+//! every N hours from a time) or a five-field cron line, read in the zone of
+//! the machine that runs it.
 //!
 //! Every choice compiles to the same cron form and one walk finds its next
 //! time, so a choice and the cron line it equals answer alike. The shortest
-//! period is one hour (D-16): a schedule fires at one minute of the hour, so
-//! two runs are never closer than an hour; a cron line with several minutes
-//! is refused. The calendar comes from `jiff`, which the core already uses
+//! period is five minutes (D-16): a cron line that would run two times
+//! closer than that is refused. The calendar comes from `jiff`, which the core already uses
 //! for zones: a time a spring-forward skips runs at the time the clock jumps
 //! to, and a time a fall-back repeats runs once, at its first instant.
 
@@ -22,6 +21,13 @@ const HORIZON_DAYS: u32 = 5 * 366;
 
 /// The longest cron line read; a longer one is refused, not cut.
 const CRON_CAP: usize = 128;
+
+/// No two runs of a schedule are closer than this (D-16).
+const SHORTEST_PERIOD_MINUTES: u8 = 5;
+
+/// The periods the form offers in minutes (D-06): each divides the hour,
+/// so every hour runs alike.
+pub const EVERY_MINUTES: [u8; 4] = [5, 10, 15, 30];
 
 /// A day of the week, as the form and the CLI name it.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -105,6 +111,11 @@ pub enum Schedule {
         days: Vec<Weekday>,
         time: Clock,
     },
+    /// Every `minutes` minutes, one of `EVERY_MINUTES`, counted from each
+    /// hour's start: every 15 minutes is :00, :15, :30 and :45.
+    EveryMinutes {
+        minutes: u8,
+    },
     /// Every `hours` hours (1 to 12) on the minute of `time`, counted from
     /// its hour: every 3 hours from 09:00 is 00:00, 03:00, ..., 21:00.
     EveryHours {
@@ -166,6 +177,16 @@ impl Schedule {
                 let restricted = numbers.len() < 7;
                 at(time, numbers, restricted)
             }
+            Self::EveryMinutes { minutes } => {
+                if !EVERY_MINUTES.contains(minutes) {
+                    return Err("schedule_minutes_out_of_range");
+                }
+                Cron {
+                    minutes: (0..60).step_by(usize::from(*minutes)).collect(),
+                    hours: (0..24).collect(),
+                    ..at(&Clock { hour: 0, minute: 0 }, every_day(), false)
+                }
+            }
             Self::EveryHours { hours, time } => {
                 if !(1..=12).contains(hours) {
                     return Err("schedule_hours_out_of_range");
@@ -178,9 +199,8 @@ impl Schedule {
             }
             Self::Cron { expr } => parse_cron(expr)?,
         };
-        // One minute of the hour keeps every two runs an hour apart (D-16).
-        if cron.minutes.len() != 1 {
-            return Err("schedule_under_hour");
+        if too_often(&cron) {
+            return Err("schedule_too_often");
         }
         Ok(cron)
     }
@@ -215,10 +235,40 @@ impl Schedule {
     }
 }
 
+/// Whether two runs could come closer than `SHORTEST_PERIOD_MINUTES`
+/// (D-16): two minutes of an hour, or the last minute of an hour and the
+/// first of the next one that runs too. An hour that ends a day is taken as
+/// followed by the next day's first, which any day may be.
+fn too_often(cron: &Cron) -> bool {
+    let (Some(first), Some(last)) = (cron.minutes.first(), cron.minutes.last()) else {
+        return true;
+    };
+    let within = cron
+        .minutes
+        .windows(2)
+        .any(|pair| pair[1] - pair[0] < SHORTEST_PERIOD_MINUTES);
+    let across = 60 + first - last < SHORTEST_PERIOD_MINUTES
+        && cron
+            .hours
+            .iter()
+            .any(|hour| cron.hours.contains(&((hour + 1) % 24)));
+    within || across
+}
+
 /// The choice a cron line equals, when it equals one.
 fn choice_of(cron: &Cron) -> Option<Schedule> {
     if cron.days_restricted || cron.months.len() != 12 {
         return None;
+    }
+    if cron.minutes.len() > 1 {
+        // Every N minutes: every hour of every day, a step of N from :00.
+        let step = cron.minutes[1];
+        let stepped: Vec<u8> = (0..60).step_by(usize::from(step)).collect();
+        return (EVERY_MINUTES.contains(&step)
+            && stepped == cron.minutes
+            && cron.hours.len() == 24
+            && cron.weekdays.len() == 7)
+            .then_some(Schedule::EveryMinutes { minutes: step });
     }
     let minute = *cron.minutes.first()?;
     let weekdays: Vec<Weekday> = cron
@@ -262,10 +312,18 @@ fn choice_of(cron: &Cron) -> Option<Schedule> {
 
 fn next_of(cron: &Cron, after_unix_ms: u64, zone: &TimeZone) -> Option<u64> {
     let after = Timestamp::from_millisecond(i64::try_from(after_unix_ms).ok()?).ok()?;
-    let mut date = after.to_zoned(zone.clone()).date();
-    for _ in 0..HORIZON_DAYS {
+    let start = after.to_zoned(zone.clone());
+    let mut date = start.date();
+    // The first day's hours well before `after` cannot be next; two hours
+    // spare a clock change. A five-minute schedule's missed times are
+    // counted by this walk under the core's lock (`take_due`).
+    let first_hour = u8::try_from(start.hour()).unwrap_or(0).saturating_sub(2);
+    for day in 0..HORIZON_DAYS {
         if day_matches(cron, date) {
             for hour in &cron.hours {
+                if day == 0 && *hour < first_hour {
+                    continue;
+                }
                 for minute in &cron.minutes {
                     let local = date.at(*hour as i8, *minute as i8, 0, 0);
                     // A skipped time runs where the clock jumps to; a
@@ -478,15 +536,23 @@ mod tests {
         );
     }
 
-    /// B7, D-16: a schedule faster than an hour, an unreadable line, a week
-    /// with no day and more than 12 hours are refused with why.
+    /// B7, D-16: a schedule that would run two times closer than five
+    /// minutes, an unreadable line, a week with no day and periods the form
+    /// does not offer are refused with why.
     #[test]
     fn a_schedule_that_cannot_run_is_refused_with_why() {
         let zone = seoul();
         for (schedule, reason) in [
-            (cron("*/30 * * * *"), "schedule_under_hour"),
-            (cron("0,30 9 * * *"), "schedule_under_hour"),
-            (cron("* 9 * * *"), "schedule_under_hour"),
+            (cron("*/4 * * * *"), "schedule_too_often"),
+            (cron("0,3 9 * * *"), "schedule_too_often"),
+            (cron("* 9 * * *"), "schedule_too_often"),
+            // 09:58 and then 10:00.
+            (cron("0,58 9,10 * * *"), "schedule_too_often"),
+            (cron("0,58 23,0 * * *"), "schedule_too_often"),
+            (
+                Schedule::EveryMinutes { minutes: 7 },
+                "schedule_minutes_out_of_range",
+            ),
             (cron("0 9 * *"), "schedule_cron_invalid"),
             (cron("0 25 * * *"), "schedule_cron_invalid"),
             (cron("@daily"), "schedule_cron_invalid"),
@@ -511,6 +577,26 @@ mod tests {
         assert_eq!(Clock::parse("9:00"), Err("schedule_time_invalid"));
         assert_eq!(Clock::parse("24:00"), Err("schedule_time_invalid"));
         assert!(cron("0 */2 * * *").validate(&zone).is_ok());
+        assert!(cron("*/5 * * * *").validate(&zone).is_ok());
+        assert!(cron("0,58 9 * * *").validate(&zone).is_ok());
+        for minutes in EVERY_MINUTES {
+            assert!(Schedule::EveryMinutes { minutes }.validate(&zone).is_ok());
+        }
+    }
+
+    /// D-06, D-16: every five minutes runs at each fifth minute of every
+    /// hour, past midnight too.
+    #[test]
+    fn every_few_minutes_runs_from_each_hours_start() {
+        let zone = seoul();
+        let schedule = Schedule::EveryMinutes { minutes: 15 };
+        let next = schedule.next_after(at(&zone, "2026-11-19T09:07"), &zone);
+        assert_eq!(next, Some(at(&zone, "2026-11-19T09:15")));
+        let next = schedule.next_after(at(&zone, "2026-11-19T23:50"), &zone);
+        assert_eq!(next, Some(at(&zone, "2026-11-20T00:00")));
+        let five = Schedule::EveryMinutes { minutes: 5 };
+        let next = five.next_after(at(&zone, "2026-11-19T21:59"), &zone);
+        assert_eq!(next, Some(at(&zone, "2026-11-19T22:00")));
     }
 
     /// B6: a cron line that equals a choice reads as that choice.
@@ -543,6 +629,9 @@ mod tests {
                     time: time("01:15"),
                 },
             ),
+            ("*/10 * * * *", Schedule::EveryMinutes { minutes: 10 }),
+            ("0,30 * * * *", Schedule::EveryMinutes { minutes: 30 }),
+            ("*/10 9 * * *", cron("*/10 9 * * *")),
             ("0 9 1 * *", cron("0 9 1 * *")),
         ];
         for (expr, choice) in cases {

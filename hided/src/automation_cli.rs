@@ -372,8 +372,11 @@ pub fn read_schedule(text: &str) -> Result<Schedule, &'static str> {
 pub fn next_action(code: &str) -> &'static str {
     match code {
         "schedule_unreadable" => SCHEDULE_FORMS,
-        "schedule_under_hour" => {
-            "An automation runs at most once an hour: give a cron line one minute and a whole-hour pattern, such as \"cron 0 * * * *\" (hourly) or \"cron 30 9 * * 1-5\", or a daily, weekdays, weekly or every-N-hours schedule"
+        "schedule_too_often" => {
+            "An automation runs at most every five minutes: give a cron line whose times are at least five minutes apart, such as \"cron */5 * * * *\" or \"cron 30 9 * * 1-5\", or a daily, weekdays, weekly or every-N-hours schedule"
+        }
+        "schedule_minutes_out_of_range" => {
+            "Every N minutes takes 5, 10, 15 or 30 minutes, counted from each hour's start, such as \"cron */15 * * * *\""
         }
         "schedule_cron_invalid" => {
             "Give five cron fields, minute hour day month weekday, with numbers, *, ranges, lists and steps, such as \"cron 0 9 * * 1-5\" for weekdays at 09:00"
@@ -664,6 +667,7 @@ fn schedule_words(schedule: &Value) -> Option<String> {
                 .collect();
             format!("every {} at {}", days.join(", "), clock(time))
         }
+        Schedule::EveryMinutes { minutes } => format!("every {minutes} minutes"),
         Schedule::EveryHours { hours, time } => {
             format!("every {hours} hours from {}", clock(time))
         }
@@ -778,9 +782,9 @@ pub fn answer(
             Ok(json!({"items": items, "zone": clock.name()}))
         }
         Call::Show { id } => Ok(json!({"automation": show(&id)?})),
-        Call::Preview { schedule } => {
+        Call::Preview { schedule, name } => {
             let mut preview = core
-                .automation(Call::Preview { schedule })
+                .automation(Call::Preview { schedule, name })
                 .map_err(refusal)?;
             preview["reads_as_text"] = json!(schedule_words(&preview["reads_as"]));
             preview["next_run_at"] = clock.at(&preview["next_run_at_unix_ms"]);
@@ -1038,7 +1042,8 @@ mod tests {
         assert!(next_action("schedule_unreadable").contains("\"cron 0 9 * * 1-5\""));
         // Every reason the core gives for a schedule has its own sentence.
         for code in [
-            "schedule_under_hour",
+            "schedule_too_often",
+            "schedule_minutes_out_of_range",
             "schedule_cron_invalid",
             "schedule_never",
             "schedule_time_invalid",

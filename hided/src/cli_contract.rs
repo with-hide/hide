@@ -232,7 +232,8 @@ const AUTOMATION_ID: &[Arg] = &[Arg {
 /// words that are none of the forms; the rest are the core's check.
 const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
     "schedule_unreadable",
-    "schedule_under_hour",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
     "schedule_cron_invalid",
     "schedule_never",
     "schedule_time_invalid",
@@ -243,7 +244,8 @@ const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
 /// Why an automation as written is refused (B7, B10).
 pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
     "schedule_unreadable",
-    "schedule_under_hour",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
     "schedule_cron_invalid",
     "schedule_never",
     "schedule_time_invalid",
@@ -693,6 +695,7 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["agent"],
         refusals: &[
             "spawn_busy",
+            "workspace_closing",
             "machine_unknown",
             "machine_not_permitted",
             "machine_unavailable",
