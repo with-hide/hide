@@ -138,6 +138,11 @@ pub const INCOMPLETE_SPAWN: [&str; 4] = [
     "pane_busy",
 ];
 
+/// The refusal of a spawn whose folder's workspace is closing its last pane:
+/// the engine took no tab there and started nothing, and the same intent
+/// asked once that workspace is gone opens the folder again.
+pub const WORKSPACE_CLOSING: &str = "workspace_closing";
+
 pub(crate) const AGENT_LIMIT: usize = 2048;
 pub(crate) const SPAWN_LIMIT: usize = 4096;
 

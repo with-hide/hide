@@ -74,8 +74,11 @@ pub struct PhoneAutomation {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PhoneRecord {
     Run(PhoneRun),
+    /// From `at_unix_ms` to `last_unix_ms`, `count` times in a row.
     Skipped {
         at_unix_ms: u64,
+        last_unix_ms: u64,
+        count: u32,
         reason: SkipReason,
     },
     Missed {
@@ -182,8 +185,15 @@ fn phone_automation(automation: &AutomationSnapshot) -> PhoneAutomation {
 fn phone_record(record: &RecordSnapshot) -> PhoneRecord {
     match record {
         RecordSnapshot::Run(run) => PhoneRecord::Run(phone_run(run)),
-        RecordSnapshot::Skipped { at_unix_ms, reason } => PhoneRecord::Skipped {
+        RecordSnapshot::Skipped {
+            at_unix_ms,
+            last_unix_ms,
+            count,
+            reason,
+        } => PhoneRecord::Skipped {
             at_unix_ms: *at_unix_ms,
+            last_unix_ms: *last_unix_ms,
+            count: *count,
             reason: reason.clone(),
         },
         RecordSnapshot::Missed {
@@ -290,6 +300,8 @@ mod tests {
             0,
             RecordSnapshot::Skipped {
                 at_unix_ms: 9,
+                last_unix_ms: 9,
+                count: 1,
                 reason: SkipReason::UsageLimit {
                     agent: "claude".into(),
                 },

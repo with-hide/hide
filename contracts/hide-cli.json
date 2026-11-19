@@ -4940,6 +4940,7 @@
             ],
             "refusals": [
                 "spawn_busy",
+                "workspace_closing",
                 "machine_unknown",
                 "machine_not_permitted",
                 "machine_unavailable",
@@ -7451,7 +7452,8 @@
             ],
             "refusals": [
                 "schedule_unreadable",
-                "schedule_under_hour",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
                 "schedule_cron_invalid",
                 "schedule_never",
                 "schedule_time_invalid",
@@ -7696,7 +7698,8 @@
             ],
             "refusals": [
                 "schedule_unreadable",
-                "schedule_under_hour",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
                 "schedule_cron_invalid",
                 "schedule_never",
                 "schedule_time_invalid",
@@ -7758,7 +7761,8 @@
             ],
             "refusals": [
                 "schedule_unreadable",
-                "schedule_under_hour",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
                 "schedule_cron_invalid",
                 "schedule_never",
                 "schedule_time_invalid",
@@ -7947,7 +7951,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:507db848a09ef64b6285350b26fe9ea719493aadf67fbd636f77af7a392a60ff",
+    "digest": "sha256:0fb4c42e7b7d582751fb66e6be83747d9a7c6c3ef79e442b30f5794cb76b16b0",
     "envelopes": {
         "access": {
             "answer": "value",

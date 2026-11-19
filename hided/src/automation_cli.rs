@@ -787,9 +787,9 @@ pub fn answer(
             Ok(json!({"items": items, "zone": clock.name()}))
         }
         Call::Show { id } => Ok(json!({"automation": show(&id)?})),
-        Call::Preview { schedule } => {
+        Call::Preview { schedule, name } => {
             let mut preview = core
-                .automation(Call::Preview { schedule })
+                .automation(Call::Preview { schedule, name })
                 .map_err(refusal)?;
             preview["reads_as_text"] = json!(schedule_words(&preview["reads_as"]));
             preview["next_run_at"] = clock.at(&preview["next_run_at_unix_ms"]);

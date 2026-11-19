@@ -287,8 +287,14 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
             "codex",
         ])
     };
-    let too_often = refused(&draft("cron */4 * * * *", "Too often"), "schedule_too_often");
-    assert!(too_often.contains("at most every five minutes"), "{too_often}");
+    let too_often = refused(
+        &draft("cron */4 * * * *", "Too often"),
+        "schedule_too_often",
+    );
+    assert!(
+        too_often.contains("at most every five minutes"),
+        "{too_often}"
+    );
     refused(
         &draft("every 7m", "Seven minutes"),
         "schedule_minutes_out_of_range",
