@@ -297,7 +297,7 @@ impl Shared {
             }
         }
         lock(&self.pings).clear();
-        hide_core::diagnostic!(json!({
+        crate::diagnostic!(json!({
             "component": "link_mux",
             "kind": "mux.ended",
             "side": format!("{:?}", self.side),
@@ -602,7 +602,7 @@ fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) 
                 };
                 if let Err(error) = sent {
                     if matches!(error, mpsc::TrySendError::Full(_)) {
-                        hide_core::diagnostic!(json!({
+                        crate::diagnostic!(json!({
                             "component": "link_mux",
                             "kind": "stream.fell_behind",
                             "side": format!("{:?}", shared.side),
@@ -648,7 +648,7 @@ fn addresses(payload: &[u8]) -> Option<Vec<SocketAddr>> {
 /// it lands.
 fn open(shared: &Arc<Shared>, stream: u32, payload: &[u8]) {
     let refuse = |reason: &str| {
-        hide_core::diagnostic!(json!({
+        crate::diagnostic!(json!({
             "component": "link_mux",
             "kind": "stream.refused",
             "stream": stream,
@@ -818,7 +818,7 @@ impl Mux {
                         continue;
                     };
                     if let Err(error) = mux.carry(socket, &to) {
-                        hide_core::diagnostic!(json!({
+                        crate::diagnostic!(json!({
                             "component": "link_mux",
                             "kind": "forward.refused",
                             "reason": error.to_string(),

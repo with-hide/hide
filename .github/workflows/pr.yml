@@ -146,6 +146,11 @@ jobs:
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
       # macOS-only lanes out and the lanes below run without their macOS leg.
       macos: ${{ steps.plan.outputs.macos }}
+      # Whether the Rust lane checks every crate's license and the advisory
+      # database: `true` for a pull request that changes the lockfile or what
+      # the check is held to, and for the nightly (`scripts/ci-plan.py`,
+      # DENY_PATHS).
+      deny: ${{ steps.plan.outputs.deny }}
       # Where `vt`, `omp SDK contract` and `compile (macos)` run their macOS
       # job: the repository variable HIDE_MACOS_CI_RUNNER, a JSON `runs-on`
       # value naming the Mac mini's CI runner (docs/BUILD.md, The CI runner
@@ -219,6 +224,7 @@ jobs:
           bash scripts/check-no-workstation-identity.sh
           bash scripts/check-worktree-removal-boundary.sh
           python3 scripts/check-core-touches-no-machine.py
+          python3 scripts/check-iroh-stays-behind-the-seam.py
           python3 scripts/check-timed-waits.py --base HEAD^1
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
@@ -251,6 +257,7 @@ jobs:
     env:
       FULL: ${{ needs.plan.outputs.full }}
       PACKAGES: ${{ needs.plan.outputs.rust-packages }}
+      DENY: ${{ needs.plan.outputs.deny }}
     steps:
       - uses: actions/checkout@v7
       # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests
@@ -302,6 +309,19 @@ jobs:
         # command that selects other members builds dependencies again
         # (docs/BUILD.md, "One feature set per dependency").
         run: bash scripts/verify-cargo.sh hakari
+      - name: Install cargo-deny
+        # The pinned release build, checked against its digest, so no compile.
+        if: env.DENY == 'true'
+        timeout-minutes: 3
+        run: bash scripts/install-cargo-deny.sh
+      - name: Check every crate's license and the advisory database
+        # For a pull request that changes the lockfile, and nightly: a crate
+        # under a license Hide does not ship, or with a known vulnerability,
+        # stops here (deny.toml; CONTRIBUTING.md, CI gates). It reads the
+        # advisory database from the network, which is why no other run does.
+        if: env.DENY == 'true'
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh deny
       - name: Check formatting and lint the planned crates
         run: |
           if [ "$FULL" = true ]; then
@@ -534,6 +554,7 @@ jobs:
       TEST_TARGETS: >-
         -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p hide-core -p hide-ai
         -p hide-agent-adapter -p hide-desk -p hide-shell -p hide-session
+        -p hide-peer -p hide-peer-protocol -p hide-peer-iroh
         --lib --bin hide-agent-hooks --test it
     steps:
       - name: Keep line endings as committed
@@ -576,6 +597,17 @@ jobs:
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
+      - name: The peer connection's key and grant files, its loopback transport and two iroh endpoints
+        # hide-peer saves the machine key, the grants and the event inbox
+        # through the platform layer's private files, and hide-peer-iroh
+        # binds real UDP sockets on loopback: what the Linux Rust lane proves
+        # of them it proves for Linux (docs/ARCHITECTURE.md, The peer
+        # connection). The link multiplexer's tests (`mux::`) stay out: it
+        # moved into hide-peer from hided, where this job never ran them, and
+        # four of them do not hold on Windows (#2655).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-peer) & !test(/^mux::/)) | package(hide-peer-protocol) | package(hide-peer-iroh)'
       - name: Every kit location follows the home the platform names
         # The kit finds its home in USERPROFILE, never in the HOME OpenSSH sets
         # beside it (hide-host/src/kit.rs).

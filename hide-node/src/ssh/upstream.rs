@@ -4,7 +4,7 @@
 //! B33): one owned `ssh` signed in once, whose start script installs a
 //! build, runs the move's steps and copies its files, and then runs the
 //! core machine's attach role in its own place, whose input and output
-//! carry the node's link and its screens' streams (`hided`'s `link_mux`).
+//! carry the node's link and its screens' streams (`hide_peer::mux`).
 //!
 //! The screen machine needs no SSH server of its own, only the alias, which
 //! OpenSSH reads exactly as a terminal does, its known hosts included.
