@@ -1691,6 +1691,9 @@ fn spawn(
                             Some(hide_node_link::holders::HOLDER_CAP_REFUSAL) => {
                                 holder_cap(&child_device, failure.message())
                             }
+                            Some(super::WORKSPACE_CLOSING) => {
+                                super::refusal(super::WORKSPACE_CLOSING, failure.message())
+                            }
                             _ => failure.message().to_owned(),
                         })?;
                         shell = ShellStart::of_tab(tab.launched, launch.as_ref());

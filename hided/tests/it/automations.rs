@@ -287,11 +287,14 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
             "codex",
         ])
     };
-    let under_hour = refused(
-        &draft("cron */30 * * * *", "Half-hourly"),
-        "schedule_under_hour",
+    let too_often = refused(
+        &draft("cron */4 * * * *", "Every four minutes"),
+        "schedule_too_often",
     );
-    assert!(under_hour.contains("at most once an hour"), "{under_hour}");
+    assert!(
+        too_often.contains("at most every five minutes"),
+        "{too_often}"
+    );
     refused(
         &draft("cron 0 9 * *", "Four fields"),
         "schedule_cron_invalid",
