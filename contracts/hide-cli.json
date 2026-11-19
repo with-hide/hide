@@ -5127,6 +5127,7 @@
             ],
             "arguments": [],
             "command": "device share",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5209,6 +5210,7 @@
             ],
             "arguments": [],
             "command": "device allow",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5236,6 +5238,7 @@
                 }
             ],
             "command": "device pause",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5295,6 +5298,7 @@
                 }
             ],
             "command": "device resume",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5418,6 +5422,7 @@
                 }
             ],
             "command": "device request",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5456,6 +5461,7 @@
                 }
             ],
             "command": "device address",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5516,6 +5522,7 @@
             ],
             "arguments": [],
             "command": "device look-ssh",
+            "hidden": true,
             "options": [],
             "refusals": [
                 "hide_unavailable",
@@ -5530,6 +5537,7 @@
             ],
             "arguments": [],
             "command": "device accept-ssh",
+            "hidden": true,
             "options": [
                 {
                     "name": "--request",
@@ -7496,7 +7504,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:1356b2943f3b9664862efea6c97c26693d99d13e4b732ad2c98bef21a5a2707e",
+    "digest": "sha256:b0c9c100e8c94c2ce82dc2e385483705aa62f933c032e842a5e3416dac4b52c0",
     "envelopes": {
         "access": {
             "answer": "value",
