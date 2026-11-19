@@ -370,10 +370,15 @@ fn a_folder_skill_is_followed_and_a_gone_folder_keeps_the_last_copy() {
     );
     assert_eq!(report.items[0].version, Version::Folder);
     assert!(report.follows);
+    // The follow runs every few seconds: with the folder as it was, it
+    // reads the folder's files' sizes and times and nothing else.
+    assert_eq!(crate::follow_store(&fixture.target), None);
 
     write(&source.join("SKILL.md"), &skill_md("writer", "Write more."));
-    let followed = store(&fixture, Vec::new());
+    let followed = crate::follow_store(&fixture.target).expect("the folder changed");
+    assert_eq!(followed.refused, None, "{followed:#?}");
     assert_eq!(cells(&followed, "skill:writer"), all(CellState::On));
+    assert_eq!(crate::follow_store(&fixture.target), None);
     for folder in folders(&fixture) {
         assert_eq!(
             std::fs::read_to_string(folder.join("writer/SKILL.md")).unwrap(),
@@ -382,8 +387,9 @@ fn a_folder_skill_is_followed_and_a_gone_folder_keeps_the_last_copy() {
     }
 
     std::fs::remove_dir_all(&source).unwrap();
-    let gone = store(&fixture, Vec::new());
+    let gone = crate::follow_store(&fixture.target).expect("the folder went");
     assert!(gone.items[0].folder_missing);
+    assert_eq!(crate::follow_store(&fixture.target), None);
     assert_eq!(cells(&gone, "skill:writer"), all(CellState::On));
     assert!(
         fixture

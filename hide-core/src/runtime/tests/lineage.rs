@@ -2102,6 +2102,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
     runtime.ingest_kit_report(
         crate::node::TEST_NODE,
         &hide_kit::KitReport {
+            store: None,
             components: vec![
                 part(
                     hide_kit::ComponentId::Cli,
@@ -2162,6 +2163,7 @@ fn a_reinstall_queues_only_the_parts_that_need_it() {
     runtime.ingest_kit_report(
         crate::node::TEST_NODE,
         &hide_kit::KitReport {
+            store: None,
             components: vec![part(
                 hide_kit::ComponentId::Cli,
                 hide_kit::ComponentState::Installed,

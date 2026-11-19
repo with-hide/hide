@@ -180,6 +180,7 @@ section!(whole StatusSections, StatusSnapshot, s, {
     project_adds: Vec<ProjectAddReceiptSnapshot> => s.project_adds,
     agent_definitions: Option<AgentDefinitionsSnapshot> => s.agent_definitions,
     agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer> => s.agent_profile_answer,
+    store_answer: Option<StoreAnswer> => s.store_answer,
 });
 
 section!(RestSections, Snapshot, s, {

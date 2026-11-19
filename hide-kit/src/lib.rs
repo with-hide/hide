@@ -1059,6 +1059,14 @@ pub fn apply_store(target: &KitTarget, changes: Vec<store::StoreChange>) -> stor
     )
 }
 
+/// The follow of the store's folders (PRD skill-mcp-manager D-33): a pass
+/// over the store when a folder an item follows changed, else `None` with
+/// nothing done but a stat of each such folder, so it can run every few
+/// seconds.
+pub fn follow_store(target: &KitTarget) -> Option<store::StoreReport> {
+    store::follow_due(target).then(|| apply_store(target, Vec::new()))
+}
+
 /// What a pass over the machine's profile accounts did.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProfilesApplied {

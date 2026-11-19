@@ -1018,6 +1018,31 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
 /// Brings each followed folder's changes into the store (D-20, B24): a
 /// folder whose stat fingerprint moved is read again, and one that is gone
 /// keeps the last copy and says so.
+/// Whether a folder an item follows changed since the store last took it in
+/// (D-33): a stat of each such folder and nothing written. A store that is
+/// not there follows nothing, and one that cannot be read is left to the
+/// next pass to report.
+pub(crate) fn follow_due(target: &KitTarget) -> bool {
+    let Ok(dir) = store_dir(&target.home, false) else {
+        return false;
+    };
+    let Ok(store) = load(&dir) else {
+        return false;
+    };
+    store.items.iter().any(|item| {
+        let (Source::Folder { path }, ItemKind::Skill) = (&item.source, item.kind) else {
+            return false;
+        };
+        match skill::fingerprint(Path::new(path)) {
+            Ok(Some(fingerprint)) => {
+                item.folder_missing || item.fingerprint.as_deref() != Some(fingerprint.as_str())
+            }
+            Ok(None) => !item.folder_missing,
+            Err(_) => false,
+        }
+    })
+}
+
 fn follow(ctx: &Ctx<'_>, store: &mut StoreRecord) {
     for item in &mut store.items {
         let (Source::Folder { path }, ItemKind::Skill) = (&item.source, item.kind) else {

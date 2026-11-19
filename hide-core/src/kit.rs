@@ -29,7 +29,7 @@ use serde_json::json;
 use crate::handle::ChangeNotifier;
 use crate::node_access::{NodeLink, call_as};
 use crate::runtime::{
-    DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead, Runtime,
+    DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead, Runtime, StoreJob,
 };
 
 const PUMP_TICK: Duration = Duration::from_millis(250);
@@ -79,20 +79,28 @@ impl KitPump {
                         break;
                     };
                     let now = Instant::now();
-                    let Ok((job, diagnosis_due)) = core.lock().map(|mut locked| {
+                    let Ok((job, store, diagnosis_due)) = core.lock().map(|mut locked| {
+                        locked.schedule_store(now);
                         let job = locked.take_local_kit_job(now).map(|job| {
                             let profiles = locked.profiles_due(node.as_str(), &job);
                             (job, locked.retirement_projects(node.as_str()), profiles)
                         });
+                        // The store's work runs once no kit job waits.
+                        let store = job
+                            .is_none()
+                            .then(|| locked.take_local_store_job())
+                            .flatten();
                         let due = next_diagnosis.is_none()
                             || (locked.ui_attached()
                                 && locked.settings_observed()
                                 && next_diagnosis.is_some_and(|next| now >= next));
-                        (job, due)
+                        (job, store, due)
                     }) else {
                         break;
                     };
                     drop(core);
+                    let stored =
+                        store.map(|store| call_store(link.as_ref(), &store, LOCAL_CLI_DIR));
                     let mut applied = false;
                     let mut profiles_due = false;
                     let report = job.map(|(job, retirement_projects, profiles)| {
@@ -133,7 +141,11 @@ impl KitPump {
                         if cancelled.load(Ordering::Acquire) || link.closed_reason().is_some() {
                             return false;
                         }
-                        let mut changed = match &report {
+                        let mut changed = match stored {
+                            Some(answered) => locked.ingest_store_answer(node.as_str(), answered),
+                            None => false,
+                        };
+                        changed |= match &report {
                             Some(Ok(report)) => locked.ingest_kit_report(node.as_str(), report),
                             Some(Err((cause, detail))) => {
                                 // The node never ran the kit: a daemon
@@ -291,7 +303,7 @@ pub(crate) fn spawn_device_worker(
                     locked.take_device_kit_call(&device_id).map(|call| {
                         let profiles = match &call.work {
                             DeviceKitWork::Job(job) => locked.profiles_due(&device_id, job),
-                            DeviceKitWork::Remove => false,
+                            DeviceKitWork::Store(_) | DeviceKitWork::Remove => false,
                         };
                         (call, profiles)
                     })
@@ -350,6 +362,9 @@ fn call_device(call: &DeviceKitCall) -> DeviceKitAnswer {
     use hide_node_link::protocol::KitAction;
     let action = match &call.work {
         DeviceKitWork::Job(job) => action_of(job),
+        DeviceKitWork::Store(store) => {
+            return DeviceKitAnswer::Store(call_store(call.channel.as_ref(), store, &call.cli_dir));
+        }
         DeviceKitWork::Remove => KitAction::Remove,
     };
     let removing = action == KitAction::Remove;
@@ -366,6 +381,38 @@ fn call_device(call: &DeviceKitCall) -> DeviceKitAnswer {
         DeviceKitAnswer::Report(
             call_as(call.channel.as_ref(), kit, KIT_TIMEOUT).map_err(|error| error.to_string()),
         )
+    }
+}
+
+/// A store pass may fetch a repository for an install or an update preview;
+/// git's own time limits end a host that stops answering well before this.
+const STORE_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Runs store work on a machine's node, with the runtime lock released: a
+/// pass answers the store's report, and a follow answers one only when a
+/// followed folder changed. `cli_dir` is the one the machine's kit calls
+/// name, which a store pass reads nothing from.
+fn call_store(link: &dyn NodeLink, job: &StoreJob, cli_dir: &str) -> crate::runtime::StoreAnswered {
+    use hide_node_link::protocol::KitAction;
+    let action = match job {
+        StoreJob::Pass(changes) => KitAction::Store {
+            changes: changes.clone(),
+        },
+        StoreJob::Follow => KitAction::FollowStore,
+    };
+    let kit = hide_node_link::protocol::Call::Kit {
+        action,
+        cli_dir: cli_dir.to_owned(),
+        retirement_projects: Vec::new(),
+    };
+    match job {
+        StoreJob::Pass(_) => call_as::<hide_kit::store::StoreReport>(link, kit, STORE_TIMEOUT)
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        StoreJob::Follow => {
+            call_as::<Option<hide_kit::store::StoreReport>>(link, kit, STORE_TIMEOUT)
+                .map_err(|error| error.to_string())
+        }
     }
 }
 
