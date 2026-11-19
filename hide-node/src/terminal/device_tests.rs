@@ -270,7 +270,17 @@ fn a_resident_nodes_pane_goes_up_only_while_its_core_has_it_attached() {
         "a pane the core never attached went up the link"
     );
 
-    // The guest's core attaches it: the pane is drawn whole for it too.
+    // No link took a line yet, so nothing the node reported waits for one:
+    // a node that runs on with its guest away keeps nothing for a core
+    // that is not there, and its diagnostics go to its host's log.
+    {
+        let state = lock(&node.uplink.state);
+        assert!(state.stopped && state.reports.is_empty() && state.diagnostics.is_empty());
+    }
+
+    // The guest's core links and attaches it: the pane is drawn whole for
+    // it too.
+    node.relink();
     node.line(
         down(TerminalControl::Attach {
             pane: "w1:p1".into(),
