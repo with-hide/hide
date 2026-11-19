@@ -24,6 +24,9 @@ use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[cfg(unix)]
+mod guest_work;
+
 /// The machine id the guest daemon runs under, so one host is two machines.
 const GUEST: &str = "pairing-guest";
 
@@ -32,7 +35,7 @@ const WITHIN: Duration = Duration::from_secs(40);
 fn host_env(root: &Path) -> Env {
     let state = root.join("host-state");
     hide_platform::fs::private::create_dir_all(&state).unwrap();
-    std::fs::create_dir_all(root.join("host-home")).unwrap();
+    crate::fixtures::fixture_home(&root.join("host-home"));
     Env {
         home: root.join("host-home"),
         state_dir: state,
@@ -62,19 +65,21 @@ struct Window(Socket);
 
 impl Window {
     async fn open(running: &hided::RunningDaemon, kind: &str) -> Self {
-        let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
+        Self::open_at(running.port, &running.token, kind).await
+    }
+
+    /// A screen of `kind` on the daemon that listens on `port`.
+    async fn open_at(port: u16, token: &str, kind: &str) -> Self {
+        let mut request = format!("ws://127.0.0.1:{port}/ws")
             .into_client_request()
             .unwrap();
-        request.headers_mut().insert(
-            ORIGIN,
-            format!("http://127.0.0.1:{}", running.port)
-                .parse()
-                .unwrap(),
-        );
+        request
+            .headers_mut()
+            .insert(ORIGIN, format!("http://127.0.0.1:{port}").parse().unwrap());
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         socket
             .send(Message::Text(
-                json!({"token": running.token, "schema_version": 2, "client_kind": kind})
+                json!({"token": token, "schema_version": 2, "client_kind": kind})
                     .to_string()
                     .into(),
             ))
@@ -132,7 +137,26 @@ struct Terminal {
 }
 
 impl Terminal {
+    /// A terminal of the machine whose HOME is `home`, which is made a
+    /// fixture's (`fixtures::fixture_home`).
+    fn new(home: PathBuf, state: PathBuf, machine: Option<&'static str>) -> Self {
+        crate::fixtures::fixture_home(&home);
+        Self {
+            home,
+            state,
+            machine,
+        }
+    }
+
     fn command_of(&self, program: &Path, args: &[&str]) -> Command {
+        // A `hide` here may start the machine's daemon, which under a HOME
+        // that is no fixture's reaches the account's login items once it is
+        // paired. A cleanup that runs while the test fails is let through.
+        assert!(
+            std::thread::panicking() || hide_kit::layout::fixture_home(&self.home),
+            "{} is not a fixture HOME: make the terminal with `Terminal::new`",
+            self.home.display()
+        );
         let mut command = Command::new(program);
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().to_uppercase().starts_with("HIDE_") {
@@ -323,19 +347,18 @@ fn words_printed(ran: &Ran) -> Vec<String> {
 // thread of it, so it needs threads of its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::fixtures::fixture_root("hp");
     let running = hided::start_daemon(host_env(root.path())).await.unwrap();
-    let host = Terminal {
-        home: root.path().join("host-home"),
-        state: root.path().join("host-state"),
-        machine: None,
-    };
-    let guest = Terminal {
-        home: root.path().join("guest-home"),
-        state: root.path().join("guest-state"),
-        machine: Some(GUEST),
-    };
-    std::fs::create_dir_all(&guest.home).unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
     let _stop = StopOnDrop(&guest);
     let connected = guest.run(&["connect"]);
     assert!(connected.ok, "the guest daemon: {}", connected.text());
@@ -596,18 +619,18 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
 async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     use crate::support::sshd::Sshd;
 
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::fixtures::fixture_root("hp");
     let _running = hided::start_daemon(host_env(root.path())).await.unwrap();
-    let target = Terminal {
-        home: root.path().join("host-home"),
-        state: root.path().join("host-state"),
-        machine: None,
-    };
-    let guest = Terminal {
-        home: root.path().join("guest-home"),
-        state: root.path().join("guest-state"),
-        machine: Some(GUEST),
-    };
+    let target = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
     // What an SSH login to the target's account finds: its home, its state
     // folder, and the `hide` command its own Hide linked.
     let ssh = Sshd::start(

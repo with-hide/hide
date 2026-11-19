@@ -1169,6 +1169,7 @@ mod tests {
         let legacy = serde_json::json!({"id": "old-host", "label": "old", "ssh_alias": "old-host", "host_consent": null});
         let inbound = serde_json::json!({"id": "laptop", "label": "MacBook", "ssh_alias": null, "host_consent": null, "inbound": true});
         let wsl = serde_json::json!({"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null, "wsl_distro": "Ubuntu"});
+        let peer = serde_json::json!({"id": "windows-pc", "label": "Windows PC", "ssh_alias": null, "host_consent": null, "peer_key": "ab".repeat(32)});
         // What a build from before WSL devices reads of the same record.
         let wsl_as_an_older_build_reads_it = serde_json::json!({"id": "wsl-old", "label": "WSL Ubuntu", "ssh_alias": null, "host_consent": null});
         persisted["device_registrations"] = serde_json::json!([
@@ -1177,7 +1178,10 @@ mod tests {
             legacy,
             inbound,
             wsl,
+            peer,
             {"id": "both", "label": "both", "ssh_alias": "both-host", "inbound": true},
+            {"id": "wsl-and-peer", "label": "both", "wsl_distro": "Ubuntu", "peer_key": "ab".repeat(32)},
+            {"id": "short-key", "label": "short", "peer_key": "abcd"},
             {"id": "alias-and-wsl", "label": "both", "ssh_alias": "both-host", "wsl_distro": "Ubuntu"},
             {"id": "neither", "label": "neither"},
             wsl_as_an_older_build_reads_it,
@@ -1224,11 +1228,17 @@ mod tests {
                         distro: "Ubuntu".to_owned()
                     }
                 ),
+                (
+                    "windows-pc",
+                    crate::model::LinkOrigin::Peer {
+                        key: "ab".repeat(32)
+                    }
+                ),
             ]
         );
         assert_eq!(
             serde_json::to_value(&state.device_registrations).unwrap(),
-            serde_json::json!([dialed, pending, legacy, inbound, wsl])
+            serde_json::json!([dialed, pending, legacy, inbound, wsl, peer])
         );
     }
 

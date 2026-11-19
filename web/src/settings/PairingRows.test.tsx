@@ -6,6 +6,7 @@ import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { PairingDialogs } from "../PairingDialogs";
 import type { PairingView, Peer } from "../pairing";
+import type { GuestPanes } from "../snapshot";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { forgetFirewallAsk } from "./firewall";
@@ -25,7 +26,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function mount(pairing: PairingView | null, peers: Peer[] = []) {
+async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_panes: GuestPanes[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -35,7 +36,7 @@ async function mount(pairing: PairingView | null, peers: Peer[] = []) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices: [], peers }, ui_state: {} } } as never);
+    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices: [], peers, guest_panes }, ui_state: {} } } as never);
     root.render(
       <TooltipProvider>
         <PairedRows actions={actions} />
@@ -126,7 +127,25 @@ it("asks before removing a machine that opens this computer, with its work left 
   expect(events.filter((event) => event.kind === "pairing_remove")).toHaveLength(0);
   await press("[data-peer-remove-go]");
   expect(last(events)).toMatchObject({ kind: "pairing_remove", payload: { device: guest.key, direction: "incoming" } });
+  // With no terminal of that machine here there is nothing to end, and nothing says so.
+  expect(last(events)?.payload).not.toHaveProperty("end_work");
   expect(q("[data-peer-remove-confirm]")).toBeNull();
+  await unmount();
+});
+
+it("offers to end a removed machine's work only while it has terminals here, and sends that choice (B26, B60)", async () => {
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active" });
+  const panes = [1, 2].map((n) => ({ id: `guest:macbook:pane:w1:p${n}`, pane: `w1:p${n}`, since_unix_ms: n }));
+  const { q, press, events, unmount } = await mount(idle, [guest], [{ device_id: "macbook", key: guest.key, panes }]);
+  await act(async () => { q('[data-peer-menu="macbook"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-remove-incoming="macbook"]');
+  // Leaving the work is still what a plain Remove does.
+  expect(q("[data-peer-remove-work]")?.dataset.peerRemoveWork).toBe("keep");
+  expect(q('[data-peer-remove-choice="end"]')?.textContent).toBe("End itIts 2 terminals here close now, even while that computer is away");
+  await press('[data-peer-remove-choice="end"] [role="radio"]');
+  expect(q("[data-peer-remove-work]")?.dataset.peerRemoveWork).toBe("end");
+  await press("[data-peer-remove-go]");
+  expect(last(events)).toMatchObject({ kind: "pairing_remove", payload: { device: guest.key, direction: "incoming", end_work: true } });
   await unmount();
 });
 

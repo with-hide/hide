@@ -20,7 +20,7 @@ pub fn device_target(root: &Path, home: &Path, cli_dir: &Path, stop: Arc<AtomicB
         .map(PathBuf::from);
     KitTarget {
         home: home.to_path_buf(),
-        install: hide_agent_hooks::route::install_of_root(root),
+        install: crate::layout::install_of_root(root),
         kit_dir: root.join(CURRENT),
         cli_dir: cli_dir.to_path_buf(),
         // The old layout's root too, so its `hide` link is re-pointed rather
@@ -34,5 +34,56 @@ pub fn device_target(root: &Path, home: &Path, cli_dir: &Path, stop: Arc<AtomicB
         legacy: crate::legacy::device(home, root),
         stop,
         profiles: None,
+        hooks_only: false,
     }
+}
+
+/// The kit target of another machine's work on this account, whose builds
+/// sit under the install root `root` (a guest's, PRD device-connect-iroh
+/// D-77 (2), (4)): its hook entries and the agents' pieces under the
+/// installation name of that root, and nothing else of the account
+/// ([`KitTarget::hooks_only`]). The guest's own node applies it, and the
+/// host's Hide takes it out by the same name when the guest goes.
+pub fn guest_target(root: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTarget {
+    let login_shell = crate::agents::login_shell();
+    KitTarget {
+        home: home.to_path_buf(),
+        install: crate::layout::install_of_root(root),
+        kit_dir: root.join(CURRENT),
+        // Named for the part's row alone: nothing is written there.
+        cli_dir: home.join(".local").join("bin"),
+        owned_roots: vec![root.to_path_buf()],
+        codex: crate::agents::find(home, login_shell.as_deref(), &stop, "codex"),
+        login_shell,
+        legacy_coordination_home: None,
+        user_agents: crate::login_agents(home),
+        retirement_projects: Vec::new(),
+        legacy: Vec::new(),
+        stop,
+        profiles: None,
+        hooks_only: true,
+    }
+}
+
+/// Takes off this account what the installation under the guest install
+/// root `root` wrote into it ([`guest_target`], [`crate::remove`]): for the
+/// host's Hide, when nothing of that guest runs here. A removal reads no
+/// agent's program and asks no login shell.
+pub fn remove_guest(root: &Path, home: &Path) -> crate::RemoveReport {
+    crate::remove(&KitTarget {
+        home: home.to_path_buf(),
+        install: crate::layout::install_of_root(root),
+        kit_dir: root.join(CURRENT),
+        cli_dir: home.join(".local").join("bin"),
+        owned_roots: vec![root.to_path_buf()],
+        codex: None,
+        login_shell: None,
+        legacy_coordination_home: None,
+        user_agents: crate::login_agents(home),
+        retirement_projects: Vec::new(),
+        legacy: Vec::new(),
+        stop: Arc::default(),
+        profiles: None,
+        hooks_only: true,
+    })
 }

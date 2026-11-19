@@ -751,6 +751,21 @@ impl Core {
         lock_recover(&self.runtime).prepare_delivery(device, caller, expected, hint, command)
     }
 
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Runtime::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        if !check_owner_thread(self, "delivery.prepare_kept") {
+            return Err("delivery_unavailable".into());
+        }
+        lock_recover(&self.runtime).prepare_kept_letter(device, pane, terminal, command)
+    }
+
     /// One call hided makes for an external tool (PRD
     /// hide-external-control): its request, status, leave, its key's proof
     /// or a command's check, under one short lock; the list is saved by its

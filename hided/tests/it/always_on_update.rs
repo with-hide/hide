@@ -48,20 +48,11 @@ struct Machine {
 
 impl Machine {
     fn new() -> Self {
-        // A fixture HOME is one in the system's temporary folder
-        // (`hide_kit::layout::fixture_home`), read from the account.
-        let own = hide_platform::user_agents::account_home().unwrap();
-        let temporary = if cfg!(windows) {
-            own.join("AppData").join("Local").join("Temp")
-        } else {
-            PathBuf::from("/tmp")
-        };
-        let dir = tempfile::tempdir_in(temporary).unwrap();
+        let dir = crate::fixtures::fixture_root("hu");
         let root = hide_platform::fs::identity::canonical(dir.path()).unwrap();
         let home = root.join("home");
         let state = root.join("state");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::write(home.join(hide_kit::layout::FIXTURE_HOME_MARKER), "").unwrap();
+        crate::fixtures::fixture_home(&home);
         let core_root = hide_kit::layout::core_root(&home);
         let resources = package(&root.join("app"));
         let built = Path::new(env!("CARGO_BIN_EXE_hided"));
