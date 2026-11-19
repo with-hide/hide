@@ -321,7 +321,7 @@ fn prs_frame(prs: &PhonePrs) -> Value {
 fn automations_frame(automations: &PhoneAutomations) -> Value {
     json!({
         "type": "automations", "items": automations.items, "omitted": automations.omitted,
-        "zone": automations.zone,
+        "zone": automations.zone, "asks": automations.asks,
     })
 }
 
@@ -1716,6 +1716,12 @@ async fn automation_request(mobile: &Arc<Mobile>, phone_id: &str, message: &Valu
             "id": id, "ok": ok, "reason": reason,
         })
     };
+    // An id this phone already sent is answered from its claim before the
+    // automation is judged again, so the repeat of a run that started is `ok`
+    // and never `running`.
+    if let Some(state) = mobile.claimed_input(phone_id, request_id) {
+        return claim_answer(&answer, state);
+    }
     let bytes = match automation_event(message, &mobile.automations()) {
         Ok(bytes) => bytes,
         Err(reason) => {
@@ -3313,6 +3319,7 @@ mod tests {
 
     fn listed_automations(running: bool) -> PhoneAutomations {
         PhoneAutomations {
+            asks: Vec::new(),
             items: vec![hide_core::agent_state::phone::PhoneAutomation {
                 id: "auto-1".into(),
                 name: "Morning issues".into(),
@@ -3387,8 +3394,15 @@ mod tests {
             mobile.reserve_input(&phone, "a"),
             Reservation::Seen(InputState::Written)
         ));
+        // The run started: a repeat of the same press is answered from its
+        // claim before the list, which now says it is running, is read.
+        mobile
+            .automations
+            .send_replace(Arc::new(listed_automations(true)));
         let again = automation_request(&mobile, &phone, &press("run", "auto-1", "a")).await;
         assert_eq!(again["ok"], true, "{again}");
+        let new_press = automation_request(&mobile, &phone, &press("run", "auto-1", "b")).await;
+        assert_eq!(reason(&new_press), Some("running"));
         let refused = automation_request(&mobile, &phone, &press("run", "auto-9", "g")).await;
         assert_eq!(reason(&refused), Some("gone"));
         assert!(matches!(

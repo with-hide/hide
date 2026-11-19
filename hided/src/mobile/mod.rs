@@ -56,6 +56,21 @@ fn projection_failed(stage: &str, message: &str) {
     );
 }
 
+/// The automations the core counts as the operator's turn, oldest pause
+/// first (`navigator.agent_scope.automation_asks`, PRD automations D-12); the
+/// core leaves the field out while there are none.
+fn automation_asks(rest: &Value) -> Vec<String> {
+    rest.pointer("/navigator/agent_scope/automation_asks")
+        .and_then(Value::as_array)
+        .map(|asks| {
+            asks.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// How often the checklist is read again while Settings > Mobile is open.
 const OBSERVE_INTERVAL: Duration = Duration::from_secs(3);
 /// How often the seven-day sweep runs.
@@ -2510,6 +2525,9 @@ impl Mobile {
         let mut stopping = self.stopping.subscribe();
         let mut cursor = 0_u64;
         let mut rest = Value::Null;
+        // The core's automations section as last sent, reprojected when its
+        // asks in `rest` move.
+        let mut automations: Option<Arc<hide_core::automations::AutomationsSnapshot>> = None;
         // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
         let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
@@ -2519,6 +2537,7 @@ impl Mobile {
             if !self.follower_active() {
                 cursor = 0;
                 rest = Value::Null;
+                automations = None;
                 self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
@@ -2573,12 +2592,21 @@ impl Mobile {
                 }
             };
             cursor = payload.revision;
-            // The core's own section, sent only when it moved past the cursor.
-            if let Some(section) = payload.automations.as_deref() {
-                self.publish_automations(PhoneAutomations::project(Some(section)));
+            // The core's own section comes only when it moved past the cursor;
+            // its asks are in `rest`, so either moving reprojects the list.
+            let section_moved = payload.automations.is_some();
+            if let Some(section) = &payload.automations {
+                automations = Some(Arc::clone(section));
             }
-            match projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision)
-            {
+            let rest_moved =
+                projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision);
+            if section_moved || matches!(rest_moved, Ok(true)) {
+                self.publish_automations(PhoneAutomations::project(
+                    automations.as_deref(),
+                    &automation_asks(&rest),
+                ));
+            }
+            match rest_moved {
                 Err(error) => {
                     projection_failed("inputs", &error.to_string());
                     return;
