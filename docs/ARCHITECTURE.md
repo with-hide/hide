@@ -3275,13 +3275,28 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 A guest's work runs on this machine in the guest's own node (`hided node serve --guest`), and this machine's daemon reaches its panes only through the tap that node serves (`hided/src/guests/tap.rs`), whether or not the guest is connected.
 The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, sizes, redraws and a close.
 Nothing on this machine sends that close for one pane yet: the screen that lists a guest's panes and closes one is the ownership work's, and until then a guest's panes end here together, with its removal ([A guest taken off the host](#a-guest-taken-off-the-host)).
-The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 256 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
+The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 128 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
 The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field, from the daemon-only `guest_panes` event that replaces the list whole; `hide device list` answers it and prints each pane's address under its machine, with the panes a machine left after it was taken off under its id.
 The node keeps a session on every pane its holders' records say may run, so the host draws a pane whether or not the guest's core looks at it, and the guest's core's attach and release only decide whether a pane's output also goes up the node link.
 It lists each by the id its core names it by (`Holders::live_pane_ids`), never by the name its record's file has, so the host, the node's sessions and the guest's core name one pane one way.
 With no link, from its start to its first one too, nothing the node reports waits for a core that is not there, and its diagnostics go to the host's log.
 After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
 A screen of this machine draws a guest's pane and types into it by its `guest:` address, and `hide pane send` types text and Enter into it through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
+
+### A guest's build on the host
+
+A guest's node runs from the guest's own build, which the host has only once the guest sent it.
+The guest asks on the management stream for its node (`node_start`, naming the build by its id); a host that lacks the build answers `build_missing`, the guest sends it once on a file stream, the list of its files and then each file's bytes in that order, and asks again when the host says it is placed (`hided/src/peer_dial.rs`, `ready` and `upload`; `Guests::file`).
+The host takes the bytes a piece at a time (`hide_node::ssh::host::guest_build::place`): each file is written to `<name>.part` beside its place with its hash counted as the bytes arrive, and takes its name only when they are the bytes the build names, so no file is held in memory and a part an earlier try left is replaced.
+A file already there with those bytes is kept, and its bytes in the upload are read past and checked the same way, so the files after it stay where the list says.
+A build is never too slow to arrive, only silent: each read of the upload has 30 s (`UPLOAD_QUIET_WITHIN`), because a relay carries about 2 MiB a second and the largest build, 256 MiB, takes two minutes.
+The guest in turn waits `READY_WITHIN` for each stretch that is the host's own, from its ask and again from the build being placed, and 120 s after its last byte for the host to say so; the time the upload takes is counted by neither.
+Nothing resumes: a link that drops part way costs the whole build again at the next try, on a relay against its monthly limit.
+Before a build is placed the host makes room for it (`Guests::make_room`), keeping only that build and the one the guest's node last ran from, so a build that never brings a node up goes when the next arrives.
+A retry of a node left stopped (`node_retry`) is a start like the first: it is counted against the guests at work and told `host_full` at the cap.
+
+Both machines read the management stream through one reader that keeps what it has of a message when a wait on it is dropped (`hide_peer::wire::MessageReader`), because each waits on it beside something else: the host beside the node's standing and its events, the guest beside its link's close and its inbox's clock.
+`wire::read_message` is for a stream nothing else is waited on with.
 
 ### A guest's hook entries
 
@@ -3301,16 +3316,17 @@ Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more
 
 | What | Cap | At the cap | Named in |
 | --- | --- | --- | --- |
-| Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 4 | the next guest's node is not started and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::start_within_the_cap` |
+| Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 4 | the next guest's node is not started, by a first ask or by a retry of one left stopped, and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::within_the_cap` |
 | Guests a host keeps a place for | 32 | those with no node and no pane are dropped, and past that a guest is refused | `hide_peer::limits::MAX_GRANTS`, `Guests::node_for` |
-| Panes of one guest, each in one holder | 256 | the node starts no holder past it, and the host lists none | `hide_kit::panes::HOLDER_CAP`, `hide_core::guest_panes::MAX_PANES` |
+| Panes of one guest, each in one holder | 128 | the node starts no holder past it, and the host lists none | `hide_kit::panes::HOLDER_CAP`, which `hide_core::guest_panes::MAX_PANES` is |
 | Streams on one connection | 72, with a cap for each kind | a stream past it is refused | `hide_peer::limits::MAX_STREAMS` |
 | Output a node keeps waiting for a slow host, on the tap | 4 MiB | what waits is dropped and each pane is drawn whole again | `tap::CAP_BYTES` |
 | Letters a node keeps while its core is away | 4,096 events and 8 MiB | the sender is refused `outbox_full`; nothing is dropped | `event::BOX_MAX_EVENTS`, `event::BOX_MAX_BYTES` |
 | Events a node hands the host before the guest's stream takes them | 64 | the node's output is left unread, which holds its next event in its box | `guests/node.rs`, `EVENTS_WAITING` |
 | Crashes of a node the host starts again | 5 in 600 s | the node is left stopped and the guest's device shows the reason with a retry | `launch::CRASHES`, `launch::CRASH_WINDOW_SECS` |
 | Starts of a node for a holder it lost | 1 in 600 s | a pane lost sooner stays unreachable until the node's next start; the host's own daemon never restarts for it | `launch::HOLDER_LOST_RESTART_SECS`, `launch::EXIT_RESTART` |
-| Builds of one guest a host keeps | 2 | the oldest goes when a node says it is ready | `launch::BUILDS_KEPT` |
+| One build a guest sends | 256 MiB in 64 files | the build is refused before a byte of it is placed | `build::MAX_BYTES`, `build::MAX_FILES` |
+| Builds of one guest a host keeps | 2 | room is made before a build is placed: every build goes but that one and the one the node last ran from | `launch::BUILDS_KEPT`, `Guests::make_room` |
 
 The first row is set by the hook entries.
 A guest at work adds one start of its helper to every agent event on the host's account, and the guests together are to add no more than a second to one event on the slowest system Hide supports, for an agent that runs its hooks one after another.
@@ -3329,7 +3345,7 @@ A node told to end now reports each pane as gone on its tap and waits up to 2 s 
 The two words come on two threads and are applied one at a time, and the grant list's word never weakens an "end now" already given.
 Once a guest that was taken off has no pane and its node has stopped, its place among the guests, the screens' way to its panes and its whole `g/<key>` folder are removed; a folder of a guest with no grant that nothing was started from since the daemon's start is removed in the same sweep.
 A guest that is paired again before that has its mark cleared and its node started again, since the one that was running takes no new link.
-Of a guest's builds the host keeps the one that runs and the one before it; the rest are removed when a node says it is ready.
+Of a guest's builds the host keeps the one that runs and the one before it ([A guest's build on the host](#a-guests-build-on-the-host)).
 
 A holder of a guest's pane that dies without saying why is settled by that guest's node alone (PRD D-77 (6)).
 A node's start ends such a pane's record as lost and wakes its agent, as a daemon's start does for its own panes, so the node ends itself with exit code 71 and the host starts it again at once, every other pane staying in its holder (`guest_node::restart_for_lost_holder`, `guests::node::follows`).

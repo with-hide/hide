@@ -34,7 +34,7 @@ use hide_peer::{limits, wire};
 use hide_platform::fs::{Access, atomic, private};
 use hide_platform::ipc::{self, LocalStream};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
@@ -336,7 +336,8 @@ impl Guests {
                                 .and_then(|bytes| serde_json::from_slice::<NodeRecord>(&bytes).ok())
                                 .map(|earlier| earlier.build_id)
                                 .unwrap_or_default();
-                            guest_build::prune(&builds, &[&remembered.build_id, &before]);
+                            let kept: [&str; launch::BUILDS_KEPT] = [&remembered.build_id, &before];
+                            guest_build::prune(&builds, &kept);
                             let written = serde_json::to_vec(&remembered)
                                 .map_err(io::Error::other)
                                 .and_then(|bytes| {
@@ -443,6 +444,24 @@ impl Guests {
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
     }
 
+    /// Makes room under the guest's install root `root` for the build `id`
+    /// before it is placed: every build goes but `id` itself, whose folder
+    /// an earlier try may have left to finish, and the build the guest's
+    /// node last ran from, [`launch::BUILDS_KEPT`] in all. A build that
+    /// never brings a node up so takes the place of the one before it, and
+    /// the folder cannot grow by builds that are only ever sent. Blocking.
+    fn make_room(&self, guest: &PeerKey, root: &Path, id: &str) {
+        let last = self
+            .remembered(guest)
+            .map(|remembered| remembered.build_id)
+            .unwrap_or_default();
+        let kept: [&str; launch::BUILDS_KEPT] = [id, &last];
+        let removed = guest_build::prune(root, &kept);
+        if !removed.is_empty() {
+            record("guests.builds_pruned", guest, json!({"removed": removed}));
+        }
+    }
+
     /// Starts the guest's node from the build it last ran, when that build
     /// is still placed. Blocking.
     fn start_remembered(&self, guest: &PeerKey, node: &Arc<GuestNode>) -> bool {
@@ -547,22 +566,29 @@ impl Guests {
                 json!({"reason": error.to_string()}),
             );
         }
-        if mode == EndMode::Now
-            && hosted.node.running().is_none()
-            && !hosted.tap.panes().is_empty()
-            && self.start_remembered(guest, &hosted.node)
+        if mode == EndMode::Now && hosted.node.running().is_none() && !hosted.tap.panes().is_empty()
         {
-            let mut phase = hosted.node.phase();
-            let ready = self.runtime.block_on(async {
-                tokio::time::timeout(
-                    END_START_WITHIN,
-                    phase.wait_for(|phase| !matches!(phase, Phase::Starting)),
-                )
-                .await
-                .is_ok_and(|phase| phase.is_ok_and(|phase| matches!(*phase, Phase::Ready(_))))
-            });
-            if !ready {
-                record("guests.end_not_started", guest, json!({}));
+            if self.start_remembered(guest, &hosted.node) {
+                let mut phase = hosted.node.phase();
+                let ready = self.runtime.block_on(async {
+                    tokio::time::timeout(
+                        END_START_WITHIN,
+                        phase.wait_for(|phase| !matches!(phase, Phase::Starting)),
+                    )
+                    .await
+                    .is_ok_and(|phase| phase.is_ok_and(|phase| matches!(*phase, Phase::Ready(_))))
+                });
+                if !ready {
+                    record("guests.end_not_started", guest, json!({}));
+                }
+            } else {
+                // No build is left to run the node that would end them:
+                // the panes stay, and the log says why.
+                record(
+                    "guests.end_without_build",
+                    guest,
+                    json!({"panes": hosted.tap.panes().len()}),
+                );
             }
         }
         record(
@@ -804,6 +830,7 @@ impl Guests {
                 format!("build {id} is not on this machine"),
             ));
         }
+        self.make_room(guest, &root, id);
         self.packages
             .guest_build(std::env::consts::OS, std::env::consts::ARCH)
             .map_err(|error| error.to_string())
@@ -895,21 +922,17 @@ impl Guests {
         // this machine before is back.
         let guests = Arc::clone(self);
         let _ = tokio::task::spawn_blocking(move || guests.back(&guest)).await;
-        self.start_within_the_cap(&guest, &node, program)?;
+        self.within_the_cap(&guest, || node.start(program))?;
         Ok(node)
     }
 
-    /// Starts `node`, the node of `guest`, unless as many other guests are
-    /// at work here as this machine carries at once
-    /// ([`launch::MAX_GUEST_NODES`], D-77 (7)). A guest already at work is
-    /// never refused its own node: a restart or a newer build of it adds no
-    /// guest.
-    fn start_within_the_cap(
-        &self,
-        guest: &PeerKey,
-        node: &Arc<GuestNode>,
-        program: PathBuf,
-    ) -> Result<(), Refusal> {
+    /// Runs `start`, which starts the node of `guest`, unless as many other
+    /// guests are at work here as this machine carries at once
+    /// ([`launch::MAX_GUEST_NODES`], D-77 (7)). Every start a guest asks
+    /// for goes through here, its first and one it asks for again. A guest
+    /// already at work is never refused its own node: a restart or a newer
+    /// build of it adds no guest.
+    fn within_the_cap<T>(&self, guest: &PeerKey, start: impl FnOnce() -> T) -> Result<T, Refusal> {
         let _one = lock(&self.starting);
         let others = lock(&self.hosted)
             .iter()
@@ -924,8 +947,7 @@ impl Guests {
                 ),
             ));
         }
-        node.start(program);
-        Ok(())
+        Ok(start())
     }
 
     /// One guest's management stream: its asks for its node, and where the
@@ -933,14 +955,15 @@ impl Guests {
     async fn manage(self: Arc<Self>, incoming: Incoming) {
         let guest = incoming.link.key();
         let device = incoming.link.their_hello().device.clone();
-        let Stream {
-            mut send, mut recv, ..
-        } = incoming.stream;
+        let Stream { mut send, recv, .. } = incoming.stream;
+        // The read is one branch of a wait that loops: what it has of a
+        // message stays in the reader when another branch wins.
+        let mut messages = wire::MessageReader::new(recv, frame::MAX_MESSAGE);
         let mut phase: Option<watch::Receiver<Phase>> = None;
         let mut events: Option<Events> = None;
         loop {
             let answer = tokio::select! {
-                message = wire::read_message(&mut recv, frame::MAX_MESSAGE) => {
+                message = messages.next() => {
                     let Ok(Some(body)) = message else { break };
                     let asked = match Manage::parse(&body) {
                         Ok(Some(asked)) => asked,
@@ -1011,7 +1034,7 @@ impl Guests {
         // The guest opens its next management stream once it sees this
         // one end: the reading half goes first, so this machine's place
         // for that kind is free by then.
-        drop(recv);
+        drop(messages);
         drop(send);
     }
 
@@ -1040,16 +1063,34 @@ impl Guests {
                     Asked::Answer(stopped(refusal))
                 }
             },
-            Manage::NodeRetry => match self.node(&guest) {
-                Some(node) if node.retry() => Asked::Watch(node),
+            Manage::NodeRetry => {
                 // This daemon was never asked for a build: the guest names
                 // one, as it does on its first ask.
-                _ => Asked::Answer(Manage::NodeStopped {
-                    reason: NodeStop::Ended,
-                    retry: false,
-                    detail: None,
-                }),
-            },
+                let name_one = || {
+                    Asked::Answer(Manage::NodeStopped {
+                        reason: NodeStop::Ended,
+                        retry: false,
+                        detail: None,
+                    })
+                };
+                let Some(node) = self.node(&guest) else {
+                    return name_one();
+                };
+                // A node left stopped is no guest at work, so its start
+                // again is one more guest here like any other.
+                match self.within_the_cap(&guest, || node.retry()) {
+                    Ok(true) => Asked::Watch(node),
+                    Ok(false) => name_one(),
+                    Err(refusal) => {
+                        record(
+                            "guests.node_refused",
+                            &guest,
+                            json!({"retry": true, "reason": refusal.1}),
+                        );
+                        Asked::Answer(stopped(refusal))
+                    }
+                }
+            }
             Manage::NodeEnd { mode } => {
                 if let Some(node) = self.node(&guest) {
                     node.end(mode);
@@ -1130,22 +1171,17 @@ impl Guests {
             }
             Err(_) => return,
         };
-        let runtime = Handle::current();
         let guests = Arc::clone(&self);
         let named = id.clone();
+        let mut upload = Upload {
+            recv,
+            runtime: Handle::current(),
+        };
         let placed = tokio::task::spawn_blocking(move || {
             guests.folder(&guest).map_err(|refusal| refusal.1)?;
             let root = layout::guest_install_root(&guests.state_dir, &guest);
-            guest_build::place(&root, &named, &files, |file| {
-                // `place` checked the list: a file is at most the cap.
-                let mut bytes = vec![0u8; file.size as usize];
-                runtime.block_on(async {
-                    tokio::time::timeout(limits::WRITE_WITHIN, recv.read_exact(&mut bytes))
-                        .await
-                        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
-                })?;
-                Ok(bytes)
-            })
+            guests.make_room(&guest, &root, &named);
+            guest_build::place(&root, &named, &files, &mut upload)
         })
         .await
         .unwrap_or_else(|error| Err(error.to_string()));
@@ -1165,6 +1201,37 @@ impl Guests {
         };
         let _ = wire::write_message(&mut send, &answer).await;
         let _ = send.shutdown().await;
+    }
+}
+
+/// How long an upload may bring nothing before it is given up. Each read
+/// of the stream has this long, whatever it brings: a build is never too
+/// slow to arrive, only silent. (A relay carries about 2 MiB a second, so a
+/// whole file within one such wait was more than it could do.)
+const UPLOAD_QUIET_WITHIN: Duration = limits::WRITE_WITHIN;
+
+/// Some of an upload's next bytes, waited for at most
+/// [`UPLOAD_QUIET_WITHIN`].
+async fn upload_read<R>(recv: &mut R, buffer: &mut [u8]) -> io::Result<usize>
+where
+    R: AsyncRead + Unpin,
+{
+    tokio::time::timeout(UPLOAD_QUIET_WITHIN, recv.read(buffer))
+        .await
+        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))?
+}
+
+/// An upload's bytes for the blocking code that places them
+/// ([`guest_build::place`]): each read is the stream's own, on the runtime
+/// ([`upload_read`]).
+struct Upload<R> {
+    recv: R,
+    runtime: Handle,
+}
+
+impl<R: AsyncRead + Unpin> io::Read for Upload<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.runtime.block_on(upload_read(&mut self.recv, buffer))
     }
 }
 
@@ -1586,6 +1653,109 @@ mod tests {
         PeerKey::from_hex(&format!("{byte:02x}").repeat(32)).unwrap()
     }
 
+    /// PRD B34: a relay carries about 2 MiB a second, so the largest build
+    /// (`build::MAX_BYTES`) takes two minutes to arrive, longer than any
+    /// one wait of the link. Its bytes are read to the end, because each
+    /// read has its own wait, and a stream that then brings nothing is
+    /// given up after one such wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_build_arriving_at_a_relays_speed_is_read_whole_and_a_silent_stream_is_given_up() {
+        const A_SECOND: usize = 2 * 1024 * 1024;
+        let total = build::MAX_BYTES as usize;
+        let (mut send, mut recv) = tokio::io::duplex(64 * 1024);
+        let relay = tokio::spawn(async move {
+            let piece = vec![7u8; A_SECOND];
+            let mut sent = 0;
+            while sent < total {
+                send.write_all(&piece).await.unwrap();
+                sent += piece.len();
+                tokio::time::sleep(Duration::from_secs(1)).await; // wait-ok: the paused clock, for a relay's speed
+            }
+            // Open and silent from here.
+            send
+        });
+        let began = tokio::time::Instant::now();
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut read = 0;
+        while read < total {
+            read += upload_read(&mut recv, &mut buffer)
+                .await
+                .unwrap_or_else(|error| panic!("after {read} bytes: {error}"));
+        }
+        assert_eq!(read, total);
+        let took = began.elapsed();
+        assert!(
+            took >= Duration::from_secs((total / A_SECOND) as u64 - 1)
+                && took > 4 * UPLOAD_QUIET_WITHIN,
+            "{took:?}"
+        );
+
+        let quiet = tokio::time::Instant::now();
+        let silent = upload_read(&mut recv, &mut buffer).await;
+        assert_eq!(
+            silent.map_err(|error| error.kind()),
+            Err(io::ErrorKind::TimedOut)
+        );
+        let waited = quiet.elapsed();
+        assert!(
+            waited >= UPLOAD_QUIET_WITHIN && waited < UPLOAD_QUIET_WITHIN + Duration::from_secs(1),
+            "{waited:?}"
+        );
+        // The guest lets the stream go: the upload ends there.
+        drop(relay.await.unwrap());
+        assert_eq!(upload_read(&mut recv, &mut buffer).await.ok(), Some(0));
+    }
+
+    /// A guest keeps [`launch::BUILDS_KEPT`] builds on this machine however
+    /// many it sends: room is made before a build is placed, so one that
+    /// never brought a node up goes when the next arrives, and the build
+    /// the guest's node last ran from stays for the node to start from.
+    #[tokio::test]
+    async fn room_is_made_for_a_build_before_it_is_placed() {
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        let guest = key(7);
+        guests.folder(&guest).unwrap();
+        let root = layout::guest_install_root(state.path(), &guest);
+        let ran = "0000000000000001";
+        atomic::write_file(
+            &layout::guest_node_record(state.path(), &guest),
+            &serde_json::to_vec(&NodeRecord {
+                build_id: ran.to_owned(),
+                device: "macbook".to_owned(),
+            })
+            .unwrap(),
+            Access::Private,
+        )
+        .unwrap();
+        let builds = || -> Vec<String> {
+            let mut builds: Vec<String> = std::fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            builds.sort();
+            builds
+        };
+        let place = |id: &str| std::fs::create_dir_all(root.join(id).join("x")).unwrap();
+        place(ran);
+        for sent in ["0000000000000002", "0000000000000003", "0000000000000004"] {
+            guests.make_room(&guest, &root, sent);
+            assert_eq!(builds(), [ran], "before {sent} is placed");
+            place(sent);
+            assert_eq!(builds(), [ran, sent]);
+            assert!(builds().len() <= launch::BUILDS_KEPT);
+        }
+        // The same build sent again keeps what its earlier try left.
+        guests.make_room(&guest, &root, "0000000000000004");
+        assert_eq!(builds(), [ran, "0000000000000004"]);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_guests_panes_go_by_a_device_id_that_is_its_own_on_this_machine() {
         let state = short_root();
@@ -1673,6 +1843,22 @@ mod tests {
             "the place is the next guest's"
         );
         assert_eq!(start(1).await, Err((NodeStop::HostFull, true)));
+        // Asking for its stopped node again is one more guest all the same
+        // (B70's retry goes through the same count), and starts nothing.
+        let again = guests.asked(key(1), "device-1", Manage::NodeRetry).await;
+        assert!(
+            matches!(
+                &again,
+                Asked::Answer(Manage::NodeStopped {
+                    reason: NodeStop::HostFull,
+                    retry: false,
+                    ..
+                })
+            ),
+            "a retry past the cap is told the host is full"
+        );
+        assert!(first.stopped_by(Instant::now()));
+        assert!(first.running().is_none());
     }
 
     /// What an earlier run of this daemon left of `guest`: its folder, its
