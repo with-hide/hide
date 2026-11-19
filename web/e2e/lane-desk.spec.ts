@@ -80,7 +80,8 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
 
     // B8: moving between the tab's panes leaves its desk, its front tab and the lane as they were.
     const mode = (await screen(page).getAttribute("data-lane-mode"))!;
-    await terminal(page, beside).click();
+    // The open lane covers the right of the pane beside, so the press lands on its left edge.
+    await terminal(page, beside).click({ position: { x: 20, y: 200 } });
     await terminal(page, watched).click();
     await expect(deskTabs(page)).toHaveCount(2);
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
