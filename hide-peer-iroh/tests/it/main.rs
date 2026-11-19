@@ -335,17 +335,17 @@ async fn a_handshake_that_never_finishes_holds_up_no_other_connection() {
     })
     .await;
 
+    // Well inside the time the host gives the unfinished handshake: a host
+    // that waited for it first would take that whole time to get here.
     let to = PeerAddr::new(host.key(), host.candidates());
-    let (dialed, accepted) = within("a connection beside the unfinished handshake", async {
+    let (dialed, accepted) = tokio::time::timeout(hide_peer::limits::HELLO_WITHIN / 2, async {
         tokio::join!(guest.dial(&to), &mut accepted)
     })
-    .await;
+    .await
+    .expect("the other machine connected while the host still waited for that handshake");
     assert_eq!(accepted.unwrap().peer(), guest.key());
     dialed.unwrap();
-    assert!(
-        !stalled.is_finished(),
-        "the other machine connected while that handshake was still unfinished"
-    );
+    assert!(!stalled.is_finished(), "that handshake never finished");
 
     stalled.abort();
     wiring.abort();
