@@ -1366,6 +1366,11 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
             runtime.snapshot.ui_state.pane_launches, launches,
             "{tag}: a terminal's launch changed"
         );
+        // Its first open on the new connection is owed, and saved as owed.
+        assert!(
+            runtime.switch_open_pending(&helper.id),
+            "{tag}: the switched device owes no first open"
+        );
         let after = rest(&runtime);
         let changed: Vec<_> = before
             .as_object()
@@ -1579,4 +1584,312 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
         dispatch(&mut runtime, "device_switch", bad);
         assert_eq!(runtime.snapshot.ui_state.device_registrations, before);
     }
+}
+
+/// A switched device's first open on its new connection closes the panes
+/// that connection does not hold (PRD device-connect-iroh D-49, B36), and
+/// all of them for a later computer, whose own folder there holds none
+/// (D-75, B69). The core owes that open from the save that holds the
+/// switch, across a restart, and keeps each closed agent's conversation
+/// for 이어가기 once the engine names it (review of #2682).
+#[test]
+fn a_switched_device_owes_its_first_open_and_keeps_what_that_open_closed() {
+    use crate::model::{DeviceNaming, DeviceRegistration, LinkOrigin};
+    use crate::session_sync::NotCarried;
+    let mut runtime = runtime();
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .push(crate::model::WorkspaceRegistration {
+            primary_checkout_id: None,
+            id: "workspace:app".to_owned(),
+            label: "app".to_owned(),
+            path: "/home/me/app".to_owned(),
+            device_id: "build-box-id".to_owned(),
+            pinned: false,
+        });
+    runtime.rebuild_device_rows();
+    assert!(!runtime.switch_open_pending("build-box-id"));
+    dispatch(
+        &mut runtime,
+        "peer_machines",
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": "build-box-id", "name": "ubuntu-build",
+            "opens": "active", "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]}),
+    );
+    dispatch(
+        &mut runtime,
+        "device_switch",
+        serde_json::json!({"device_id": "build-box-id", "step": "connecting", "key": key}),
+    );
+    assert!(runtime.switch_open_pending("build-box-id"));
+
+    // The save that holds the switch holds what it owes: a core started
+    // from that store owes the same open.
+    let stored = |runtime: &Runtime| persistence::load(&runtime.state_path).0;
+    assert!(
+        stored(&runtime)
+            .device_switch_opens
+            .contains("build-box-id")
+    );
+    let home = tempfile::tempdir().unwrap();
+    let copy = home.path().join("state.json");
+    std::fs::copy(&runtime.state_path, &copy).unwrap();
+    let restarted = runtime_reading(&copy, crate::node::test_node(), home.path(), None);
+    assert!(restarted.switch_open_pending("build-box-id"));
+    drop(restarted);
+
+    // The engine's restore on the new connection held none of the device's
+    // three panes: an agent in the project, a shell, and an agent whose
+    // folder no project of the device holds.
+    let left = |pane: &str, cwd: &str, agent: Option<(&str, &str)>| NotCarried {
+        pane_id: pane.to_owned(),
+        cwd: cwd.to_owned(),
+        agent: agent.map(|(kind, _)| kind.to_owned()),
+        name: None,
+        session: agent.map(|(_, session)| session.to_owned()),
+    };
+    let closed = [
+        left("w1:p1", "/home/me/app/src", Some(("claude-code", "s-1"))),
+        left("w1:p2", "/home/me/app", None),
+        left("w1:p3", "/tmp/elsewhere", Some(("codex", "s-2"))),
+    ];
+    assert!(runtime.settle_switch_open("build-box-id", &closed));
+    let archive = &runtime.snapshot.ui_state.session_archive;
+    let (id, _) = archive
+        .find("build-box-id", "claude-code", "s-1")
+        .expect("the closed agent's conversation under 보관됨");
+    let record = &archive.records[id];
+    assert_eq!(record.project_root, "/home/me/app");
+    assert_eq!(
+        record.members[0].pane_id,
+        crate::address::scoped_pane_id("build-box-id", "w1:p1")
+    );
+    assert_eq!(record.members[0].cwd.as_deref(), Some("/home/me/app/src"));
+    assert!(
+        archive.find("build-box-id", "codex", "s-2").is_none(),
+        "a conversation no project holds has no record to stand in"
+    );
+    // The row says how many terminals were not taken up (B36).
+    assert_eq!(device(&runtime, "build-box-id").not_carried, Some(3));
+
+    // Settled once, and the store owes nothing more.
+    assert!(!runtime.switch_open_pending("build-box-id"));
+    assert!(stored(&runtime).device_switch_opens.is_empty());
+    assert!(!runtime.settle_switch_open("build-box-id", &closed));
+    assert_eq!(runtime.snapshot.ui_state.session_archive.records.len(), 1);
+}
+
+/// A switch names at most `SWITCHED_PROJECTS` of the device's projects
+/// (D-48): as many as its machine's `hide device projects-ssh` takes, so a
+/// device with more hands the first of them on and the command is never
+/// refused for one too many.
+#[test]
+fn a_switch_names_no_more_projects_than_its_machine_takes() {
+    use crate::model::{DeviceNaming, DeviceRegistration, LinkOrigin};
+    let mut runtime = runtime();
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    let registered = crate::SWITCHED_PROJECTS + 3;
+    for index in 0..registered {
+        runtime.snapshot.ui_state.workspace_registrations.push(
+            crate::model::WorkspaceRegistration {
+                primary_checkout_id: None,
+                id: format!("workspace:{index}"),
+                label: format!("p{index}"),
+                path: format!("/home/me/p{index}"),
+                device_id: "build-box-id".to_owned(),
+                pinned: false,
+            },
+        );
+    }
+    let source = runtime
+        .device_switch_source("build-box-id")
+        .expect("a device to switch");
+    assert_eq!(source.projects.len(), crate::SWITCHED_PROJECTS);
+    let first: Vec<String> = (0..crate::SWITCHED_PROJECTS)
+        .map(|index| format!("/home/me/p{index}"))
+        .collect();
+    assert_eq!(source.projects, first);
+}
+
+/// A device added over SSH is added to be switched (B41, review of #2682):
+/// when that switch stops with nothing started on its machine, the device
+/// is taken off again and one line says why; once a Hide was started there
+/// or a grant saved, it stays a helper device with its reason and a retry.
+/// A helper device that was there before stays either way.
+#[test]
+fn a_device_added_for_its_switch_is_taken_off_when_the_switch_started_nothing() {
+    use crate::model::DeviceSwitchState;
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let add = |runtime: &mut Runtime, alias: &str, switch_first: bool| {
+        runtime
+            .register_device(events::RegisterDevicePayload {
+                label: alias.to_owned(),
+                ssh_alias: alias.to_owned(),
+                wsl_distro: None,
+                host_consent: true,
+                switch_first,
+            })
+            .unwrap_or_else(|refusal| panic!("not registered: {}", refusal.code))
+    };
+    let failed = |device: &str, clean: bool| {
+        serde_json::json!({
+            "device_id": device, "step": "failed", "reason": "ssh_mac_signed_out", "clean": clean,
+        })
+    };
+
+    // Stopped before anything was started there: not added, with why.
+    let mut runtime = runtime();
+    let lab = add(&mut runtime, "lab", true);
+    assert!(device(&runtime, &lab).switch_first);
+    dispatch(&mut runtime, "device_switch", failed(&lab, true));
+    assert_eq!(runtime.device_registration(&lab), None);
+    let line = runtime.snapshot.navigator.device_not_added.clone();
+    assert_eq!(
+        line.map(|line| (line.label, line.reason)),
+        Some(("lab".to_owned(), "ssh_mac_signed_out".to_owned()))
+    );
+    // The next Add takes the line away.
+    let again = add(&mut runtime, "lab", true);
+    assert_eq!(runtime.snapshot.navigator.device_not_added, None);
+
+    // A Hide was started there, or a grant saved: it stays, as a helper
+    // device like any other from then on (B41).
+    dispatch(&mut runtime, "device_switch", failed(&again, false));
+    let row = device(&runtime, &again);
+    assert_eq!(
+        row.switch.as_ref().map(|switch| switch.state),
+        Some(DeviceSwitchState::Failed)
+    );
+    assert!(!row.switch_first);
+    dispatch(&mut runtime, "device_switch", failed(&again, true));
+    assert!(runtime.device_registration(&again).is_some());
+    assert_eq!(runtime.snapshot.navigator.device_not_added, None);
+
+    // A device that was not added for a switch is never taken off.
+    let older = add(&mut runtime, "older", false);
+    dispatch(&mut runtime, "device_switch", failed(&older, true));
+    assert!(runtime.device_registration(&older).is_some());
+}
+
+/// The link changes only after the switched registration is saved (review
+/// of #2682): a core that ended between the two would read the helper
+/// registration again and dial a folder its machine's own Hide already
+/// holds.
+#[test]
+fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
+    use crate::model::{DeviceNaming, DeviceRegistration, DeviceSwitchState, LinkOrigin};
+    let mut runtime = runtime();
+    let terminals = record_terminals(&mut runtime);
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    runtime.rebuild_device_rows();
+    let helper = runtime.device_registration("build-box-id").unwrap().clone();
+    dispatch(
+        &mut runtime,
+        "peer_machines",
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": "build-box-id", "name": "ubuntu-build",
+            "opens": "active", "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]}),
+    );
+    let before = terminals.devices();
+
+    // The store cannot be written: its folder is a file.
+    let blocked = runtime.state_path.parent().unwrap().join("not-a-folder");
+    std::fs::write(&blocked, b"").unwrap();
+    let store = std::mem::replace(&mut runtime.state_path, blocked.join("state.json"));
+    let connecting = serde_json::json!({
+        "device_id": "build-box-id", "step": "connecting", "key": key,
+        "needs": {"kind": "auto_login"},
+    });
+    dispatch(&mut runtime, "device_switch", connecting.clone());
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    let row = device(&runtime, "build-box-id");
+    let switch = row.switch.clone().expect("why the switch stopped");
+    assert_eq!(
+        (switch.state, switch.reason.as_deref()),
+        (DeviceSwitchState::Failed, Some("switch_not_saved"))
+    );
+    assert_eq!((row.peer_key.as_deref(), &row.needs), (None, &None));
+    assert_eq!(terminals.devices(), before, "the helper's link was touched");
+
+    // Pressed again once the store can be written, it lands (B41).
+    runtime.state_path = store;
+    dispatch(&mut runtime, "device_switch", connecting);
+    let row = device(&runtime, "build-box-id");
+    assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
+    assert_eq!(row.switch, None);
+    assert!(row.needs.is_some());
+    // Only now is the helper's link let go.
+    assert!(
+        terminals.devices().len() > before.len()
+            && terminals.devices()[before.len()..]
+                .iter()
+                .all(|said| said == "remove:build-box-id"),
+        "{:?}",
+        terminals.devices()
+    );
 }

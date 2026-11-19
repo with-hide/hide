@@ -515,6 +515,9 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
         peer_key: None,
         switch: None,
         needs: None,
+        switchable: false,
+        not_carried: None,
+        switch_first: false,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: TARGET.to_owned(),
@@ -2097,6 +2100,9 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
         peer_key: None,
         switch: None,
         needs: None,
+        switchable: false,
+        not_carried: None,
+        switch_first: false,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: TARGET.to_owned(),
