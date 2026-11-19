@@ -153,24 +153,42 @@ fn browser_inventory_revokes_removed_and_disconnected_catalog_checkouts() {
     assert_eq!(runtime.snapshot.browser_views.len(), 1);
     assert_eq!(runtime.snapshot.browser_views[0].view_id, id);
     assert_eq!(runtime.snapshot.browser_views[0].area_id, "a1");
-    assert_eq!(runtime.snapshot.browser_scopes.len(), 1);
+    // One scope per area of every tree: the desk's and the shelf's, where a
+    // page on no desk is held (D-37).
+    let areas = |runtime: &Runtime| {
+        let mut areas: Vec<_> = runtime
+            .snapshot
+            .browser_scopes
+            .iter()
+            .map(|scope| (scope.device_id.clone(), scope.path.clone(), scope.area_id.clone()))
+            .collect();
+        areas.sort();
+        areas
+    };
+    let scope = |area: &str| {
+        (crate::node::TEST_NODE.to_owned(), path.clone(), area.to_owned())
+    };
     assert_eq!(
-        runtime.snapshot.browser_scopes[0].device_id,
-        crate::node::TEST_NODE
+        areas(&runtime),
+        [scope("a1"), scope(crate::workspace_views::SHELF_AREA)]
     );
-    assert_eq!(runtime.snapshot.browser_scopes[0].path, path);
-    assert_eq!(runtime.snapshot.browser_scopes[0].area_id, "a1");
-    let original_incarnation = runtime.snapshot.browser_scopes[0].incarnation;
+    let incarnation = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .browser_scopes
+            .iter()
+            .find(|scope| scope.area_id == "a1")
+            .unwrap()
+            .incarnation
+    };
+    let original_incarnation = incarnation(&runtime);
     let published = runtime.snapshot.browser_views_revision;
     runtime.sync_workspace_view();
     assert_eq!(
         runtime.snapshot.browser_views_revision, published,
         "unchanged scope does not publish again"
     );
-    assert_eq!(
-        runtime.snapshot.browser_scopes[0].incarnation,
-        original_incarnation
-    );
+    assert_eq!(incarnation(&runtime), original_incarnation);
 
     runtime.snapshot.navigator.workspaces.clear();
     runtime.sync_workspace_view();
@@ -208,8 +226,8 @@ fn browser_inventory_revokes_removed_and_disconnected_catalog_checkouts() {
         1,
         "reconnected checkout gets fresh inventory"
     );
-    assert_eq!(runtime.snapshot.browser_scopes.len(), 1);
-    let regranted_incarnation = runtime.snapshot.browser_scopes[0].incarnation;
+    assert_eq!(runtime.snapshot.browser_scopes.len(), 2);
+    let regranted_incarnation = incarnation(&runtime);
     assert_ne!(
         regranted_incarnation, original_incarnation,
         "revoke/regrant cannot preserve a capability even if no intervening frame was sent"
@@ -227,11 +245,11 @@ fn browser_inventory_revokes_removed_and_disconnected_catalog_checkouts() {
     assert!(runtime.snapshot.browser_views.is_empty());
     assert_eq!(
         runtime.snapshot.browser_scopes.len(),
-        1,
+        2,
         "closing the final page preserves an authorized empty area"
     );
     assert_eq!(
-        runtime.snapshot.browser_scopes[0].incarnation, regranted_incarnation,
+        incarnation(&runtime), regranted_incarnation,
         "page closure does not retire the still-authorized area"
     );
 }
@@ -436,9 +454,10 @@ fn with_tabs(runtime: &mut Runtime, directory: &Path) {
     ))));
 }
 
-/// D-04, B8: choosing another Agent tab keeps the Workspace's document open
-/// as the checkout's one list; without View
-/// areas the terminal takes the canvas back.
+/// D-04, B8; lane-desk-pair-view B4: choosing another Agent tab keeps the
+/// Workspace's document open on the desk of the tab it was opened on, shown
+/// again when that tab comes back; without View areas the terminal takes the
+/// canvas back.
 #[test]
 fn a_terminal_tab_choice_keeps_the_workspace_document_only_with_separate_areas() {
     for separate in [true, false] {
@@ -456,9 +475,9 @@ fn a_terminal_tab_choice_keeps_the_workspace_document_only_with_separate_areas()
 
         if separate {
             assert_eq!(
-                active_label(&runtime).as_deref(),
-                Some("notes.md"),
-                "the checkout's list is the same for every tab"
+                active_label(&runtime),
+                None,
+                "each tab has its own desk"
             );
             assert_eq!(
                 runtime.snapshot.editor.tabs.len(),
@@ -483,8 +502,10 @@ fn a_terminal_tab_choice_keeps_the_workspace_document_only_with_separate_areas()
 /// PRD right-lane B1, B15, B16; lane-two-columns B6: a new Workspace shows
 /// Agent Views alone; an explicit file open shows the documents in the
 /// viewing column, opens no tool, numbers that call and lands the file; a
-/// session update, and an agent or tab chosen from anywhere, move no lane
-/// state the core keeps; a tab not shown before sees the checkout's one list.
+/// session update, and an agent or tab chosen from anywhere, call nothing;
+/// each tab shows its own desk, so a tab with nothing on its desk shows no
+/// documents and the first tab's file waits on the first tab's desk (PRD
+/// lane-desk-pair-view B4, B9).
 #[test]
 fn a_file_open_shows_the_documents_and_an_agent_choice_moves_no_lane_state() {
     let (runtime, checkout_id, directory) = strip_checkout("area-intent");
@@ -519,16 +540,17 @@ fn a_file_open_shows_the_documents_and_an_agent_choice_moves_no_lane_state() {
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
         (lane(&runtime), called(&runtime)),
-        (DOCUMENTS, opened),
-        "an agent choice moves no lane state and calls nothing"
+        ((true, false, None), opened),
+        "an agent choice calls nothing; the second tab's desk is its own, empty"
     );
+    assert_eq!(active_label(&runtime), None, "the file is not on this desk");
+    runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1"));
+    assert_eq!(lane(&runtime), DOCUMENTS);
     assert_eq!(
         active_label(&runtime).as_deref(),
         Some("notes.md"),
-        "a tab not shown before sees the checkout's one list"
+        "the first tab's desk kept its file"
     );
-    runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t1"));
-    assert_eq!(lane(&runtime), (true, true, None));
 }
 
 /// PRD lane-two-columns D-20: a tool this build does not know, the removed
@@ -1560,7 +1582,7 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
     );
     assert_eq!(std::fs::read_to_string(&state).unwrap(), saved);
     assert!(!saved.contains("width_request_id"));
-    layout(&mut runtime, serde_json::json!({"pinned": true}));
+    layout(&mut runtime, serde_json::json!({"tool": "changes"}));
     assert_eq!(
         runtime
             .snapshot
@@ -1569,7 +1591,8 @@ fn workspace_width_requests_are_bounded_ephemeral_and_confirm_exact_intents() {
             .unwrap()
             .width_request_id
             .as_deref(),
-        Some("divider:third")
+        Some("divider:third"),
+        "another lane change keeps the last width intent"
     );
     // The other tools' divider confirms its intent the same way.
     layout(

@@ -402,9 +402,7 @@ impl Runtime {
     /// document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        let Place::Tray(tab) = self.front_place(key) else {
-            return;
-        };
+        let tab = self.front_tab(key);
         let Some(tray) = self
             .workspace_views
             .as_mut()
@@ -438,9 +436,10 @@ impl Runtime {
         if !pending {
             return;
         }
-        let Some(tab) = self.workspace_active_tab(key) else {
+        let tab = self.front_tab(key);
+        if tab == workspace_views::PENDING_TRAY {
             return;
-        };
+        }
         let store = self.workspace_views.as_mut().expect("read above");
         if store.views.entry(&key.0, &key.1).adopt_pending_tray(&tab) {
             store.generation += 1;
@@ -749,11 +748,11 @@ impl Runtime {
     }
 
     pub(super) fn show_project_memory_at(&mut self, key: &WorkspaceKey, workspace: String) {
-        let tab = self.workspace_active_tab(key);
+        let tab = self.front_tab(key);
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
             let before = entry.clone();
-            entry.show_tool(Tool::Memory, tab.as_deref());
+            entry.show_tool(Tool::Memory, Some(&tab));
             let changed = *entry != before;
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
@@ -792,13 +791,13 @@ impl Runtime {
                 self.open_tray_for(key, &place);
             }
             AreaIntent::Explorer => {
-                let tab = self.workspace_active_tab(key);
+                let tab = self.front_tab(key);
                 let Some(store) = self.workspace_views.as_mut() else {
                     return;
                 };
                 let entry = store.views.entry(&key.0, &key.1);
                 let before = (entry.open, entry.tool);
-                entry.show_tool(Tool::Explorer, tab.as_deref());
+                entry.show_tool(Tool::Explorer, Some(&tab));
                 let changed = before != (entry.open, entry.tool);
                 store.call_lane(key, LaneCallSide::Tool);
                 if changed {
@@ -865,9 +864,7 @@ impl Runtime {
             );
             return true;
         }
-        let Place::Tray(tab) = self.front_place(&key) else {
-            unreachable!("the place in front is a tray");
-        };
+        let tab = self.front_tab(&key);
         let store = self.workspace_views.as_mut().expect("checked above");
         let entry = store.views.entry(&key.0, &key.1);
         let before = entry.clone();

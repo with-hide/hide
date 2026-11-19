@@ -1660,7 +1660,7 @@ fn a_schema_1_views_file_migrates_into_one_area() {
     );
     let written: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
-    assert_eq!(written["schema_version"], 5);
+    assert_eq!(written["schema_version"], 6);
 }
 
 /// Contract 3.1, B19: the documents on screen ride their own section, each

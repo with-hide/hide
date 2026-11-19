@@ -10,6 +10,8 @@ use crate::workspace_control::Action;
 use serde_json::json;
 
 const CHECKOUT: &str = "/checkouts/fixture";
+/// The fixture's one Agent tab, which holds both panes.
+const TAB: &str = "tab";
 
 fn key() -> (String, String) {
     (crate::node::TEST_NODE.into(), CHECKOUT.into())
@@ -55,10 +57,11 @@ fn fixture(child: bool) -> (tempfile::TempDir, Arc<Mutex<Runtime>>) {
         guard.snapshot.navigator.agents = vec![sender, recipient];
         guard.snapshot.navigator.focused_workspace_id = Some("workspace".into());
         guard.snapshot.navigator.focused_checkout_id = Some("checkout".into());
+        guard.snapshot.navigator.workspaces[0].checkouts[0].active_tab_id = Some(TAB.into());
         let store = guard.workspace_views.as_mut().unwrap();
         let entry = store.views.entry(crate::node::TEST_NODE, CHECKOUT);
         entry.open = true;
-        entry.tray_entry(crate::workspace_views::PENDING_TRAY).shown = true;
+        entry.tray_entry(TAB).shown = true;
         guard.set_window_focused(true);
         guard.refresh_agent_lineage();
         guard.refresh_pane_read_state();
@@ -76,31 +79,34 @@ fn keyboard(runtime: &mut Runtime, pane: Option<&str>) {
 }
 
 /// `hide file open <path>` (or a page) from `caller`, as the daemon applies
-/// it once the file is read: the View lands in the active area and is marked
-/// by its caller.
+/// it once the file is read: on the desk of the caller's tab when the
+/// operator watches the caller, else on no desk (PRD lane-desk-pair-view
+/// B1), a View that already shows the file taken where it is (D-20), and
+/// marked by its caller.
 fn open(runtime: &mut Runtime, caller: &str, path: &str) -> String {
     let key = key();
-    let view = runtime.change_front_layout(&key, |layout, stamp| {
-            let existing = layout
-                .displays()
-                .find(|display| display.shows(path, DisplayKind::File, None))
-                .map(|display| display.id.clone());
-            let id = match existing {
-                Some(id) => {
-                    layout.focus(&id, stamp)?;
-                    id
-                }
-                None => {
-                    let display = layout.new_display(path, DisplayKind::File, None, false);
-                    let id = display.id.clone();
-                    let area = layout.active_area().id.clone();
-                    layout.insert(&area, display, stamp)?;
-                    id
-                }
-            };
-            Ok((id, true))
-        })
-        .unwrap();
+    let place = runtime.control_place(&key, caller);
+    let watched = place != crate::workspace_views::Place::Shelf;
+    let view = match runtime.claim_existing_view(&key, &place, |display| {
+        display.shows(path, DisplayKind::File, None)
+    }) {
+        // An open the operator does not watch leaves every front as it was.
+        Some((id, _)) if !watched => id,
+        Some((id, at)) => runtime
+            .change_view_layout(&key, &at, |layout, stamp| {
+                Ok((id.clone(), layout.focus(&id, stamp)?))
+            })
+            .unwrap(),
+        None => runtime
+            .change_view_layout(&key, &place, |layout, stamp| {
+                let display = layout.new_display(path, DisplayKind::File, None, false);
+                let id = display.id.clone();
+                let area = layout.active_area().id.clone();
+                layout.insert(&area, display, stamp)?;
+                Ok((id, true))
+            })
+            .unwrap(),
+    };
     let action = Action::OpenFile { path: path.into() };
     runtime.stamp_control_opener(&key, caller, &action, &view);
     runtime.sync_workspace_view();
@@ -119,8 +125,7 @@ fn row<'a>(runtime: &'a Runtime, pane: &str) -> &'a crate::model::SidebarAgentSn
 
 fn unseen(runtime: &Runtime, view: &str) -> bool {
     runtime
-        .front_tray_layout(&key())
-        .and_then(|layout| layout.display(view))
+        .view_display(&key(), view)
         .is_some_and(|display| display.unseen.is_some())
 }
 
@@ -163,12 +168,16 @@ fn blocked(runtime: &mut Runtime, blocked: bool) {
     runtime.refresh_agent_lineage();
 }
 
-/// The View comes forward as the operator's press on it does.
+/// The operator's press on the View: from its pane's list or a tab, it
+/// comes onto the desk in front and forward there.
 fn look_at(runtime: &mut Runtime, view: &str) {
-    runtime.change_front_layout(&key(), |layout, stamp| {
-            layout.focus(view, stamp).map(|changed| ((), changed))
-        })
-        .unwrap();
+    assert!(runtime.dispatch_json(&explorer_event(
+        "view_layout",
+        json!({
+            "workspace": {"device_id": crate::node::TEST_NODE, "path": CHECKOUT},
+            "action": "focus", "display_id": view,
+        }),
+    )));
     runtime.sync_workspace_view();
 }
 
@@ -191,8 +200,12 @@ fn an_agents_open_while_the_operator_is_elsewhere_puts_its_row_in_needs_you_to_l
     let mut counts = crate::model::MarkCountsSnapshot::default();
     recipient.mark.count_into(&mut counts);
     assert_eq!(counts.turn, 1);
-    // B4, D-20: seeing it moves the row back without reading the pane.
+    // B4, D-20: seeing it moves the row back without reading the pane; the
+    // keyboard reaching the pane brings nothing onto the desk (PRD
+    // lane-desk-pair-view B1), the operator's press does.
     keyboard(&mut guard, Some("recipient"));
+    assert!(unseen(&guard, &view));
+    look_at(&mut guard, &view);
     assert!(!unseen(&guard, &view));
     let recipient = row(&guard, "recipient");
     assert_eq!(recipient.group, "working");
@@ -247,7 +260,8 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
 fn a_view_in_an_area_that_is_not_active_stays_unseen() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
-    keyboard(&mut guard, Some("sender"));
+    guard.set_window_focused(false);
+    keyboard(&mut guard, Some("recipient"));
     let first = open(&mut guard, "recipient", "src/a.ts");
     let second = open(&mut guard, "recipient", "src/b.ts");
     // The first View moves to an area of its own; the second stays active.
@@ -263,6 +277,7 @@ fn a_view_in_an_area_that_is_not_active_stays_unseen() {
             layout.focus_area(&area, stamp).map(|changed| ((), changed))
         })
         .unwrap();
+    guard.set_window_focused(true);
     keyboard(&mut guard, Some("recipient"));
     // B7: shown in an area that is not the active one is not looked at.
     assert!(unseen(&guard, &first));
@@ -303,7 +318,8 @@ fn a_view_closed_before_it_is_seen_takes_its_look_with_it() {
     let view = open(&mut guard, "recipient", "src/login.ts");
     assert_eq!(row(&guard, "recipient").group, "needs_you");
     // B13, B32: the record lives on the View and goes with it.
-    guard.change_front_layout(&key(), |layout, _| {
+    let place = guard.view_place(&key(), &view).unwrap();
+    guard.change_view_layout(&key(), &place, |layout, _| {
             layout.remove(&view);
             Ok(((), true))
         })
@@ -320,8 +336,9 @@ fn an_open_again_of_a_seen_view_is_to_look_at_again() {
     keyboard(&mut guard, Some("recipient"));
     let view = open(&mut guard, "recipient", "src/login.ts");
     assert!(!unseen(&guard, &view));
+    open(&mut guard, "recipient", "src/a.ts");
     keyboard(&mut guard, Some("sender"));
-    // B14, D-11: the same path brought forward again by the agent.
+    // B14, D-11: the same path opened again by the agent, now behind.
     assert_eq!(open(&mut guard, "recipient", "src/login.ts"), view);
     assert!(unseen(&guard, &view));
     assert_eq!(row(&guard, "recipient").mark, RowMark::Look);
@@ -468,6 +485,7 @@ fn a_childs_unseen_view_turns_its_ancestors_unread_until_one_reads_it_or_the_ope
     assert_eq!(parent.look.as_ref().unwrap().view_id, view);
     // (2) The operator looks at it: seen, and nothing is left on either.
     keyboard(&mut guard, Some("sender"));
+    look_at(&mut guard, &view);
     assert!(!unseen(&guard, &view));
     assert!(row(&guard, "sender").look.is_none());
 }
@@ -558,9 +576,7 @@ fn a_view_a_tools_agent_opened_is_the_eye_on_its_row_in_the_tools_cell_only() {
     assert_eq!(agent.mark, RowMark::Look);
     assert_eq!(agent.look.as_ref().unwrap().view_id, view);
     assert!(
-        guard
-            .front_tray_layout(&key())
-            .and_then(|layout| layout.display(&view))
+        guard.view_display(&key(), &view)
             .is_some_and(|display| !display.openers.is_empty() && display.unseen.is_some())
     );
     // The tool's cell holds the row where its state puts it, and the eye
@@ -608,9 +624,7 @@ fn a_tools_direct_open_is_the_operators_own_open() {
     keyboard(&mut guard, Some("sender"));
     let caller = crate::workspace_control::access_caller_id(&connection, None);
     let view = open(&mut guard, &caller, "src/hello.html");
-    let display = guard
-        .front_tray_layout(&key())
-        .and_then(|layout| layout.display(&view))
+    let display = guard.view_display(&key(), &view)
         .unwrap();
     assert!(display.operator && display.openers.is_empty() && display.opener.is_none());
     assert!(
@@ -641,7 +655,8 @@ fn reading_the_parent_takes_in_the_childs_view_signal_and_a_close_drops_it() {
     assert!(!row(&guard, "sender").unread);
     assert!(unseen(&guard, &view));
     // (6) Closed, it is gone everywhere.
-    guard.change_front_layout(&key(), |layout, _| {
+    let place = guard.view_place(&key(), &view).unwrap();
+    guard.change_view_layout(&key(), &place, |layout, _| {
             layout.remove(&view);
             Ok(((), true))
         })
@@ -764,17 +779,11 @@ fn an_open_again_from_behind_is_unseen_even_when_it_passed_through_the_front() {
     keyboard(&mut guard, Some("sender"));
     let page = open_page(&mut guard, "recipient", "https://example.test/a");
     let other = open_page(&mut guard, "recipient", "https://example.test/b");
-    // Both pages are the operator's own and seen, the second in front.
-    guard.change_front_layout(&key(), |layout, _| {
-            for id in [&page, &other] {
-                let display = layout.display_mut(id).unwrap();
-                display.operator = true;
-                display.unseen = None;
-            }
-            Ok(((), true))
-        })
-        .unwrap();
+    // The operator brings both onto the desk and sees them, the second in
+    // front.
+    look_at(&mut guard, &page);
     look_at(&mut guard, &other);
+    assert!(!unseen(&guard, &page) && !unseen(&guard, &other));
     // B14: the agent behind opens the first page again; the operator's front
     // is put back, so the page is news, though it was in front mid-action.
     assert_eq!(
@@ -884,19 +893,6 @@ fn pane_views(runtime: &Runtime, pane: &str) -> Vec<crate::model::OpenedViewSnap
         .unwrap_or_default()
 }
 
-/// The paths of the tabs the View strip marks 볼 것, in the one area it draws.
-fn unseen_tabs(runtime: &Runtime) -> Vec<String> {
-    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    let crate::model::ViewNodeSnapshot::Area(area) = &view.layout.root else {
-        panic!("the fixture draws one area");
-    };
-    area.displays
-        .iter()
-        .filter(|display| display.unseen)
-        .map(|display| display.path.clone())
-        .collect()
-}
-
 /// The same file in two areas is one row of the opener's `N views`; while
 /// the tab the operator has not looked at is the second, the row wears its
 /// 볼 것 mark and names that tab, so pressing the row brings it forward.
@@ -904,7 +900,7 @@ fn unseen_tabs(runtime: &Runtime) -> Vec<String> {
 fn a_row_for_a_file_in_two_tabs_names_the_tab_still_to_look_at() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
-    keyboard(&mut guard, Some("sender"));
+    keyboard(&mut guard, Some("recipient"));
     let first = open(&mut guard, "recipient", "src/a.ts");
     let other = open(&mut guard, "recipient", "src/b.ts");
     let second_area = guard.change_front_layout(&key(), |layout, stamp| {
@@ -918,10 +914,13 @@ fn a_row_for_a_file_in_two_tabs_names_the_tab_still_to_look_at() {
     keyboard(&mut guard, Some("recipient"));
     assert!(!unseen(&guard, &first));
     keyboard(&mut guard, Some("sender"));
+    // The agent, no longer watched, opens the file again in the second area;
+    // its open leaves the operator's front where it was (B1).
     let again = guard.change_front_layout(&key(), |layout, stamp| {
             let display = layout.new_display("src/a.ts", DisplayKind::File, None, false);
             let id = display.id.clone();
             layout.insert(&second_area, display, stamp)?;
+            layout.focus(&first, stamp)?;
             Ok((id, true))
         })
         .unwrap();
@@ -984,9 +983,10 @@ fn a_panes_views_list_the_newest_open_first_and_an_open_again_leads_it() {
     let first = open(&mut guard, "recipient", "src/a.ts");
     open(&mut guard, "recipient", "src/b.ts");
     let newest = open(&mut guard, "recipient", "src/c.ts");
-    // The operator looks at the oldest, which the session shows first, and
-    // the newest, leaving the one between to look at.
+    // The operator looks at the oldest and the newest, leaving the one
+    // between to look at.
     keyboard(&mut guard, Some("recipient"));
+    look_at(&mut guard, &first);
     look_at(&mut guard, &newest);
     keyboard(&mut guard, Some("sender"));
     let listed = |runtime: &Runtime| -> Vec<(String, bool)> {
@@ -1003,11 +1003,8 @@ fn a_panes_views_list_the_newest_open_first_and_an_open_again_leads_it() {
             ("src/a.ts".to_owned(), false),
         ]
     );
-    // The strip of the session that opened them marks the same tab, and
-    // the one it brings forward has been seen.
-    keyboard(&mut guard, Some("recipient"));
-    assert_eq!(unseen_tabs(&guard), ["src/b.ts"]);
-    keyboard(&mut guard, Some("sender"));
+    // An open again of the oldest, on the desk behind the newest, marks it
+    // To look at again and leads the list.
     assert_eq!(open(&mut guard, "recipient", "src/a.ts"), first);
     assert_eq!(
         listed(&guard),
@@ -1029,12 +1026,7 @@ fn an_agents_open_of_an_outside_file_is_tracked_as_its_open_by_grant_alone() {
         open_outside(runtime, "recipient", &grant, "report.html", request)
     };
     let view = open(&mut guard, "first");
-    let display = guard
-        .front_tray_layout(&key())
-        .unwrap()
-        .display(&view)
-        .unwrap()
-        .clone();
+    let display = guard.view_display(&key(), &view).unwrap().clone();
     assert_eq!(display.kind, DisplayKind::External);
     assert!(display.path.is_empty() && display.url.is_none());
     assert!(guard.snapshot.external_grants.contains(&grant));
@@ -1064,9 +1056,7 @@ fn an_agents_open_of_an_outside_file_is_tracked_as_its_open_by_grant_alone() {
     // B10: the same file again is the same tab, brought forward.
     assert_eq!(open(&mut guard, "again"), view);
     let externals = guard
-        .front_tray_layout(&key())
-        .unwrap()
-        .displays()
+        .view_displays(&key())
         .filter(|display| display.kind == DisplayKind::External)
         .count();
     assert_eq!(externals, 1);
@@ -1192,7 +1182,8 @@ fn the_phones_list_is_the_views_the_agent_opened_that_are_open() {
     assert!(seen.contains(&(notes.as_str(), false)));
     assert!(seen.contains(&(login.as_str(), true)));
     // Closed on the desktop, it leaves the list (B12, B27).
-    guard.change_front_layout(&key(), |layout, _| {
+    let place = guard.view_place(&key(), &login).unwrap();
+    guard.change_view_layout(&key(), &place, |layout, _| {
             layout.remove(&login);
             Ok(((), true))
         })

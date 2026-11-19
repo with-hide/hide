@@ -277,21 +277,28 @@ impl Runtime {
     }
 
     /// `item` on the tray of `pane`'s tab, the pane taking the keyboard. A
-    /// pane of this machine comes forward with its tab on this event, so the
-    /// card opens on the tray in front. A device's pane comes forward only
-    /// when the device answers, so the card waits on the tray of the pane's
-    /// tab there, its lane opened for it. A pane no catalog lists any more
-    /// (it closed, or its agent sleeps) leaves the card on the tray in front,
-    /// as a card pressed where no agent is opens.
+    /// pane of this machine comes forward with its tab on this event; the
+    /// card is placed on that tab's tray by the tab, not by whichever tray
+    /// the Workspace shows before the move settles. A device's pane comes
+    /// forward only when the device answers, so the card waits on the tray
+    /// of the pane's tab there, its lane opened for it. A pane no catalog
+    /// lists any more (it closed, or its agent sleeps) leaves the card on
+    /// the tray in front, as a card pressed where no agent is opens.
     fn open_card_for_pane(&mut self, pane: String, item: DetailItem) -> bool {
         if self.local_tab_pane(&pane) {
+            let place = self
+                .pane_workspace_of(&pane)
+                .and_then(|key| Some((Place::Tray(self.pane_tab(&key, &pane)?), key)));
             self.focus_pane(pane, PaneFocusOrigin::Operator, None);
             if self.snapshot.status.last_error.is_none()
                 && !self.device_in_front(self.node.as_str())
             {
                 self.bring_device_forward(self.node.as_str().to_owned());
             }
-            return self.open_card_in_front(item);
+            return match place {
+                Some((place, key)) => self.open_card_on(&key, &place, item),
+                None => self.open_card_in_front(item),
+            };
         }
         let Some((device, key, tab)) = self.device_pane_place(&pane) else {
             crate::diagnostic!(serde_json::json!({
@@ -610,13 +617,14 @@ impl Runtime {
     }
 
     /// The cards of one slot as tabs of `tab`'s tray, oldest first, the one
-    /// the slot showed last in front; the tray is shown when the slot was.
+    /// the slot showed last in front; the tray is shown when the slot was. A
+    /// card the checkout holds already stays on the desk it is on (D-20).
     fn place_slot_cards(&mut self, key: &WorkspaceKey, tab: &str, cards: Vec<DetailItem>, shown: bool) {
         let place = Place::Tray(tab.to_owned());
         for card in cards {
             let held = self
-                .view_layout_at(key, &place)
-                .is_some_and(|layout| layout.displays().any(|display| display.card.as_ref() == Some(&card)));
+                .view_displays(key)
+                .any(|display| display.card.as_ref() == Some(&card));
             if held || !self.make_view_room(key, &place) {
                 continue;
             }

@@ -250,6 +250,9 @@ pub(super) struct Reconciled {
     tabs: Vec<EditorTabSnapshot>,
     active: Option<String>,
     front: Option<WorkspaceKey>,
+    /// The desk the front Workspace showed: a tab switch changes which tree
+    /// the editor follows without moving the store's generation.
+    desk: Option<Place>,
     generation: u64,
 }
 
@@ -511,12 +514,37 @@ impl Runtime {
     /// The desk the Workspace `key` shows: its Agent tab in front's, or the
     /// pending desk while it shows no tab (PRD lane-desk-pair-view D-06). An
     /// open the operator makes, and one the agent they watch makes, lands
-    /// here.
+    /// here. On this machine the tab is the one the core shows for the
+    /// checkout, which a tab or pane choice moves on its own event, before
+    /// the engine confirms it.
     pub(super) fn front_place(&self, key: &WorkspaceKey) -> Place {
+        let shown = (key.0 == self.node.as_str())
+            .then(|| self.agent_workspace_ids(key))
+            .flatten()
+            .and_then(|(_, checkout)| self.visible_tab_ids.get(&checkout).cloned());
+        let catalog = || {
+            self.catalog_workspaces()
+                .filter(|workspace| workspace.device_id == key.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .find(|checkout| checkout.path == key.1)?
+                .active_tab_id
+                .clone()
+        };
         Place::Tray(
-            self.workspace_active_tab(key)
+            shown
+                .or_else(|| self.workspace_active_tab(key))
+                .or_else(catalog)
                 .unwrap_or_else(|| crate::workspace_views::PENDING_TRAY.to_owned()),
         )
+    }
+
+    /// The tab of the desk the Workspace `key` shows (`front_place`): the
+    /// pending desk's empty name while it shows no tab.
+    pub(super) fn front_tab(&self, key: &WorkspaceKey) -> String {
+        match self.front_place(key) {
+            Place::Tray(tab) => tab,
+            Place::Shelf => unreachable!("the front is always a desk"),
+        }
     }
 
     /// The tree at `place` of the Workspace `key`.
@@ -650,6 +678,40 @@ impl Runtime {
             self.persist_workspace_views();
         }
         moved
+    }
+
+    /// The area in use of the tree at `place`, the tree made first when the
+    /// Workspace has none there yet: a desk's first area takes its number
+    /// from the checkout's one count, so no fixed id names it.
+    pub(super) fn tree_area(&mut self, key: &WorkspaceKey, place: &Place) -> String {
+        if let Some(layout) = self.view_layout_at(key, place) {
+            return layout.active_area().id.clone();
+        }
+        let Some(store) = self.workspace_views.as_mut() else {
+            return Layout::default().active_area;
+        };
+        let entry = store.views.entry(&key.0, &key.1);
+        if let Place::Tray(tab) = place {
+            entry.tray_entry(tab);
+        }
+        entry
+            .layout(place)
+            .map(|layout| layout.active_area().id.clone())
+            .unwrap_or_else(|| Layout::default().active_area)
+    }
+
+    /// The desk the Workspace `key` shows, made when it has none yet.
+    #[cfg(test)]
+    pub(super) fn front_desk_mut(&mut self, key: &WorkspaceKey) -> &mut Layout {
+        let tab = self.front_tab(key);
+        &mut self
+            .workspace_views
+            .as_mut()
+            .expect("a View store")
+            .views
+            .entry(&key.0, &key.1)
+            .tray_entry(&tab)
+            .layout
     }
 
     /// `change_view_layout` on the desk the Workspace `key` shows.
@@ -1086,10 +1148,7 @@ impl Runtime {
                     false
                 };
                 let placement = (!shown).then(|| ViewPlacement {
-                    area: self
-                        .view_layout_at(&key, &place)
-                        .map(|layout| layout.active_area().id.clone())
-                        .unwrap_or_else(|| Layout::default().active_area),
+                    area: self.tree_area(&key, &place),
                     place: place.clone(),
                     key: key.clone(),
                     preview,
@@ -1448,7 +1507,7 @@ impl Runtime {
                 }
                 layout.active_area().id.clone()
             }
-            (None, _) => Layout::default().active_area,
+            (None, _) => self.tree_area(key, place),
         };
         if beside {
             return self.place_beside(key, place, &base, tab_id, &path, kind, committed);
@@ -2894,9 +2953,11 @@ impl Runtime {
         let Some(store) = self.workspace_views.as_ref() else {
             return;
         };
+        let desk = store.front.as_ref().map(|key| self.front_place(key));
         if store.reconciled.as_ref().is_some_and(|seen| {
             seen.generation == store.generation
                 && seen.front == store.front
+                && seen.desk == desk
                 && seen.active == self.snapshot.editor.active_tab_id
                 && seen.tabs == self.snapshot.editor.tabs
         }) {
@@ -2972,6 +3033,28 @@ impl Runtime {
                     stored |= view.move_view(&id, front).is_some();
                 }
             }
+            if let Some(Place::Tray(tab)) = front {
+                view.tray_entry(tab);
+            }
+            // Every tree binds its restored displays first, so the desk in
+            // front learns which documents another tree already shows.
+            let next = view.next_id();
+            let places: Vec<Place> = view.layouts().map(|(place, _)| place).collect();
+            for place in &places {
+                let layout = view.layout_mut(place).expect("listed above");
+                layout.next_id = layout.next_id.max(next);
+                let (changed, _) = reconcile_layout(
+                    layout,
+                    &key,
+                    false,
+                    &HashSet::new(),
+                    &tabs,
+                    &roots,
+                    None,
+                    now,
+                );
+                stored |= changed;
+            }
             // A document another Workspace shows, a file a terminal link
             // opened where the operator was, is not one to add here; nor is
             // one another tree of this checkout shows.
@@ -2987,24 +3070,11 @@ impl Runtime {
                 })
                 .map(|tab| tab.id.clone())
                 .collect();
-            if let Some(Place::Tray(tab)) = front {
-                view.tray_entry(tab);
-            }
-            let next = view.next_id();
-            let places: Vec<Place> = view.layouts().map(|(place, _)| place).collect();
-            for place in places {
-                let live = front == Some(&place);
-                let layout = view.layout_mut(&place).expect("listed above");
-                layout.next_id = layout.next_id.max(next);
+            if let Some(front) = front
+                && let Some(layout) = view.layout_mut(front)
+            {
                 let (changed, capped) = reconcile_layout(
-                    layout,
-                    &key,
-                    live,
-                    &owned,
-                    &tabs,
-                    &roots,
-                    requested.filter(|_| live),
-                    now,
+                    layout, &key, true, &owned, &tabs, &roots, requested, now,
                 );
                 stored |= changed;
                 unshown.extend(
@@ -3064,12 +3134,18 @@ impl Runtime {
                 None => self.deactivate_editor_tab(),
             }
         }
+        let desk = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.front.as_ref())
+            .map(|key| self.front_place(key));
         let store = self.workspace_views.as_mut().expect("checked above");
         store.derived_active = self.snapshot.editor.active_tab_id.clone();
         store.reconciled = Some(Reconciled {
             tabs: self.snapshot.editor.tabs.clone(),
             active: self.snapshot.editor.active_tab_id.clone(),
             front: store.front.clone(),
+            desk,
             generation: store.generation,
         });
     }
@@ -3127,9 +3203,7 @@ impl Runtime {
     /// lane-desk-pair-view D-06, D-16). A tray with no tab draws nothing.
     pub(super) fn drawn_tray_layout(&self, key: &WorkspaceKey) -> Option<&Layout> {
         let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
-        let Place::Tray(tab) = self.front_place(key) else {
-            return None;
-        };
+        let tab = self.front_tab(key);
         let tray = view.tray(&tab)?;
         ((view.draws_tray(&tab) || tray.pair.is_some()) && tray.layout.display_count() > 0)
             .then_some(&tray.layout)

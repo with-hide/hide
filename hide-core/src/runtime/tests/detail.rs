@@ -406,7 +406,8 @@ fn open_at(runtime: &mut Runtime, item: &DetailItem, at: serde_json::Value) {
 /// PRD lane-desk-pair-view D-06, B4, B9, B11: a card opens on the desk of
 /// the tab in front and stays there; another tab in front draws its own desk
 /// (empty until something opens there); coming back finds the card as it
-/// was; and a tab that closes takes its desk and its cards with it.
+/// was; and a tab that closes takes its desk, its cards going to the desk in
+/// front.
 #[test]
 fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
     let checkout_path = "/private/tmp/hide-desk-per-tab";
@@ -429,7 +430,7 @@ fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
         "the other tab's card never follows"
     );
     open_at(&mut runtime, &worktrees, serde_json::json!("here"));
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t2"), [worktrees]);
+    assert_eq!(desk(&runtime, checkout_path, "w-order:t2"), [worktrees.clone()]);
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     assert_eq!(drawn_desk(&mut runtime), ("w-order:t1".into(), true, 1));
@@ -446,7 +447,11 @@ fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
     let store = runtime.workspace_views.as_ref().unwrap();
     let view = store.views.get(crate::node::TEST_NODE, checkout_path).unwrap();
     assert!(view.tray("w-order:t2").is_none(), "the closed tab's desk went");
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), [cost]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t1"),
+        [cost, worktrees],
+        "what the operator opened there goes to the desk in front"
+    );
 }
 
 /// `tab_order_payload` with a second pane, `w-order:t1:q`, beside
@@ -508,8 +513,9 @@ fn two_panes_of_one_tab_share_its_desk() {
 /// PRD lane-desk-pair-view D-18, B34: the 보기 slots an older build kept
 /// move once onto the desk of their pane's tab, in the order they stacked,
 /// when that pane's tab is known: the slot kept for no pane goes to the pane
-/// in front, a pane that closed while Hide was not running takes its cards
-/// with it, a device's wait for that device, and nothing is moved twice.
+/// in front, a card two slots held lands once (D-20), a pane that closed
+/// while Hide was not running takes its cards with it, a device's wait for
+/// that device, and nothing is moved twice.
 #[test]
 fn the_slots_an_older_build_kept_move_onto_their_panes_desks_once() {
     let checkout_path = "/private/tmp/hide-desk-slot-move";
@@ -521,6 +527,9 @@ fn the_slots_an_older_build_kept_move_onto_their_panes_desks_once() {
     let worktrees = DetailItem::Worktrees {
         workspace_id: "workspace:order".into(),
     };
+    let front = DetailItem::Mission {
+        mission: "mission-9".into(),
+    };
     let device = crate::address::scoped_pane_id("mini", "w1:p2");
     let moving = |pane: Option<&str>, cards: Vec<DetailItem>| crate::model::MovingCards {
         pane: pane.map(str::to_owned),
@@ -528,7 +537,7 @@ fn the_slots_an_older_build_kept_move_onto_their_panes_desks_once() {
         shown: true,
     };
     runtime.snapshot.ui_state.moving_cards = vec![
-        moving(None, vec![cost.clone()]),
+        moving(None, vec![front.clone()]),
         moving(Some(&device), vec![cost.clone()]),
         moving(Some("w-order:t9:p"), vec![cost.clone()]),
         moving(Some("w-order:t1:p"), vec![cost.clone(), worktrees.clone()]),
@@ -542,11 +551,14 @@ fn the_slots_an_older_build_kept_move_onto_their_panes_desks_once() {
         "w-order:t2",
     )));
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
-    assert_eq!(
+    let desks = [
         desk(&runtime, checkout_path, "w-order:t1"),
-        [cost.clone(), worktrees]
-    );
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t2"), [cost.clone()]);
+        desk(&runtime, checkout_path, "w-order:t2"),
+    ];
+    let all: Vec<&DetailItem> = desks.iter().flatten().collect();
+    assert_eq!(all.iter().filter(|card| ***card == cost).count(), 1, "{desks:?}");
+    assert!(desks[0].contains(&worktrees) && desks[0].contains(&cost), "{desks:?}");
+    assert!(all.contains(&&front), "the slot kept for no pane lands: {desks:?}");
     let waiting: Vec<_> = runtime
         .snapshot
         .ui_state
@@ -605,10 +617,9 @@ fn a_record_pressed_where_no_agent_is_opens_in_its_sessions_pane() {
         desk(&runtime, checkout_path, "w-order:t1"),
         [record(&gone), record(&session)]
     );
-    assert_eq!(
-        desk(&runtime, checkout_path, "w-order:t2"),
-        [record(&session)],
-        "one card per desk; each tab's desk holds its own"
+    assert!(
+        desk(&runtime, checkout_path, "w-order:t2").is_empty(),
+        "one card is on one desk: it came to the desk it was pressed on (D-20)"
     );
 }
 

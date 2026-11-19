@@ -647,24 +647,31 @@ impl WorkspaceView {
     }
 
     /// Takes away the tray of a tab the engine no longer lists: its agents'
-    /// Views go on no tray, to stay in their panes' lists, while room is
-    /// left there; every other tab leaves with it. How many Views stayed.
-    pub fn retire_tray(&mut self, tab: &str) -> usize {
+    /// Views go on no tray, to stay in their panes' lists, and the
+    /// operator's go to `heir`'s tray (the desk in front, or the pending one
+    /// while no tab is shown), so no page or document leaves with the tab.
+    /// A View neither has room for is dropped, and counted.
+    pub fn retire_tray(&mut self, tab: &str, heir: &str) -> Retired {
+        let mut retired = Retired::default();
         let Some(index) = self.trays.iter().position(|tray| tray.tab == tab) else {
-            return 0;
+            return retired;
         };
         let tray = self.trays.remove(index);
-        let mut kept = 0;
-        for display in tray.layout.displays() {
-            if display.operator || display.openers.is_empty() {
-                continue;
-            }
-            let area = self.shelf.active_area().id.clone();
-            if self.shelf.append(&area, display.clone()).is_ok() {
-                kept += 1;
+        for display in tray.layout.displays().cloned().collect::<Vec<_>>() {
+            let agents = !display.operator && !display.openers.is_empty();
+            let layout = if agents || heir == tab {
+                &mut self.shelf
+            } else {
+                &mut self.tray_entry(heir).layout
+            };
+            let area = layout.active_area().id.clone();
+            match layout.append(&area, display) {
+                Ok(()) if agents => retired.shelved += 1,
+                Ok(()) => retired.inherited += 1,
+                Err(_) => retired.dropped += 1,
             }
         }
-        kept
+        retired
     }
 
     /// Opens a closed lane on the column a call brings forward, the other
@@ -730,6 +737,17 @@ impl WorkspaceView {
     pub fn shows_explorer(&self) -> bool {
         self.open && self.tool == Some(Tool::Explorer)
     }
+}
+
+/// Where the Views of a retired tray went.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Retired {
+    /// Agents' Views now on no tray, in their panes' lists.
+    pub shelved: usize,
+    /// The operator's Views now on the heir's tray.
+    pub inherited: usize,
+    /// Views no tree had room for.
+    pub dropped: usize,
 }
 
 /// A stored or sent width inside what the core accepts.
@@ -1980,17 +1998,27 @@ mod tests {
 
     /// PRD lane-desk-pair-view D-19, B11: a tab that left takes its tray;
     /// its agent's Views stay on no tray, in their pane's list, and the
-    /// operator's go with it.
+    /// operator's go to the heir's tray rather than with it.
     #[test]
     fn a_retired_tray_keeps_its_agents_views_on_no_tray() {
         let mut view = WorkspaceView::new("local", "/repo");
         let layout = &mut view.tray_entry("t1").layout;
         operators(layout, "/repo/mine.md");
         agents(layout, "/repo/agent.md");
-        assert_eq!(view.retire_tray("t1"), 1);
+        assert_eq!(
+            view.retire_tray("t1", "t2"),
+            Retired {
+                shelved: 1,
+                inherited: 1,
+                dropped: 0
+            }
+        );
         assert!(view.tray("t1").is_none());
-        let kept: Vec<&str> = view.shelf.displays().map(|d| d.path.as_str()).collect();
-        assert_eq!(kept, ["/repo/agent.md"]);
+        let paths = |layout: &Layout| -> Vec<String> {
+            layout.displays().map(|d| d.path.clone()).collect()
+        };
+        assert_eq!(paths(&view.shelf), ["/repo/agent.md"]);
+        assert_eq!(paths(&view.tray("t2").unwrap().layout), ["/repo/mine.md"]);
     }
 
     /// D-18: the tray a migration could not name goes to the first tab

@@ -38,9 +38,7 @@ impl Runtime {
             return false;
         };
         let Some(pane) = payload.pane_id else {
-            let Place::Tray(tab) = self.front_place(&key) else {
-                return false;
-            };
+            let tab = self.front_tab(&key);
             return self.end_pair_view(&key, &tab, "left");
         };
         // A terminal outside every Agent tab, such as an automation run's
@@ -99,7 +97,7 @@ impl Runtime {
             store.generation += 1;
         }
         self.persist_workspace_views();
-        if self.workspace_active_tab(&key).as_deref() != Some(tab.as_str())
+        if self.front_tab(&key) != tab
             && self.local_tab_pane(&pane)
         {
             self.focus_pane(pane, PaneFocusOrigin::Operator, None);

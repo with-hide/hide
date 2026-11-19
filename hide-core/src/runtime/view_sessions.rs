@@ -153,6 +153,13 @@ impl Runtime {
                         display.operator = true;
                         Ok(((), true))
                     });
+                    // The operator's now, it goes where the operator's
+                    // Views are: on a desk, never on no desk with no pane to
+                    // list it (PRD lane-desk-pair-view D-05).
+                    if place == Place::Shelf {
+                        let front = self.front_place(&key);
+                        self.bring_view_to(&key, &id, &front);
+                    }
                     kept += 1;
                 } else {
                     self.close_view_display(&key, &id, None, false);

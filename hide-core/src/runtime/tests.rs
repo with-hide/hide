@@ -49,6 +49,7 @@ mod closed_registrations;
 #[path = "tests/control_order.rs"]
 mod control_order;
 mod desk_group;
+mod desk_views;
 #[path = "tests/detail.rs"]
 mod detail;
 #[path = "tests/device_catalog.rs"]
@@ -193,7 +194,6 @@ mod unseen_views;
 mod usage_limit;
 #[path = "tests/view_areas.rs"]
 mod view_areas;
-mod view_bookmarks;
 #[path = "tests/workspace_control.rs"]
 mod workspace_control;
 #[path = "tests/workspace_view.rs"]

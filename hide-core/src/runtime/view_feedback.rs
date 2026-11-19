@@ -209,7 +209,7 @@ impl Runtime {
             .ok()
     }
 
-    fn pane_opener(&self, pane_id: &str) -> Result<Opener, &'static str> {
+    pub(super) fn pane_opener(&self, pane_id: &str) -> Result<Opener, &'static str> {
         let device = crate::address::pane_device(pane_id)
             .unwrap_or(self.node.as_str())
             .to_owned();

@@ -58,22 +58,38 @@ impl Runtime {
     /// Where a Workspace command's open or select lands (PRD
     /// lane-desk-pair-view B1, B2, D-05, D-36): the tray of the tab of the
     /// pane the operator watches, the selected pane of the Workspace in
-    /// front, when the caller is that pane; for any other caller, on no
-    /// tray, where the View waits in its pane's list with the To look at
+    /// front, when the caller is that pane; for any other agent's pane, on
+    /// no tray, where the View waits in its pane's list with the To look at
     /// mark. A Workspace not on screen has no watched pane (conductor
-    /// decision 5). A window's browser gateway opens on the tray in front:
-    /// a page a CDP client creates is driven there.
+    /// decision 5). A caller with no agent to list the View (a plain
+    /// shell's pane, the window's browser gateway, Desk, a checkout or an
+    /// external tool's own connection) opens as the operator does, on the
+    /// tray in front, where nothing else would show it.
     pub(super) fn control_place(&self, key: &WorkspaceKey, caller_id: &str) -> Place {
         match Caller::parse(caller_id) {
-            Caller::Checkout { gateway: true, .. } | Caller::Desk => self.front_place(key),
-            Caller::Pane(pane)
-                if self.front_workspace_key().as_ref() == Some(key)
-                    && self.operator_pane(&key.0) == Some(pane) =>
-            {
-                self.control_caller_tab(key, caller_id)
-                    .map_or(Place::Shelf, Place::Tray)
+            Caller::Pane(_) if self.watched_caller(key, caller_id) => self
+                .control_caller_tab(key, caller_id)
+                .map_or(Place::Shelf, Place::Tray),
+            Caller::Pane(pane) if self.pane_opener(pane).is_ok() => Place::Shelf,
+            Caller::Pane(_) => self.front_place(key),
+            Caller::Checkout { .. } | Caller::Access { .. } | Caller::Desk => {
+                self.front_place(key)
             }
-            Caller::Pane(_) | Caller::Checkout { .. } | Caller::Access { .. } => Place::Shelf,
+        }
+    }
+
+    /// Whether an open from `caller_id` comes in front, lane permitting:
+    /// the watched pane's agent's, the gateway's and Desk's do; a checkout's
+    /// or a tool connection's lands behind what the operator looks at, and
+    /// any other agent's waits on no tray (B1).
+    pub(super) fn watched_caller(&self, key: &WorkspaceKey, caller_id: &str) -> bool {
+        match Caller::parse(caller_id) {
+            Caller::Checkout { gateway: true, .. } | Caller::Desk => true,
+            Caller::Pane(pane) => {
+                self.front_workspace_key().as_ref() == Some(key)
+                    && self.operator_pane(&key.0) == Some(pane)
+            }
+            Caller::Checkout { .. } | Caller::Access { .. } => false,
         }
     }
 
@@ -155,9 +171,8 @@ impl Runtime {
 
     /// The engine listed the Agent tabs `tabs` of `key`: a tab that left
     /// takes its pending reads and its tray with it, its agents' Views
-    /// staying in their panes' lists and every other tab leaving; a document
-    /// it showed lands on the tray in front, as any document no View shows
-    /// does. A pair view whose left pane left the tab ends (PRD
+    /// staying in their panes' lists and the operator's going to the desk in
+    /// front. A pair view whose left pane left the tab ends (PRD
     /// lane-desk-pair-view B28), without a notice. Whether anything changed.
     pub(super) fn prune_view_callers(&mut self, key: &WorkspaceKey, tabs: &[&str]) -> bool {
         let reads = self.prune_gui_reads(key, tabs);
@@ -200,13 +215,21 @@ impl Runtime {
         if gone.is_empty() && unpaired.is_empty() {
             return reads;
         }
+        // The operator's Views of a tab that left go to the desk in front,
+        // or wait on the pending desk while no tab of the checkout is left.
+        let heir = match self.front_place(key) {
+            Place::Tray(tab) if tabs.contains(&tab.as_str()) => tab,
+            _ => crate::workspace_views::PENDING_TRAY.to_owned(),
+        };
         let store = self.workspace_views.as_mut().expect("read above");
         let view = store.views.entry(&key.0, &key.1);
         for tab in &gone {
-            let moved = view.retire_tray(tab);
+            let retired = view.retire_tray(tab, &heir);
             crate::diagnostic!(serde_json::json!({
                 "component": "view_layout", "kind": "tray.tab_gone",
-                "device": key.0, "tab": tab, "shelved": moved,
+                "device": key.0, "tab": tab, "heir": heir,
+                "shelved": retired.shelved, "inherited": retired.inherited,
+                "dropped": retired.dropped,
             }));
         }
         for (tab, pane) in &unpaired {

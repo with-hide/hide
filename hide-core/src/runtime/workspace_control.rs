@@ -425,7 +425,9 @@ impl Runtime {
             // closed, and the tray's count and the To look at mark say a tab
             // came (B2).
             let in_view = match &place {
-                Place::Tray(tab) => self.tray_in_view(&key, tab),
+                Place::Tray(tab) => {
+                    self.watched_caller(&key, pane_id) && self.tray_in_view(&key, tab)
+                }
                 Place::Shelf => false,
             };
             let kept = (!in_view || !lane_call(&action)).then(|| self.keep_front(&key));
@@ -756,7 +758,14 @@ impl Runtime {
                         })
                         .map_err(layout_refusal)?,
                 };
-                if matches!(place, Place::Shelf)
+                // Selected where the operator does not see it (on no desk, or
+                // on a desk whose lane is closed), an agent's select is To
+                // look at (B2).
+                let unseen = match place {
+                    Place::Shelf => true,
+                    Place::Tray(tab) => !self.tray_in_view(key, tab),
+                };
+                if unseen
                     && expected_browser_area.is_none()
                     && let Caller::Pane(_) = Caller::parse(pane_id)
                 {
@@ -834,6 +843,7 @@ impl Runtime {
                     });
                 }
                 let area = self.view_area(key, view_id);
+                let at = self.view_place(key, view_id);
                 if !shared {
                     if let Some(tab) = display.tab_id.as_deref() {
                         self.close_file_tab_now(tab);
@@ -857,8 +867,16 @@ impl Runtime {
                     })
                     .map_err(layout_refusal)?;
                 }
-                // The tray it left folds when that was its last tab.
-                self.close_emptied_lane(key);
+                // An agent's close leaves the desk shown as it was (PRD
+                // right-lane B12, lane-desk-pair-view B33); a pair view with
+                // nothing left on its right side ends.
+                if let Some(Place::Tray(tab)) = at
+                    && self
+                        .view_layout_at(key, &Place::Tray(tab.clone()))
+                        .is_some_and(|layout| layout.display_count() == 0)
+                {
+                    self.end_pair_view(key, &tab, "tray_emptied");
+                }
                 (view_id.clone(), true, area)
             }
         };

@@ -47,13 +47,7 @@ fn caller_fixture() -> (Runtime, tempfile::TempDir) {
 }
 
 fn seed_browser_areas(runtime: &mut Runtime, context: &Context) -> (String, String, String) {
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(&context.device_id, &context.checkout_path)
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = runtime.front_desk_mut(&((&context.device_id).to_string(), (&context.checkout_path).to_string()));
     let first = layout.new_browser_display("https://example.test/page", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -109,13 +103,7 @@ fn caller_query_reads_only_its_live_checkout_and_untouched_views_are_empty() {
         Some(Vec::new())
     );
 
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(crate::node::TEST_NODE, "/checkouts/b")
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = runtime.front_desk_mut(&((crate::node::TEST_NODE).to_string(), ("/checkouts/b").to_string()));
     let display = layout.new_display(
         "/checkouts/b/보고서.md",
         crate::view_layout::DisplayKind::File,
@@ -253,13 +241,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
         .unwrap()
         .context;
     let key = (crate::node::TEST_NODE, "/checkouts/b");
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(key.0, key.1)
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = runtime.front_desk_mut(&((key.0).to_string(), (key.1).to_string()));
     for path in ["first.md", "second.md"] {
         let display = layout.new_display(
             &format!("/checkouts/b/{path}"),
@@ -390,13 +372,7 @@ fn close_of_an_already_closed_view_returns_a_no_change_result() {
         .unwrap()
         .context;
     let key = (crate::node::TEST_NODE, "/checkouts/b");
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(key.0, key.1)
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = runtime.front_desk_mut(&((key.0).to_string(), (key.1).to_string()));
     let display = layout.new_browser_display("https://example.org", 1);
     let view_id = display.id.clone();
     layout.insert("a1", display, 1).unwrap();
@@ -453,13 +429,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
     let (mut runtime, _dir) = caller_fixture();
     runtime.sync_agent_lineage_layouts();
     let key = (crate::node::TEST_NODE, "/checkouts/b");
-    let layout = &mut runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(key.0, key.1)
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = runtime.front_desk_mut(&((key.0).to_string(), (key.1).to_string()));
     let first = layout.new_browser_display("https://example.org", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -498,8 +468,14 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
     );
     assert_eq!(
         in_front(&runtime).as_deref(),
-        Some(first_id.as_str()),
-        "a Workspace not on screen shows what its agent selected, which it can then drive"
+        Some(second_id.as_str()),
+        "a Workspace not on screen has no watched pane: its agent's select moves nothing"
+    );
+    assert!(
+        runtime
+            .view_display(&(key.0.to_owned(), key.1.to_owned()), &first_id)
+            .is_some_and(|display| display.unseen.is_some()),
+        "and marks the View To look at (PRD lane-desk-pair-view D-36)"
     );
     assert!(
         !views_of(&runtime, key),
@@ -511,22 +487,41 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
         "a select from another pane calls no lane"
     );
 
+    // PRD lane-desk-pair-view B2, D-36: the pane the operator watches
+    // selects on its tab's desk; a closed lane stays closed, the View marked
+    // To look at, and an open lane is called with the View in front.
     operator_in(&mut runtime, "workspace-b", "checkout-b", "pane-b");
     runtime
         .workspace_control_action(
             crate::node::TEST_NODE,
             "pane-b",
             &expected,
-            &action_id("select-operator"),
-            select(&second_id),
+            &action_id("select-operator-closed"),
+            select(&first_id),
             Ok(None),
         )
         .unwrap();
+    assert!(!views_of(&runtime, key), "a closed lane stays closed");
+    assert_eq!(called(&runtime), 0);
     assert_eq!(in_front(&runtime).as_deref(), Some(second_id.as_str()));
-    assert!(
-        views_of(&runtime, key),
-        "a select from the operator's pane opens the files lane"
-    );
+    runtime
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(key.0, key.1)
+        .open = true;
+    runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            "pane-b",
+            &expected,
+            &action_id("select-operator"),
+            select(&first_id),
+            Ok(None),
+        )
+        .unwrap();
+    assert_eq!(in_front(&runtime).as_deref(), Some(first_id.as_str()));
     // The shell shows a called lane over the terminals; a call from the CLI
     // reaches it only as this count rising (PRD right-lane B1, B16).
     assert_eq!(called(&runtime), 1, "the operator's pane calls the lane");
@@ -616,6 +611,7 @@ fn file_open_reads_outside_the_runtime_then_places_once_in_the_callers_workspace
 #[test]
 fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
     let (mut runtime, _dir) = caller_fixture();
+    operator_in(&mut runtime, "workspace-b", "checkout-b", "pane-b");
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
         .unwrap()
@@ -877,6 +873,7 @@ fn browser_explicit_area_dedupes_only_within_that_area() {
 #[test]
 fn legacy_browser_open_keeps_global_dedupe_and_active_area_insertion() {
     let (mut runtime, _dir) = caller_fixture();
+    operator_in(&mut runtime, "workspace-b", "checkout-b", "pane-b");
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
         .unwrap()
@@ -1126,13 +1123,7 @@ fn scoped_browser_close_and_select_refuse_a_document_in_the_named_area() {
             .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
             .unwrap()
             .context;
-        let layout = &mut runtime
-            .workspace_views
-            .as_mut()
-            .unwrap()
-            .views
-            .entry(&expected.device_id, &expected.checkout_path)
-            .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+        let layout = runtime.front_desk_mut(&((&expected.device_id).to_string(), (&expected.checkout_path).to_string()));
         let file = layout.new_display(
             "/checkouts/b/index.html",
             crate::view_layout::DisplayKind::File,
