@@ -54,13 +54,13 @@ const desk = (shown: boolean, session: WorkSession = SESSION) => ({
   layout: { root: { area: { id: "area-1", active: "card-1", displays: [{ id: "card-1", kind: "card", card: { kind: "record", session } }] } }, active_area: "area-1", display_count: 1 },
 });
 
-async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; locator?: { request_offset: number; query?: string }; folded?: boolean } = {}) {
+async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; locator?: { request_offset: number; query?: string }; folded?: boolean; frontOf?: WorkSession; target?: WorkSession } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: options.summaries !== false, chosen: true, agent_summary: options.summaries !== false } } } as unknown as SnapshotRest;
   const shown = options.rest ?? rest;
-  useShellStore.setState({ rest: { ...shown, workspace_view: shown.workspace_view ?? desk(options.folded !== true) } as SnapshotRest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
+  useShellStore.setState({ rest: { ...shown, workspace_view: shown.workspace_view ?? desk(options.folded !== true, options.frontOf) } as SnapshotRest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -69,7 +69,7 @@ async function mount(record: RecordValue | null, options: { summaries?: boolean;
   const showTrail = async (trail: readonly WorkSession[] = []) => {
     await act(async () => root.render(<TooltipProvider>{options.overview
       ? <SessionRecord actions={actions} target={SESSION} frame={{ kind: "overview", trail, locator: options.locator, onTrail: () => undefined, onRead: () => undefined, onLeave: () => undefined }} />
-      : <SlotSessionRecord actions={actions} target={SESSION} />}</TooltipProvider>));
+      : <SlotSessionRecord actions={actions} target={options.target ?? SESSION} />}</TooltipProvider>));
   };
   await showTrail();
   return { container, sent, showTrail, unmount: async () => { await act(async () => root.unmount()); } };
@@ -639,6 +639,18 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     expect(text(gallery.querySelector('[data-record-issue="41"] [data-record-view-detail]'))).toBe("#41");
     await act(async () => gallery.querySelector<HTMLButtonElement>('[data-record-view="doc"]')!.click());
     expect(sent.find((event) => event.kind === "focus_checkout")?.payload).toMatchObject({ checkout_id: checkout.id, display_id: "doc" });
+  } finally { await unmount(); }
+});
+
+it("waits quietly, asking for no read, when a record card tab out of its desk's front has drawn nothing yet (PRD lane-desk-pair-view D-13)", async () => {
+  const other: WorkSession = { device_id: "local", agent: "codex", session_id: "other" };
+  // A record no card drew in this page yet: the kept drawings outlive a test.
+  const fresh: WorkSession = { device_id: "local", agent: "claude", session_id: "never-drawn" };
+  const { container, sent, unmount } = await mount(null, { frontOf: other, target: fresh });
+  try {
+    expect(container.querySelector("[data-record-waiting]")).not.toBeNull();
+    expect(container.querySelector("[aria-busy]")).toBeNull();
+    expect(sent).toEqual([]);
   } finally { await unmount(); }
 });
 

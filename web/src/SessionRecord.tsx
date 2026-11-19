@@ -28,7 +28,7 @@ import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, SessionRecordSection, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
-import { frontCard, workspaceViewOf } from "./workspace";
+import { isDeskFront, KeptDrawings } from "./deskFront";
 import { PlanChecklist } from "./components/plan-checklist";
 import { OpenAskList } from "./components/open-asks";
 import { FoldedAskList } from "./components/folded-asks";
@@ -104,13 +104,7 @@ export function SlotSessionRecord({ actions, target }: { actions: Actions; targe
  * (PRD lane-desk-pair-view D-13). Kept for this page's life and capped; the
  * card reads again when it comes in front.
  */
-const KEPT_RECORDS = 8;
-const keptRecords = new Map<string, SessionRecordSection>();
-function keepRecord(key: string, section: SessionRecordSection): void {
-  keptRecords.delete(key);
-  keptRecords.set(key, section);
-  if (keptRecords.size > KEPT_RECORDS) keptRecords.delete(keptRecords.keys().next().value!);
-}
+const keptRecords = new KeptDrawings<SessionRecordSection>(8);
 
 export function SessionRecord({ actions, target, frame }: { actions: Actions; target: WorkSession; frame: RecordFrame }) {
   const { t } = useInterfaceTranslation();
@@ -119,19 +113,16 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   const summaries = summariesEnabled(rest?.status?.background_ai);
   const connected = deviceConnected(rest, target.device_id);
   const read = section?.session && workKey(section.session) === workKey(target) ? section : null;
-  // Whether this record is the card tab in front of the desk the lane draws, the one the core reads;
-  // a folded desk's card, whose read the core stopped, would open its desk again with an ask (B14).
-  const front = useShellStore((state) => {
-    const view = workspaceViewOf(state.rest);
-    const card = view?.open && view.tray.shown ? frontCard(view) : null;
-    return card?.kind === "record" && workKey(card.session) === workKey(target);
-  });
+  // Whether this record is the card the core reads (`deskFront.ts`); a folded desk's is not (B14).
+  const front = useShellStore((state) => isDeskFront(state.rest, { kind: "record", session: target }));
   const settled = read && !read.loading && !read.failure ? read : null;
   useEffect(() => {
-    if (settled && frame.kind === "lane") keepRecord(workKey(target), settled);
+    if (settled && frame.kind === "lane") keptRecords.keep(workKey(target), settled);
   }, [settled, frame.kind, target]);
   // A card tab out of front draws what it drew last rather than a read in flight for another.
-  const own = read ?? (frame.kind === "lane" && !front ? keptRecords.get(workKey(target)) ?? null : null);
+  const own = read ?? (frame.kind === "lane" && !front ? keptRecords.get(workKey(target)) : null);
+  // One out of front with nothing drawn yet (after a relaunch, or past the cap) waits quietly for its turn.
+  const waiting = frame.kind === "lane" && !front && !own;
   const records = useMemo(() => own?.record ? recordTree(own.record) : [], [own?.record]);
   // The drilled child, when it is still in the tree; a vanished one leaves its parent shown.
   const shown = useMemo(() => {
@@ -170,7 +161,7 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
       {parent ? <Button size="sm" variant="ghost" className="min-w-0 self-start px-md" onClick={up} data-record-up="true"><ArrowLeftIcon /><span className="truncate">{t("record.backTo", { parent: recordTitle(parent, summaries) })}</span></Button> : null}
     </>}
     {frame.note ? <p className="px-md pb-xs text-caption text-muted-foreground" data-record-note="true">{frame.note}</p> : null}
-    {!own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
+    {waiting ? <p className="px-md py-sm text-caption text-muted-foreground" data-record-waiting="true">{t("detail.readInFront")}</p> : !own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
       <h2 className="flex min-w-0 items-center gap-xs py-sm text-subhead font-semibold"><AgentMark kind={shown.session.agent} /><span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" title={recordTitle(shown, summaries)}>{recordTitle(shown, summaries)}</span></h2>
       <RecordPlace key={workKey(shown.session)} record={shown} actions={actions} />
       <Work key={`work:${workKey(shown.session)}`} record={shown} summaries={summaries} onOpen={open} actions={actions} locator={workKey(shown.session) === workKey(target) ? frame.locator : undefined} />
