@@ -246,6 +246,10 @@ impl Runtime {
             "device.registered",
             format!("Registered paired machine {}", registration.id),
         );
+        // The machine keeps its own Settings from here on.
+        if self.drop_placements_on_own_settings_machines() {
+            self.refresh_background_ai();
+        }
         self.connect_remote_device(&registration, super::hosts::HostAttempt::Background);
         true
     }

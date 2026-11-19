@@ -6249,6 +6249,15 @@ impl LinkOrigin {
     pub fn reports_own_facts(&self) -> bool {
         matches!(self, Self::Inbound | Self::Wsl { .. })
     }
+
+    /// Whether the machine keeps its own Settings (PRD device-connect-iroh,
+    /// Settings per machine): a paired machine runs a Hide of its own, so
+    /// its agents, models and Hide AI are chosen there and this core's
+    /// Settings hold none of them. A device with no Hide of its own is set
+    /// from the core that runs it.
+    pub fn keeps_own_settings(&self) -> bool {
+        matches!(self, Self::Peer { .. })
+    }
 }
 
 /// A registration as the store and the shell spell it: the alias of a
