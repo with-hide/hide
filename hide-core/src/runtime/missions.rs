@@ -447,9 +447,7 @@ fn ready_at(mission: &Mission, node: &crate::missions::MissionNode) -> Option<u6
 fn dependency_met(mission: &Mission, key: &str) -> Option<Option<u64>> {
     match mission.nodes.iter().find(|other| other.key == key) {
         None => Some(None),
-        Some(before) => {
-            (before.status == NodeStatus::Done).then_some(before.finished_at_unix_ms)
-        }
+        Some(before) => (before.status == NodeStatus::Done).then_some(before.finished_at_unix_ms),
     }
 }
 

@@ -1434,7 +1434,10 @@ mod tests {
             answer(&mut line, 0, true, Some("b2c3d4e5f6a1"), 4);
             assert_eq!(line.rounds, 2, "{kind:?}");
             answer(&mut line, 1, false, None, 5);
-            assert_eq!(line.rounds, 2, "an answer naming no head stays in the round");
+            assert_eq!(
+                line.rounds, 2,
+                "an answer naming no head stays in the round"
+            );
             answer(&mut line, 1, false, Some("c3d4e5f6a1b2"), 6);
             assert_eq!((line.state, line.rounds), (CriterionState::Fail, 3));
             line.skip("issues #1".into(), None, by(Role::Conductor));
@@ -1531,7 +1534,11 @@ mod tests {
         assert_eq!(lines[1].rounds, 2);
         let again = plan(&lines);
         assert_eq!(
-            (again[1].state, again[1].rounds, again[1].round_head.as_deref()),
+            (
+                again[1].state,
+                again[1].rounds,
+                again[1].round_head.as_deref()
+            ),
             (CriterionState::Fail, 2, Some("b2c3d4e5f6a1"))
         );
     }

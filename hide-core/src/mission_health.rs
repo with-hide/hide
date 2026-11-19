@@ -747,12 +747,17 @@ pub(crate) fn warn_acts(
                 node: at,
                 kind: WarningKind::ReviewFails,
             }),
-            None if past.is_some_and(|line| line.state == crate::mission_criteria::CriterionState::Fail) => acts.push(WarnAct::Raise {
-                node: at,
-                kind: WarningKind::ReviewFails,
-                from: last_review_at(node).unwrap_or(now),
-                cause: None,
-            }),
+            None if past.is_some_and(|line| {
+                line.state == crate::mission_criteria::CriterionState::Fail
+            }) =>
+            {
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::ReviewFails,
+                    from: last_review_at(node).unwrap_or(now),
+                    cause: None,
+                })
+            }
             _ => {}
         }
         let quiet = node.quiet_since();

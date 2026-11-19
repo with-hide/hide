@@ -9912,7 +9912,12 @@ fn a_node_records_when_its_own_lines_first_all_stood_met_and_when_it_could_start
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     with_worker_and_reviewer(&mut runtime);
     checkout_at(&mut runtime, HEAD);
-    let started = runtime.missions.book.get("mission-1").unwrap().started_at_unix_ms;
+    let started = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .started_at_unix_ms;
     assert!(started.is_some());
     assert_eq!(node_view(&runtime, "fix").ready_at_unix_ms, started);
     assert_eq!(node_view(&runtime, "docs").ready_at_unix_ms, None);
@@ -9923,7 +9928,11 @@ fn a_node_records_when_its_own_lines_first_all_stood_met_and_when_it_could_start
     )
     .unwrap();
     command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
-    assert_eq!(node_view(&runtime, "fix").own_met_at_unix_ms, None, "check is open");
+    assert_eq!(
+        node_view(&runtime, "fix").own_met_at_unix_ms,
+        None,
+        "check is open"
+    );
     let before = crate::runtime::unix_milliseconds();
     command(
         &mut runtime,
@@ -9931,7 +9940,9 @@ fn a_node_records_when_its_own_lines_first_all_stood_met_and_when_it_could_start
         record_of("fix", "check", json!({"commit": HEAD})),
     )
     .unwrap();
-    let met = node_view(&runtime, "fix").own_met_at_unix_ms.expect("stamped");
+    let met = node_view(&runtime, "fix")
+        .own_met_at_unix_ms
+        .expect("stamped");
     assert!(met >= before, "the record that met the last line");
     // A later record of a line already met leaves the first time.
     command(
@@ -9947,7 +9958,8 @@ fn a_node_records_when_its_own_lines_first_all_stood_met_and_when_it_could_start
     fix.finished_at_unix_ms = Some(done);
     assert_eq!(node_view(&runtime, "docs").ready_at_unix_ms, Some(done));
     // A node of a book from before the stamp reads with none.
-    let mut old = serde_json::to_value(&runtime.missions.book.get("mission-1").unwrap().nodes[0]).unwrap();
+    let mut old =
+        serde_json::to_value(&runtime.missions.book.get("mission-1").unwrap().nodes[0]).unwrap();
     old.as_object_mut().unwrap().remove("own_met_at_unix_ms");
     let read: crate::missions::MissionNode = serde_json::from_value(old).unwrap();
     assert_eq!(read.own_met_at_unix_ms, None);
