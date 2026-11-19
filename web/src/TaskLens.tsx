@@ -407,7 +407,7 @@ function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const counts = TASK_GROUPS.filter((state) => group.counts[state]);
   return (
     <h3 tabIndex={-1} data-task-focus="group" className="flex min-w-0 items-center gap-sm rounded-xs px-xs pt-sm pb-xs text-caption font-semibold text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-task-group-head="project">
-      <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? ""}</span>
+      <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? t("taskLens.outsideProjects")}</span>
       {counts.map((state: TaskGroupState) => (
         <span key={state} className={cn("shrink-0 text-micro font-normal", state === "needs_you" && !tool ? "text-warning" : "text-muted-foreground")}>
           {groupLabel(state, tool, t)} {group.counts[state]}

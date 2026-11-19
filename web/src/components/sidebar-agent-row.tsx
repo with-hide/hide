@@ -175,6 +175,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const names = useShellStore((s) => automationNames(s.automations));
   // An automation run's row says which automation started it wherever it stands, its Needs You row too (PRD automations B15).
   const origin = agent.hide_ai && (tree || agent.hide_ai.home === "automations") ? originLine(t, agent.hide_ai, names) : null;
+  // A run in its automation's own folder has no project, so its place is that same origin (B30): the row says it once.
+  const placeShown = place === origin ? null : place;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
@@ -289,7 +291,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           {device ? (
             <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
           ) : null}
-          {placeInHead && place ? <span aria-hidden="true" data-agent-place-head={place} className="pointer-events-none min-w-0 max-w-2/5 shrink truncate text-caption text-muted-foreground">{place.split(" › ")[0]}</span> : null}
+          {placeInHead && placeShown ? <span aria-hidden="true" data-agent-place-head={placeShown} className="pointer-events-none min-w-0 max-w-2/5 shrink truncate text-caption text-muted-foreground">{placeShown.split(" › ")[0]}</span> : null}
           {ask ? null : <AgentPrHover agent={agent} pulls={pulls} card={(icon) => <PrHoverCard agent={agent} pulls={pulls} staleness={staleness} onOpenPullRequest={openPull}>{icon}</PrHoverCard>} />}
           {agent.letters_waiting ? <RowLetterMark /> : null}
           {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
@@ -313,9 +315,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           </span>
         ) : null}
         {agent.human_turn && humanActions ? <HumanTurnDone turn={agent.human_turn} actions={humanActions} className="mt-xxs" /> : null}
-        {place && !placeInHead ? (
-          <span aria-hidden="true" data-agent-place={place} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
-            {place}
+        {placeShown && !placeInHead ? (
+          <span aria-hidden="true" data-agent-place={placeShown} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
+            {placeShown}
           </span>
         ) : null}
       </SessionRowBody>
