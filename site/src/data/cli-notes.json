@@ -267,7 +267,7 @@
     "example": "hide agent read agent-7 --lines 40"
   },
   "workspace purpose": {
-    "line": "Sets the one-line purpose of your checkout, which the sidebar shows; it can be 40 characters at most.",
+    "line": "Sets the one-line purpose of the checkout you run it in, which the sidebar shows; it can be 40 characters at most, and an empty text clears it.",
     "example": "hide workspace purpose 'Fix the lens filter'"
   },
   "workspace info": {

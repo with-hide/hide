@@ -1646,7 +1646,7 @@ fn workspace_action_before_send_refusal<T>(request_id: &str, reason: &str) -> Re
     Err(reason.to_owned())
 }
 
-fn absolute_caller_path(path: &str) -> Result<String, String> {
+pub(crate) fn absolute_caller_path(path: &str) -> Result<String, String> {
     use std::path::{Component, PathBuf};
     let cwd = std::env::current_dir().map_err(|_| "cwd_unavailable".to_owned())?;
     let input = PathBuf::from(path);

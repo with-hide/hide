@@ -1562,7 +1562,7 @@ it("keeps a looked-at or closed View on the decision, marked so, and opens a clo
   await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, navigator: { ...state.rest!.navigator!, workspaces: [{ id: "w", device_id: "mac", checkouts: [{ id: "c", path: "/repo" }] }] } } as unknown as SnapshotRest })));
   try {
     const rows = [...map.container.querySelectorAll<HTMLElement>("[data-mission-banner-view]")];
-    expect(rows.map((row) => row.dataset.missionBannerViewState)).toEqual(["seen", "closed"]);
+    expect(rows.map((row) => row.dataset.linkedViewState)).toEqual(["seen", "closed"]);
     expect(rows[0]?.querySelector('[aria-label="Seen"]')).not.toBeNull();
     expect(rows[1]?.textContent).toContain("Closed");
     expect(rows[1]?.textContent).toContain("Reopen ›");
@@ -1573,6 +1573,61 @@ it("keeps a looked-at or closed View on the decision, marked so, and opens a clo
     expect(map.events.filter((event) => event.kind === "mission_view_reopen")).toHaveLength(1);
     expect(map.events.at(-1)).toMatchObject({ kind: "focus_checkout", payload: { workspace_id: "w", checkout_id: "c", display_id: "d7" } });
   } finally { await map.unmount(); }
+});
+
+it("starts a done node's panel with its result: the conclusion, the documents its worker left that open with one press, then every finish line with its summary (issue 2637)", async () => {
+  const views = [
+    { device_id: "mac", checkout_path: "/repo", display_id: "d1", view: "v1", kind: "file" as const, label: "results.md", by: "worker" as const },
+    { device_id: "mac", checkout_path: "/repo", display_id: "d2", view: "v2", kind: "file" as const, label: "spec.md", closed: true, by: "worker" as const },
+  ];
+  const criteria = [
+    line("launch", "own", { state: "pass", text: "Write the launch contract first", summary: "Ran update and rollback on v1.2.8 and main" }),
+    line("measure", "own", { state: "skipped", text: "Measure the D-68 bar", summary: "Six measured, the Windows hook cost was not", skip: { reason: "CI measures it" } }),
+    line("plain", "own", { state: "pass", text: "No summary" }),
+  ];
+  const s2 = node("s2", { kind: "general", preset: "research", delivery: null, status: "done", reported: "The guest node works; only long macOS paths failed", views, criteria, criteria_met: 3, steps: ["Read the spike"] });
+  const map = await mount({ items: [mission({ nodes: [s2] })] });
+  await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, navigator: { ...state.rest!.navigator!, workspaces: [{ id: "w", device_id: "mac", checkouts: [{ id: "c", path: "/repo" }] }] } } as unknown as SnapshotRest })));
+  try {
+    await act(async () => card(map, "s2").click());
+    const panel = map.q('[data-mission-detail="s2"]')!;
+    // Its result comes first, then its finish lines, and its plan after them.
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart).slice(0, 4)).toEqual(["head", "result", "criteria", "plan"]);
+    // With no line from the Conductor, the worker's report says the conclusion.
+    const conclusion = panel.querySelector<HTMLElement>("[data-panel-conclusion]")!;
+    expect([conclusion.dataset.panelConclusion, conclusion.textContent]).toEqual(["report", "The guest node works; only long macOS paths failed"]);
+    const documents = [...panel.querySelectorAll<HTMLElement>("[data-panel-document]")];
+    expect(documents.map((row) => [row.textContent, row.dataset.linkedViewState])).toEqual([["results.md" + "Open ›", "seen"], ["spec.mdClosedReopen ›", "closed"]]);
+    // A closed one opens again from its link, named by its node, in one event; an open one comes forward.
+    await act(async () => documents[1]!.click());
+    expect(map.events.filter((event) => event.kind === "mission_view_reopen").map((event) => event.payload)).toEqual([{ mission: "mission-1", node: "s2", view: "v2" }]);
+    await act(async () => documents[0]!.click());
+    expect(map.events.at(-1)).toMatchObject({ kind: "focus_checkout", payload: { workspace_id: "w", checkout_id: "c", display_id: "d1" } });
+    // Every line with a summary carries it under its words, a passed one too.
+    const summaries = (key: string) => [...panel.querySelectorAll<HTMLElement>(`[data-panel-line="${key}"] ~ * [data-line-summary], [data-panel-line="${key}"] ~ [data-line-summary]`)].map((row) => row.textContent);
+    expect(summaries("launch")).toEqual(["└Ran update and rollback on v1.2.8 and main"]);
+    expect(panel.querySelector('[data-panel-verdict="skipped"] [data-line-summary]')?.textContent).toBe("Six measured, the Windows hook cost was not");
+    expect(panel.querySelector('[data-panel-verdict="skipped"] [data-verdict-summary]')?.textContent).toBe("CI measures it");
+    expect(summaries("plain")).toEqual([]);
+  } finally { await map.unmount(); }
+  // The Conductor's line is the conclusion when it gave one, said once.
+  const lined = await mount({ items: [mission({ nodes: [{ ...s2, line: "Guest nodes work", views: undefined }] })] });
+  try {
+    await act(async () => card(lined, "s2").click());
+    const panel = lined.q('[data-mission-detail="s2"]')!;
+    expect(panel.querySelector<HTMLElement>("[data-panel-conclusion]")?.dataset.panelConclusion).toBe("line");
+    expect(panel.textContent?.split("Guest nodes work")).toHaveLength(2);
+    expect(panel.querySelector("[data-panel-documents]")).toBeNull();
+  } finally { await lined.unmount(); }
+  // A node not done shows neither, and keeps its plan before what it made.
+  const working = await mount({ items: [mission({ nodes: [{ ...s2, status: "working" }] })] });
+  try {
+    await act(async () => card(working, "s2").click());
+    const panel = working.q('[data-mission-detail="s2"]')!;
+    expect(panel.querySelector("[data-panel-conclusion], [data-panel-documents]")).toBeNull();
+    const parts = [...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart);
+    expect(parts.indexOf("plan")).toBeLessThan(parts.indexOf("criteria"));
+  } finally { await working.unmount(); }
 });
 
 it("lists the Views linked to the decision, seen or not, each bringing its View forward, and offers only a quiet 자료 요청 with none", async () => {

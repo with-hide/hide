@@ -1312,6 +1312,57 @@ fn a_report_marks_only_a_delegated_child_and_never_a_conductor() {
     assert_eq!(marks(&runtime), ["agent-2"]);
 }
 
+/// A node worker's report to its Conductor is the node's conclusion while
+/// the Conductor gives it none (with-hide/hide#2637): the report's first
+/// line that says anything, replaced by the next report and kept with the
+/// book; a letter of another kind leaves it.
+#[test]
+fn a_node_workers_report_to_its_conductor_sets_the_nodes_conclusion() {
+    let mut runtime = mission_runtime();
+    let send = |runtime: &mut Runtime, kind: &str, body: &str| {
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        let intent = format!("node-{kind}-{}", ledger.next_id);
+        crate::delivery::mailbox::send(
+            &mut ledger,
+            &actor(WORKER),
+            &actor(LEAD),
+            &intent,
+            body,
+            kind,
+            None,
+            unix_milliseconds(),
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), true);
+    };
+    let conclusion = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0].reported.clone()
+    };
+    send(&mut runtime, "progress", "Halfway through the spike");
+    assert_eq!(conclusion(&mut runtime), None);
+    send(
+        &mut runtime,
+        "report",
+        "\n  \nGuest nodes work; only long macOS paths failed\n\nSix runs, see results.md",
+    );
+    assert_eq!(
+        conclusion(&mut runtime).as_deref(),
+        Some("Guest nodes work; only long macOS paths failed")
+    );
+    send(
+        &mut runtime,
+        "report",
+        "Shorter names fixed the macOS paths",
+    );
+    assert_eq!(
+        conclusion(&mut runtime).as_deref(),
+        Some("Shorter names fixed the macOS paths")
+    );
+    let saved = serde_json::to_value(&runtime.missions.book.missions[0].nodes[0]).unwrap();
+    assert_eq!(saved["reported"], "Shorter names fixed the macOS paths");
+}
+
 /// The ledger a runtime starts on is the baseline: a report it already
 /// holds marks nothing, so a restart does not put to sleep children that
 /// reported days ago or were woken since; a report sent after the start

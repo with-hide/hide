@@ -608,3 +608,182 @@ fn a_nodes_worker_asked_again_answers_its_worker_after_its_profile_or_plan_moved
         Err("intent_conflict".to_owned())
     );
 }
+
+/// This machine's node for a mission spawn into real repositories: the
+/// host's own answers for what Git says of a folder, the engine's own shell
+/// and an installed program for the rest of the start.
+struct RealGit(hide_host::serve::Env);
+
+impl crate::node_access::NodeLink for RealGit {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        _timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        use crate::node_access::{LinkAnswer, LinkError};
+        use hide_node_link::protocol::Call;
+        match call {
+            Call::Repository { .. } | Call::Git { .. } => {
+                hide_host::serve::handle_in(call, &self.0)
+                    .map(LinkAnswer::Parsed)
+                    .map_err(LinkError::Refused)
+            }
+            Call::ShellIntegration => Ok(LinkAnswer::Parsed(
+                json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}}),
+            )),
+            Call::AgentInstalled { .. } => Ok(LinkAnswer::Parsed(json!("program"))),
+            Call::AgentTrust { .. } => Ok(LinkAnswer::Parsed(Value::Null)),
+            _ => Err(LinkError::NotConnected(
+                "this node answers only a spawn's Git reads".to_owned(),
+            )),
+        }
+    }
+}
+
+fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+/// A repository at `dir` on `main` with one commit, whose HEAD it answers.
+fn repository(dir: &std::path::Path) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    git_in(dir, &["init", "-q", "-b", "main"]);
+    git_in(dir, &["config", "user.name", "Fixture"]);
+    git_in(dir, &["config", "user.email", "fixture@example.invalid"]);
+    git_in(dir, &["config", "commit.gpgsign", "false"]);
+    git_in(dir, &["commit", "-q", "--allow-empty", "-m", "a"]);
+    git_in(dir, &["rev-parse", "HEAD"])
+}
+
+/// with-hide/hide#2634, as reported: the mission's destination is a branch
+/// only the project's folder has, and that folder has another branch out at
+/// another commit. A node's worker named another repository is refused with
+/// nothing reserved; the same intent with the project's folder, spelled
+/// another way, is the worker's spawn, and its new worktree stands at the
+/// destination's commit, not the folder's.
+#[test]
+fn a_node_worker_starts_at_its_local_only_destination_in_any_spelling_of_the_project() {
+    let folder = tempfile::tempdir().unwrap();
+    let project = folder.path().join("project");
+    let other = folder.path().join("other");
+    repository(&project);
+    repository(&other);
+    git_in(&project, &["switch", "-q", "-c", "hide/base"]);
+    git_in(
+        &project,
+        &["commit", "-q", "--allow-empty", "-m", "destination"],
+    );
+    let destination = git_in(&project, &["rev-parse", "HEAD"]);
+    git_in(&project, &["switch", "-q", "-c", "fix/followups", "main"]);
+    git_in(
+        &project,
+        &["commit", "-q", "--allow-empty", "-m", "conductor"],
+    );
+    let made = folder.path().join("made");
+    let engine = {
+        let (project, made) = (project.clone(), made.clone());
+        FakeEngine::start(move |method, params| match method {
+            "worktree_path" => reply(None::<String>),
+            // The engine makes the worktree as its own does: `worktree add
+            // -b`, from the start the spawn named, else the folder's HEAD.
+            "create_worktree" => {
+                let branch = params["branch"].as_str().unwrap();
+                let mut add = vec![
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    branch,
+                    made.to_str().unwrap(),
+                ];
+                if let Some(base) = params["base"].as_str() {
+                    add.push(base);
+                }
+                git_in(&project, &add);
+                reply(crate::engine::CreatedWorktree {
+                    tab_label: "fix".into(),
+                    workspace_id: "w3".into(),
+                    tab_id: "w3:t1".into(),
+                    pane_id: "w3:p1".into(),
+                    path: made.to_str().unwrap().to_owned(),
+                    branch: Some(branch.to_owned()),
+                })
+            }
+            // Where the worktree stands is all this test reads.
+            _ => refused("internal_error", "the test stops the start here"),
+        })
+    };
+    let spawner = conducting(vec![codex(None)]);
+    {
+        let mut runtime = spawner.runtime.lock().unwrap();
+        let node: Arc<dyn crate::node_access::NodeLink> =
+            Arc::new(RealGit(hide_host::serve::Env::standalone(None)));
+        runtime.live = Some(live::LiveContext {
+            socket_path: engine.scope(),
+            runtime: std::sync::Weak::new(),
+            notifier: crate::handle::ChangeNotifier::noop(),
+            engine: engine.engine(),
+            node: node.clone(),
+        });
+        runtime.own_node = node;
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.project = hide_platform::path::to_wire(
+            &hide_platform::fs::identity::canonical(&project).unwrap(),
+        )
+        .unwrap();
+        mission.destination = Some("hide/base".into());
+    }
+    let intent = format!("{}:fix", mission_id(&spawner));
+    let worker = |repo: String| Command::Agents {
+        command: crate::coordination::Command::Spawn {
+            pick: None,
+            parent: None,
+            machine: None,
+            name: "worker".into(),
+            intent: intent.clone(),
+            kind: "codex".into(),
+            repo: Some(repo),
+            branch: Some("hide/fix".into()),
+            path: None,
+            args: Vec::new(),
+            launch: Default::default(),
+            task: None,
+            brief: Some("Fix it".into()),
+            mission: None,
+            plan_node: None,
+            plan: None,
+            beside: false,
+            profile: None,
+        },
+    };
+    let elsewhere = spawner
+        .spawn_mission(worker(other.to_str().unwrap().to_owned()), |_| {})
+        .unwrap_err();
+    assert!(
+        elsewhere.starts_with("mission_other_repository"),
+        "{elsewhere}"
+    );
+    assert!(
+        spawner
+            .ledger()
+            .spawns
+            .iter()
+            .all(|spawn| spawn.intent != intent),
+        "the refusal reserved nothing"
+    );
+    assert!(!made.exists());
+    let spelled = format!("{}{}.", project.display(), std::path::MAIN_SEPARATOR);
+    let started = spawner.spawn_mission(worker(spelled), |_| {});
+    assert!(
+        !matches!(&started, Err(reason) if reason == "intent_conflict" || reason.starts_with("mission_other_repository")),
+        "{started:?}"
+    );
+    assert_eq!(git_in(&made, &["rev-parse", "HEAD"]), destination);
+}

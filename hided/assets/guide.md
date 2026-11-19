@@ -104,7 +104,8 @@ hide workspace purpose <text>
   It is refused with `composer_not_empty` when someone typed into the pane since the agent last took input and its input box still holds text, a draft a person may be writing; a question, approval or review screen no one typed into takes it, and so does text your own earlier send left there. If a typed command and its `--enter` in one send leave the command in the box, as Codex's command menu can, send `--key enter` on its own; `keys_not_sent` says the text landed and the keys did not, `send_unconfirmed` that an answer was lost, and `operator_typing` that someone typed into the pane during the send, which stopped there; each says in `sent` what landed: read the pane before sending again.
   It is input, not a letter: Hide logs that it happened, never what was typed, and keeps no reply or retry, so hand an agent work with `hide request send`.
 - `hide pane open --beside -- <command>` opens a pane right of yours in your checkout, runs the command there and answers the new pane's id; the command is one line of 1000 bytes at most, and one that needs its shell's own quoting goes as one quoted argument. Your keyboard focus stays where it is unless `--focus`.
-- `hide workspace purpose <text>` sets your checkout's one-line purpose, 40 characters at most, which the sidebar shows.
+- `hide workspace purpose <text>` sets the one-line purpose of the checkout it runs in, 40 characters at most, which the sidebar shows, and `""` clears it.
+  Run in a worktree of your project, such as one you just made, it names that worktree, not your pane's checkout; a folder Hide lists in no checkout of your project yet is refused with `purpose_checkout_unlisted`.
 - A refusal is one line with its `code` and the step to take: a pane or agent that is not there, a limit passed, or a shell outside a Hide pane.
 
 ## Removing a worktree
