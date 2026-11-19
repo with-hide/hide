@@ -5274,6 +5274,7 @@ fn log_refusal(reason: CloseReason, extra: Option<usize>) {
 pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::JoinHandle<()> {
     let shutdown = state.shutdown.clone();
     let mobile = Arc::clone(&state.mobile);
+    let core = Arc::clone(&state.core);
     let idle_task = watch_idle(
         Idle {
             idle_secs: state.idle_secs,
@@ -5290,9 +5291,10 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             },
         },
         // Mobile on with a phone paired: the phone may come back at any
-        // time and push has to keep going (PRD D-10). The idle clock starts
-        // over when that ends.
-        move || mobile.keep_alive(),
+        // time and push has to keep going (PRD D-10), and an automation on
+        // has to run at its time (PRD automations D-19). The idle clock
+        // starts over when both end.
+        move || mobile.keep_alive() || core.automations_on(),
     );
     seat.mount(router(state));
     idle_task
