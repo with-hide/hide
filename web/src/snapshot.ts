@@ -2186,6 +2186,8 @@ export type Device = {
   machine_name?: string | null;
   /** A node that dials the core rather than a device the core dials (`DeviceSnapshot::dials_in`). */
   dials_in?: boolean;
+  /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
+  peer_key?: string | null;
 };
 
 /**
@@ -3535,6 +3537,19 @@ export type OverviewGraphMetadata = {
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
 };
 
+/**
+ * One guest machine and its panes on this machine. A pane is drawn and typed
+ * into by its `id`, `guest:<device_id>:pane:<pane>`, which is not the
+ * `remote:` address of a pane on that machine.
+ */
+export type GuestPanes = {
+  /** The guest's device id, the id `navigator.peers` names it by. */
+  device_id: string;
+  /** Its connection id. */
+  key: string;
+  panes: { id: string; pane: string; since_unix_ms: number }[];
+};
+
 export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
@@ -3572,6 +3587,8 @@ export type SnapshotRest = {
     devices?: Device[];
     /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
     peers?: import("./pairing").Peer[];
+    /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */
+    guest_panes?: GuestPanes[];
     focused_device_id?: string | null;
     /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
     tools?: ToolCell[];

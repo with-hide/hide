@@ -1077,7 +1077,12 @@ pub const COMMANDS: &[Spec] = &[
         ],
         rest: None,
         answers: &["pane_read"],
-        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "pane_unavailable",
+            "guest_pane_read",
+        ],
     },
     Spec {
         words: &["pane", "send"],
@@ -1126,6 +1131,7 @@ pub const COMMANDS: &[Spec] = &[
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_keys",
         ],
     },
     Spec {
@@ -1252,13 +1258,15 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--force", &["--now"]),
         ],
         rest: None,
-        answers: &["letter"],
+        answers: &["letter", "queued"],
         refusals: &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
             "intent_conflict",
             "no_parent",
+            "outbox_full",
+            "outbox_unavailable",
             "participant_registering",
         ],
     },
@@ -2024,6 +2032,19 @@ fn body() -> Value {
                 ))
                 .collect::<Map<String, Value>>(),
         },
+        // A pane of another Hide's work on this machine, while that Hide
+        // is not connected: a letter is kept and answered `queued`, and any
+        // other command above answers `owner_offline` (PRD
+        // device-connect-iroh B12, B13).
+        "away": {
+            "refusals": crate::guest_node::away::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::guest_node::away::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
+        },
         "answers": answers(),
     })
 }
@@ -2042,6 +2063,19 @@ fn answers() -> Value {
         json!({"type": "object", "properties": properties, "required": fields})
     };
     let map = answers.as_object_mut().expect("the answers are an object");
+    // A letter its sender's node keeps until the Hide it belongs to is
+    // back (`away`).
+    map.insert(
+        "queued".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "queued": {"const": true},
+                "intent": {"type": "string"},
+            },
+            "required": ["queued", "intent"],
+        }),
+    );
     map.insert("mission".into(), shape(&["mission"]));
     map.insert("mission_created".into(), shape(&["mission", "settings"]));
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
@@ -2094,9 +2128,13 @@ fn answers() -> Value {
         "access_list".into(),
         shape(&["machine", "limit", "pending", "connections"]),
     );
-    // The SSH devices and, under `peers`, the Hides this machine is paired
-    // with: who opens whom, and whether the two are connected.
-    map.insert("device_list".into(), shape(&["devices", "peers"]));
+    // The SSH devices; under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected; and under
+    // `guest_panes`, the panes other machines' work runs in on this one.
+    map.insert(
+        "device_list".into(),
+        shape(&["devices", "peers", "guest_panes"]),
+    );
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
     map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));

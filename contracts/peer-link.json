@@ -66,11 +66,45 @@
     ],
     "version": 1
   },
+  "file": {
+    "build": {
+      "id_chars": 16,
+      "max_bytes": 268435456,
+      "max_files": 64,
+      "max_path_bytes": 255
+    },
+    "build_file_fields": [
+      "executable",
+      "path",
+      "sha256",
+      "size"
+    ],
+    "messages": {
+      "build": {
+        "fields": [
+          "files",
+          "id"
+        ],
+        "since": 1
+      },
+      "build_placed": {
+        "fields": [
+          "id"
+        ],
+        "since": 1
+      },
+      "refused": {
+        "fields": [
+          "reason"
+        ],
+        "since": 1
+      }
+    }
+  },
   "guest": {
     "folder": {
       "builds_kept": 2,
       "guests": "g",
-      "holders": "holders",
       "host_side": "h",
       "install_side": "i",
       "key_file": "key",
@@ -87,6 +121,7 @@
     },
     "install": {
       "build_chars": 16,
+      "hooks_name_prefix": "guest-root:",
       "name_prefix": "guest:"
     },
     "launch": {
@@ -123,6 +158,7 @@
         "end_now_waits_secs": 5,
         "folder_held_retries": 10,
         "folder_held_retry_secs": 1,
+        "guest_nodes": 8,
         "holder_lost_restart_secs": 600,
         "idle_end_secs": 60
       },
@@ -287,6 +323,7 @@
       "update_needed",
       "folder_refused",
       "crashed",
+      "host_full",
       "other"
     ],
     "release_fields": [

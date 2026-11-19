@@ -1028,7 +1028,10 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
             "reason": null, "update": null,
         }])
     );
-    assert_eq!(answer["devices"], serde_json::json!([]));
+    // The machine this one opens is a device too, under the same id: one
+    // machine, one row.
+    assert_eq!(answer["devices"][0]["id"], "windows-pc");
+    assert_eq!(answer["devices"].as_array().map(Vec::len), Some(1));
     // A window draws its rows from the navigator it is sent.
     let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
         let payload = runtime.snapshot_delta_payload(have);
@@ -1056,4 +1059,181 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
     assert!(runtime.snapshot.navigator.peers.is_empty());
     // A window that drew the machine is told it is gone.
     assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
+}
+
+/// The panes another machine's work runs in here are the list hided last
+/// told, replaced whole (PRD device-connect-iroh D-77 (5), B10): the
+/// snapshot and `hide device list` read it, the same list again publishes
+/// nothing, and a list whose pane is not its guest's is refused whole.
+#[test]
+fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, guests: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "guest_panes",
+            "payload": { "guests": guests }
+        }))
+        .expect("guest panes event");
+        runtime.dispatch_json(&event)
+    };
+    let macbook = serde_json::json!({
+        "device_id": "macbook", "key": "cd".repeat(32),
+        "panes": [{"id": "guest:macbook:pane:w1:p1", "pane": "w1:p1", "since_unix_ms": 7}],
+    });
+    assert!(told(&mut runtime, serde_json::json!([macbook])));
+    assert!(
+        !told(&mut runtime, serde_json::json!([macbook])),
+        "the list it already holds is no change"
+    );
+    let (answer, _) = runtime
+        .device_command(crate::node::TEST_NODE, DeviceCommand::List)
+        .expect("listed");
+    assert_eq!(
+        answer["guest_panes"],
+        serde_json::json!([{
+            "id": "macbook", "connection_id": "cd".repeat(32),
+            "panes": [{"id": "guest:macbook:pane:w1:p1", "pane": "w1:p1", "since_unix_ms": 7}],
+        }])
+    );
+
+    // A window draws the list from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["guest_panes"].clone(),
+        )
+    };
+    let (seen, guests) = sent(&mut runtime, 0);
+    assert_eq!(guests[0]["device_id"], "macbook");
+    assert_eq!(guests[0]["panes"][0]["id"], "guest:macbook:pane:w1:p1");
+
+    // A pane under another machine's address.
+    let mut other = macbook.clone();
+    other["panes"][0]["id"] = serde_json::json!("guest:mini:pane:w1:p1");
+    told(&mut runtime, serde_json::json!([other]));
+    assert_eq!(
+        runtime.snapshot.navigator.guest_panes[0].panes[0].id,
+        "guest:macbook:pane:w1:p1"
+    );
+
+    assert!(told(&mut runtime, serde_json::json!([])));
+    assert!(runtime.snapshot.navigator.guest_panes.is_empty());
+    // A window that drew the panes is told they are gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
+}
+
+/// A machine this one opens is a device for as long as the pairing holds
+/// (PRD device-connect-iroh D-61, B3): registered when its grant is active,
+/// kept through a pause, and removed with what Hide recorded for it when
+/// the pairing ends. A registration that already holds its id is not
+/// replaced.
+#[test]
+fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
+    use crate::model::LinkOrigin;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, machines: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": machines }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    let machine = |opens: &str| {
+        serde_json::json!({
+            "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+            "opens": opens, "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        })
+    };
+    let origin_of = |runtime: &Runtime, id: &str| {
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.id == id)
+            .map(|registration| registration.origin.clone())
+    };
+    let peer = LinkOrigin::Peer {
+        key: "ab".repeat(32),
+    };
+
+    // Not confirmed by its host yet: nothing to open.
+    told(&mut runtime, serde_json::json!([machine("confirming")]));
+    assert_eq!(origin_of(&runtime, "windows-pc"), None);
+
+    told(&mut runtime, serde_json::json!([machine("active")]));
+    assert_eq!(origin_of(&runtime, "windows-pc"), Some(peer.clone()));
+    let registration = runtime.device_registration("windows-pc").unwrap();
+    assert_eq!(registration.label, "Windows PC");
+    // Its row names the pairing it is, so Settings lists the machine once.
+    assert_eq!(
+        device(&runtime, "windows-pc").peer_key,
+        Some("ab".repeat(32))
+    );
+    assert!(
+        registration.host_consent.is_some(),
+        "pairing is the consent its node runs under"
+    );
+    // This test's connector reaches no paired machine, and the row says so
+    // instead of reading as never tried.
+    let status = runtime
+        .snapshot
+        .status
+        .remote
+        .iter()
+        .find(|status| status.target_id == "windows-pc")
+        .expect("the device has a status entry");
+    assert_eq!(
+        status.message.as_deref(),
+        Some("This Hide connects no paired machine")
+    );
+
+    for paused in ["paused", "paused_there"] {
+        told(&mut runtime, serde_json::json!([machine(paused)]));
+        assert_eq!(
+            origin_of(&runtime, "windows-pc"),
+            Some(peer.clone()),
+            "{paused}"
+        );
+    }
+
+    told(&mut runtime, serde_json::json!([machine("unpaired")]));
+    assert_eq!(origin_of(&runtime, "windows-pc"), None);
+    assert!(
+        !runtime
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == "windows-pc")
+    );
+
+    // An SSH device already under that machine's id stays what it is.
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(crate::model::DeviceRegistration {
+            id: "windows-pc".to_owned(),
+            label: "pc over ssh".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "pc".to_owned(),
+                naming: crate::model::DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    told(&mut runtime, serde_json::json!([machine("active")]));
+    assert_eq!(
+        origin_of(&runtime, "windows-pc").and_then(|origin| origin.ssh_alias().map(str::to_owned)),
+        Some("pc".to_owned())
+    );
+    assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
 }

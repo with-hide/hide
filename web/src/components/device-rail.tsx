@@ -63,9 +63,9 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   // A ⌘ hold numbers the tiles ⌘n selects (`numbering.ts`).
   const numbered = useUiStore((s) => s.hint === "devices");
   const numbers = useMemo(() => (numbered ? numberedDevices(devices) : null), [numbered, devices]);
-  // The Hides this computer opens (PRD device-connect-iroh B3), after its
-  // devices. A machine that is already a device keeps that one tile.
-  const peers = useShellStore(useShallow((s) => openedMachines(s.rest).filter((peer) => !(s.rest?.navigator?.devices ?? []).some((device) => device.id === peer.device_id))));
+  // The Hides this computer opens that are not yet its devices (PRD
+  // device-connect-iroh B3), after its devices.
+  const peers = useShellStore(useShallow((s) => openedMachines(s.rest)));
   return (
     <EntryContextMenu
       asChild

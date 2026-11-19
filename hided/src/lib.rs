@@ -52,13 +52,17 @@ pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
 
+pub mod guest_node;
+pub mod guests;
 mod hook_request;
 pub mod node_panes;
 pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_dial;
 pub mod peer_host;
+pub mod peer_inbox;
 pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
@@ -477,8 +481,28 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let node_panes = Arc::new(node_panes::NodePanes::new(tokio::runtime::Handle::current()));
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
+    // How the core opens its node on a machine it is paired with; the
+    // endpoint it uses is handed in below, once it exists.
+    let this_build = build_order::Release::of_this_build();
+    let peer_dial = peer_dial::Dialer::new(
+        tokio::runtime::Handle::current(),
+        this_build.version.clone(),
+        this_build
+            .is_official()
+            .then(|| this_build.commit.clone())
+            .flatten()
+            .map(|commit| hide_peer::protocol::manage::Release {
+                commit,
+                order: this_build.order,
+            }),
+        env.state_dir.clone(),
+    );
     seat.starting("core.owner");
-    let core = Arc::new(CoreHandle::spawn(options, Arc::clone(&pane_events))?);
+    let core = Arc::new(CoreHandle::spawn(
+        options,
+        Arc::clone(&pane_events),
+        Some(Arc::clone(&peer_dial) as Arc<dyn hide_node::ssh::host::peer::PeerDial>),
+    )?);
     seat.starting("core.services");
     if effects_held {
         let mut open = move_gate.subscribe();
@@ -577,6 +601,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         shutdown.clone(),
     );
+    peer_dial.attach(Arc::clone(&peers));
+    peer_dial.take_events(Arc::new(peer_inbox::Letters::new(Arc::clone(&core))));
     // Each stream kind's owner hands its handler in here, before the
     // endpoint opens. The start is not held for the endpoint: a machine
     // whose network is down still starts, and the reason is in the log.
@@ -587,6 +613,24 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         env.state_dir.clone(),
         env.starter_program.is_some(),
     );
+    //
+    // Other machines' work here: each guest's node runs from that guest's
+    // build, and a guest of this build runs from the programs beside this
+    // one.
+    let guests = guests::Guests::new(
+        env.state_dir.clone(),
+        env.home.clone(),
+        hide_node::ssh::host::HelperPackages::new(
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+            cli::RELEASE,
+        ),
+        Some(guests::Screens {
+            core: Arc::clone(&core),
+        }),
+    );
+    guests.serve(&peers, shutdown.clone());
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
         Arc::clone(&core),
@@ -604,6 +648,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         shutdown.clone(),
     );
+    pairing.follow_guests(Arc::clone(&guests));
     {
         let peers = Arc::clone(&peers);
         let pairing = Arc::clone(&pairing);
@@ -613,7 +658,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 // with what was not settled.
                 Ok(Some(_)) => pairing.started().await,
                 // Nothing to dial: a machine a host dropped is still listed.
-                Ok(None) => pairing.rested().await,
+                // No grant is saved either, so no machine is a guest here.
+                Ok(None) => {
+                    guests.granted(Vec::new());
+                    pairing.rested().await;
+                }
                 Err(error) => hide_core::diagnostic!(serde_json::json!({
                     "component": "peer_host",
                     "kind": "peer_host.open_failed",

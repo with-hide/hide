@@ -2861,6 +2861,16 @@ The web shell reads the id from the navigator's own device row (`localDeviceId` 
 A device's ids are scoped to it as `remote:<device>:<kind>:<id>`, while the core's own node keeps the engine's bare ids, and one module builds and reads that form: `hide_node_link::address`, re-exported as `hide_core::address`, which `hide-node`'s router, `hided` and the core all call and nothing else formats or splits.
 It lives in `hide-node-link` because the router cannot depend on the core.
 A pane is a `PaneAddress`, either a pane of the core's own node or a device's pane by the device's own id; a typed `remote:<device>:pane:<id>` from a `hide` command parses into the same type, and a `remote:` id that names no pane is refused rather than read as a local pane.
+Three spellings name a pane that involves another machine, and they are three different things:
+
+| Address | What it names | Who answers |
+|---|---|---|
+| `remote:<device>:pane:<id>` | A pane on that machine that this core runs: its engine made it, in this core's node there | This core, through its node link |
+| `guest:<device>:pane:<id>` | A pane on this machine that the other machine's core runs: that core's work, in its guest node here ([A guest's panes on the host](#a-guests-panes-on-the-host)) | This machine's daemon, through the guest node's tap, as the host's own view of work running here, which its operator may see, type into and close |
+| `core:<device>:pane:<id>` | A pane the other machine's core owns, asked of that core over a grant | The other machine's core, which decides |
+
+`guest:` is the third variant of `PaneAddress` (`PaneAddress::Guest`), read and written only in `hide_node_link::address`; it is not `remote:` because two machines that open each other have both, and each names its panes without the other, so the same `<id>` can be either.
+A guest's pane is no pane of this core's engine, so everything that takes a pane id to the engine reads it as a pane the engine does not have.
 Two pane ids are the same pane only on the same device (`address::same_pane`), so one raw pane id on two machines is two panes.
 Each agent and pane row publishes its machine as `device_id` and the pane's id on that machine as `device_pane_id`, and each editor tab its machine as `device_id`; a raised ask names the device its pane is on as `open_device_id`, because a disconnected device publishes no rows to find it by.
 These are derived fields, written by `Runtime::stamp_row_addresses` as a snapshot is taken and never compared (`model::Derived`), so a stamp is never a change and a projection that has not stamped yet is equal to one that has.
@@ -3215,7 +3225,9 @@ The two directions are two records: pausing or removing one leaves the other and
 
 `hided/src/pairing.rs` is the daemon's side: it starts the service with the endpoint, answers every ask about pairing, and after every change it reads the paired machines again in `Pairing::paired_changed`, the one place that runs after a pairing is saved, and hands them to the core as the daemon-only `peer_machines` event.
 The core keeps them as a list of facts (`hide-core/src/peer_machines.rs`) and publishes them as `navigator.peers`: who opens whom, whether the two are connected and by which path, why not when the relay is unreachable or stopped for the month, and which side must update.
-A paired machine is not a device of the core here; the one place the web shell reads them (`web/src/pairing.ts`) is where a rail tile's list comes from, so a machine never shows twice.
+A machine this one opens becomes a device of the core once its host confirmed the pairing: `Runtime::reconcile_peer_devices` (`hide-core/src/runtime/peer_devices.rs`) registers it under its own device id with `LinkOrigin::Peer { key }` when `opens` turns `active`, keeps it through a pause, and removes it with what Hide recorded for it when the pairing ends; an id another registration already holds is left to that registration, with a `peer_device.id_taken` diagnostic.
+One machine is one tile: the one place the web shell reads a rail tile's list (`openedMachines` in `web/src/pairing.ts`) leaves a machine that is a device to that device's tile, which leads to its screen, and gives a tile of its own only to one that is not a device yet.
+The device's row says which pairing it is (`DeviceSnapshot::peer_key`, the registration's `LinkOrigin::Peer` key), and both lists go by that key, never by the id a machine says of itself: Settings lists a paired machine once, as its pairing's row, and its device gets no device row (`listedDevices`).
 An ask names a paired machine by its connection id, its device id, its name or the start of its connection id; a device id is what a machine says of itself, so one that two paired machines share is refused as `device_ambiguous`, and a window always sends the row's connection id.
 The relay's reason is asked in a task of its own, at most once in 30 seconds, so neither the loop that publishes the machines nor an ask waits on the relay.
 A share a terminal holds (`hide device share`) ends 10 seconds after that terminal last asked for its status; the command keeps asking while its allow question waits for the operator, so only a terminal that went away ends it.
@@ -3240,6 +3252,7 @@ A file that names another machine, as a copied or restored home folder would car
 An event another core hands this one is appended and synced to `peers/inbox/<host>/events.jsonl` before it is acknowledged, in the sender's own sequence: a repeat answers its old number, a gap is refused with what the inbox holds, and a full inbox refuses instead of dropping.
 Events are applied one at a time with `cursor.json` saved after each, and one that cannot be applied is acknowledged and logged rather than blocking the ones behind it.
 An append that fails partway is cut back to the last whole line, so the next event never joins a torn one.
+An event whose target the core does not know yet (`Applied::Later`) stays recorded and holds the ones behind it, so order is kept; it is tried again until its caller says the wait is over.
 
 **The iroh transport.**
 `hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
@@ -3255,6 +3268,85 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 
 **Diagnostics.**
 `hide-peer` writes its diagnostics through `hide_peer::log`, which `hided` points at the core's diagnostic log at start; a program that sets no sink gets them on stderr.
+
+### A guest's panes on the host
+
+A guest's work runs on this machine in the guest's own node (`hided node serve --guest`), and this machine's daemon reaches its panes only through the tap that node serves (`hided/src/guests/tap.rs`), whether or not the guest is connected.
+The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, sizes, redraws and a close.
+The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 256 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
+The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field, from the daemon-only `guest_panes` event that replaces the list whole; `hide device list` answers it.
+The node keeps a session on every pane its holders' records say may run, so the host draws a pane whether or not the guest's core looks at it, and the guest's core's attach and release only decide whether a pane's output also goes up the node link.
+After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
+`hide pane send` types text and Enter into a guest's pane through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
+
+### A guest's hook entries
+
+A guest's agents report to the guest's core through hook entries of the guest's own installation in the host account's agent settings (PRD D-77 (4), (5); [agent-hooks.md](agent-hooks.md#more-than-one-hide-on-an-account)).
+The guest's node writes them: it runs from the guest's install root (`<state>/g/<key>/i/<build>/hided`), names its installation by that root (`guest-root:<install root>`, `hide_kit::layout::install_of_root`), and answers its core's kit requests as a device's node does, over a target that keeps to the hook entries and plugin files (`KitPlace::Guest`, `hide_host::kit::run_guest`, `hide_kit::guest_target`); a node that runs from anywhere else installs nothing.
+The entries name `<install root>/current`, which the pass points at the build that runs, so a guest's next build needs no rewrite, and a guest's panes name that installation and its own `hide` (`HIDE_INSTALL`, `HIDE_INSTALL_CLI`).
+The account's `hide` command, its `PATH`, its skills and its login agents stay the host's own Hide's.
+The host's Hide takes the entries out, by Hide's marker and that installation's name (`Guests::unhook`, `hide_kit::remove_guest`): when the guest's node has stopped and no pane of the guest is left, when the guest is taken off the machine, and at the daemon's start for what a node that ended without it left.
+So the entries are there while the guest's node runs, which is while the guest is connected or has a pane here, not only while it has an agent's pane: an agent reads its settings when it starts, so the entries have to be there before a guest's first pane is, and the node cannot tell an agent's pane from a shell's.
+What that costs is one start of the guest's helper at every agent event on the account, the host's own agents' among them: anywhere but in a pane that names the guest's installation the helper reads its environment and arguments and ends, with no file or socket touched (`hide_agent_hooks::route::foreign_pane`).
+[What a guest may take](#what-a-guest-may-take) has what a start takes and the number of guests it allows.
+
+### What a guest may take
+
+Every bound on a guest's work is a count, and this is the whole list (PRD D-77 (7)).
+Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more per pane, and a pane's holder 7 to 16 MB, in a debug build.
+
+| What | Cap | At the cap | Named in |
+| --- | --- | --- | --- |
+| Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 8 | the next guest's node is not started and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::start_within_the_cap` |
+| Guests a host keeps a place for | 32 | those with no node and no pane are dropped, and past that a guest is refused | `hide_peer::limits::MAX_GRANTS`, `Guests::node_for` |
+| Panes of one guest, each in one holder | 256 | the node starts no holder past it, and the host lists none | `hide_kit::panes::HOLDER_CAP`, `hide_core::guest_panes::MAX_PANES` |
+| Streams on one connection | 72, with a cap for each kind | a stream past it is refused | `hide_peer::limits::MAX_STREAMS` |
+| Output a node keeps waiting for a slow host, on the tap | 4 MiB | what waits is dropped and each pane is drawn whole again | `tap::CAP_BYTES` |
+| Letters a node keeps while its core is away | 4,096 events and 8 MiB | the sender is refused `outbox_full`; nothing is dropped | `event::BOX_MAX_EVENTS`, `event::BOX_MAX_BYTES` |
+| Events a node hands the host before the guest's stream takes them | 64 | the node's output is left unread, which holds its next event in its box | `guests/node.rs`, `EVENTS_WAITING` |
+| Crashes of a node the host starts again | 5 in 600 s | the node is left stopped and the guest's device shows the reason with a retry | `launch::CRASHES`, `launch::CRASH_WINDOW_SECS` |
+| Restarts of a node's own service for a lost holder | 1 in 600 s | the host never restarts for it | `launch::HOLDER_LOST_RESTART_SECS` |
+| Builds of one guest a host keeps | 2 | the oldest goes when a node says it is ready | `launch::BUILDS_KEPT` |
+
+The first row is set by the hook entries.
+A guest at work adds one helper start to every agent event on the host's account, and eight guests are to add no more than a quarter of a second to one event on the slowest system Hide supports.
+On a Mac a start took about 5 ms in a release build.
+The `windows check` lane prints what it takes there on every run (`windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each`), started as Claude Code starts a hook, with no shell, and as Codex does, through PowerShell, beside what PowerShell alone takes.
+
+### A guest taken off the host
+
+A guest's work on this machine follows its grant.
+The pairing tells the guests' service who holds one whenever that changes and once at the daemon's start (`Guests::granted`, from `Pairing::paired_changed`), and a guest that holds none is marked as taken off in its `h/removed`, which is what the next start of the daemon goes on with.
+Its node is told to end after its last pane (`ToNode::End(AfterLastPane)`): the panes stay, on this machine's screen only, and take no new link.
+When the operator chose to end that work with the removal (`pairing_remove` with `end_work`, `Guests::end_work`), the node is told to end now instead, and a node that is not running is started from the build it last ran only to end the panes its holders still run; this needs no connection to the guest, because the node holds the panes' records.
+A node told to end now reports each pane as gone on its tap and waits up to 2 s for the tap to take that before it exits, so the host's list does not keep panes that no longer run.
+The two words come on two threads and are applied one at a time, and the grant list's word never weakens an "end now" already given.
+Once a guest that was taken off has no pane and its node has stopped, its place among the guests, the screens' way to its panes and its whole `g/<key>` folder are removed; a folder of a guest with no grant that nothing was started from since the daemon's start is removed in the same sweep.
+A guest that is paired again before that has its mark cleared and its node started again, since the one that was running takes no new link.
+Of a guest's builds the host keeps the one that runs and the one before it; the rest are removed when a node says it is ready.
+
+### A guest node's events while its core is away
+
+A pane of a guest's node reaches the guest's core through the pane service of the node's link, which lives only as long as a link does.
+While no link is served, the same `hide` asks the node itself on `away.sock` in the node's folder (`hided/src/guest_node/away.rs`), bound for the node's whole life: one line each way, both ends the guest's own build.
+A letter (`hide request send`) from a caller this machine's kernel finds in the pane it names is kept in the node's box, with that pane's terminal, and answered `queued`; every other command needs the core's judgement and is answered `owner_offline` at once, and so is a credential the pane asks for with no link (`workspace_cli::bootstrap`).
+
+The box is `box.jsonl` and `acked` in the node's folder (`hided/src/guest_node/event_box.rs`), in the format `hide_peer_protocol::event` names because two builds of one guest read it: the node that wrote it and the one that replaces it.
+An event is appended and synced before its sender is answered, numbered from 1 with no gaps in a box named once; an event of the same kind and key that is still kept is the same event, so a send tried again adds nothing.
+At 4096 events or 8 MiB a new event is refused `outbox_full` and nothing kept is dropped; one event is at most a management message.
+A line is kept and sent as the text it was written as, so a field a later build added reaches the guest's core unchanged, and a whole line this build cannot read refuses the box and leaves the file as it is: the node then names no `events` capability and answers a letter `outbox_unavailable`.
+
+The guest's core asks for the box on the management stream it holds beside its node link (`hided/src/peer_dial.rs`, `hold`): it names how far it recorded (`resume`), the host tells the node on its input (`ToNode::Resume`), and the node writes every kept event, and each new one as it is made, on its output.
+The host relays each line to the stream that asked as an `event` message with the line's own fields (`GuestNode::relay`), at most 64 waiting; a stream that takes nothing for 30 s is ended and the node is told `away`, so events wait in the node's box and never in the host's memory.
+The guest records each event durably (`hide_peer::inbox`), acknowledges it, and only then applies it; the acknowledgement goes back to the node, which drops what was recorded.
+A core whose place the box cannot follow (it names another box, or a place the box dropped or never reached) gets what is kept in a box started fresh, numbered from 1, and the product's own keys make a repeat nothing.
+One management stream per guest is open at a time: a new link ends the earlier stream on both machines before it opens the next (`Held`).
+
+This build keeps one kind of event, `letter`, and applies it as the command its sender would have run had the core been there (`hided/src/peer_inbox.rs`), under the letter's intent, which makes a second apply the same letter.
+The node proves the sender when the letter is written (`hide_host::panes::prove_caller`, the check a pane's credential gets) and records the terminal it ran in, which names one life of one pane; which agent that is, is the core's own knowledge (`Runtime::prepare_kept_letter`): the agent it observes in that terminal, else the one it last registered there.
+So a letter is applied as its agent whether or not the pane still runs, and a worker's report written before the host closed its pane reaches its parent; nothing of the caller is checked again when it applies (`Authority::proven`, `Proven::WhenWritten`), because that was settled when it was written.
+A letter is given up, and logged as unappliable, only when what it names is gone: its recipient, or a sender the core registered in no terminal and whose pane it does not find within 60 s of the link's return; a core that cannot write a letter just then is asked again for that long.
+A pane's end and an agent's completion are not events: they reach the core as the node's state when its link is read again, which is the same however often it is read.
 
 ### Moving the core
 

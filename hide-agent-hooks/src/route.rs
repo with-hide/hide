@@ -10,8 +10,9 @@
 //! device helper a Hide on another machine put there, each with its own hook
 //! entry, and a pane names the installation that started it
 //! ([`INSTALL_VARIABLE`]). An entry acts only in a pane of its own
-//! installation, or in one that names none (docs/agent-hooks.md, More than
-//! one Hide on an account).
+//! installation, or in one that names none; a guest's installation
+//! ([`install_of_guest_root`]) acts in its own panes alone
+//! (docs/agent-hooks.md, More than one Hide on an account).
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -24,8 +25,9 @@ pub(crate) const ARGUMENT: &str = "--state-dir-b64";
 pub(crate) const INSTALL_ARGUMENT: &str = "--install-b64";
 const STATE_VARIABLE: &str = "HIDE_STATE_DIR";
 /// The variable a pane names the Hide installation that started it by: a
-/// pane holder's pane carries its node's ([`APP_INSTALL`] or [`install_of_root`]), and a
-/// pane that names none (an agent outside Hide, a plain terminal) is anyone's.
+/// pane holder's pane carries its node's ([`APP_INSTALL`], [`install_of_root`] or
+/// [`install_of_guest_root`]), and a pane that names none (an agent outside Hide, a
+/// plain terminal) is anyone's but a guest's.
 pub const INSTALL_VARIABLE: &str = "HIDE_INSTALL";
 /// The variable a pane names its installation's own `hide` command by: a
 /// `hide` that another installation put first on the pane's `PATH` hands the
@@ -44,6 +46,23 @@ pub const APP_INSTALL: &str = "app";
 /// its builds shares.
 pub fn install_of_root(root: &Path) -> String {
     format!("root:{}", root.display())
+}
+
+/// How the name of a guest's installation starts. The host's build takes a
+/// guest's entries out by this name and the guest's build writes them, so
+/// `contracts/peer-link.json` carries it too
+/// (`hide_peer_protocol::launch::HOOKS_INSTALL_PREFIX`, held equal by
+/// `hide_kit::layout`'s test).
+pub const GUEST_INSTALL_PREFIX: &str = "guest-root:";
+
+/// The installation of another machine's work on this account, whose builds
+/// sit under the install root `root` (a guest's, on its host): named by the
+/// root like [`install_of_root`], and a kind of its own because every pane
+/// of it names it. Its entries therefore act in no other place, a pane that
+/// names no installation among them ([`foreign_pane`]), and every agent
+/// event of the host's own costs one start of its helper and nothing more.
+pub fn install_of_guest_root(root: &Path) -> String {
+    format!("{GUEST_INSTALL_PREFIX}{}", root.display())
 }
 
 /// The installed helper, the daemon state folder its kit serves and the
@@ -400,7 +419,10 @@ pub fn mark(install: &str) -> Option<String> {
 /// ran this helper names another. Such a call is that installation's own
 /// entry's to answer, so this one does nothing. A pane that names none, an
 /// entry an earlier build wrote without an installation, and arguments that
-/// do not read are never foreign: the call goes on as before.
+/// do not read are never foreign: the call goes on as before. A guest's
+/// entry ([`install_of_guest_root`]) is the exception: a place that names
+/// no installation is never its pane, so it does nothing there either. The
+/// answer reads this process's environment and arguments and nothing else.
 pub fn foreign_pane() -> bool {
     foreign(
         std::env::var(INSTALL_VARIABLE).ok().as_deref(),
@@ -409,10 +431,13 @@ pub fn foreign_pane() -> bool {
 }
 
 fn foreign(pane: Option<&str>, arguments: impl Iterator<Item = String>) -> bool {
-    let Some(pane) = pane.filter(|value| !value.is_empty()) else {
+    let Ok(Some(entry)) = parse_install(arguments) else {
         return false;
     };
-    matches!(parse_install(arguments), Ok(Some(entry)) if entry != pane)
+    match pane.filter(|value| !value.is_empty()) {
+        Some(pane) => entry != pane,
+        None => entry.starts_with(GUEST_INSTALL_PREFIX),
+    }
 }
 
 /// Read a generated shell command's installation, for the kit's judgement of
@@ -540,6 +565,15 @@ mod tests {
         assert!(!foreign(Some("root:/helper"), device.into_iter()));
         assert!(!foreign(None, app.into_iter()));
         assert!(!foreign(Some(APP_INSTALL), entry(None).into_iter()));
+        assert!(!foreign(None, entry(Some("root:/helper")).into_iter()));
+
+        // A guest's entry acts in its own panes alone.
+        let name = install_of_guest_root(Path::new("/state/g/0123456789abcdef/i"));
+        let guest = entry(Some(&name));
+        assert!(!foreign(Some(&name), guest.clone().into_iter()));
+        assert!(foreign(Some(APP_INSTALL), guest.clone().into_iter()));
+        assert!(foreign(Some(""), guest.clone().into_iter()));
+        assert!(foreign(None, guest.into_iter()));
     }
 
     #[test]
