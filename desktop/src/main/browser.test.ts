@@ -782,17 +782,21 @@ describe("pages on no desk on screen (PRD lane-desk-pair-view B32)", () => {
 
   it("keeps pages on no desk within the live-page cap and releases a closed View's page", () => {
     const { sync, resolve, release, removeChildView, live, views, viewOf } = host();
-    sync([]);
-    const rows: ReturnType<typeof row>[] = [];
-    for (let index = 1; index <= MAX_LIVE_VIEWS + 2; index += 1) {
+    // The operator looked at one page on a desk, then left it.
+    const desk = row("desk", 1);
+    sync([desk], [{ id: "desk", load: 1, rect }]);
+    sync([desk]);
+    const rows: ReturnType<typeof row>[] = [desk];
+    for (let index = 1; index <= MAX_LIVE_VIEWS; index += 1) {
       rows.push(row(`p${index}`, 1));
       sync([...rows]);
     }
-    // Twelve live at most; the newest asked is kept, the least recently loaded go.
+    // Twelve live at most: a page loaded off screen counts as just seen, so the
+    // page shown longest ago goes and every page an agent just asked for stays.
     expect(live()).toHaveLength(MAX_LIVE_VIEWS);
-    expect(live()).not.toContain("p1");
-    expect(live()).not.toContain("p2");
-    expect(live()).toContain(`p${MAX_LIVE_VIEWS + 2}`);
+    expect(live()).not.toContain("desk");
+    expect(live()).toContain("p1");
+    expect(live()).toContain(`p${MAX_LIVE_VIEWS}`);
     // An unloaded page is not loaded again on the next sync; only a new ask does that.
     const loads = resolve.mock.calls.length;
     sync([...rows]);
