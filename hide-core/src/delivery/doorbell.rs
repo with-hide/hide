@@ -4796,7 +4796,8 @@ mod tests {
     /// Antigravity CLI do instead?" above it, which the composer reads as
     /// empty; the engine still reads the turn `working` after the Esc, and
     /// agy takes letters at its tools while it works, so no bell is typed
-    /// there and the screen is not read.
+    /// there and the screen is not read, even past the mid-turn wait after
+    /// which an agent that takes no letters at its tools is rung.
     #[test]
     fn an_interrupted_antigravity_turn_the_engine_reads_working_is_not_rung() {
         let bell = Bell::of_kind("agy", AGY_INTERRUPTED);
@@ -4809,7 +4810,12 @@ mod tests {
         *bell.flags.lock().unwrap() = json!({"agent_status": "working", "state_change_seq": 4});
         let mut doorbell = Doorbell::default();
         let start = now();
-        for at in [start, start + RETRY_LIMIT_MS, start + 2 * RETRY_LIMIT_MS] {
+        for at in [
+            start,
+            start + RETRY_LIMIT_MS,
+            start + MID_TURN_WAIT_MS + RETRY_LIMIT_MS,
+            start + 2 * MID_TURN_WAIT_MS,
+        ] {
             bell.pass(&mut doorbell, at);
         }
         assert!(bell.typed().is_empty());
