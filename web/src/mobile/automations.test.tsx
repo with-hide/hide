@@ -64,8 +64,15 @@ async function connect(automations: PhoneAutomation[] | null) {
   document.body.append(container);
   const root = createRoot(container);
   store.patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
-  connection.pairNow();
-  let socket = FakeSocket.instances[0]!;
+  // The sockets this test's app opened, read by their own handles: one a former test's app opens later is not this one's.
+  const opened: FakeSocket[] = [];
+  const pair = () => {
+    const before = FakeSocket.instances.length;
+    connection.pairNow();
+    opened.push(FakeSocket.instances[before]!);
+    return opened.at(-1)!;
+  };
+  let socket = pair();
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
   const open = async () => {
     await act(async () => socket.onopen?.());
@@ -79,19 +86,24 @@ async function connect(automations: PhoneAutomation[] | null) {
   const q = (selector: string) => container.querySelector<HTMLElement>(selector);
   const click = (selector: string) => act(async () => q(selector)!.click());
   // Every press this phone sent, on any of its connections.
-  const sent = () => FakeSocket.instances.flatMap((one) => one.sent).filter((message) => message.type === "automation");
+  const sent = () => opened.flatMap((one) => one.sent).filter((message) => message.type === "automation");
   const lose = () => act(async () => {
     socket.readyState = 3;
     socket.onclose?.();
   });
   /** The connection comes back, and hided sends the list as it is now. */
   const reconnect = async (items: PhoneAutomation[]) => {
-    await act(async () => connection.pairNow());
-    socket = FakeSocket.instances.at(-1)!;
+    await act(async () => {
+      socket = pair();
+    });
     await open();
     await list(items);
   };
-  return { container, serve, list, q, click, sent, lose, reconnect, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
+  return { container, serve, list, q, click, sent, lose, reconnect, unmount: () => act(async () => {
+    root.unmount();
+    // Its retry timer would open a socket in the next test.
+    connection.stop();
+  }).then(() => container.remove()) };
 }
 
 // The first import of the app transforms its whole module graph; that cost is paid here, with the hook's own budget.
