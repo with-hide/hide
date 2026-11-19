@@ -280,6 +280,12 @@ fn testing_an_unconnected_device_reports_the_way_out() {
 }
 
 pub(super) fn runtime_with_home() -> Runtime {
+    runtime_showing_drives(None)
+}
+
+/// A runtime on a machine that shows its Windows PC's drives at
+/// `windows_drives`: a WSL distribution, or none for any other machine.
+fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
     let folder = scratch_dir("hide-core-devices-");
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
@@ -297,6 +303,7 @@ pub(super) fn runtime_with_home() -> Runtime {
         local_issues_path: None,
         effects_held: false,
         machine_name: None,
+        windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
     };
     let mut runtime = Runtime::new(
@@ -311,6 +318,31 @@ pub(super) fn runtime_with_home() -> Runtime {
     );
     runtime.test_dirs.push(folder);
     runtime
+}
+
+/// PRD wsl-device B16 for a core that itself runs in a distribution: its own
+/// device row says where the Windows PC's drives show, as a device's helper
+/// reports its own, and a row built again keeps it. Any other machine names
+/// none, so a pasted Windows path stays as typed there.
+#[test]
+fn a_cores_own_device_row_names_where_its_windows_drives_show() {
+    let drives = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .devices
+            .iter()
+            .find(|device| device.kind != "remote")
+            .expect("this machine's row")
+            .host
+            .windows_drives
+            .clone()
+    };
+    let mut distribution = runtime_showing_drives(Some("/mnt"));
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    distribution.rebuild_device_rows();
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    assert_eq!(drives(&runtime_with_home()), None);
 }
 
 /// A real worker resolves the alias with the system `ssh`, which refuses a

@@ -37,11 +37,12 @@ use hide_peer::{PeerEvent, PeerTransport, RelayState};
 use hide_peer_iroh::IrohTransport;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::{OnceCell, Semaphore, watch};
 use tokio::time::Instant;
 
 use crate::core::CoreHandle;
 use crate::ending::Ending;
+use crate::pairing_ssh;
 use crate::peer_host::{HostPeers, Incoming, PeerHost};
 
 type Service = Pairings<IrohTransport>;
@@ -132,6 +133,17 @@ pub enum Ask {
         device: String,
         address: String,
     },
+    /// Asks a machine this one reaches over SSH whether it can pair that
+    /// way; nothing changes there (B7).
+    LookSsh {
+        alias: String,
+    },
+    /// Pairs with a machine reached over SSH whose own Hide runs: that Hide
+    /// saves a pending grant and this machine confirms it over the
+    /// connection (security spec 15). Nothing is installed there.
+    PairSsh {
+        alias: String,
+    },
     /// The target's side of a pairing over SSH or `wsl.exe` (security spec
     /// 15, 17).
     AcceptSsh {
@@ -157,6 +169,8 @@ impl Ask {
             | Self::Resume { .. }
             | Self::Request { .. }
             | Self::Address { .. }
+            | Self::LookSsh { .. }
+            | Self::PairSsh { .. }
             | Self::AcceptSsh { .. } => true,
             Self::Status { .. }
             | Self::DismissJoin
@@ -235,6 +249,18 @@ pub fn next_action(code: &str) -> &'static str {
         "pairing_update_needed" => {
             "The two Hides are too far apart to connect: update the older one, then share a new link"
         }
+        "ssh_hide_absent" => {
+            "That machine has no Hide of its own: install Hide there and add it by a link it shares"
+        }
+        "ssh_update_there" => "Update Hide on that machine, then add it again",
+        "ssh_hide_not_running" => {
+            "Hide is not running on that machine: log in there and open Hide, then add it again"
+        }
+        "ssh_not_reached" => {
+            "ssh did not sign in without asking: check ssh <alias> in a terminal, or add the machine by a link it shares"
+        }
+        "ssh_busy" => "Other SSH checks are still running; try again in a moment",
+        "device_own" => "That is this machine itself",
         _ => "Retry; the reason is in Hide's diagnostic log",
     }
 }
@@ -276,7 +302,31 @@ pub struct Pairing {
     relay: Mutex<Option<RelayAnswer>>,
     /// When the terminal that holds the open share last asked.
     held: Mutex<Option<Instant>>,
+    /// How a target's `hide` is reached over SSH.
+    ssh: pairing_ssh::Reach,
+    /// The SSH dials under way: each is one `ssh` this daemon owns.
+    ssh_dials: Arc<Semaphore>,
+    /// The request each alias's pairing runs under, so one that ssh lost
+    /// midway is asked again as the same request (security spec 15).
+    ssh_requests: Mutex<Vec<SshRequest>>,
     shutdown: Ending,
+}
+
+/// The most `ssh` this daemon runs at once to look at or pair with a
+/// machine; an ask past it is refused, not queued.
+const SSH_DIALS: usize = 4;
+
+/// How long a pairing's request is asked again as itself: as long as the
+/// target keeps its pending grant.
+const SSH_REQUEST_KEPT: Duration = Duration::from_secs(10 * 60);
+
+/// The most requests remembered; the oldest is dropped first.
+const SSH_REQUESTS: usize = 16;
+
+struct SshRequest {
+    alias: String,
+    id: String,
+    made: Instant,
 }
 
 impl Pairing {
@@ -287,6 +337,7 @@ impl Pairing {
         core: Arc<CoreHandle>,
         always_on: crate::always_on::Follower,
         me: Me,
+        ssh: pairing_ssh::Reach,
         shutdown: Ending,
     ) -> Arc<Self> {
         let pairing = Arc::new(Self {
@@ -300,6 +351,9 @@ impl Pairing {
             updates: Mutex::new(HashMap::new()),
             relay: Mutex::new(None),
             held: Mutex::new(None),
+            ssh,
+            ssh_dials: Arc::new(Semaphore::new(SSH_DIALS)),
+            ssh_requests: Mutex::new(Vec::new()),
             shutdown,
         });
         for kind in [StreamKind::Pairing, StreamKind::Revoke] {
@@ -613,11 +667,22 @@ impl Pairing {
                 .collect();
             return Ok(json!({ "pairing": *service.view().borrow(), "machines": machines }));
         }
-        // Sharing this machine, joining another and answering for an SSH
+        // Looking at a machine over SSH opens nothing here and changes
+        // nothing there.
+        if let Ask::LookSsh { alias } = &ask {
+            let (reach, target) = (self.ssh.clone(), alias.clone());
+            let looked = self
+                .ssh_dial(alias, move || pairing_ssh::look(&reach, &target))
+                .await?;
+            return Ok(json!({ "alias": alias, "looked": looked }));
+        }
+        // Sharing this machine, joining another and either side of an SSH
         // pairing open the endpoint (D-83). Nothing else does: with no
         // endpoint there is no machine to act on and no ask to answer.
         let service = match &ask {
-            Ask::Share { .. } | Ask::Join { .. } | Ask::AcceptSsh { .. } => self.service().await?,
+            Ask::Share { .. } | Ask::Join { .. } | Ask::PairSsh { .. } | Ask::AcceptSsh { .. } => {
+                self.service().await?
+            }
             Ask::EndShare | Ask::DismissJoin => match self.service.get() {
                 Some(service) => service.clone(),
                 None => return Ok(json!({})),
@@ -641,7 +706,31 @@ impl Pairing {
             }
         };
         match ask {
-            Ask::Status { .. } => unreachable!("answered above"),
+            Ask::Status { .. } | Ask::LookSsh { .. } => unreachable!("answered above"),
+            Ask::PairSsh { alias } => {
+                let request = self.ssh_request(&alias)?;
+                let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
+                let target = alias.clone();
+                let paired = self
+                    .ssh_dial(&alias, move || {
+                        pairing_ssh::accept(&reach, &target, &request, &me, &key)
+                    })
+                    .await??;
+                let answer = json!({
+                    "device_id": paired.accepted.device,
+                    "name": paired.accepted.name,
+                });
+                service
+                    .adopt(paired.accepted, paired.first)
+                    .map_err(|error| match error {
+                        AcceptError::Invalid => "device_own",
+                        AcceptError::Already => "device_already_connected",
+                        AcceptError::Store(error) => store(error),
+                    })?;
+                // Adopted: a later pairing of this alias is a new request.
+                lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
+                Ok(answer)
+            }
             Ask::Share { language, held } => {
                 self.relay_named(&peers).await;
                 let list = WordList::for_language(language.as_deref().unwrap_or_default());
@@ -771,6 +860,49 @@ impl Pairing {
                 Ok(json!({ "accepted": accepted }))
             }
         }
+    }
+
+    /// Runs one `ssh` step for `alias` off the runtime, when fewer than
+    /// [`SSH_DIALS`] run; the step's `ssh` ends with it.
+    async fn ssh_dial<T: Send + 'static>(
+        &self,
+        alias: &str,
+        step: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, &'static str> {
+        if !pairing_ssh::valid_alias(alias) {
+            return Err("invalid_request");
+        }
+        let dial = Arc::clone(&self.ssh_dials)
+            .try_acquire_owned()
+            .map_err(|_| "ssh_busy")?;
+        tokio::task::spawn_blocking(move || {
+            let _dial = dial;
+            step()
+        })
+        .await
+        .map_err(|_| "ssh_not_reached")
+    }
+
+    /// The request `alias`'s pairing runs under: the one it ran under in
+    /// the last ten minutes, or a new one.
+    fn ssh_request(&self, alias: &str) -> Result<String, &'static str> {
+        let mut requests = lock(&self.ssh_requests);
+        requests.retain(|kept| kept.made.elapsed() < SSH_REQUEST_KEPT);
+        if let Some(kept) = requests.iter().find(|kept| kept.alias == alias) {
+            return Ok(kept.id.clone());
+        }
+        let mut id = [0u8; 16];
+        getrandom::getrandom(&mut id).map_err(|_| "peer_unavailable")?;
+        let id = hex::encode(id);
+        if requests.len() == SSH_REQUESTS {
+            requests.remove(0);
+        }
+        requests.push(SshRequest {
+            alias: alias.to_owned(),
+            id: id.clone(),
+            made: Instant::now(),
+        });
+        Ok(id)
     }
 
     /// Waits, briefly, until the relay named this machine, so a link or an

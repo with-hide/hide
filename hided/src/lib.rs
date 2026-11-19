@@ -45,6 +45,7 @@ pub mod node_uploads;
 mod outside_open;
 pub mod page_forward;
 pub mod pairing;
+pub mod pairing_ssh;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
@@ -466,6 +467,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         // amendment 3).
         effects_held: !move_gate.is_open(),
         machine_name: host_name(),
+        windows_drives: hide_host::serve::windows_drives(),
         account_state_folder: env.account_state_folder,
     };
     let effects_held = options.effects_held;
@@ -595,6 +597,10 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .and_then(hide_peer::link::clean_name)
                 .unwrap_or_else(|| peer_device.clone()),
             device: peer_device,
+        },
+        pairing_ssh::Reach {
+            home: env.home.clone(),
+            command_folder: env.host_cli_dir.clone(),
         },
         shutdown.clone(),
     );

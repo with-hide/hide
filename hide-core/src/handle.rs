@@ -1754,6 +1754,7 @@ mod tests {
                     local_issues_path: None,
                     effects_held: false,
                     machine_name: None,
+                    windows_drives: None,
                     account_state_folder: false,
                 },
                 std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),

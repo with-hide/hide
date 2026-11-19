@@ -3201,6 +3201,28 @@ A removed grant leaves a tombstone for 30 days, 256 at most with the oldest drop
 When no grant is left in either direction the connection closes as `no_grant`; a connection with none may stay 10 minutes, a pending grant keeps it only while that grant still waits, and the limit is read again each time a grant or a known host changes.
 A machine holds 16 such connections at most and closes the next as `busy`; what it keeps for a connection, the inbound gate included, lives in that connection and goes with it.
 
+**Pairing.**
+`hide_peer::pairing::Pairings` is how two machines become a pair and stop being one, above any transport: the one link a host shares, the machines that wait for this machine's operator, the pairing this machine is joining, the request a guest sends to be let in the other way, and the confirm and the removal a guest keeps sending until its host answered.
+A link is `hide://pair#...` with the host's connection id, its device id, the addresses it can be dialed at and a one-time secret; it opens a pairing for 9 minutes and for one machine, and a second share replaces the first.
+Both screens show the same four words, read from a hash of the two keys and the secret in the word list the host named, and each operator has 2 minutes: the guest says the words match, the host allows, and anything else, a closed window included, leaves no grant that opens anything.
+A machine that is already a guest asks to be let in the other way over the connection the two have, which needs no words since both keys are proved, and the answer there is the same allow window; at most 8 machines wait for an operator at once, and one machine's confirms, removals and requests are each held to 6 a minute.
+The two directions are two records: pausing or removing one leaves the other and the connection as they were, and a guest that removes a host it cannot reach keeps the removal and sends it until the host answers.
+
+`hided/src/pairing.rs` is the daemon's side: it starts the service with the endpoint, answers every ask about pairing, and after every change it reads the paired machines again in `Pairing::paired_changed`, the one place that runs after a pairing is saved, and hands them to the core as the daemon-only `peer_machines` event.
+The core keeps them as a list of facts (`hide-core/src/peer_machines.rs`) and publishes them as `navigator.peers`: who opens whom, whether the two are connected and by which path, why not when the relay is unreachable or stopped for the month, and which side must update.
+A paired machine is not a device of the core here; the one place the web shell reads them (`web/src/pairing.ts`) is where a rail tile's list comes from, so a machine never shows twice.
+An ask reaches the daemon from a window as a `pairing_<verb>` event and from `hide device` over the bootstrap socket, and both are answered by `Pairing::ask` with the caller it came from: sharing, adding, comparing, allowing, resuming, asking back, naming an address and pairing over SSH are the operator's alone, refused to a Hide pane (by what the kernel says of the caller, and by the command's own environment before it is sent) and to an external tool, and every ask is refused to a screen that is not this machine's own window, which hears the refusal alone.
+The pairings under way go to this machine's own windows as a `pairing` frame, sent when a window connects and when it changes, and the answer to a window's ask as a `pairing_result` frame to that window; neither is part of the snapshot, a relay connection is never sent either, and the link and the words are never logged.
+Reading opens nothing: only sharing, adding a machine and answering for an SSH pairing open the endpoint.
+
+**Pairing over SSH.**
+A machine this one reaches over SSH and that already runs its own Hide is paired with no words, because whoever signs in to that account already holds its authority (`hided/src/pairing_ssh.rs`).
+This machine runs two commands there, on the session `hide_node`'s upstream signs in: `hide device look-ssh`, which changes nothing and says whether that account's Hide runs, and `hide device accept-ssh`, which has it save a `pending` grant and answer its ids and addresses.
+This machine saves the host as confirming, with the address the SSH login reached at the target endpoint's own port first when the alias has no proxy command and no jump host, and confirms over the connection; the same request run again within 10 minutes is answered the same there, so a session lost midway is asked again as itself.
+A dial here asks nobody: a login that needs a password, a passphrase, a code, an unknown host key or a key touch ends as not reached, and at most four such `ssh` run at once.
+The target's command is `hide` in its account's command folder (`~/.local/bin`, or `HIDE_HOST_CLI_DIR`), started from that account's own `HOME`.
+Nothing is installed: a machine with no Hide of its own, one whose Hide is too old to know the command, and one whose Hide is installed and not running are each told apart and none is paired, and a machine with no Hide is still added as an SSH device ([Device file hosts and document saves](#device-file-hosts-and-document-saves)).
+
 **The machine key.**
 `peers/machine.key` holds the Ed25519 secret a machine connects as, with the id of the machine it was made on.
 A file that names another machine, as a copied or restored home folder would carry, is replaced by a new key; a damaged file is an error, never a silent new identity, and so is one that another account can read or that is not this account's own file.

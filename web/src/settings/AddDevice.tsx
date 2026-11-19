@@ -6,20 +6,26 @@
 // under the same consent (PRD wsl-device B4); a distribution's device takes
 // the name the core gives it (D-20). The list is hided's
 // (`status.ssh_hosts`), asked for when the dialog opens.
+//
+// A chosen Host is asked, over an ssh that asks nobody, whether a Hide of
+// its own runs there (PRD device-connect-iroh B7). One that does is
+// connected to as a Hide, which installs nothing there, and the form says
+// so before the press; one whose Hide is too old or not running says what
+// to do on that machine; any other Host is added as before.
 
 import { useEffect, useId, useState } from "react";
 import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
-import { Disclosure, Group, Note, Row } from "../components/settings-rows";
+import { Disclosure, Group, Note, Row, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { Device } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
-import { isPairLink, refusalKey } from "../pairing";
+import { isPairLink, refusalKey, sshLookLine, type SshLook } from "../pairing";
 import { useRefusalSince } from "../errorSince";
 
 const HOST_EXAMPLE = "Host studio\n  HostName studio.local\n  User you";
@@ -71,9 +77,23 @@ export function AddByLink({ actions, onStarted }: { actions: Actions; onStarted:
   );
 }
 
-export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null }) {
+export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null; onPaired: () => void }) {
   const { t } = useInterfaceTranslation();
   const hosts = useShellStore((s) => s.rest?.status?.ssh_hosts);
+  const answered = useShellStore((s) => s.pairingResult);
+  // What the chosen Host's own Hide answered, and the pairing a press started.
+  const [look, setLook] = useState<{ alias: string; request: string; looked: SshLook | null } | null>(null);
+  const [pairing, setPairing] = useState<{ request: string; refused: string | null } | null>(null);
+  useEffect(() => {
+    if (!answered?.request_id) return;
+    if (answered.verb === "look_ssh" && answered.request_id === look?.request && look.looked === null && answered.ok && answered.looked) {
+      setLook({ ...look, looked: answered.looked });
+    }
+    if (answered.verb === "pair_ssh" && answered.request_id === pairing?.request && pairing.refused === null) {
+      if (answered.ok) onPaired();
+      else setPairing({ ...pairing, refused: answered.reason ?? "" });
+    }
+  }, [answered, look, pairing, onPaired]);
   const [alias, setAlias] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
@@ -93,18 +113,34 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   const distro = chosen === null ? null : chosenDistro(chosen);
   const distribution = distributions.find((choice) => choice.value === chosen) ?? null;
   const added = submitted ? devices.some((device) => (submitted.distro !== null ? device.wsl_distro === submitted.distro : device.ssh_alias === submitted.alias)) : false;
-  const pending = submitted !== null && !added && error === null;
-  const blocked = pending || chosen === null || (distro === null && !name.trim());
+  const looked = look !== null && look.alias === chosen ? look.looked : null;
+  const lookLine = sshLookLine(looked);
+  // The chosen Host runs its own Hide: the press connects, and installs nothing.
+  const connects = looked?.state === "ready";
+  const connecting = pairing !== null && pairing.refused === null;
+  const pending = (submitted !== null && !added && error === null) || connecting;
+  const blocked = pending || chosen === null || (distro === null && !connects && !name.trim());
   const choose = (next: string) => {
     setAlias(next);
+    setPairing(null);
+    if (chosenDistro(next) !== null) return;
     // The name follows the Host until the person writes their own.
-    if (!nameEdited && chosenDistro(next) === null) setName(defaultDeviceName(next));
+    if (!nameEdited) setName(defaultDeviceName(next));
+    const request = `look-${Date.now()}`;
+    setLook({ alias: next, request, looked: null });
+    actions.pairing("look_ssh", { alias: next, request_id: request });
   };
   // Adding is where the whole kit is agreed to, once (PRD device-parity
   // D-12): what Hide installs is under Advanced and the description above
   // says it, and there is one way to add.
   const submit = () => {
     if (blocked || chosen === null) return;
+    if (connects) {
+      const request = `pair-${Date.now()}`;
+      setPairing({ request, refused: null });
+      actions.pairing("pair_ssh", { alias: chosen, request_id: request });
+      return;
+    }
     if (distro !== null) {
       setSubmitted({ alias: null, distro, at: Date.now() });
       actions.registerWslDevice(distro);
@@ -144,6 +180,9 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
       {unreadable}
       {hosts.truncated ? <Note>{t("devices.hostsTruncated", { count: hosts.hosts.length })}</Note> : null}
       <Note data-ssh-hosts-hint="true">{t("devices.notListed")}</Note>
+      {lookLine ? <Status tone={lookLine.tone} data-ssh-look={looked?.state}>{t(lookLine.key)}</Status> : null}
+      {pairing?.refused != null ? <Note tone="warn" data-ssh-pair-refused={pairing.refused}>{t(refusalKey(pairing.refused) ?? "pairing.failed.ended")}</Note> : null}
+      {connects ? null : (
       <Group>
         <Row label={t("devices.name")} detail={error ? <Note tone="error" data-add-device-error="true" data-core-error={error.kind}>{coreErrorText(error, t)}</Note> : null}>
           <Input
@@ -162,9 +201,10 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
               <Row label={<span className="text-subhead text-subtle-foreground">{t("devices.whatInstalls")}</span>} detail={<DeviceInstallTerms helperRoot={helperRoot} cliDir={cliDir} />} />
         </Disclosure>
       </Group>
+      )}
       <div className="flex justify-end">
-        <Button disabled={blocked} onClick={submit} data-add-device="true">
-          {pending ? t("devices.adding") : t("common.add")}
+        <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : "true"}>
+          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("common.add")}
         </Button>
       </div>
     </div>

@@ -147,7 +147,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
               <AddByLink actions={actions} onStarted={() => setAdding(null)} />
               <section className="space-y-sm">
                 <h3 className="text-body font-semibold text-subtle-foreground">{t("pairing.add.sshTitle")}</h3>
-                <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} />
+                <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />
               </section>
             </DialogBody>
           </DialogContent>

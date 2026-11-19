@@ -30,17 +30,25 @@ async function mount(sshHosts: SshHosts | undefined, devices: Device[] = []) {
   document.body.append(container);
   const root = createRoot(container);
   const saved = useShellStore.getState();
+  const paired = vi.fn();
   await act(async () => {
-    useShellStore.setState({ connection: "live", rest: { status: { ssh_hosts: sshHosts }, ui_state: {} } } as never);
-    root.render(<AddDevice actions={actions} devices={devices} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" />);
+    useShellStore.setState({ connection: "live", pairingResult: null, rest: { status: { ssh_hosts: sshHosts }, ui_state: {} } } as never);
+    root.render(<AddDevice actions={actions} devices={devices} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} />);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
   const rerender = async (next: Device[]) => {
     await act(async () => {
-      root.render(<AddDevice actions={actions} devices={next} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" />);
+      root.render(<AddDevice actions={actions} devices={next} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} />);
     });
   };
-  return { events, q, container, rerender, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
+  // hided's answer to the last `pairing_<verb>` event this form sent.
+  const answer = async (verb: string, result: Record<string, unknown>) => {
+    const request = sent(events, `pairing_${verb}`).at(-1)?.payload.request_id;
+    await act(async () => {
+      useShellStore.setState({ pairingResult: { verb, request_id: request, ...result } } as never);
+    });
+  };
+  return { events, q, container, rerender, answer, paired, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
@@ -64,6 +72,66 @@ it("lists each Host with its address, and fills the name and adds only the alias
   expect(register).toHaveLength(1);
   // The core gives the device its id: the shell sends none.
   expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true });
+  await unmount();
+});
+
+it("connects to a Host whose own Hide runs, and installs nothing there (PRD device-connect-iroh B7)", async () => {
+  const { events, q, answer, paired, unmount } = await mount(hosts([host("lab")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  // Choosing the Host is the one look: an ssh that asks nobody.
+  expect(sent(events, "pairing_look_ssh").map((event) => event.payload.alias)).toEqual(["lab"]);
+  expect(q("[data-ssh-look]")).toBeNull();
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  expect(q('[data-ssh-look="ready"]')?.textContent).toContain("Hide is already there · this only connects");
+  // Nothing is installed, so there is no name to give and no install to agree to.
+  expect(q("[data-device-label]")).toBeNull();
+  expect(q("[data-add-device-advanced]")).toBeNull();
+  expect(q('[data-add-device="connect"]')?.textContent).toBe("Connect");
+  await act(async () => { q('[data-add-device="connect"]')?.click(); });
+  expect(sent(events, "pairing_pair_ssh").map((event) => event.payload.alias)).toEqual(["lab"]);
+  expect(sent(events, "register_device")).toHaveLength(0);
+  expect(q('[data-add-device="connect"]')?.hasAttribute("disabled")).toBe(true);
+  await answer("pair_ssh", { ok: true, device_id: "lab-machine", name: "Lab" });
+  expect(paired).toHaveBeenCalledTimes(1);
+  await unmount();
+});
+
+it("says why a pairing over SSH was refused and lets it be pressed again", async () => {
+  const { q, answer, paired, unmount } = await mount(hosts([host("lab")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  await act(async () => { q('[data-add-device="connect"]')?.click(); });
+  await answer("pair_ssh", { ok: false, reason: "device_already_connected" });
+  expect(q('[data-ssh-pair-refused="device_already_connected"]')?.textContent).toBe("Already connected");
+  expect(q('[data-add-device="connect"]')?.hasAttribute("disabled")).toBe(false);
+  expect(paired).not.toHaveBeenCalled();
+  await unmount();
+});
+
+it("says what to do on a machine whose Hide is too old or not running, and adds it as before (B7)", async () => {
+  const { events, q, answer, unmount } = await mount(hosts([host("lab"), host("studio")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "update_there" } });
+  expect(q('[data-ssh-look="update_there"]')?.textContent).toContain("Update Hide on that PC");
+  // Another Host's answer is never this one's line.
+  await act(async () => { q('[data-ssh-host="studio"] [role="radio"]')?.click(); });
+  expect(q("[data-ssh-look]")).toBeNull();
+  await answer("look_ssh", { ok: true, alias: "studio", looked: { state: "not_running", system: "macos" } });
+  expect(q('[data-ssh-look="not_running"]')?.textContent).toContain("Log in on that Mac");
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device").map((event) => event.payload.ssh_alias)).toEqual(["studio"]);
+  expect(sent(events, "pairing_pair_ssh")).toHaveLength(0);
+  await unmount();
+});
+
+it("leaves a Host with no Hide of its own, or one ssh did not reach, as it was", async () => {
+  const { q, answer, unmount } = await mount(hosts([host("lab")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  for (const state of ["absent", "not_reached"]) {
+    await answer("look_ssh", { ok: true, alias: "lab", looked: { state } });
+    expect(q("[data-ssh-look]")).toBeNull();
+    expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
+  }
   await unmount();
 });
 
