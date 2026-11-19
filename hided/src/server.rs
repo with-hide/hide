@@ -1544,22 +1544,27 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     }
 }
 
+/// Whether a page command, the CLI's or a phone's picture
+/// (`mobile/page_shot.rs`), may act on `view`. A View on a desk does only as
+/// its area's selected View, so one behind another tab is refused before
+/// anything is sent; a page on no desk is on no screen for an action to be
+/// drawn over, so every one of them does (PRD lane-desk-pair-view B32).
+pub(crate) fn takes_input(view: &hide_core::workspace_control::View) -> bool {
+    view.selected || view.area_id == hide_core::workspace_views::SHELF_AREA
+}
+
 /// What the core knows of a display a `hide browser` command relays to:
-/// whether it takes input, and `source_url`, the address the core keeps for
-/// it. A View on a desk takes input only as its area's selected View, so the
-/// CLI refuses one behind another tab before sending it; a page on no desk
-/// is on no screen for an action to be drawn over, so every one of them
-/// takes input (PRD lane-desk-pair-view B32). A device's page loads from a
-/// loopback route on this machine, so the page reports that address and the
-/// CLI names this one instead. `None` when the caller's checkout, whose
-/// Views alone `views` lists, has no such display.
+/// whether it takes input (`takes_input`), and `source_url`, the address the
+/// core keeps for it. A device's page loads from a loopback route on this
+/// machine, so the page reports that address and the CLI names this one
+/// instead. `None` when the caller's checkout, whose Views alone `views`
+/// lists, has no such display.
 pub(crate) fn relay_facts(
     views: &[hide_core::workspace_control::View],
     display_id: &str,
 ) -> Option<Value> {
     let view = views.iter().find(|view| view.view_id == display_id)?;
-    let takes_input = view.selected || view.area_id == hide_core::workspace_views::SHELF_AREA;
-    Some(json!({"selected": takes_input, "source_url": view.target}))
+    Some(json!({"selected": takes_input(view), "source_url": view.target}))
 }
 
 /// The relay's answer to the CLI: `relay_facts` under the display's id.
