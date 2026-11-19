@@ -151,7 +151,11 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       return;
     }
     setSubmitted({ alias: chosen, distro: null, at: Date.now() });
-    actions.registerDevice(name.trim(), chosen, { hostConsent: true });
+    // A device added over SSH goes on to the new connection once it
+    // connects (B41): the core keeps that it was added for its switch, which
+    // is asked then and says what would be installed there before anything
+    // is.
+    actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: true });
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
   const reading = hosts === undefined || ((hosts.state === "idle" || hosts.state === "loading") && hosts.hosts.length === 0 && distributions.length === 0);

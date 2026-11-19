@@ -1848,6 +1848,17 @@
             ],
             "type": "object"
         },
+        "device_projects_listed": {
+            "properties": {
+                "projects": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "projects"
+            ],
+            "type": "object"
+        },
         "device_removed": {
             "properties": {
                 "device_id": {
@@ -1890,6 +1901,21 @@
             "required": [
                 "link",
                 "expires_unix_ms"
+            ],
+            "type": "object"
+        },
+        "device_switched": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "switch": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "switch"
             ],
             "type": "object"
         },
@@ -5512,6 +5538,57 @@
         },
         {
             "answers": [
+                "device_switched"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device switch",
+            "options": [
+                {
+                    "name": "--install",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "switch_unsupported",
+                "switch_running",
+                "switch_not_connected",
+                "ssh_core_not_started",
+                "ssh_not_reached",
+                "ssh_busy",
+                "ssh_mac_from_mac_only",
+                "ssh_mac_signed_out",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "device_already_connected"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "device_looked"
             ],
             "arguments": [],
@@ -5568,6 +5645,14 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--helper",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -5575,6 +5660,29 @@
                 "invalid_request",
                 "device_already_connected",
                 "device_limit"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_projects_listed"
+            ],
+            "arguments": [],
+            "command": "device projects-ssh",
+            "needs_one_of": [
+                "--project"
+            ],
+            "options": [
+                {
+                    "name": "--project",
+                    "repeats_at_most": 32,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7496,7 +7604,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:1356b2943f3b9664862efea6c97c26693d99d13e4b732ad2c98bef21a5a2707e",
+    "digest": "sha256:6399aa58cb0eb60318b60778bed052333f86dd34ecd6dba63db0c20792f07c44",
     "envelopes": {
         "access": {
             "answer": "value",

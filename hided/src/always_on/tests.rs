@@ -267,6 +267,46 @@ fn a_moved_core_s_item_is_the_move_s() {
 
 /// A system with no login items puts nothing in; a paired machine there is
 /// told why.
+/// The login item is the account's whatever HOME says, so a core whose HOME
+/// is not the account's own home, a test's or an isolated candidate's, puts
+/// none in when it pairs, and the outcome says why. Runs on every system.
+#[test]
+fn a_home_that_is_not_the_accounts_own_puts_no_login_item_in() {
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let mut grants = Grants::open(hide_kit::layout::peer_grants(&state)).unwrap();
+    let grant = grants
+        .grant_pending(guest(), "d1", "Laptop", Via::Link, NOW)
+        .unwrap();
+    grants.confirm(&guest(), &grant.id, NOW).unwrap();
+    let program = home.path().join("hided");
+    let asker = Asker {
+        program: &program,
+        under_item: false,
+    };
+    let outcome = reconcile(
+        &agents_for(home.path()),
+        home.path(),
+        &state,
+        &asker,
+        |_| panic!("a build was put in"),
+    )
+    .unwrap();
+    assert_eq!(
+        outcome,
+        Outcome::Unsupported {
+            reason: hide_platform::user_agents::NOT_THE_ACCOUNT_HOME.to_owned()
+        }
+    );
+    assert!(!hide_kit::layout::keep_alive(&state).exists());
+    // The account's own home is the one that has the system's.
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    agents_for(&hide_platform::user_agents::account_home().unwrap())
+        .supported()
+        .unwrap();
+}
+
 #[test]
 fn a_system_with_no_login_items_puts_nothing_in() {
     let home = tempfile::tempdir().unwrap();
