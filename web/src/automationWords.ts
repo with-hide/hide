@@ -62,14 +62,17 @@ export function whenText(unixMs: number, now: number, zone: string | undefined, 
 /** What 다음 실행 says (B3, B25): a run going, the automation paused, its next time, or none (a schedule that never runs again). */
 export type NextRun = { kind: "running" } | { kind: "paused" } | { kind: "at"; unixMs: number } | { kind: "none" };
 
-export function nextRun(automation: Automation): NextRun {
+/** The fields of an automation its next run is read from; the phone's frame carries only these. */
+export type NextRunFacts = Pick<Automation, "running" | "paused" | "next_run_at_unix_ms">;
+
+export function nextRun(automation: NextRunFacts): NextRun {
   if (automation.running) return { kind: "running" };
   if (automation.paused) return { kind: "paused" };
   return automation.next_run_at_unix_ms == null ? { kind: "none" } : { kind: "at", unixMs: automation.next_run_at_unix_ms };
 }
 
 /** `도는 중`, `멈춤`, `내일 09:00`, `—`: the words after the mark the screen draws (●, ⏸). */
-export function nextRunText(automation: Automation, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
+export function nextRunText(automation: NextRunFacts, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
   const next = nextRun(automation);
   switch (next.kind) {
     case "running":
@@ -119,7 +122,12 @@ export type RecordTone = "ok" | "failed" | "skipped" | "running" | "stopped";
 /** A record's mark and its words after the time: `✓ 12분`, `✗ 실패 · 3번 시도`, `✗ 로그인 만료`, `■ 멈춤 · 사람이 끝냄`, `– 건너뜀 · Claude 사용 한도`, `– 어제 10:00 ~ 오늘 08:00 · 놓침 24회 · Hide가 꺼져 있었음`. */
 export type RecordText = { tone: RecordTone; text: string };
 
-export function recordText(record: AutomationRecord, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): RecordText {
+/** The fields of a run its words are read from; the phone's frame carries only these, never a path, a branch, a pane or a conversation. */
+export type RunFacts = Pick<AutomationRun, "state" | "attempt" | "reason" | "started_at_unix_ms" | "ended_at_unix_ms">;
+/** A record as its words read it: a run's facts, a skipped time or the times missed. */
+export type AutomationRecordLike = ({ kind: "run" } & RunFacts) | Exclude<AutomationRecord, { kind: "run" }>;
+
+export function recordText(record: AutomationRecordLike, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): RecordText {
   switch (record.kind) {
     case "run":
       return runText(record, language, t);
@@ -144,7 +152,7 @@ export function recordText(record: AutomationRecord, now: number, zone: string |
 }
 
 /** A run's mark and words (B16, B22, B24): its length when it finished the task, else why it did not. */
-export function runText(run: AutomationRun, language: InterfaceLanguage, t: Translate): RecordText {
+export function runText(run: RunFacts, language: InterfaceLanguage, t: Translate): RecordText {
   switch (run.state) {
     case "starting":
     case "running":
