@@ -1689,8 +1689,11 @@ fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
     ));
 }
 
+/// One pair view as (tab, left pane).
+type Pair = (String, String);
+
 /// The pair view of the desk on screen, and every tab the wire marks.
-fn pairs(runtime: &Runtime) -> (Option<(String, String)>, Vec<(String, String)>) {
+fn pairs(runtime: &Runtime) -> (Option<Pair>, Vec<Pair>) {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     let pair = |pair: &crate::model::PairViewSnapshot| (pair.tab_id.clone(), pair.pane_id.clone());
     (
@@ -1699,7 +1702,7 @@ fn pairs(runtime: &Runtime) -> (Option<(String, String)>, Vec<(String, String)>)
     )
 }
 
-fn paired(tab: &str, pane: &str) -> (String, String) {
+fn paired(tab: &str, pane: &str) -> Pair {
     (tab.to_owned(), pane.to_owned())
 }
 

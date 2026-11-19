@@ -48,8 +48,8 @@ fn caller_fixture() -> (Runtime, tempfile::TempDir) {
 
 fn seed_browser_areas(runtime: &mut Runtime, context: &Context) -> (String, String, String) {
     let layout = runtime.front_desk_mut(&(
-        (&context.device_id).to_string(),
-        (&context.checkout_path).to_string(),
+        context.device_id.to_string(),
+        context.checkout_path.to_string(),
     ));
     let first = layout.new_browser_display("https://example.test/page", 1);
     let first_id = first.id.clone();
@@ -1134,8 +1134,8 @@ fn scoped_browser_close_and_select_refuse_a_document_in_the_named_area() {
             .unwrap()
             .context;
         let layout = runtime.front_desk_mut(&(
-            (&expected.device_id).to_string(),
-            (&expected.checkout_path).to_string(),
+            expected.device_id.to_string(),
+            expected.checkout_path.to_string(),
         ));
         let file = layout.new_display(
             "/checkouts/b/index.html",

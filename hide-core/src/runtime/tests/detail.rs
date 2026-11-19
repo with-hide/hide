@@ -420,7 +420,10 @@ fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
         workspace_id: "workspace:order".into(),
     };
     open_at(&mut runtime, &cost, serde_json::json!("here"));
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), [cost.clone()]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t1"),
+        std::slice::from_ref(&cost)
+    );
     assert_eq!(drawn_desk(&mut runtime), ("w-order:t1".into(), true, 1));
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t2:p")));
@@ -432,12 +435,15 @@ fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
     open_at(&mut runtime, &worktrees, serde_json::json!("here"));
     assert_eq!(
         desk(&runtime, checkout_path, "w-order:t2"),
-        [worktrees.clone()]
+        std::slice::from_ref(&worktrees)
     );
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     assert_eq!(drawn_desk(&mut runtime), ("w-order:t1".into(), true, 1));
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), [cost.clone()]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t1"),
+        std::slice::from_ref(&cost)
+    );
 
     let remaining = ["w-order:t1", "w-order:t3"];
     let mut closed = with_agents(
