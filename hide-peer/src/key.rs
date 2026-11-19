@@ -7,7 +7,7 @@
 //! replaced at start, so a copied disk or a test's isolated state folder
 //! never connects as the operator's machine.
 
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -33,6 +33,23 @@ pub enum Loaded {
     Created,
     /// The file held a key made on another machine.
     ReplacedForeign,
+}
+
+/// Reads the key file when it is this account's own regular file that no
+/// other account can read. A key another account could read, or planted
+/// under this name, is not connected as: it is an error the operator sees,
+/// never a key quietly used or replaced.
+fn read_own_private(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
+    let mut file = private::open_own_file(path, false)?;
+    if !private::is_private(path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} can be read by another account", path.display()),
+        ));
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn random<const N: usize>() -> io::Result<[u8; N]> {
@@ -72,9 +89,8 @@ impl MachineKey {
                 "a machine id of 1 to 255 bytes is needed to keep a machine key",
             ));
         }
-        let loaded = match std::fs::read(path) {
+        let loaded = match read_own_private(path) {
             Ok(bytes) => {
-                let bytes = Zeroizing::new(bytes);
                 let (secret, made_on) = parse(&bytes).ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -196,12 +212,34 @@ mod tests {
     fn a_damaged_key_file_is_reported_not_replaced() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("machine.key");
-        std::fs::write(&path, b"HIDEKEY1 short").unwrap();
+        atomic::write_file(&path, b"HIDEKEY1 short", Access::Private).unwrap();
         let error = MachineKey::load_or_create(&path, "machine-a")
             .err()
             .unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(std::fs::read(&path).unwrap(), b"HIDEKEY1 short");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_file_another_account_can_read_is_refused_not_used() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("machine.key");
+        MachineKey::load_or_create(&path, "machine-a").unwrap();
+        let saved = std::fs::read(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let error = MachineKey::load_or_create(&path, "machine-a")
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            saved,
+            "and it is left as it was"
+        );
     }
 
     #[test]
