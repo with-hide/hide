@@ -1203,6 +1203,10 @@ impl Runtime {
                                     area_id: area.id.clone(),
                                     view_id: display.id.clone(),
                                     tray: tray.clone(),
+                                    url: (display.kind == DisplayKind::Browser)
+                                        .then(|| display.url.clone())
+                                        .flatten(),
+                                    load: display.load,
                                 }),
                         );
                     }

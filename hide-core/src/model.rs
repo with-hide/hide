@@ -418,6 +418,11 @@ pub struct BrowserViewInventoryRow {
     /// tray, which the desktop host keeps loaded off screen (PRD
     /// lane-desk-pair-view D-37).
     pub tray: Option<String>,
+    /// A web page's address and the load the core last asked of it, so the
+    /// host can load a page that is on no desk on screen (D-37, B32); null
+    /// and 0 for an outside HTML file, whose path stays in the host.
+    pub url: Option<String>,
+    pub load: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
