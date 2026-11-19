@@ -351,9 +351,16 @@ pub fn read_schedule(text: &str) -> Result<Schedule, &'static str> {
             })
         }
         "every" => {
-            // "every 15m" counts from each hour's start and takes no time.
-            if let Some(minutes) = rest.strip_suffix('m') {
-                let minutes = minutes.parse::<u8>().map_err(|_| "schedule_unreadable")?;
+            // "every 15m" counts from each hour's start and takes no time;
+            // a count the form does not offer is the core's to refuse, and
+            // one too large to hold is refused the same way here.
+            if let Some(minutes) = rest
+                .strip_suffix('m')
+                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            {
+                let minutes = minutes
+                    .parse::<u8>()
+                    .map_err(|_| "schedule_minutes_out_of_range")?;
                 return Ok(Schedule::EveryMinutes { minutes });
             }
             let (hours, at) = rest
@@ -381,7 +388,7 @@ pub fn next_action(code: &str) -> &'static str {
             "An automation runs at most every five minutes: give a cron line whose times are five minutes apart or more, such as \"cron */5 * * * *\", or \"every 5m\""
         }
         "schedule_minutes_out_of_range" => {
-            "Every N minutes takes 5, 10, 15 or 30 minutes, such as \"every 15m\"; for longer use \"every 1h 00:00\""
+            "Every N minutes takes 5, 10, 15 or 30 minutes, such as \"every 15m\"; for longer use \"every 1h 00:00\", and for another period a cron line"
         }
         "schedule_cron_invalid" => {
             "Give five cron fields, minute hour day month weekday, with numbers, *, ranges, lists and steps, such as \"cron 0 9 * * 1-5\" for weekdays at 09:00"
@@ -892,6 +899,12 @@ mod tests {
         assert_eq!(read_schedule("every 3 09:00"), Err("schedule_unreadable"));
         // Every N minutes counts from the hour and takes no time.
         assert_eq!(read_schedule("every 15m 09:00"), Err("schedule_unreadable"));
+        assert_eq!(read_schedule("every 1 5m"), Err("schedule_unreadable"));
+        assert_eq!(read_schedule("every m"), Err("schedule_unreadable"));
+        assert_eq!(
+            read_schedule("every 900m"),
+            Err("schedule_minutes_out_of_range")
+        );
         assert_eq!(read_schedule("cron"), Err("schedule_unreadable"));
         assert_eq!(
             read_schedule("weekly 09:00"),
