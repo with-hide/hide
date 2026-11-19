@@ -55,6 +55,8 @@ pub enum CommandKind {
         reason: String,
     },
     Device(crate::device_cli::DeviceCli),
+    /// `hide always-on …`: a paired machine's login item and firewall rules.
+    AlwaysOn(crate::always_on::cli::Command),
     /// `hide access request|status|leave|list`: an external tool's own
     /// connection.
     Access(crate::access_cli::AccessCli),
@@ -222,6 +224,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "status" => "usage: hide status [--json]".to_owned(),
         "import" => IMPORT_USAGE.to_owned(),
         "stop" => "usage: hide stop".to_owned(),
+        "always-on" => crate::always_on::cli::USAGE.to_owned(),
         "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
         "guide" => "usage: hide guide".to_owned(),
@@ -365,6 +368,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
+        Some("always-on") => crate::always_on::cli::parse(&args[2..]).map(CommandKind::AlwaysOn),
         Some("restart") => match (
             iter.next().map(String::as_str),
             iter.next().and_then(|pid| pid.parse().ok()),
@@ -1015,6 +1019,9 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
+        CommandKind::AlwaysOn(command) => {
+            crate::always_on::cli::run(&command, &env.home, &env.state_dir)
+        }
         CommandKind::Restart { daemon, started } => restart(&env, daemon, started),
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
@@ -2671,7 +2678,9 @@ fn connect_json(env: &Env) -> Result<(), String> {
 /// about or stopped.
 fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
     match kind {
-        CommandKind::Stop | CommandKind::Status { json: true } => Some(env::STATE_FOLDER_KEYS),
+        CommandKind::Stop | CommandKind::Status { json: true } | CommandKind::AlwaysOn(_) => {
+            Some(env::STATE_FOLDER_KEYS)
+        }
         CommandKind::RuntimePrepare => Some(&[env::HOME]),
         CommandKind::Status { json: false } => Some(env::STATUS_KEYS),
         _ => None,

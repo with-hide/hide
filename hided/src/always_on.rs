@@ -200,5 +200,7 @@ pub fn after_peer_change(home: PathBuf, state_dir: PathBuf, under_item: bool) {
     }
 }
 
+pub mod cli;
+
 #[cfg(test)]
 mod tests;

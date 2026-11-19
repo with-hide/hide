@@ -97,6 +97,67 @@ pub fn remove_all() -> io::Result<()> {
     Err(unsupported())
 }
 
+/// Whether any rule of the group is in place, for any port.
+pub fn any() -> io::Result<bool> {
+    #[cfg(windows)]
+    {
+        let finished = powershell(&format!(
+            "if (Get-NetFirewallRule -Group '{GROUP}' -ErrorAction SilentlyContinue) {{ exit 0 }} exit 3"
+        ))?;
+        match finished.code {
+            Some(0) => Ok(true),
+            Some(3) => Ok(false),
+            code => Err(io::Error::other(format!(
+                "the firewall rules could not be read (exit {code:?}): {}",
+                finished.last_error_line()
+            ))),
+        }
+    }
+    #[cfg(not(windows))]
+    Err(unsupported())
+}
+
+/// What asking Windows to run a program as an administrator came to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Elevated {
+    /// It ran and exited 0.
+    Done,
+    /// The operator declined Windows's permission prompt.
+    Declined,
+    /// It ran and failed, with this exit.
+    Failed(Option<i32>),
+}
+
+/// Windows's exit for a prompt the operator declined (`ERROR_CANCELLED`).
+pub const DECLINED_EXIT: i32 = 1223;
+
+/// Runs `program` with `arguments` as an administrator, through Windows's
+/// permission prompt, and waits for it: what an uninstaller does to remove
+/// the rules, which a per-user install cannot.
+pub fn run_elevated(program: &std::path::Path, arguments: &[&str]) -> io::Result<Elevated> {
+    #[cfg(windows)]
+    {
+        let quoted = |value: &str| format!("'{}'", value.replace('\'', "''"));
+        let arguments: Vec<String> = arguments.iter().map(|argument| quoted(argument)).collect();
+        let script = format!(
+            "try {{ $p = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode }} catch {{ exit {DECLINED_EXIT} }}",
+            quoted(&program.to_string_lossy()),
+            arguments.join(","),
+        );
+        let finished = powershell(&script)?;
+        Ok(match finished.code {
+            Some(0) => Elevated::Done,
+            Some(DECLINED_EXIT) => Elevated::Declined,
+            code => Elevated::Failed(code),
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (program, arguments);
+        Err(unsupported())
+    }
+}
+
 #[cfg(not(windows))]
 fn unsupported() -> io::Error {
     io::Error::new(
