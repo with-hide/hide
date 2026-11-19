@@ -20,8 +20,9 @@ pub const MAX_UNGRANTED: usize = 16;
 /// closed before any of its bytes are read.
 pub const MAX_ADMITTING: usize = 16;
 
-/// How long a connection with no grant in either direction may stay: the
-/// life of a pending grant.
+/// How long a connection with no settled grant in either direction may
+/// stay: the life of a pending grant. One whose pending grant was saved
+/// later stays until that grant stops waiting, and no longer.
 pub const UNGRANTED_FOR: Duration = PENDING_FOR;
 
 /// How long a grant waits for its guest's confirm before it is dropped
@@ -69,6 +70,10 @@ pub const HELLO_WITHIN: Duration = Duration::from_secs(10);
 /// machine wakes or its network changes (B15).
 pub const REDIAL_FIRST: Duration = Duration::from_secs(1);
 pub const REDIAL_MOST: Duration = Duration::from_secs(60);
+
+/// How long a connection has to live before its end starts the redial wait
+/// over. One that was admitted and closed sooner counts as a failed dial.
+pub const STAYED_AFTER: Duration = REDIAL_MOST;
 
 /// How long one dial may take before it counts as failed.
 pub const DIAL_WITHIN: Duration = Duration::from_secs(30);

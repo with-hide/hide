@@ -9,6 +9,9 @@
 //!   a dead direct path does not hold a connection for iroh's default;
 //! - mDNS lookup can be turned off, and relay and saved addresses still
 //!   work without it;
+//! - each incoming connection's handshake runs in a task of its own, under
+//!   a cap and a time, so a peer that starts one and never finishes it holds
+//!   up nobody else's;
 //! - an endpoint that closed without being asked is bound again, and
 //!   [`IrohTransport::rebuild`] does the same for one that is stuck
 //!   (iroh#4656, #4476);
@@ -41,7 +44,7 @@ use iroh::{
     Endpoint, EndpointAddr, EndpointId, RelayConfig, RelayMap, RelayMode, RelayUrl, SecretKey,
     TransportAddr, Watcher,
 };
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, mpsc, watch};
 
 /// A path that carried nothing for this long is given up, and a path is
 /// kept alive at this interval (S1: about three seconds and one second).
@@ -105,6 +108,13 @@ pub struct IrohTransport {
     rebuilt: watch::Sender<u64>,
     closed: AtomicBool,
     next_id: Arc<AtomicU64>,
+    /// Incoming connections whose handshake runs. At the cap the next one
+    /// is refused before any handshake starts.
+    handshaking: Arc<Semaphore>,
+    /// Connections whose handshake finished, with the endpoint they came in
+    /// on, waiting for [`PeerTransport::accept`].
+    proved: mpsc::Sender<(Endpoint, Connection)>,
+    proving: tokio::sync::Mutex<mpsc::Receiver<(Endpoint, Connection)>>,
 }
 
 async fn bind(secret: &SecretKey, options: &Options) -> Result<Endpoint, BindFailed> {
@@ -149,6 +159,7 @@ impl IrohTransport {
     pub async fn open(secret: &[u8; 32], options: Options) -> Result<Self, BindFailed> {
         let secret = SecretKey::from_bytes(secret);
         let endpoint = bind(&secret, &options).await?;
+        let (proved, proving) = mpsc::channel(limits::MAX_ADMITTING);
         Ok(Self {
             secret,
             options,
@@ -156,7 +167,33 @@ impl IrohTransport {
             rebuilt: watch::channel(0).0,
             closed: AtomicBool::new(false),
             next_id: Arc::new(AtomicU64::new(0)),
+            handshaking: Arc::new(Semaphore::new(limits::MAX_ADMITTING)),
+            proved,
+            proving: tokio::sync::Mutex::new(proving),
         })
+    }
+
+    /// Starts one incoming connection's handshake in a task of its own. The
+    /// task ends with the handshake, at [`limits::HELLO_WITHIN`] at the
+    /// latest, or when nobody accepts any more.
+    fn prove(&self, endpoint: &Endpoint, incoming: iroh::endpoint::Incoming) {
+        let Ok(permit) = Arc::clone(&self.handshaking).try_acquire_owned() else {
+            incoming.refuse();
+            return;
+        };
+        // A peer that fails its handshake never reaches the caller.
+        let Ok(accepting) = incoming.accept() else {
+            return;
+        };
+        let proved = self.proved.clone();
+        let endpoint = endpoint.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Ok(Ok(conn)) = tokio::time::timeout(limits::HELLO_WITHIN, accepting).await {
+                // The receiver is gone only with the transport.
+                let _ = proved.send((endpoint, conn)).await;
+            }
+        });
     }
 
     fn endpoint(&self) -> Endpoint {
@@ -246,17 +283,32 @@ impl PeerTransport for IrohTransport {
 
     async fn accept(&self) -> Result<IrohConn, TransportError> {
         let mut rebuilt = self.rebuilt.subscribe();
+        let mut proving = self.proving.lock().await;
         loop {
             if self.closed.load(Ordering::Acquire) {
                 return Err(TransportError::Closed);
             }
             let endpoint = self.endpoint();
-            let Some(incoming) = endpoint.accept().await else {
+            // Never waits on one peer's handshake: a connection that
+            // finished its own is returned, and every other one that
+            // arrives meanwhile starts.
+            let incoming = tokio::select! {
+                proved = proving.recv() => {
+                    // The transport holds a sender, so this is a connection.
+                    let Some((endpoint, conn)) = proved else {
+                        return Err(TransportError::Closed);
+                    };
+                    return Ok(self.wrap(&endpoint, conn, false));
+                }
+                incoming = endpoint.accept() => incoming,
+            };
+            let Some(incoming) = incoming else {
                 if self.closed.load(Ordering::Acquire) {
                     return Err(TransportError::Closed);
                 }
                 // The endpoint ended. A rebuild in progress announces the
                 // new one; one that ended by itself is bound again here.
+                // The caller waits before it asks again when that fails.
                 if !rebuilt.has_changed().unwrap_or(false) {
                     self.rebuild()
                         .await
@@ -265,13 +317,7 @@ impl PeerTransport for IrohTransport {
                 rebuilt.mark_unchanged();
                 continue;
             };
-            // A peer that fails its handshake never reaches the caller.
-            let Ok(accepting) = incoming.accept() else {
-                continue;
-            };
-            if let Ok(conn) = accepting.await {
-                return Ok(self.wrap(&endpoint, conn, false));
-            }
+            self.prove(&endpoint, incoming);
         }
     }
 

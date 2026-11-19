@@ -23,11 +23,15 @@ pub enum CloseCode {
     NoRelayPath,
     /// The transport lost the peer without a close from it.
     Lost,
+    /// The side that closed holds as many connections in their first
+    /// exchange, or without a grant, as it takes: the peer may dial again.
+    /// It says nothing about a grant, which [`CloseCode::NoGrant`] does.
+    Busy,
     Other(u32),
 }
 
 impl CloseCode {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Shutdown,
         Self::Replaced,
         Self::Duplicate,
@@ -36,6 +40,7 @@ impl CloseCode {
         Self::Protocol,
         Self::NoRelayPath,
         Self::Lost,
+        Self::Busy,
     ];
 
     pub const fn number(self) -> u32 {
@@ -48,6 +53,7 @@ impl CloseCode {
             Self::Protocol => 5,
             Self::NoRelayPath => 6,
             Self::Lost => 7,
+            Self::Busy => 8,
             Self::Other(number) => number,
         }
     }
@@ -69,6 +75,7 @@ impl CloseCode {
             Self::Protocol => "protocol",
             Self::NoRelayPath => "no_relay_path",
             Self::Lost => "lost",
+            Self::Busy => "busy",
             Self::Other(_) => "other",
         }
     }
