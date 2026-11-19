@@ -2178,6 +2178,94 @@ fn the_window_never_opens_on_an_automations_own_folder() {
     );
 }
 
+/// Together F2: the operator came to a run's terminal in an automation's
+/// own folder, which no list shows. While it is open the Workspace and
+/// Changes name that folder; once the engine has no pane there they go back
+/// to the project last in front that a list shows, else to the first one
+/// listed.
+#[test]
+fn the_focus_leaves_an_automations_own_folder_once_its_last_pane_closes() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    let (id, _) = add(&mut runtime, "Issues");
+    let folder = show(&mut runtime, &id)["folder"]["path"]
+        .as_str()
+        .expect("its own folder")
+        .to_owned();
+    let folder = folder.as_str();
+    let mut own = workspace(
+        "w-auto",
+        "Issues",
+        folder,
+        vec![checkout(
+            "w-auto",
+            "c-auto",
+            folder,
+            Some(super::pane("w-auto:p1", folder)),
+        )],
+    );
+    own.unlisted = true;
+    let listed = |id: &str| {
+        let path = format!("/srv/{id}");
+        workspace(
+            &format!("w-{id}"),
+            id,
+            &path,
+            vec![checkout(
+                &format!("w-{id}"),
+                &format!("c-{id}"),
+                &path,
+                None,
+            )],
+        )
+    };
+    runtime.snapshot.navigator.workspaces = vec![listed("first"), listed("project"), own];
+    let look_at = |runtime: &mut Runtime, checkout: &str| {
+        runtime.snapshot.navigator.focused_checkout_id = Some(checkout.into());
+        runtime.resync_navigator_focus();
+        runtime.track_recent_checkouts();
+    };
+    let front = |runtime: &Runtime| {
+        (
+            runtime.snapshot.navigator.focused_checkout_id.clone(),
+            runtime.snapshot.navigator.root_path.clone(),
+        )
+    };
+    look_at(&mut runtime, "c-project");
+    look_at(&mut runtime, "c-auto");
+    assert_eq!(
+        front(&runtime),
+        (Some("c-auto".into()), Some(folder.into())),
+        "the run's terminal is open"
+    );
+    let close = |runtime: &mut Runtime| {
+        let own = runtime
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.id == "w-auto")
+            .expect("the automation's folder");
+        own.checkouts[0].tabs.clear();
+        own.checkouts[0].has_panes = false;
+        runtime.resync_navigator_focus();
+    };
+    close(&mut runtime);
+    assert_eq!(
+        front(&runtime),
+        (Some("c-project".into()), Some("/srv/project".into()))
+    );
+
+    // No project a list shows was in front: the first one listed.
+    runtime.snapshot.ui_state.recent_checkouts.clear();
+    runtime.snapshot.navigator.focused_checkout_id = Some("c-auto".into());
+    runtime.resync_navigator_focus();
+    assert_eq!(
+        front(&runtime),
+        (Some("c-first".into()), Some("/srv/first".into()))
+    );
+}
+
 /// B36, engineering 11: a start asked again under its intent asks the start
 /// it made, though the task was edited meanwhile: an edit changes the next
 /// run's start, never one already made, so the same intent is never a
