@@ -4,14 +4,16 @@
 // run's terminal live and opened again, and an automation stopped for a
 // person in Needs You. The run's agent is the fixture's `claude` stand-in,
 // which reports its session as Claude Code does, so a finished run's
-// conversation can be opened again; OpenCode is not on the fixture's PATH, so
-// an automation that runs it stops for a person.
+// conversation can be opened again; an automation whose project folder is
+// removed from the disk stops for a person.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { agentIn, withControl } from "./daemon-actions";
+import fs from "node:fs";
+import path from "node:path";
+import { agentIn, openProject, withControl } from "./daemon-actions";
 import { startCaller, type CallerFixture } from "./engine-fixture";
 import { afterCleanup } from "./worker-owned";
-import { setAgentAsking } from "./fixture-agents";
+import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { sendEvent } from "./wire";
 
@@ -125,7 +127,7 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     await page.locator("[data-automation-pause]").click();
     await expect(page.locator("[data-automation-resume]")).toBeVisible();
     await page.locator("[data-automation-back]").click();
-    await expect(page.locator("[data-automation-row]", { hasText: name ?? "" })).toHaveAttribute("data-automation-row-paused", "true");
+    await expect(page.locator("[data-automation-row]", { hasText: name ?? "" })).toHaveAttribute("data-automation-row-paused", "operator");
     await page.locator("[data-automation-row]", { hasText: name ?? "" }).locator("[data-automation-open]").click();
     await page.locator("[data-automation-resume]").click();
     await expect(page.locator("[data-automation-pause]")).toBeVisible();
@@ -178,9 +180,10 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     await withControl(stack.daemon, (control) => control.until((rest) => ((rest.navigator as { workspaces?: { unlisted?: boolean }[] } | undefined)?.workspaces ?? []).some((workspace) => workspace.unlisted) || undefined, "the automation's own folder listed unlisted", 30_000));
     await expect(page.locator("nav[data-sidebar] [data-project]")).toHaveCount(1);
 
-    // B15: the run's agent asking raises it in Needs You under its automation, and the row opens the run.
-    await withControl(stack.daemon, (control) => control.until((rest) => agentIn(rest, pane), `the run's agent in ${pane}`, 30_000));
-    await setAgentAsking(stack.daemon, pane);
+    // The stand-in reported its session as Claude Code does, so the run has a conversation to open again (B17).
+    await withControl(stack.daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id || undefined, `the run's agent in ${pane} on its session`, 30_000));
+    // B15: the run's agent held at a permission prompt raises it in Needs You under its automation, and the row opens the run.
+    await setAgentState(stack.daemon, pane, "blocked");
     const raised = page.locator(`[data-project-list] [data-raised-group="needs_you"] [data-pane="${pane}"]`);
     await expect(raised).toHaveCount(1, { timeout: 30_000 });
     await expect(raised.locator("[data-agent-task]")).toContainText("야간 점검");
@@ -205,16 +208,22 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
   }
 });
 
-test("an automation whose agent is not there stops with its own Needs You line, and 다시 켜기 takes the line away", async ({ page }) => {
+test("an automation whose folder is gone stops with its own Needs You line, and 다시 켜기 takes the line away", async ({ page }) => {
   const stack = await start(page, "automations-ask");
   try {
-    // B23: OpenCode is not on the fixture's PATH, so the run made now stops the automation for a person.
-    const id = await add(page, stack.daemon, { name: "오픈코드 점검", task: "의존성 점검", agent: { kind: "opencode" }, run_now: true });
+    // B23: the project it works in is removed from the disk, so the run asked for now stops the automation for a person.
+    const folder = path.join(stack.fixture.root, "reports");
+    fs.mkdirSync(folder);
+    await withControl(stack.daemon, (control) => openProject(control, folder, "reports"));
+    await expect(page.locator("nav[data-sidebar] [data-project]", { hasText: "reports" })).toHaveCount(1, { timeout: 30_000 });
+    const id = await add(page, stack.daemon, { name: "보고서 정리", task: "보고서 정리", agent: { kind: "claude" }, folder: fs.realpathSync.native(folder) });
+    fs.rmSync(folder, { recursive: true });
+    await sendEvent(page, stack.daemon, "automation_run", { id });
     const ask = page.locator(`[data-project-list] [data-raised-group="needs_you"] [data-automation-ask="${id}"]`);
     await expect(ask).toHaveCount(1, { timeout: 60_000 });
-    await expect(ask).toHaveAttribute("data-automation-ask-reason", "agent_missing");
-    await expect(ask).toContainText("오픈코드 점검");
-    await expect(ask.locator('[data-automation-ask-line="agent_missing"]')).toBeVisible();
+    await expect(ask).toHaveAttribute("data-automation-ask-reason", "folder_missing");
+    await expect(ask).toContainText("보고서 정리");
+    await expect(ask.locator('[data-automation-ask-line="folder_missing"]')).toBeVisible();
 
     // The row opens the automation, which reads paused with the run that failed.
     await ask.locator("[data-automation-ask-open]").click();
