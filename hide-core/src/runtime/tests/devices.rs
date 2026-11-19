@@ -1646,10 +1646,20 @@ fn a_node_that_dialed_in_becomes_its_machines_device_once_paired() {
 fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing_else_changed() {
     use crate::model::LinkOrigin;
     use crate::node_migration::CORE_STATE;
-    use crate::node_migration::upgrade_tests::{fixtures, started};
+    use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
     let key = "cd".repeat(32);
-    let mut folders = 0;
-    for folder in fixtures() {
+    // Everything the store keeps but the devices themselves.
+    let rest = |runtime: &Runtime| {
+        let mut stored = serde_json::to_value(&runtime.snapshot.ui_state).expect("the store");
+        stored
+            .as_object_mut()
+            .expect("the store is an object")
+            .remove("device_registrations");
+        stored
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
         let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
         let state = started(&folder);
         let path = state.path().join(CORE_STATE);
@@ -1659,23 +1669,37 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
             .as_array_mut()
             .and_then(|devices| devices.iter_mut().find(|row| row["ssh_alias"].is_string()))
             .unwrap_or_else(|| panic!("{tag}: the folder registers no dialed device"));
-        let (id, label) = (
-            device["id"].as_str().unwrap().to_owned(),
-            device["label"].as_str().unwrap().to_owned(),
-        );
+        let id = device["id"].as_str().unwrap().to_owned();
         let row = device.as_object_mut().unwrap();
         for dialed in ["ssh_alias", "naming", "host_consent"] {
             row.remove(dialed);
         }
         row.insert("inbound".to_owned(), true.into());
         std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
-
         assert_eq!(crate::dialing_nodes(&path).unwrap(), [id.clone()], "{tag}");
-        let (saved, _, disposition) = crate::persistence::load(&path);
-        assert_eq!(disposition, crate::persistence::LoadDisposition::Loaded, "{tag}");
-        let mut runtime = runtime();
-        runtime.snapshot.ui_state = saved.clone();
-        runtime.rebuild_device_rows();
+
+        // The store is read by the start itself, so what is in front and
+        // every other record is the folder's own.
+        let mut runtime = runtime_reading(
+            &path,
+            node_of(state.path()),
+            &state.path().join("home"),
+            None,
+        );
+        let node = runtime
+            .device_registration(&id)
+            .unwrap_or_else(|| panic!("{tag}: the start dropped the node that dials in"))
+            .clone();
+        assert_eq!(node.origin, LinkOrigin::Inbound, "{tag}");
+        let others: Vec<_> = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .filter(|registration| registration.id != id)
+            .cloned()
+            .collect();
+        let before = rest(&runtime);
         let paired = serde_json::to_vec(&serde_json::json!({
             "schema_version": SCHEMA_VERSION,
             "kind": "peer_machines",
@@ -1688,28 +1712,35 @@ fn a_released_folders_node_that_dials_in_becomes_its_paired_machine_with_nothing
         .expect("event");
         runtime.dispatch_json(&paired);
 
-        let registration = runtime.device_registration(&id).unwrap().clone();
-        assert_eq!(
-            registration.origin,
-            LinkOrigin::Peer {
-                key: key.clone(),
-                switched: true
-            },
-            "{tag}"
-        );
-        assert_eq!(registration.label, label, "{tag}");
-        // Everything else the folder's state held is as the start read it.
-        let mut expected = saved;
-        for device in &mut expected.device_registrations {
-            if device.id == id {
-                device.origin = registration.origin.clone();
-            }
-        }
+        // The same registration, by its machine's key now and nothing else.
+        let mut expected = node;
+        expected.origin = LinkOrigin::Peer {
+            key: key.clone(),
+            switched: true,
+        };
+        assert_eq!(runtime.device_registration(&id), Some(&expected), "{tag}");
+        let left: Vec<_> = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .filter(|registration| registration.id != id)
+            .cloned()
+            .collect();
+        assert_eq!(left, others, "{tag}: another device changed");
+        let after = rest(&runtime);
+        let changed: Vec<_> = before
+            .as_object()
+            .expect("the store is an object")
+            .iter()
+            .filter(|(name, value)| after.get(name.as_str()) != Some(value))
+            .map(|(name, value)| format!("{name}: {value} -> {:?}", after.get(name.as_str())))
+            .collect();
         assert!(
-            runtime.snapshot.ui_state == expected,
-            "{tag}: the state changed beyond the device's link"
+            changed.is_empty()
+                && after.as_object().map(serde_json::Map::len)
+                    == before.as_object().map(serde_json::Map::len),
+            "{tag}: becoming the paired machine's device changed another record: {changed:#?}"
         );
-        folders += 1;
     }
-    assert!(folders > 0, "no released folder was read");
 }
