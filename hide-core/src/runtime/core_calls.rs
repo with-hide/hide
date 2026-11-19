@@ -163,7 +163,7 @@ impl Runtime {
             .ok_or_else(|| MACHINE_NOT_PERMITTED.to_owned())
     }
 
-    fn peer_on(&self, device: &str) -> Result<&PeerMachine, String> {
+    pub(super) fn peer_on(&self, device: &str) -> Result<&PeerMachine, String> {
         self.snapshot
             .navigator
             .peers
@@ -173,7 +173,7 @@ impl Runtime {
     }
 
     /// The agent `party` of `machine`, as this core knows it.
-    fn core_actor(&self, machine: &PeerMachine, party: &Party) -> Actor {
+    pub(super) fn core_actor(&self, machine: &PeerMachine, party: &Party) -> Actor {
         Actor::core(
             CoreAddress::new(&machine.device_id, party.item, &party.id),
             &machine.name,
@@ -184,7 +184,7 @@ impl Runtime {
 
     /// No pane's context holds another core's authority: its machine's
     /// standing does, read again when the command applies.
-    fn core_context(&self, actor: &Actor) -> Context {
+    pub(super) fn core_context(&self, actor: &Actor) -> Context {
         Context {
             device_id: self.node.as_str().to_owned(),
             workspace_id: actor.pane_id.clone(),

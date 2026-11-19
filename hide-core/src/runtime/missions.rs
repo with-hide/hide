@@ -829,6 +829,11 @@ pub(crate) struct MissionRuntime {
     pub(crate) event_store: Option<crate::mission_events::MissionEventStore>,
     /// Counts the events' changes, for the published section.
     pub(crate) events_edit: u64,
+    /// The missions that closed and whose report their Conductor's origin
+    /// has not been sent yet (`mission_report.rs`), and whether a thread
+    /// sends some now. Memory only: a close is reported by the next tick.
+    pub(crate) reports_owed: Vec<String>,
+    pub(crate) reporting: bool,
     /// The answers the doorbell tried and held, by mission: shown as
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
@@ -1753,6 +1758,7 @@ impl Runtime {
         if matches!(status, MissionStatus::Done | MissionStatus::MergeWait) {
             self.owe_folder_pull(id);
         }
+        self.owe_mission_report(id);
         Ok(changed)
     }
 
@@ -1785,6 +1791,7 @@ impl Runtime {
         self.missions.answers_held.remove(id);
         self.record_mission_events(id, events);
         self.owe_folder_pull(id);
+        self.owe_mission_report(id);
         true
     }
 

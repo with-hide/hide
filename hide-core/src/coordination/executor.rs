@@ -987,7 +987,7 @@ fn own_registration(
 /// Registers a code-owned identity, a Factory's or Hide's own, as the
 /// parent or origin of the agents it starts (D-14); converges on the
 /// existing record.
-fn register_code_owned(
+pub(crate) fn register_code_owned(
     client: &Client,
     authority: &Authority,
     actor: &Actor,
@@ -1001,7 +1001,13 @@ fn register_code_owned(
         machine: actor.device_id.clone(),
         host_scope: actor.kind.clone(),
         native_machine: actor.kind.clone(),
-        session: actor.name.clone(),
+        // What the identity's session is the digest of: its name, and for
+        // another core's agent its address, which stays whatever the agent
+        // or its machine is called later (`Actor::core`).
+        session: match actor.core_address() {
+            Some(_) => actor.pane_id.clone(),
+            None => actor.name.clone(),
+        },
         instance: actor.pane_id.clone(),
         pane: actor.pane_id.clone(),
         parent: None,

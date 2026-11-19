@@ -85,8 +85,8 @@ pub const HIDE_ACCESS_ROLE: &str = "access";
 /// stands as the sender of what that agent asks of this core, and as the
 /// recipient of what this core's agents write to it.
 pub const HIDE_CORE_ROLE: &str = "core";
-/// The most characters of another machine's agent name this core keeps.
-const CORE_NAME_CHARS: usize = 96;
+/// The most bytes a ledger key holds, a name among them.
+const KEY_BYTES: usize = 256;
 /// The kind of the operator's own code-owned identity: the sender of the
 /// feedback letters the desktop app's Send makes from the operator's View
 /// comments (PRD view-opener-feedback D-17). It has no pane, reads no
@@ -173,14 +173,17 @@ impl Actor {
 
     /// The agent on another machine's core this identity stands for.
     /// The name another machine's agent goes by here: its machine's name,
-    /// then its own, cut to what a name may hold.
+    /// then its own, cut to what a ledger key holds, since the other core
+    /// chose it.
     pub fn core_name(machine: &str, name: &str) -> String {
-        let own: String = name
-            .chars()
-            .filter(|character| !character.is_control())
-            .take(CORE_NAME_CHARS)
-            .collect();
-        format!("{HIDE_PREFIX}{HIDE_CORE_ROLE}:{machine}:{own}")
+        let mut full = format!("{HIDE_PREFIX}{HIDE_CORE_ROLE}:{machine}:");
+        for character in name.chars().filter(|character| !character.is_control()) {
+            if full.len() + character.len_utf8() > KEY_BYTES {
+                break;
+            }
+            full.push(character);
+        }
+        full
     }
 
     pub fn core_address(&self) -> Option<crate::address::CoreAddress<'_>> {
@@ -301,5 +304,5 @@ pub use hide_agent_hooks::delivery::{
 };
 
 pub(crate) fn valid_key(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+    !value.is_empty() && value.len() <= KEY_BYTES && !value.chars().any(char::is_control)
 }
