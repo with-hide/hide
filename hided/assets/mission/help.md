@@ -167,8 +167,9 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   The node's worker starts from them: it puts the same steps up with `hide task set` and changes one only when the work turns out different, which the panel marks as changed.
   Once the worker's plan exists it is the truth and your `steps` stay its starting point; a later plan that leaves `steps` out keeps them, and `"steps": []` clears them.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
-- Show the plan in the conversation: the nodes and their kinds (코드, 일반 with its preset, 기다림), dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub account, and any overlap.
+- Show the plan in the conversation: the nodes and their kinds (코드, 일반 with its preset, 기다림), why each node is its own (which of the four lines above, in a few words), dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge, naming the nodes the operator merges themselves as above), the GitHub account, and any overlap.
   Name the gates in one line that asks the operator to check there and tell you, such as `내가 확인할 곳: fix-1487 (재시작 후 태스크 렌즈), deploy (시작 전: 배포해도 될지). 여기서 확인하고 알려 주세요`; they approve it, or name more or fewer places.
+  Ask about the cut in the same message, in one line that names the count and what you joined: `노드 3개로 나눴어요 (화면은 core와 한 노드로 합침). 더 합치거나 나눌까요?`; the operator's answer reshapes the plan before it starts.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - With the plan, show the options this mission runs with, one line each and in this order, in the operator's language:
   머지 (the scope and who merges, and any node the operator merges), 워크트리 (whether a merged worktree is cleaned up, and that one with changes or in use stays), 확인 (the verification strength), 동시에 (the cap), 내 폴더 (that your checkout is brought up to the destination when the mission closes, or `없음` when no node's result goes into the destination).
@@ -207,6 +208,8 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
 ## Cutting the mission and briefing a worker
 
 A node is one reviewable deliverable, never a step; the work inside a node (reading, trying, failing, retrying) is the worker's own.
+Every node costs: an agent that reads the project from the start, a brief, letters back and forth, checkers, CI and a merge, all paid in tokens and in waiting.
+So a node is as large as one worker can carry and one pull request can be reviewed whole: a feature with its core change, its screen and its tests is one node, not three.
 Cut only on one of these four lines, and keep everything else inside one node:
 
 - another node needs what it makes (a schema, an API, a merged screen);
@@ -215,6 +218,8 @@ Cut only on one of these four lines, and keep everything else inside one node:
 - the operator wants to merge it on its own.
 
 Do not cut a node into "implement, test, document": that is one worker's turn order, and three agents would each rebuild the context the first one had.
+Join two nodes when they always change together, when the first has nothing a reviewer could judge on its own, or when one is a few lines whose agent would cost more than the change; when unsure, cut fewer.
+A mission of one node is a fine mission: the plan, the checkers and the map still hold it.
 A review or verify of one node is a checker in its `checks`, never another node; a general node with the `verify` preset is only for changes that work only together.
 A checker's brief says what to check, where (an isolated candidate app, never the operator's), its line (`review` or `verify`), and to record its result with `hide mission record`.
 A `research` node only when the plan cannot be written without its answer; a question a worker can settle in its own pane is not a node.
