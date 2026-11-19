@@ -2221,9 +2221,18 @@ fn only_a_build_folder_s_hided_is_a_build() {
             version: "0123456789abcdef".to_owned(),
         })
     );
+    // A Windows core's program carries its `.exe` name.
+    assert_eq!(
+        crate::build_of("C:/Users/me/.hide/core/0123456789abcdef/hided.exe"),
+        Ok(crate::BuildPlace {
+            root: "C:/Users/me/.hide/core".to_owned(),
+            version: "0123456789abcdef".to_owned(),
+        })
+    );
     for program in [
         "/h/.hide/host-helper/current/hided",
         "/h/.hide/host-helper/0123456789abcdef/hide",
+        "/h/.hide/host-helper/0123456789abcdef/hide.exe",
         "/usr/local/bin/hided",
         "relative/0123456789abcdef/hided",
     ] {
