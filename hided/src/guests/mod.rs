@@ -50,6 +50,11 @@ const END_WITHIN: Duration = Duration::from_secs(launch::END_NOW_WAITS_SECS + 1)
 /// How long a node that said it is ready is given to take its link.
 const LINK_WITHIN: Duration = Duration::from_secs(5);
 
+/// How long a guest's management stream is kept from ending for its node
+/// link to end here first. Less than a guest waits for the stream's end
+/// before its next link (`peer_dial`, `HELD_ENDS_WITHIN`).
+const LINK_ENDS_WITHIN: Duration = Duration::from_secs(1);
+
 /// Connects to an endpoint of a guest's node, waiting `within` for a node
 /// that is slow to take it. The wait bounds the connect alone: the stream
 /// is one this daemon keeps for as long as the node and the guest do, so
@@ -146,6 +151,25 @@ struct Hosted {
     /// The guest was taken off this machine: its folder goes once nothing
     /// of it runs here.
     removed: Arc<AtomicBool>,
+    /// How many of the guest's node links are carried here now.
+    links: watch::Sender<usize>,
+}
+
+/// One node link while it is carried, counted in its guest's
+/// [`Hosted::links`].
+struct Carried(watch::Sender<usize>);
+
+impl Carried {
+    fn begin(links: &watch::Sender<usize>) -> Self {
+        links.send_modify(|links| *links += 1);
+        Self(links.clone())
+    }
+}
+
+impl Drop for Carried {
+    fn drop(&mut self) {
+        self.0.send_modify(|links| *links -= 1);
+    }
 }
 
 impl Hosted {
@@ -900,6 +924,7 @@ impl Guests {
                 node: Arc::clone(&node),
                 tap,
                 removed: Arc::default(),
+                links: watch::Sender::new(0),
             },
         );
         Ok(node)
@@ -1031,9 +1056,18 @@ impl Guests {
         if let Some(events) = events {
             events.node.away(events.listener);
         }
-        // The guest opens its next management stream once it sees this
-        // one end: the reading half goes first, so this machine's place
-        // for that kind is free by then.
+        // The guest opens its next link once it sees this stream end, and
+        // a connection carries one node link as it carries one management
+        // stream. The node link this guest had ends here first, so its
+        // place is free by then: the guest let both go together, and a
+        // link that outlives the wait is refused its successor as before.
+        if let Some(hosted) = self.known(&guest) {
+            let mut links = hosted.links.subscribe();
+            let _ =
+                tokio::time::timeout(LINK_ENDS_WITHIN, links.wait_for(|links| *links == 0)).await;
+        }
+        // The reading half goes first, so this machine's place for a
+        // management stream is free when the guest sees the end.
         drop(messages);
         drop(send);
     }
@@ -1129,10 +1163,17 @@ impl Guests {
     /// ready gets a closed stream; it opens the link when it hears ready.
     async fn link(self: Arc<Self>, incoming: Incoming) {
         let guest = incoming.link.key();
-        let Some(running) = self.node(&guest).and_then(|node| node.running()) else {
+        let running = self.known(&guest).and_then(|hosted| {
+            let running = hosted.node.running()?;
+            Some((hosted, running))
+        });
+        let Some((hosted, running)) = running else {
             record("guests.link_without_node", &guest, json!({}));
             return;
         };
+        // Counted until the stream's two halves are gone, which is when its
+        // place on the connection is free.
+        let _carried = Carried::begin(&hosted.links);
         let runtime = Handle::current();
         let carried =
             tokio::task::spawn_blocking(move || carry(incoming.stream, &running.link, &runtime))

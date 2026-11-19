@@ -3367,6 +3367,7 @@ The host relays each line to the stream that asked as an `event` message with th
 The guest records each event durably (`hide_peer::inbox`), acknowledges it, and only then applies it; the acknowledgement goes back to the node, which drops what was recorded.
 A core whose place the box cannot follow (it names another box, or a place the box dropped or never reached) gets what is kept in a box started fresh, numbered from 1, and the product's own keys make a repeat nothing.
 One management stream per guest is open at a time: a new link ends the earlier stream on both machines before it opens the next (`Held`).
+A connection has one place for a node link too, so the host lets the earlier management stream go only once the guest's node link has ended there, for at most 1 s (`LINK_ENDS_WITHIN`): a link opened the moment the one before it closed finds both places free, where it was once refused `limit` (seen in CI on Linux, run 44527417085).
 
 This build keeps one kind of event, `letter`, and applies it as the command its sender would have run had the core been there (`hided/src/peer_inbox.rs`), under the letter's intent, which makes a second apply the same letter.
 The node proves the sender when the letter is written (`hide_host::panes::prove_caller`, the check a pane's credential gets) and records the terminal it ran in, which names one life of one pane; which agent that is, is the core's own knowledge (`Runtime::prepare_kept_letter`): the agent it observes in that terminal, else the one it last registered there.
