@@ -887,6 +887,11 @@ pub struct NavigatorSnapshot {
     /// machine runs its own core.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peers: Vec<crate::peer_machines::PeerMachine>,
+    /// The panes other machines' work runs in on this machine, by guest, as
+    /// hided last told the core (PRD device-connect-iroh D-77 (5), B10).
+    /// They are not this core's panes: its engine runs none of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guest_panes: Vec<crate::guest_panes::GuestPanes>,
     pub workspaces: Vec<WorkspaceSnapshot>,
     /// Project rows the core grouped at the bottom of each device's Projects
     /// list. `workspaces` remains the one authoritative row collection so
@@ -8319,6 +8324,7 @@ impl Snapshot {
                     None,
                 )],
                 peers: Vec::new(),
+                guest_panes: Vec::new(),
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
                 agents: Vec::new(),

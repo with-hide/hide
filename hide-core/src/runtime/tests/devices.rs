@@ -1014,6 +1014,56 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
     assert!(runtime.snapshot.navigator.peers.is_empty());
 }
 
+/// The panes another machine's work runs in here are the list hided last
+/// told, replaced whole (PRD device-connect-iroh D-77 (5), B10): the
+/// snapshot and `hide device list` read it, the same list again publishes
+/// nothing, and a list whose pane is not its guest's is refused whole.
+#[test]
+fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, guests: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "guest_panes",
+            "payload": { "guests": guests }
+        }))
+        .expect("guest panes event");
+        runtime.dispatch_json(&event)
+    };
+    let macbook = serde_json::json!({
+        "device_id": "macbook", "key": "cd".repeat(32),
+        "panes": [{"id": "guest:macbook:pane:w1:p1", "pane": "w1:p1", "since_unix_ms": 7}],
+    });
+    assert!(told(&mut runtime, serde_json::json!([macbook])));
+    assert!(
+        !told(&mut runtime, serde_json::json!([macbook])),
+        "the list it already holds is no change"
+    );
+    let (answer, _) = runtime
+        .device_command(crate::node::TEST_NODE, DeviceCommand::List)
+        .expect("listed");
+    assert_eq!(
+        answer["guest_panes"],
+        serde_json::json!([{
+            "id": "macbook", "connection_id": "cd".repeat(32),
+            "panes": [{"id": "guest:macbook:pane:w1:p1", "pane": "w1:p1", "since_unix_ms": 7}],
+        }])
+    );
+
+    // A pane under another machine's address.
+    let mut other = macbook.clone();
+    other["panes"][0]["id"] = serde_json::json!("guest:mini:pane:w1:p1");
+    told(&mut runtime, serde_json::json!([other]));
+    assert_eq!(
+        runtime.snapshot.navigator.guest_panes[0].panes[0].id,
+        "guest:macbook:pane:w1:p1"
+    );
+
+    assert!(told(&mut runtime, serde_json::json!([])));
+    assert!(runtime.snapshot.navigator.guest_panes.is_empty());
+}
+
 /// A machine this one opens is a device for as long as the pairing holds
 /// (PRD device-connect-iroh D-61, B3): registered when its grant is active,
 /// kept through a pause, and removed with what Hide recorded for it when

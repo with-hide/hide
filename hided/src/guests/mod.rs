@@ -14,6 +14,7 @@
 //! guest's folder and process.
 
 pub mod node;
+pub mod tap;
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -23,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use hide_kit::layout;
 use hide_node::ssh::host::{HelperPackages, guest_build};
+use hide_node_link::address::guest_pane_id;
 use hide_peer::protocol::build::{self, FileMessage};
 use hide_peer::protocol::manage::{Manage, NodeStop};
 use hide_peer::protocol::{PeerKey, StreamKind, frame, launch};
@@ -35,6 +37,8 @@ use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 use self::node::{GuestNode, Phase};
+use self::tap::GuestTap;
+use crate::core::CoreHandle;
 use crate::ending::Ending;
 use crate::peer_host::{Incoming, PeerHost, Stream};
 
@@ -105,6 +109,30 @@ fn preparing() -> Manage {
     }
 }
 
+/// Where a guest's panes reach this machine's screens and its core.
+pub struct Screens {
+    pub core: Arc<CoreHandle>,
+}
+
+/// What this host remembers of a guest's node between its own starts
+/// (`h/node.json`), so the guest's panes are drawn and typed into again
+/// after this daemon restarts with the guest away (B16).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct NodeRecord {
+    /// The build the node last ran from.
+    build_id: String,
+    /// The guest's product device id.
+    device: String,
+}
+
+/// One guest on this machine: its node, and the tap this machine's screens
+/// reach its panes by. Made together and dropped together.
+#[derive(Clone)]
+struct Hosted {
+    node: Arc<GuestNode>,
+    tap: Arc<GuestTap>,
+}
+
 pub struct Guests {
     state_dir: PathBuf,
     /// The account's home, which every guest's node is started with.
@@ -114,18 +142,195 @@ pub struct Guests {
     packages: HelperPackages,
     /// The name of this daemon's own build for this machine, read once.
     own_build: OnceLock<Option<String>>,
-    nodes: Mutex<HashMap<PeerKey, Arc<GuestNode>>>,
+    hosted: Mutex<HashMap<PeerKey, Hosted>>,
+    /// None in a test of the node's launch alone, where no screen draws a
+    /// guest's panes.
+    screens: Option<Screens>,
+    runtime: Handle,
+}
+
+/// The screens' hub for a daemon with none.
+struct NoScreens;
+
+impl hide_node::terminal::OutputSink for NoScreens {
+    fn output(&self, _pane: &str, _bytes: &[u8], _full: bool) {}
+    fn forget(&self, _pane: &str) {}
+    fn clipboard(&self, _pane: &str, _text: &[u8]) {}
 }
 
 impl Guests {
-    pub fn new(state_dir: PathBuf, home: PathBuf, packages: HelperPackages) -> Arc<Self> {
+    /// Called on the daemon's runtime, whose tasks follow each guest's
+    /// node.
+    pub fn new(
+        state_dir: PathBuf,
+        home: PathBuf,
+        packages: HelperPackages,
+        screens: Option<Screens>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             state_dir,
             home,
             packages,
             own_build: OnceLock::new(),
-            nodes: Mutex::new(HashMap::new()),
+            hosted: Mutex::new(HashMap::new()),
+            screens,
+            runtime: Handle::current(),
         })
+    }
+
+    /// Every guest's panes on this machine, as each guest's node last
+    /// said; a guest with none is not in the list.
+    pub fn panes(&self) -> Vec<hide_core::guest_panes::GuestPanes> {
+        let mut guests: Vec<_> = lock(&self.hosted)
+            .iter()
+            .map(|(key, hosted)| {
+                let device = hosted.tap.device();
+                hide_core::guest_panes::GuestPanes {
+                    device_id: device.to_owned(),
+                    key: key.to_hex(),
+                    panes: hosted
+                        .tap
+                        .panes()
+                        .into_iter()
+                        .map(|pane| hide_core::guest_panes::GuestPane {
+                            id: guest_pane_id(device, &pane.pane),
+                            pane: pane.pane,
+                            since_unix_ms: pane.since_unix_ms,
+                        })
+                        .collect(),
+                }
+            })
+            .filter(|guest| !guest.panes.is_empty())
+            .collect();
+        guests.sort_by(|left, right| left.device_id.cmp(&right.device_id));
+        guests
+    }
+
+    /// Tells the core the guests' panes, whole; the core keeps the list
+    /// only when it differs. Called from a tap's own thread or a blocking
+    /// one, never under a lock of this module.
+    fn tell_core(&self) {
+        let Some(screens) = &self.screens else { return };
+        let event = json!({
+            "schema_version": hide_core::SCHEMA_VERSION,
+            "kind": "guest_panes",
+            "payload": { "guests": self.panes() },
+        });
+        if let Err(error) = screens.core.dispatch(event.to_string().into_bytes()) {
+            hide_core::diagnostic!(json!({
+                "component": "guests",
+                "kind": "guests.core_not_told",
+                "reason": error,
+            }));
+        }
+    }
+
+    /// The guest's tap: it lists the panes the guest's `h/panes.json`
+    /// holds, takes this machine's screens to them from now on, and is
+    /// connected whenever `node` is ready.
+    fn tap_of(self: &Arc<Self>, guest: &PeerKey, device: &str, node: &GuestNode) -> Arc<GuestTap> {
+        let hub: Arc<dyn hide_node::terminal::OutputSink> = match &self.screens {
+            Some(screens) => Arc::clone(&screens.core.outputs) as _,
+            None => Arc::new(NoScreens),
+        };
+        let guests = Arc::downgrade(self);
+        let tap = GuestTap::open(
+            device,
+            &guest.short(),
+            layout::guest_panes(&self.state_dir, guest),
+            hub,
+            Box::new(move || {
+                if let Some(guests) = guests.upgrade() {
+                    guests.tell_core();
+                }
+            }),
+        );
+        if let Some(screens) = &self.screens {
+            screens
+                .core
+                .terminals
+                .install_guest(device, Arc::clone(&tap) as _);
+        }
+        let mut phase = node.phase();
+        let record = layout::guest_node_record(&self.state_dir, guest);
+        let following = Arc::clone(&tap);
+        // Ends with the node: its phase has no more to say once it is
+        // dropped.
+        self.runtime.spawn(async move {
+            loop {
+                let now = phase.borrow_and_update().clone();
+                match now {
+                    Phase::Ready(running) => {
+                        following.attach(&running.tap);
+                        // What the next start of this daemon runs the
+                        // guest's node from.
+                        let remembered = NodeRecord {
+                            build_id: running.build_id,
+                            device: following.device().to_owned(),
+                        };
+                        let record = record.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let written = serde_json::to_vec(&remembered)
+                                .map_err(io::Error::other)
+                                .and_then(|bytes| {
+                                    atomic::write_file(&record, &bytes, Access::Private)
+                                });
+                            if let Err(error) = written {
+                                hide_core::diagnostic!(json!({
+                                    "component": "guests",
+                                    "kind": "guests.node_not_remembered",
+                                    "reason": error.to_string(),
+                                }));
+                            }
+                        });
+                    }
+                    Phase::Starting | Phase::Stopped { .. } => following.detach(),
+                }
+                if phase.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+        tap
+    }
+
+    /// The guests this machine hosted before this start: each one's panes
+    /// are listed again from its `h/panes.json`, and a guest that still has
+    /// panes gets its node back from the build it last ran, whether or not
+    /// the guest is connected (B16). Blocking: it reads each guest's folder.
+    pub fn resume(self: &Arc<Self>) {
+        let Ok(folders) = std::fs::read_dir(layout::guests(&self.state_dir)) else {
+            return;
+        };
+        for folder in folders.flatten().take(2 * limits::MAX_GRANTS) {
+            let Some(guest) = std::fs::read_to_string(folder.path().join(launch::KEY_FILE))
+                .ok()
+                .and_then(|key| PeerKey::from_hex(key.trim()).ok())
+                .filter(|key| folder.file_name().to_str() == Some(key.short().as_str()))
+            else {
+                continue;
+            };
+            let Some(remembered) =
+                std::fs::read(layout::guest_node_record(&self.state_dir, &guest))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice::<NodeRecord>(&bytes).ok())
+            else {
+                continue;
+            };
+            let Ok(node) = self.node_for(&guest, &remembered.device) else {
+                continue;
+            };
+            let has_panes = lock(&self.hosted)
+                .get(&guest)
+                .is_some_and(|hosted| !hosted.tap.panes().is_empty());
+            let root = layout::guest_install_root(&self.state_dir, &guest);
+            match guest_build::placed(&root, &remembered.build_id, std::env::consts::OS) {
+                Some(program) if has_panes => node.start(program),
+                _ => {}
+            }
+            record("guests.resumed", &guest, json!({"panes": has_panes}));
+        }
+        self.tell_core();
     }
 
     /// Takes the three kinds of stream a guest opens for its node, and ends
@@ -144,6 +349,8 @@ impl Guests {
             Arc::clone(&guests).file(incoming)
         });
         let guests = Arc::clone(self);
+        tokio::task::spawn_blocking(move || guests.resume());
+        let guests = Arc::clone(self);
         tokio::spawn(async move {
             shutdown.ended().await;
             let _ = tokio::task::spawn_blocking(move || guests.stop()).await;
@@ -152,19 +359,22 @@ impl Guests {
 
     /// The node of `guest`, when this daemon was asked for one.
     pub fn node(&self, guest: &PeerKey) -> Option<Arc<GuestNode>> {
-        lock(&self.nodes).get(guest).cloned()
+        lock(&self.hosted)
+            .get(guest)
+            .map(|hosted| Arc::clone(&hosted.node))
     }
 
     /// Ends every guest's node and waits, within a bound, until each is
     /// reaped. Their pane holders stay.
     pub fn stop(&self) {
-        let nodes: Vec<_> = lock(&self.nodes).values().cloned().collect();
-        for node in &nodes {
-            node.stop();
+        let hosted: Vec<_> = lock(&self.hosted).values().cloned().collect();
+        for guest in &hosted {
+            guest.node.stop();
         }
         let deadline = Instant::now() + END_WITHIN;
-        for node in &nodes {
-            node.stopped_by(deadline);
+        for guest in &hosted {
+            guest.node.stopped_by(deadline);
+            guest.tap.detach();
         }
     }
 
@@ -238,24 +448,54 @@ impl Guests {
             .map_err(|detail| (NodeStop::FolderRefused, detail))
     }
 
-    /// The guest's node, made on its first ask. The map holds one entry per
-    /// guest that ever asked; at the cap the nodes that are not running
-    /// are dropped, and a guest past it is refused.
-    fn node_for(&self, guest: &PeerKey) -> Result<Arc<GuestNode>, Refusal> {
-        let mut nodes = lock(&self.nodes);
-        if let Some(node) = nodes.get(guest) {
-            return Ok(Arc::clone(node));
+    /// The guest's node and its tap, made on its first ask. `device` is
+    /// the id the guest's panes go by on this machine: one that names no
+    /// guest, or that another guest's panes already go by, is refused. The
+    /// map holds one entry per guest that ever asked; at the cap the
+    /// guests whose node is stopped and who have no pane here are dropped,
+    /// and a guest past it is refused.
+    fn node_for(
+        self: &Arc<Self>,
+        guest: &PeerKey,
+        device: &str,
+    ) -> Result<Arc<GuestNode>, Refusal> {
+        let refused = |detail: String| Err((NodeStop::Other, detail));
+        if !hide_core::guest_panes::device_names_a_guest(device) {
+            return refused(format!("{device:?} is no device id this machine can show"));
         }
-        if nodes.len() >= limits::MAX_GRANTS {
-            nodes.retain(|_, node| !node.stopped_by(Instant::now()));
+        let mut hosted = lock(&self.hosted);
+        if let Some(known) = hosted.get(guest) {
+            if known.tap.device() != device {
+                return refused(format!(
+                    "this machine knows this guest as {:?}, not {device:?}; pair the two again",
+                    known.tap.device()
+                ));
+            }
+            return Ok(Arc::clone(&known.node));
         }
-        if nodes.len() >= limits::MAX_GRANTS {
-            return Err((
-                NodeStop::Other,
-                format!(
-                    "this machine already runs {} guests' nodes",
-                    limits::MAX_GRANTS
-                ),
+        if hosted.values().any(|other| other.tap.device() == device) {
+            return refused(format!(
+                "another guest of this machine already goes by {device:?}"
+            ));
+        }
+        if hosted.len() >= limits::MAX_GRANTS {
+            let idle: Vec<PeerKey> = hosted
+                .iter()
+                .filter(|(_, known)| {
+                    known.tap.panes().is_empty() && known.node.stopped_by(Instant::now())
+                })
+                .map(|(key, _)| *key)
+                .collect();
+            for key in idle {
+                if let (Some(dropped), Some(screens)) = (hosted.remove(&key), &self.screens) {
+                    screens.core.terminals.remove_guest(dropped.tap.device());
+                }
+            }
+        }
+        if hosted.len() >= limits::MAX_GRANTS {
+            return refused(format!(
+                "this machine already runs {} guests' nodes",
+                limits::MAX_GRANTS
             ));
         }
         let node = GuestNode::new(
@@ -263,7 +503,14 @@ impl Guests {
             layout::guest_node_side(&self.state_dir, guest),
             self.home.clone(),
         );
-        nodes.insert(*guest, Arc::clone(&node));
+        let tap = self.tap_of(guest, device, &node);
+        hosted.insert(
+            *guest,
+            Hosted {
+                node: Arc::clone(&node),
+                tap,
+            },
+        );
         Ok(node)
     }
 
@@ -272,13 +519,14 @@ impl Guests {
     async fn start(
         self: &Arc<Self>,
         guest: PeerKey,
+        device: &str,
         id: String,
     ) -> Result<Arc<GuestNode>, Refusal> {
         let guests = Arc::clone(self);
         let program = tokio::task::spawn_blocking(move || guests.program(&guest, &id))
             .await
             .map_err(|error| (NodeStop::Other, error.to_string()))??;
-        let node = self.node_for(&guest)?;
+        let node = self.node_for(&guest, device)?;
         node.start(program);
         Ok(node)
     }
@@ -287,6 +535,7 @@ impl Guests {
     /// node stands, told on every change from the first ask on.
     async fn manage(self: Arc<Self>, incoming: Incoming) {
         let guest = incoming.link.key();
+        let device = incoming.link.their_hello().device.clone();
         let Stream {
             mut send, mut recv, ..
         } = incoming.stream;
@@ -301,7 +550,7 @@ impl Guests {
                         Ok(None) => continue,
                         Err(_) => break,
                     };
-                    match self.asked(guest, asked).await {
+                    match self.asked(guest, &device, asked).await {
                         Asked::Answer(answer) => Some(answer),
                         Asked::Watch(node) => {
                             // The node's standing now is the first answer.
@@ -331,14 +580,14 @@ impl Guests {
         }
     }
 
-    async fn asked(self: &Arc<Self>, guest: PeerKey, asked: Manage) -> Asked {
+    async fn asked(self: &Arc<Self>, guest: PeerKey, device: &str, asked: Manage) -> Asked {
         match asked {
             Manage::NodeStart { build_id: None, .. } => Asked::Answer(preparing()),
             Manage::NodeStart {
                 build,
                 build_id: Some(id),
                 ..
-            } => match self.start(guest, id.clone()).await {
+            } => match self.start(guest, device, id.clone()).await {
                 Ok(node) => {
                     record(
                         "guests.node_asked",
@@ -608,6 +857,7 @@ mod tests {
                 host.dir.path().to_path_buf(),
                 home.path().to_path_buf(),
                 HelperPackages::new(None, crate::cli::RELEASE),
+                None,
             )
             .serve(&host.host, host.shutdown.clone());
             let link = paired(&host, &guest).await;
@@ -732,6 +982,145 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    fn key(byte: u8) -> PeerKey {
+        PeerKey::from_hex(&format!("{byte:02x}").repeat(32)).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_guests_panes_go_by_a_device_id_that_is_its_own_on_this_machine() {
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        let refused = |guest: u8, device: &str| {
+            guests
+                .node_for(&key(guest), device)
+                .err()
+                .map(|(reason, _)| reason)
+        };
+        assert_eq!(refused(1, "macbook"), None);
+        assert_eq!(refused(1, "macbook"), None, "the same guest asks again");
+        assert_eq!(
+            refused(2, "macbook"),
+            Some(NodeStop::Other),
+            "another guest under the same id would share its panes' addresses"
+        );
+        assert_eq!(
+            refused(1, "mini"),
+            Some(NodeStop::Other),
+            "a guest's panes keep the id they were given"
+        );
+        assert_eq!(refused(3, "mac:book"), Some(NodeStop::Other));
+        assert_eq!(refused(3, ""), Some(NodeStop::Other));
+        assert_eq!(refused(3, "mini"), None);
+    }
+
+    /// B16: the host's daemon starts again with the guest away.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_host_that_starts_again_lists_a_guests_panes_and_runs_its_node_with_the_guest_away() {
+        use hide_peer::protocol::panes::{self, Pane, Panes};
+        use hide_peer::protocol::tap::ToNode;
+
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guest = key(7);
+        let programs = tempfile::tempdir().unwrap();
+        stand_in::programs(programs.path());
+        // What an earlier run of this daemon left: the guest's folder, its
+        // build, the build its node ran from and the panes it had.
+        let build = HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE)
+            .guest_build(std::env::consts::OS, std::env::consts::ARCH)
+            .unwrap_or_else(|error| panic!("the stand-in build is whole: {error}"));
+        let earlier = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        earlier.folder(&guest).unwrap();
+        build
+            .place(&layout::guest_install_root(state.path(), &guest))
+            .unwrap();
+        let write = |path: PathBuf, bytes: Vec<u8>| {
+            private::create_dir_all(path.parent().unwrap()).unwrap();
+            atomic::write_file(&path, &bytes, Access::Private).unwrap();
+        };
+        write(
+            layout::guest_node_record(state.path(), &guest),
+            serde_json::to_vec(&NodeRecord {
+                build_id: build.id().to_owned(),
+                device: "macbook".to_owned(),
+            })
+            .unwrap(),
+        );
+        write(
+            layout::guest_panes(state.path(), &guest),
+            serde_json::to_vec(&Panes {
+                version: panes::VERSION,
+                panes: vec![Pane {
+                    pane: "w1:p1".to_owned(),
+                    rows: 24,
+                    cols: 80,
+                    since_unix_ms: 5,
+                }],
+            })
+            .unwrap(),
+        );
+        drop(earlier);
+        // This test is the tap of the node the stand-in says is ready.
+        let node_dir = layout::guest_node_side(state.path(), &guest);
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let taps = ipc::LocalListener::bind(&node_dir.join(launch::TAP_ENDPOINT)).unwrap();
+
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        {
+            let guests = Arc::clone(&guests);
+            tokio::task::spawn_blocking(move || guests.resume())
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            guests.panes(),
+            [hide_core::guest_panes::GuestPanes {
+                device_id: "macbook".to_owned(),
+                key: guest.to_hex(),
+                panes: vec![hide_core::guest_panes::GuestPane {
+                    id: "guest:macbook:pane:w1:p1".to_owned(),
+                    pane: "w1:p1".to_owned(),
+                    since_unix_ms: 5,
+                }],
+            }],
+            "the panes show before the node is back"
+        );
+        let hello = within(
+            "the tap of the node that was started again",
+            tokio::task::spawn_blocking(move || {
+                let mut node = taps.accept().unwrap();
+                tap::tests::heard(&mut node)
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(hello, ToNode::Hello { .. }), "{hello:?}");
+        assert!(
+            guests.node(&guest).unwrap().running().is_some(),
+            "the guest's node runs with no guest connected"
+        );
+        tokio::task::spawn_blocking(move || guests.stop())
+            .await
+            .unwrap();
     }
 
     #[cfg(unix)]

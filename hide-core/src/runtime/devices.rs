@@ -1060,8 +1060,19 @@ impl Runtime {
                     .iter()
                     .map(crate::peer_machines::answer)
                     .collect::<Vec<_>>();
+                let guest_panes = self
+                    .snapshot
+                    .navigator
+                    .guest_panes
+                    .iter()
+                    .map(crate::guest_panes::answer)
+                    .collect::<Vec<_>>();
                 Ok((
-                    serde_json::json!({ "devices": devices, "peers": peers }),
+                    serde_json::json!({
+                        "devices": devices,
+                        "peers": peers,
+                        "guest_panes": guest_panes,
+                    }),
                     false,
                 ))
             }

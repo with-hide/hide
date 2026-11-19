@@ -643,6 +643,17 @@ pub fn guest_dir(state_dir: &Path, guest: &PeerKey) -> PathBuf {
         .join(guest.short())
 }
 
+/// The folder every guest's folder is in.
+pub fn guests(state_dir: &Path) -> PathBuf {
+    state_dir.join(hide_peer_protocol::launch::GUESTS_DIR)
+}
+
+/// What the host build remembers of a guest's node between its own
+/// starts: the build to run it from and the guest's device id.
+pub fn guest_node_record(state_dir: &Path, guest: &PeerKey) -> PathBuf {
+    guest_host_side(state_dir, guest).join("node.json")
+}
+
 /// The file in a guest's folder that holds its whole key.
 pub fn guest_key(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::KEY_FILE)

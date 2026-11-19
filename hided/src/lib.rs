@@ -613,6 +613,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
             cli::RELEASE,
         ),
+        Some(guests::Screens {
+            core: Arc::clone(&core),
+        }),
     )
     .serve(&peers, shutdown.clone());
     let pairing = pairing::Pairing::new(

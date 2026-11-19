@@ -432,6 +432,7 @@ mod tests {
             host.dir.path().to_path_buf(),
             home.path().to_path_buf(),
             HelperPackages::new(None, crate::cli::RELEASE),
+            None,
         )
         .serve(&host.host, host.shutdown.clone());
         let _link = paired(&host, &guest).await;

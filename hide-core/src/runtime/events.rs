@@ -1429,6 +1429,14 @@ pub(super) struct PeerMachinesPayload {
     pub(super) machines: Vec<crate::peer_machines::PeerMachine>,
 }
 
+/// The panes of other machines' work on this machine, sent by hided
+/// whenever a guest's node said its panes changed (PRD device-connect-iroh
+/// D-77 (5)). The whole list each time, as the paired machines are.
+#[derive(Debug, Deserialize)]
+pub(super) struct GuestPanesPayload {
+    pub(super) guests: Vec<crate::guest_panes::GuestPanes>,
+}
+
 /// One Hide AI settings event, carrying whatever it is about.
 ///
 /// It folds what a single screen does into one event, the way
@@ -1829,6 +1837,7 @@ pub(super) enum Event {
     MachineProfileConnect(MachineProfileConnectPayload),
     UiAttached(UiAttachedPayload),
     PeerMachines(PeerMachinesPayload),
+    GuestPanes(GuestPanesPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
@@ -2193,6 +2202,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "machine_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
+        "guest_panes" => decode!(GuestPanesPayload, GuestPanes).and_then(|event| match &event {
+            Event::GuestPanes(payload) if crate::guest_panes::valid(&payload.guests) => Ok(event),
+            _ => Err(invalid_payload("guest_panes")),
+        }),
         "peer_machines" => {
             decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
                 Event::PeerMachines(payload) if crate::peer_machines::valid(&payload.machines) => {
@@ -2597,6 +2610,13 @@ impl Runtime {
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
                 false
+            }
+            Event::GuestPanes(payload) => {
+                let changed = self.snapshot.navigator.guest_panes != payload.guests;
+                if changed {
+                    self.snapshot.navigator.guest_panes = payload.guests;
+                }
+                changed
             }
             Event::PeerMachines(payload) => {
                 let changed = self.snapshot.navigator.peers != payload.machines;

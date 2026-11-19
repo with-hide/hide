@@ -1804,13 +1804,17 @@
                 "devices": {
                     "type": "object"
                 },
+                "guest_panes": {
+                    "type": "object"
+                },
                 "peers": {
                     "type": "object"
                 }
             },
             "required": [
                 "devices",
-                "peers"
+                "peers",
+                "guest_panes"
             ],
             "type": "object"
         },
@@ -7412,7 +7416,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e661c82a8fd8312bfaff985bc242b0f93b3c8619ae613734223ee55dbe5b98a3",
+    "digest": "sha256:136df9ed40861177eaa7f8391d2d0598c3fe604c8d249584668c0f26246cd234",
     "envelopes": {
         "access": {
             "answer": "value",

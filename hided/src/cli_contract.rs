@@ -2072,9 +2072,13 @@ fn answers() -> Value {
         "access_list".into(),
         shape(&["machine", "limit", "pending", "connections"]),
     );
-    // The SSH devices and, under `peers`, the Hides this machine is paired
-    // with: who opens whom, and whether the two are connected.
-    map.insert("device_list".into(), shape(&["devices", "peers"]));
+    // The SSH devices; under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected; and under
+    // `guest_panes`, the panes other machines' work runs in on this one.
+    map.insert(
+        "device_list".into(),
+        shape(&["devices", "peers", "guest_panes"]),
+    );
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
     map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));

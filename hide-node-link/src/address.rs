@@ -81,6 +81,30 @@ pub fn device_of(id: &str) -> Option<&str> {
         .filter(|device| !device.is_empty())
 }
 
+const GUEST_PREFIX: &str = "guest:";
+const GUEST_PANE: &str = ":pane:";
+
+/// A pane of this machine that belongs to a guest: another machine's work
+/// running here in that machine's own node (PRD device-connect-iroh D-61).
+/// `device` is the guest machine's device id and `pane` its node's own id
+/// for the pane: `guest:<device>:pane:<pane>`.
+///
+/// It is not `remote:<device>:pane:<pane>`, which names a pane on that
+/// machine: two machines that open each other have both, and the two
+/// engines name their panes apart from each other, so the same `<pane>`
+/// can be either.
+pub fn guest_pane_id(device: &str, pane: &str) -> String {
+    format!("{GUEST_PREFIX}{device}{GUEST_PANE}{pane}")
+}
+
+/// The guest's device id and its node's own pane id, when `id` names a
+/// guest's pane on this machine.
+pub fn guest_pane(id: &str) -> Option<(&str, &str)> {
+    let (device, pane) = id.strip_prefix(GUEST_PREFIX)?.split_once(GUEST_PANE)?;
+    (device_id_is_unambiguous(device) && !device.is_empty() && !pane.is_empty())
+        .then_some((device, pane))
+}
+
 /// An id the core scoped to a device: `remote:<device>:<kind>:<id>`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Scoped<'a> {
@@ -455,6 +479,33 @@ mod tests {
         );
         assert_eq!(id_on("core", "core", Kind::Tab, "w1:t1"), "w1:t1");
         assert!(!is_device_scoped("w1:p1"));
+    }
+
+    #[test]
+    fn a_guests_pane_here_is_no_pane_of_that_machine() {
+        let here = guest_pane_id("macbook", "w1:p1");
+        assert_eq!(here, "guest:macbook:pane:w1:p1");
+        assert_eq!(guest_pane(&here), Some(("macbook", "w1:p1")));
+        // The same machine's own pane of the same engine id is another
+        // address, and neither reads as the other.
+        let there = scoped_pane_id("macbook", "w1:p1");
+        assert_ne!(here, there);
+        assert_eq!(guest_pane(&there), None);
+        assert_eq!(device_of(&here), None);
+        assert!(!is_device_scoped(&here));
+        // A node id that itself holds `:pane:` stays the node's own id.
+        assert_eq!(
+            guest_pane("guest:macbook:pane:a:pane:b"),
+            Some(("macbook", "a:pane:b"))
+        );
+        for id in [
+            "guest:",
+            "guest::pane:w1:p1",
+            "guest:macbook:pane:",
+            "w1:p1",
+        ] {
+            assert_eq!(guest_pane(id), None, "{id}");
+        }
     }
 
     #[test]
