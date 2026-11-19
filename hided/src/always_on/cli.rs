@@ -319,7 +319,7 @@ mod tests {
             UserAgents::fixture_of(Kind::Systemd, home.path())
         };
         let refused = stand_in(
-            "#!/bin/sh\ncase \"$1\" in\n  show-user) echo Linger=no ;;\n  enable-linger) exit 1 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  show-user) echo no ;;\n  enable-linger) exit 1 ;;\nesac\n",
         );
         let answer = linger(&refused, home.path()).unwrap();
         assert_eq!(answer["linger"], "needs_administrator");
@@ -329,7 +329,7 @@ mod tests {
                 .is_some_and(|command| command.starts_with("sudo loginctl enable-linger ")),
             "{answer}"
         );
-        let on = stand_in("#!/bin/sh\n[ \"$1\" = show-user ] && echo Linger=yes\nexit 0\n");
+        let on = stand_in("#!/bin/sh\n[ \"$1\" = show-user ] && echo yes\nexit 0\n");
         assert_eq!(linger(&on, home.path()).unwrap(), json!({ "linger": "on" }));
     }
 
