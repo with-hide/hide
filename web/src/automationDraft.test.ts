@@ -36,6 +36,11 @@ describe("the automation form's values", () => {
     expect(editCall(inProject, { ...draftOf(inProject, undefined), folder: null }, false)).toEqual({ call: "edit", id: "a1", folder: null });
   });
 
+  it("renames an automation whose worktree folder the form no longer lists without touching its worktree", () => {
+    const unlisted = automation({ folder: { path: "/gone", default: false, worktree: true } });
+    expect(editCall(unlisted, { ...draftOf(unlisted, undefined), name: "주간 점검" }, false)).toEqual({ call: "edit", id: "a1", name: "주간 점검" });
+  });
+
   it("puts each refusal under the field it names and words an unknown one as not now", () => {
     expect(refusalField("schedule_under_hour")).toBe("schedule");
     expect(refusalField("automation_name_taken")).toBe("name");

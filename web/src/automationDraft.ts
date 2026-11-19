@@ -115,8 +115,11 @@ export function editCall(automation: Automation, draft: FormDraft, git: boolean)
   const agent = draftAgent(draft.agent);
   if (JSON.stringify(agent) !== JSON.stringify(draftAgent(before.agent))) changes.agent = agent;
   if (draft.folder !== before.folder) changes.folder = draft.folder;
-  const worktree = worktreeOf(draft, git);
-  if (worktree !== automation.folder.worktree) changes.worktree = worktree;
+  // The worktree is read again only when its fields moved: a folder the form no longer lists reads as no Git project, which no edit of the name may turn into a change.
+  if (draft.folder !== before.folder || draft.worktree !== before.worktree) {
+    const worktree = worktreeOf(draft, git);
+    if (worktree !== automation.folder.worktree) changes.worktree = worktree;
+  }
   return Object.keys(changes).length > 2 ? changes : null;
 }
 
