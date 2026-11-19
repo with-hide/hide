@@ -1139,6 +1139,117 @@ fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
     assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
 }
 
+/// PRD device-connect-iroh D-61 over the state folders released builds
+/// wrote: a machine this build pairs with is saved as a device beside the
+/// ones the release stored, and the next start is the same machine to it.
+/// The start's conversions, which rename the devices an earlier build
+/// dialed, find nothing to do and hold nothing, and the core reads every
+/// device the release had as it read it before, with the paired machine
+/// after them under the id and the connection key it was registered by.
+#[test]
+fn a_machine_paired_over_a_released_state_folder_is_the_same_device_at_the_next_start() {
+    use crate::model::LinkOrigin;
+    use crate::node_migration::upgrade_tests::{fixtures, started};
+    use crate::node_migration::{CORE_STATE, MARKER_FILE, convert, name_devices};
+
+    let key = "ab".repeat(32);
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let stored = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(state.path().join(name)).unwrap()).unwrap()
+        };
+        let node = crate::node::NodeId::parse(stored(MARKER_FILE)["node"].as_str().unwrap())
+            .unwrap_or_else(|error| panic!("{tag}: {error}"));
+        let home = tempfile::tempdir().unwrap();
+        // A core's start over the folder, as `runtime_showing_drives` makes
+        // one over an empty folder.
+        let reading = || {
+            Runtime::new(
+                CoreOptions {
+                    schema_version: SCHEMA_VERSION,
+                    home: None,
+                    node_id: node.clone(),
+                    app_state_path: state.path().join(CORE_STATE).to_string_lossy().into_owned(),
+                    host_helper_root: None,
+                    host_cli_dir: None,
+                    workspace_views_path: None,
+                    shortcut_import_path: None,
+                    local_issues_path: None,
+                    effects_held: false,
+                    machine_name: None,
+                    windows_drives: None,
+                    account_state_folder: false,
+                },
+                environment::EnvironmentReport {
+                    statuses: Vec::new(),
+                    home_path: Some(home.path().to_path_buf()),
+                    codex_home: None,
+                },
+                std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),
+                crate::node::test_devices(),
+            )
+        };
+        let devices = |runtime: &Runtime| -> Vec<(String, LinkOrigin)> {
+            runtime
+                .snapshot
+                .ui_state
+                .device_registrations
+                .iter()
+                .map(|registration| (registration.id.clone(), registration.origin.clone()))
+                .collect()
+        };
+
+        let mut runtime = reading();
+        let mut expected = devices(&runtime);
+        assert!(
+            !expected.is_empty(),
+            "{tag}: the release's own device is read"
+        );
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": [{
+                "key": key, "device_id": "windows-pc", "name": "Windows PC",
+                "opens": "active", "opened_by": null, "connected": false, "path": null,
+                "reason": null, "update": null,
+            }] }
+        }))
+        .expect("peer machines event");
+        assert!(runtime.dispatch_json(&event), "{tag}");
+        expected.push((
+            "windows-pc".to_owned(),
+            LinkOrigin::Peer { key: key.clone() },
+        ));
+        assert_eq!(devices(&runtime), expected, "{tag}");
+        drop(runtime);
+
+        // The row as this build stored it: the connection key on it, and no
+        // SSH alias, which is what the conversion reads a dialed device by.
+        let rows = stored(CORE_STATE)["device_registrations"].clone();
+        let row = rows
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["id"] == "windows-pc"))
+            .unwrap_or_else(|| panic!("{tag}: the paired machine is not in the store: {rows}"));
+        assert_eq!(row["peer_key"], serde_json::json!(key), "{tag}");
+        assert_eq!(row["ssh_alias"], serde_json::Value::Null, "{tag}");
+
+        // The next start: what `hided` runs before the core reads the folder.
+        convert(state.path(), &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+        let named = name_devices(state.path(), &node)
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+        assert_eq!(named, Default::default(), "{tag}");
+        assert_eq!(
+            stored(CORE_STATE)["device_registrations"],
+            rows,
+            "{tag}: the start rewrote a device"
+        );
+        assert_eq!(devices(&reading()), expected, "{tag}");
+    }
+}
+
 /// A machine this one opens is a device for as long as the pairing holds
 /// (PRD device-connect-iroh D-61, B3): registered when its grant is active,
 /// kept through a pause, and removed with what Hide recorded for it when

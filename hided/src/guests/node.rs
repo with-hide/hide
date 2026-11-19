@@ -629,7 +629,17 @@ impl GuestNode {
                 ));
             }
         };
-        lock(&self.control).input = child.take_stdin();
+        {
+            // Another build was asked for, or the daemon began to end,
+            // since this run was chosen: its input is let go here, which
+            // tells this node its host is gone, as the ask told the one
+            // before it. Kept, it would run until something else ended it.
+            let input = child.take_stdin();
+            let mut control = lock(&self.control);
+            if control.next.is_none() && !control.stopping {
+                control.input = input;
+            }
+        }
         let (lines, heard) = mpsc::channel::<String>();
         let readers = [
             child.take_stdout().map(|output| {

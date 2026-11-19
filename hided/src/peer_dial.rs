@@ -30,7 +30,7 @@ use hide_peer::protocol::manage::{Manage, NodeStop, Release};
 use hide_peer::protocol::{PeerKey, StreamKind, frame, launch};
 use hide_peer::{PeerEvent, limits, wire};
 use serde_json::json;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
@@ -49,9 +49,12 @@ const GRANT_TOLD_WITHIN: Duration = Duration::from_secs(5);
 /// How long the host has to say which platform it is.
 const PLATFORM_WITHIN: Duration = Duration::from_secs(30);
 
-/// How long the host has to bring the node up once it has the build: the
-/// node's own start, the folder another node may still hold, and one start
-/// again after a crash.
+/// How long the host has for each stretch that is its own: to say it lacks
+/// the build, and, once it has the build, to bring the node up (the node's
+/// own start, the folder another node may still hold, and one start again
+/// after a crash). The upload between the two is not counted: it is bounded
+/// by each of its writes and by [`PLACED_WITHIN`], and a build takes as long
+/// as its link is slow.
 const READY_WITHIN: Duration = Duration::from_secs(
     launch::READY_WITHIN_SECS
         + launch::FOLDER_HELD_RETRIES as u64 * launch::FOLDER_HELD_RETRY_SECS
@@ -177,15 +180,16 @@ impl Dialer {
             // answer in time refuses the next, and the link is tried again.
             let _ = tokio::time::timeout(HELD_ENDS_WITHIN, earlier.ended).await;
         }
-        let mut management = link
+        let Stream { send, recv, .. } = link
             .open(StreamKind::Management)
             .await
             .map_err(|error| failed("The management stream did not open", error))?;
+        let mut management = Management::new(send, recv);
 
-        ask(&mut management, &self.start(None)).await?;
+        management.ask(&self.start(None)).await?;
         let (os, arch) = tokio::time::timeout(PLATFORM_WITHIN, async {
             loop {
-                if let Manage::NodePreparing { os, arch } = answer(&mut management).await? {
+                if let Manage::NodePreparing { os, arch } = management.answer().await? {
                     break Ok::<_, EstablishError>((os, arch));
                 }
             }
@@ -198,36 +202,12 @@ impl Dialer {
             .await
             .map_err(|error| failed("This build could not be read", error))??;
         let id = build.id().to_owned();
-        ask(&mut management, &self.start(Some(id.clone()))).await?;
-        let mut placed = false;
-        tokio::time::timeout(READY_WITHIN, async {
-            loop {
-                match answer(&mut management).await? {
-                    Manage::NodeReady { .. } => break Ok(()),
-                    Manage::NodeStopped {
-                        reason: NodeStop::BuildMissing,
-                        ..
-                    } if !placed => {
-                        upload(&link, &build).await?;
-                        placed = true;
-                        ask(&mut management, &self.start(Some(id.clone()))).await?;
-                    }
-                    // The host starts it again by itself.
-                    Manage::NodeStopped { retry: true, .. } => {}
-                    Manage::NodeStopped { reason, detail, .. } => {
-                        break Err(stopped(reason, detail));
-                    }
-                    _ => {}
-                }
-            }
-        })
-        .await
-        .map_err(|_| {
-            failed(
-                "This Hide's node there did not start",
-                "not ready within the wait",
-            )
-        })??;
+        let placed = ready(
+            &mut management,
+            || self.start(Some(id.clone())),
+            || upload(&link, &build),
+        )
+        .await?;
 
         let Stream { send, recv, .. } = link
             .open(StreamKind::NodeLink)
@@ -355,24 +335,104 @@ async fn granted(
     link.granted()
 }
 
-async fn ask(management: &mut Stream, message: &Manage) -> Result<(), EstablishError> {
-    wire::write_message(&mut management.send, message)
-        .await
-        .map_err(|error| failed("That machine took no management message", error))
+/// A management stream as this side holds it: the half it writes, and the
+/// host's messages through one reader, which keeps what it has of a message
+/// when a wait on it is dropped (the held stream waits on it beside its own
+/// close and its inbox's clock).
+struct Management<S, R> {
+    send: S,
+    messages: wire::MessageReader<R>,
 }
 
-/// The next management message this build knows.
-async fn answer(management: &mut Stream) -> Result<Manage, EstablishError> {
-    loop {
-        let body = wire::read_message(&mut management.recv, frame::MAX_MESSAGE)
+impl<S, R> Management<S, R>
+where
+    S: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    fn new(send: S, recv: R) -> Self {
+        Self {
+            send,
+            messages: wire::MessageReader::new(recv, frame::MAX_MESSAGE),
+        }
+    }
+
+    async fn ask(&mut self, message: &Manage) -> Result<(), EstablishError> {
+        wire::write_message(&mut self.send, message)
             .await
-            .map_err(|error| failed("The management stream failed", error))?
-            .ok_or_else(|| failed("The management stream ended", "that machine closed it"))?;
-        match Manage::parse(&body) {
-            Ok(Some(message)) => return Ok(message),
-            // A message of a later build.
-            Ok(None) => {}
-            Err(error) => return Err(failed("That machine sent no management message", error)),
+            .map_err(|error| failed("That machine took no management message", error))
+    }
+
+    /// The next management message this build knows. A wait on it that is
+    /// dropped loses nothing.
+    async fn answer(&mut self) -> Result<Manage, EstablishError> {
+        loop {
+            let body = self
+                .messages
+                .next()
+                .await
+                .map_err(|error| failed("The management stream failed", error))?
+                .ok_or_else(|| failed("The management stream ended", "that machine closed it"))?;
+            match Manage::parse(&body) {
+                Ok(Some(message)) => return Ok(message),
+                // A message of a later build.
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(failed("That machine sent no management message", error));
+                }
+            }
+        }
+    }
+}
+
+/// Has the host bring this build's node up: asks with `start`, sends the
+/// build with `upload` once when the host says it lacks it, and waits until
+/// the host says the node is ready. True when the build was sent.
+///
+/// The host has [`READY_WITHIN`] for each stretch that is its own, from the
+/// ask and again from the end of the upload; the upload's own time is not
+/// counted, so a build sent over a slow link is not given up on for the
+/// link's speed.
+async fn ready<S, R, U>(
+    management: &mut Management<S, R>,
+    start: impl Fn() -> Manage,
+    upload: impl FnOnce() -> U,
+) -> Result<bool, EstablishError>
+where
+    S: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+    U: Future<Output = Result<(), EstablishError>>,
+{
+    management.ask(&start()).await?;
+    let mut upload = Some(upload);
+    let mut by = tokio::time::Instant::now() + READY_WITHIN;
+    loop {
+        let said = tokio::time::timeout_at(by, management.answer())
+            .await
+            .map_err(|_| {
+                failed(
+                    "This Hide's node there did not start",
+                    "not ready within the wait",
+                )
+            })??;
+        match said {
+            Manage::NodeReady { .. } => return Ok(upload.is_none()),
+            Manage::NodeStopped {
+                reason: NodeStop::BuildMissing,
+                detail,
+                ..
+            } => match upload.take() {
+                Some(upload) => {
+                    upload().await?;
+                    management.ask(&start()).await?;
+                    by = tokio::time::Instant::now() + READY_WITHIN;
+                }
+                // The host lacks a build it just said it placed.
+                None => return Err(stopped(NodeStop::BuildMissing, detail)),
+            },
+            // The host starts it again by itself.
+            Manage::NodeStopped { retry: true, .. } => {}
+            Manage::NodeStopped { reason, detail, .. } => return Err(stopped(reason, detail)),
+            _ => {}
         }
     }
 }
@@ -586,17 +646,21 @@ impl Taken {
 /// it as the host hears an end: this side stops writing and reads until
 /// the host let the stream go, so the host's place for the next one is
 /// free when this returns.
-async fn hold(
-    mut management: Stream,
+async fn hold<S, R>(
+    mut management: Management<S, R>,
     key: PeerKey,
     closed: watch::Receiver<bool>,
     taking: Option<Taking>,
-) {
+) where
+    S: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
     held(&mut management, key, closed, taking).await;
     let _ = tokio::time::timeout(HELD_ENDS_WITHIN, async {
         let _ = management.send.shutdown().await;
-        while let Ok(Some(_)) = wire::read_message(&mut management.recv, frame::MAX_MESSAGE).await {
-        }
+        // Through the same reader: the held wait may have left it part way
+        // into a message.
+        while let Ok(Some(_)) = management.messages.next().await {}
     })
     .await;
 }
@@ -604,12 +668,15 @@ async fn hold(
 /// What a held management stream does: records what the host says of the
 /// node, and takes the node's box of events. The link itself ends when
 /// the node does; this only says why.
-async fn held(
-    management: &mut Stream,
+async fn held<S, R>(
+    management: &mut Management<S, R>,
     key: PeerKey,
     mut closed: watch::Receiver<bool>,
     taking: Option<Taking>,
-) {
+) where
+    S: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
     let failed = |step: &str, error: &dyn std::fmt::Display| {
         hide_core::diagnostic!(json!({
             "component": "peer_dial",
@@ -629,7 +696,7 @@ async fn held(
         None => None,
     };
     if let Some(open) = &taken
-        && ask(management, &open.resume()).await.is_err()
+        && management.ask(&open.resume()).await.is_err()
     {
         return;
     }
@@ -647,7 +714,9 @@ async fn held(
             .as_ref()
             .is_some_and(|open| open.waits_until.is_some());
         let message = tokio::select! {
-            message = answer(management) => message,
+            // Dropped whenever another branch wins: the reader keeps what
+            // it has of the message.
+            message = management.answer() => message,
             _ = closed.wait_for(|closed| *closed) => break,
             _ = tokio::time::sleep(peer_inbox::LOOK_AGAIN), if waits => {
                 apply = true;
@@ -691,7 +760,7 @@ async fn held(
             Err(_) => break,
         };
         if let Some(said) = said
-            && ask(management, &said).await.is_err()
+            && management.ask(&said).await.is_err()
         {
             break;
         }
@@ -716,6 +785,167 @@ impl<R: AsyncRead + Unpin> Read for LinkReader<R> {
                 _ = closed.wait_for(|closed| *closed) => Ok(0),
             }
         })
+    }
+}
+
+/// This side's management stream over an in-memory stream. These tests
+/// start no program, so they run on every system.
+#[cfg(test)]
+mod stream_tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+    use crate::peer_host::fixture::within;
+
+    fn start() -> Manage {
+        Manage::NodeStart {
+            build: "9.9.9".to_owned(),
+            build_id: Some("0123456789abcdef".to_owned()),
+            release: None,
+        }
+    }
+
+    /// PRD B34: a build crosses a relay at about 2 MiB a second, so sending
+    /// one takes longer than a host has to bring a node up. The wait for
+    /// the node starts again once the build is placed, so a host that then
+    /// takes nearly all of it is waited for, and one that then says nothing
+    /// is given up on after that wait, counted from the build's end.
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_for_a_node_does_not_count_the_time_its_build_took_to_send() {
+        let sending = READY_WITHIN * 3;
+        let starting = READY_WITHIN - Duration::from_secs(1);
+        for answers in [true, false] {
+            let (mine, theirs) = tokio::io::duplex(64 * 1024);
+            let (recv, send) = tokio::io::split(mine);
+            let mut management = Management::new(send, recv);
+            let host = tokio::spawn(async move {
+                let (recv, send) = tokio::io::split(theirs);
+                let mut host = Management::new(send, recv);
+                assert_eq!(host.answer().await.ok(), Some(start()));
+                let missing = Manage::NodeStopped {
+                    reason: NodeStop::BuildMissing,
+                    retry: false,
+                    detail: None,
+                };
+                assert!(host.ask(&missing).await.is_ok());
+                assert_eq!(host.answer().await.ok(), Some(start()));
+                if answers {
+                    tokio::time::sleep(starting).await; // wait-ok: the paused clock, for the time a host takes to start a node
+                    let up = Manage::NodeReady {
+                        build: "9.9.9".to_owned(),
+                    };
+                    assert!(host.ask(&up).await.is_ok());
+                }
+                // Holds its end open until this side lets the stream go.
+                let _ = host.answer().await;
+            });
+            let began = tokio::time::Instant::now();
+            let sent = ready(&mut management, start, || async move {
+                tokio::time::sleep(sending).await; // wait-ok: the paused clock, for the time a build takes over a relay
+                Ok(())
+            })
+            .await;
+            let took = began.elapsed();
+            let expected = sending + if answers { starting } else { READY_WITHIN };
+            assert_eq!(sent.ok(), answers.then_some(true), "{answers}");
+            assert!(
+                took >= expected && took < expected + Duration::from_secs(1),
+                "{answers}: {took:?} for {expected:?}"
+            );
+            drop(management);
+            host.await.unwrap();
+        }
+    }
+
+    /// What the core takes, for a test: it can place no event yet, as while
+    /// a node's panes are still being read, and tells of each try.
+    struct NotYet(mpsc::UnboundedSender<()>);
+
+    impl Events for NotYet {
+        fn apply(&self, _device: &str, _event: &Event, _last: bool) -> Applied {
+            let _ = self.0.send(());
+            Applied::Later
+        }
+    }
+
+    fn event(seq: u64) -> Event {
+        Event {
+            v: hide_peer::protocol::event::BOX_VERSION,
+            outbox: "box".to_owned(),
+            seq,
+            kind: "letter".to_owned(),
+            key: format!("intent-{seq}"),
+            at_unix_ms: 0,
+            body: json!({}),
+        }
+    }
+
+    /// While an event waits for the core, the held stream looks at its
+    /// inbox again on a clock, beside its wait for the host's next message.
+    /// A message whose first half arrived before such a look and whose rest
+    /// came after it is read whole: its event is recorded and acknowledged,
+    /// and the stream ends at a message's edge when the link closes.
+    #[tokio::test(start_paused = true)]
+    async fn a_message_that_arrives_in_two_parts_across_a_look_at_the_inbox_is_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mine, theirs) = tokio::io::duplex(64 * 1024);
+        let (tries, mut tried) = mpsc::unbounded_channel();
+        let (close, closed) = watch::channel(false);
+        let taking = Taking {
+            dir: dir.path().join("inbox"),
+            device: "windows-pc".to_owned(),
+            events: Arc::new(NotYet(tries)),
+        };
+        let key = PeerKey::from_hex(&"07".repeat(32)).unwrap();
+        let holding = tokio::spawn(async move {
+            let (recv, send) = tokio::io::split(mine);
+            hold(Management::new(send, recv), key, closed, Some(taking)).await;
+        });
+        let (recv, send) = tokio::io::split(theirs);
+        let mut host = Management::new(send, recv);
+        let acked = |seq: u64| {
+            Some(Manage::EventAck {
+                outbox: "box".to_owned(),
+                seq,
+            })
+        };
+        let place = within("this side's place in the box", host.answer()).await;
+        assert!(matches!(place, Ok(Manage::Resume { seq: 0, .. })));
+        assert!(host.ask(&Manage::Event(event(1))).await.is_ok());
+        assert_eq!(
+            within("the first event's acknowledgement", host.answer())
+                .await
+                .ok(),
+            acked(1)
+        );
+        within("the first event's first try", tried.recv())
+            .await
+            .unwrap();
+
+        let mut frame = Vec::new();
+        wire::write_message(&mut frame, &Manage::Event(event(2)))
+            .await
+            .unwrap();
+        let (first, rest) = frame.split_at(frame.len() / 2);
+        host.send.write_all(first).await.unwrap();
+        host.send.flush().await.unwrap();
+        // Two more looks at the inbox: the wait that held the first half of
+        // the message was dropped for a look in between.
+        for _ in 0..2 {
+            within("a look at the inbox", tried.recv()).await.unwrap();
+        }
+        host.send.write_all(rest).await.unwrap();
+        host.send.flush().await.unwrap();
+        assert_eq!(
+            within("the second event's acknowledgement", host.answer())
+                .await
+                .ok(),
+            acked(2)
+        );
+
+        close.send(true).unwrap();
+        drop(host);
+        within("the held stream's end", holding).await.unwrap();
     }
 }
 
