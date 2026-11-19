@@ -1184,10 +1184,9 @@ impl Pairing {
         // own Hide names itself by an id of its own).
         let known_as = |paired: &Paired| match &source.reach {
             hide_core::SwitchReach::Ssh { .. } => paired.machine.device_id == device,
-            hide_core::SwitchReach::Wsl { distro } => peers.host(&paired.key).is_some_and(|host| {
-                host.candidates
-                    .contains(&Candidate::Wsl(distro.to_owned()))
-            }),
+            hide_core::SwitchReach::Wsl { distro } => peers
+                .host(&paired.key)
+                .is_some_and(|host| host.candidates.contains(&Candidate::Wsl(distro.to_owned()))),
         };
         let host = match &paired {
             Some(paired) => paired.accepted.key,

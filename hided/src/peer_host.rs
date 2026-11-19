@@ -25,10 +25,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
+use hide_peer::pipe::{Beside, Either, PipeConn, PipeTransport};
 use hide_peer::protocol::{Candidate, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerTransport};
-use hide_peer::pipe::{Beside, Either, PipeConn, PipeTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
 use tokio::sync::{OnceCell, mpsc};

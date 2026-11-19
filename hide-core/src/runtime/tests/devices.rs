@@ -1449,7 +1449,10 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
             assert_eq!(source.projects, ["/home/me/app"], "{tag}: {named}");
             assert_eq!(
                 Some(&source.helper_root),
-                helper.host_consent.as_ref().map(|consent| &consent.helper_root),
+                helper
+                    .host_consent
+                    .as_ref()
+                    .map(|consent| &consent.helper_root),
                 "{tag}: {named}"
             );
         }

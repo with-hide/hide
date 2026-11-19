@@ -172,10 +172,7 @@ impl Carriers {
             ));
         }
         let argv = pairing_ssh::hide_argv(&self.reach, "linux", &["device", "carry"]);
-        let child = self
-            .access
-            .start(distro, &argv)
-            .map_err(io::Error::other)?;
+        let child = self.access.start(distro, &argv).map_err(io::Error::other)?;
         carrier_of(child, distro)
     }
 }
@@ -240,7 +237,6 @@ mod tests {
     use super::*;
     use hide_platform::wsl::Distribution;
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
     /// A stand-in `wsl.exe`: it runs the command it is given on this
@@ -249,6 +245,7 @@ mod tests {
     /// systemd is the test's to say (a `systemd` file beside it), never
     /// the machine's the test runs on.
     const FAKE_WSL: &str = r#"#!/bin/sh
+[ "$1" = "--help" ] && exit 0
 here=$(dirname "$0")
 printf '%s\n' "$*" >> "$here/calls.log"
 if [ "$1" = "--list" ]; then
@@ -278,10 +275,11 @@ exec "$@"
         reach: Reach,
     }
 
+    /// A stand-in program at `path`, started once before the test's
+    /// deadlines run it (`stand_ins`): its text is fixed, and it finds the
+    /// test's files beside itself or under the `HOME` it is run with.
     fn script(path: &Path, text: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::stand_ins::program(path, text);
     }
 
     /// A PC whose one distribution, Ubuntu, has `hide` as its `hide`.
@@ -330,15 +328,16 @@ exec "$@"
         }
     }
 
-    /// Waits for `ready` to answer, for as long as a loaded runner needs.
+    /// Waits for `ready` to answer; the bound is a hang guard.
+    #[allow(clippy::disallowed_methods)] // a bounded polling helper
     fn until<T>(what: &str, mut ready: impl FnMut() -> Option<T>) -> T {
-        let over = Instant::now() + Duration::from_secs(20);
+        let over = Instant::now() + Duration::from_secs(60);
         loop {
             if let Some(value) = ready() {
                 return value;
             }
             assert!(Instant::now() < over, "timed out waiting for {what}");
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(10)); // wait-ok: the next poll of a file the stand-in writes once it runs
         }
     }
 
@@ -503,13 +502,19 @@ esac
     #[test]
     fn a_distribution_with_no_hide_or_none_reached_reads_as_such() {
         let absent = pc(None);
-        assert_eq!(look(&absent.access, &absent.reach, "Ubuntu"), Looked::Absent);
+        assert_eq!(
+            look(&absent.access, &absent.reach, "Ubuntu"),
+            Looked::Absent
+        );
         let old = pc(Some("#!/bin/sh\necho 'usage: hide device list'\nexit 2\n"));
         assert_eq!(look(&old.access, &old.reach, "Ubuntu"), Looked::UpdateThere);
 
         let gone = pc(Some(HIDE));
         std::fs::remove_file(gone.dir.path().join("wsl.exe")).unwrap();
-        assert_eq!(look(&gone.access, &gone.reach, "Ubuntu"), Looked::NotReached);
+        assert_eq!(
+            look(&gone.access, &gone.reach, "Ubuntu"),
+            Looked::NotReached
+        );
         let mine = hide_peer::MachineKey::generate().unwrap().public();
         let refused = accept(&gone.access, &gone.reach, "Ubuntu", "r", &me(), &mine);
         assert_eq!(refused.err(), Some("wsl_not_reached"));
@@ -540,6 +545,9 @@ esac
                 .ok()
                 .and_then(|pid| pid.trim().parse().ok())
         });
+        // Named while it runs, so what is asked later is whether this
+        // process ended, never whether its pid names something.
+        let started = hide_platform::process::start_time(pid).unwrap();
         let (pipe, _accepted) = hide_peer::mux::Pipe::start(carrier, true).unwrap();
         // The echo sends this end's own frames back: its greeting is read
         // as the other end's, and its close as the other end's close.
@@ -558,11 +566,11 @@ esac
                 .unwrap()
         });
         assert_eq!(code, Some(shutdown));
-        let over = Instant::now() + Duration::from_secs(20);
-        while hide_platform::process::is_alive(pid) {
-            assert!(Instant::now() < over, "the carrier's command outlived it");
-            std::thread::yield_now();
-        }
+        until("the carrier's command to end", || {
+            let runs = hide_platform::process::is_alive(pid)
+                && hide_platform::process::start_time(pid).ok() == Some(started);
+            (!runs).then_some(())
+        });
     }
 
     /// A background dial finds a distribution that is off and starts
@@ -583,7 +591,10 @@ esac
         });
         carrier.end();
         assert_eq!(calls.len(), 2, "{calls:?}");
-        assert!(calls[1].ends_with(".local/bin/hide device carry"), "{calls:?}");
+        assert!(
+            calls[1].ends_with(".local/bin/hide device carry"),
+            "{calls:?}"
+        );
     }
 
     /// What a carrier's command says before it gives up is read to its end

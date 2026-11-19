@@ -1,8 +1,8 @@
 //! Programs a test runs against a product deadline, ready before the
 //! deadline starts (issues 813 and 824). Built only into tests: hide-platform's
-//! integration tests, and by `#[path]` hided's and hide-ai's integration tests,
-//! hide-agent-hooks' unit and integration tests and hide-kit's unit tests, so
-//! a change here plans every crate that runs it.
+//! integration tests, and by `#[path]` hide-ai's integration tests, hided's
+//! and hide-agent-hooks' unit and integration tests and hide-kit's unit
+//! tests, so a change here plans every crate that runs it.
 //!
 //! macOS checks a file the first time it is started, once per file, and the
 //! checks of every process on the machine wait in one line: on 2026-10-09 at

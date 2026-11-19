@@ -69,7 +69,11 @@ fn pc_and_distribution() -> (Machine, Machine) {
         arrives_at.transport().pipe().arrived(far.into());
         async move { Ok(Carrier::from(near)) }
     });
-    let pc = machine("windows-pc", pc_dir, Beside::new(Net::new().join(key), pipe));
+    let pc = machine(
+        "windows-pc",
+        pc_dir,
+        Beside::new(Net::new().join(key), pipe),
+    );
     (pc, distro)
 }
 
