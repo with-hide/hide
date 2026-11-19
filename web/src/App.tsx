@@ -23,6 +23,7 @@ import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "
 import { FirstRunWizard } from "./FirstRunWizard";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
+import { PairingDialogs } from "./PairingDialogs";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
 import { GroupNameDialog } from "./AgentGroupControls";
@@ -290,6 +291,7 @@ export function App() {
     ["inline_starts", <InlineStartHost />],
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
+    ["pairing", <PairingDialogs actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],

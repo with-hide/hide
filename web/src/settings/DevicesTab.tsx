@@ -14,10 +14,12 @@ import { deviceRemovalLines, draftExported, kitRemovalLine, unstoredDeviceDrafts
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
-import { AddDevice } from "./AddDevice";
+import { AddByLink, AddDevice } from "./AddDevice";
 import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./CoreMoveDialog";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
+import { PairedRows } from "./PairingRows";
+import { ownWindow, pairedMachines } from "../pairing";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -56,6 +58,9 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const localRoot = localHost?.helper_root ?? null;
   const localCliDir = localHost?.cli_dir ?? null;
   const remoteRows = rows.filter((device) => device.kind === "remote");
+  const paired = useShellStore((s) => pairedMachines(s.rest).length);
+  // Adding a machine is this computer's own window's to do (B52).
+  const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations);
   const editorTabs = useShellStore((s) => s.editor?.tabs);
   const recoveryDrafts = useShellStore((s) => s.recoveryDrafts);
@@ -105,12 +110,16 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       <Group
         title={t("settings.tabs.devices")}
         action={
-          <Button variant="secondary" size="sm" onClick={() => setAdding(rows.length)} data-device-add-open="true">
-            <PlusIcon aria-hidden="true" />
-            {t("devices.addTitle")}
-          </Button>
+          ownScreen ? (
+            <Button variant="secondary" size="sm" onClick={() => setAdding(rows.length)} data-device-add-open="true">
+              <PlusIcon aria-hidden="true" />
+              {t("devices.addTitle")}
+            </Button>
+          ) : undefined
         }
       >
+        {/* The Hides this computer is paired with stand in the same list as its SSH devices (B24). */}
+        <PairedRows actions={actions} />
         {rows.map((device) => (
           <DeviceRow
             key={device.id}
@@ -129,17 +138,21 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             handlers={handlers}
           />
         ))}
-        {remoteRows.length === 0 ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
+        {remoteRows.length === 0 && paired === 0 ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
-      {adding !== null ? (
+      {adding !== null && ownScreen ? (
         <Dialog open onOpenChange={(next) => { if (!next) setAdding(null); }}>
           <DialogContent showCloseButton data-add-device-dialog="true">
             <DialogHeader>
               <DialogTitle>{t("devices.addTitle")}</DialogTitle>
             </DialogHeader>
-            <DialogBody>
-              <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} />
+            <DialogBody className="space-y-lg">
+              <AddByLink actions={actions} onStarted={() => setAdding(null)} />
+              <section className="space-y-sm">
+                <h3 className="text-body font-semibold text-subtle-foreground">{t("pairing.add.sshTitle")}</h3>
+                <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />
+              </section>
             </DialogBody>
           </DialogContent>
         </Dialog>

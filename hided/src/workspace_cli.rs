@@ -193,6 +193,7 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
         hook: None,
         install: env.install.clone(),
         access: None,
+        device: None,
     };
     let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
     let install = env.install.as_deref();
@@ -275,6 +276,46 @@ pub fn access_bootstrap(
     ))
 }
 
+/// How long `hide device` waits for one answer about pairing: past opening
+/// the endpoint and a share's wait for the relay to name this machine.
+const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most a pairing answer holds: every paired machine and the pairings
+/// under way.
+const PAIRING_ANSWER_LIMIT: u64 = 256 * 1024;
+
+/// One ask about pairing this machine with another Hide (`crate::pairing`),
+/// answered by this machine's own daemon in one exchange on the bootstrap
+/// socket. The answer is the daemon's line, a refusal included; an `Err` is
+/// the reason none arrived.
+pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
+    let request = serde_json::to_value(PaneRequest {
+        // The pane this command says it runs in, which lets the daemon
+        // refuse what is the operator's without walking the process tree.
+        pane_id: env.pane_id.clone().unwrap_or_default(),
+        nonce: hex::encode(nonce),
+        one_shot: false,
+        hook: None,
+        install: None,
+        access: None,
+        device: Some(ask),
+    })
+    .map_err(|_| "reference_unavailable".to_owned())?;
+    let mut stream = connect_bootstrap(&env.state_dir)?;
+    stream
+        .set_read_timeout(Some(PAIRING_TIMEOUT))
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
+    let mut line = String::new();
+    BufReader::new(&mut stream)
+        .take(PAIRING_ANSWER_LIMIT)
+        .read_line(&mut line)
+        .map_err(|_| "request_timeout".to_owned())?;
+    serde_json::from_str(&line).map_err(|_| "hide_unavailable".to_owned())
+}
+
 fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
@@ -285,6 +326,7 @@ fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
         hook: None,
         install: None,
         access: Some(ask),
+        device: None,
     })
     .map_err(|_| "reference_unavailable".to_owned())
 }
@@ -2326,6 +2368,7 @@ mod tests {
             access: None,
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+            peer_direct: None,
             search_path: None,
         }
     }

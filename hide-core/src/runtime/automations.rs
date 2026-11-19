@@ -54,11 +54,22 @@ const RESUME_GAP_MS: u64 = 10_000;
 /// machine's start line (`spawn_busy`: nothing was started) it is asked
 /// again; a start holds the line for seconds.
 const BUSY_GAP_MS: u64 = 1_000;
-/// How long one start may find the line held before it is given up as a
-/// transient failure: the line is never held that long by starts alone.
-const BUSY_LIMIT_MS: u64 = 15 * 60 * 1000;
+/// How long one start may wait for what it needs and has not got yet
+/// before it is given up as a transient failure: the line is never held
+/// that long by starts alone, nor a machine's kit that long unread.
+const WAIT_LIMIT_MS: u64 = 15 * 60 * 1000;
 /// The start's answer when another start holds this machine's start line.
 const SPAWN_BUSY: &str = "spawn_busy";
+/// The refusals of a start that started nothing and that a later ask of
+/// the same intent may pass: the start line held, and a Codex start on a
+/// machine whose kit has not read its Codex yet (the unused pane is closed
+/// by the spawn). Asked again under the intent, outside its deadline.
+const WAIT_REFUSALS: [&str; 2] = [SPAWN_BUSY, crate::codex_launch::CAPABILITY_UNKNOWN];
+/// The refusal of a start whose agent's program this machine does not find
+/// (`Call::AgentInstalled`), which a person fixes (B23).
+const AGENT_NOT_INSTALLED: &str = "agent_not_installed";
+/// Why an attempt whose stored start this build cannot read failed.
+const START_UNREADABLE: &str = "start_unreadable";
 /// The wait after a close's first failure, doubled each try up to the last.
 const CLEANUP_RETRY_MS: u64 = 5_000;
 const CLEANUP_RETRY_MAX_MS: u64 = 10 * 60 * 1000;
@@ -152,10 +163,10 @@ pub(crate) struct AutomationsRuntime {
     /// A start that stopped partway with its pane made: its code, and when
     /// it is asked again.
     resume: HashMap<RunKey, (String, u64)>,
-    /// A start refused because the start line was held, nothing started:
-    /// since when the line has been found held, and when it is asked again.
-    /// The start's deadline does not run while it waits for the line.
-    busy: HashMap<RunKey, (u64, u64)>,
+    /// A start refused for what it needs and has not got yet, nothing
+    /// started (`WAIT_REFUSALS`): the refusal, since when it waits, and when
+    /// it is asked again. The start's deadline does not run while it waits.
+    waiting: HashMap<RunKey, (String, u64, u64)>,
     /// Whether the attempt's agent was seen at work, so a stop with no
     /// answer after it is the end of its turn, not a start on its way.
     worked: HashSet<RunKey>,
@@ -709,7 +720,7 @@ impl Runtime {
     fn forget(&mut self, key: &RunKey) {
         self.automations.attempt_since.remove(key);
         self.automations.resume.remove(key);
-        self.automations.busy.remove(key);
+        self.automations.waiting.remove(key);
         self.automations.worked.remove(key);
         self.automations.shown.remove(key);
         self.automations.absent_since.remove(key);
@@ -1074,7 +1085,10 @@ impl Runtime {
         };
         let worktree = folder.worktree.then_some(branch).flatten();
         if let Some(run) = self.run_mut(key) {
-            run.ask = Some(Ask { command, worktree });
+            run.ask = Some(Ask {
+                command: Some(command),
+                worktree,
+            });
         }
     }
 
@@ -1114,21 +1128,48 @@ impl Runtime {
             .entry(track.clone())
             .or_insert(now);
         let resume = self.automations.resume.get(track).cloned();
-        let busy = self.automations.busy.get(track).copied();
-        if busy.is_some_and(|(held_since, _)| now.saturating_sub(held_since) > BUSY_LIMIT_MS) {
-            return self.ask_expired(track, purpose, SPAWN_BUSY.to_owned(), now);
+        let waiting = self.automations.waiting.get(track).cloned();
+        if let Some((code, waits_since, _)) = &waiting
+            && now.saturating_sub(*waits_since) > WAIT_LIMIT_MS
+        {
+            return self.ask_expired(track, purpose, code.clone(), now);
         }
-        // The start's own time stands still while it waits for the line.
-        let clock = busy.map_or(now, |(held_since, _)| held_since);
+        // The start's own time stands still while it waits.
+        let clock = waiting
+            .as_ref()
+            .map_or(now, |(_, waits_since, _)| *waits_since);
         if clock.saturating_sub(since) > START_DEADLINE_MS {
             let code = resume.map_or_else(|| "start_unavailable".to_owned(), |(code, _)| code);
             return self.ask_expired(track, purpose, code, now);
         }
-        if busy.is_some_and(|(_, at)| now < at) || resume.is_some_and(|(_, at)| now < at) {
+        if waiting.is_some_and(|(_, _, at)| now < at) || resume.is_some_and(|(_, at)| now < at) {
             return false;
         }
-        self.spawn_for_run(track, ask.command, purpose, now);
+        let Some(command) = ask.command else {
+            return self.ask_unreadable(track, purpose, now);
+        };
+        self.spawn_for_run(track, command, purpose, now);
         false
+    }
+
+    /// A start the book holds in a shape this build cannot read (a build
+    /// whose spawn differs wrote it): it cannot be asked again as it was
+    /// made, so the pane it may have made goes to the close and an attempt
+    /// fails as a transient failure, tried again as a new start; an opening
+    /// ends, and a person can open the conversation again.
+    fn ask_unreadable(&mut self, track: &RunKey, purpose: Purpose, now: u64) -> bool {
+        let key = (track.0.clone(), track.1 & !OPEN_BIT);
+        crate::diagnostic!(json!({
+            "component": "automations", "kind": "automation.start_unreadable",
+            "automation": key.0, "run": key.1, "purpose": purpose.name(),
+            "number": purpose.number(),
+        }));
+        match purpose {
+            Purpose::Attempt(_) => {
+                self.attempt_failed(&key, Failure::Transient(START_UNREADABLE.to_owned()), now)
+            }
+            Purpose::Open(number) => self.end_opening(&key, number, false, now),
+        }
     }
 
     /// A start that did not leave by its deadline: the pane it made goes to
@@ -1167,10 +1208,22 @@ impl Runtime {
             }
         };
         let start = Arc::clone(&self.automations.start.0);
+        let probe = self.program_probe(&command);
         let worker_key = track.clone();
         let result = self.spawn_issue_worker(
             "automation-start",
-            move || start(delivery, command),
+            move || {
+                if let Some((node, program)) = probe
+                    && let Ok(None) = crate::start_prompt::start_form(
+                        node.as_ref(),
+                        &program,
+                        crate::start_prompt::START_FORM_TIMEOUT,
+                    )
+                {
+                    return Err(AGENT_NOT_INSTALLED.to_owned());
+                }
+                start(delivery, command)
+            },
             move |runtime, started| runtime.apply_start(&worker_key, purpose, now, started),
         );
         match result {
@@ -1186,6 +1239,26 @@ impl Runtime {
                 }));
             }
         }
+    }
+
+    /// What finds whether this machine has the start's agent program: its
+    /// own node and the program the engine starts the agent by. A spawn
+    /// types the program whether or not the machine has it, so a missing
+    /// one would leave a shell that never starts an agent and read as a
+    /// start that stopped partway; asked first, it stops the automation for
+    /// a person (B23). A node that does not answer says nothing, and the
+    /// start goes on.
+    fn program_probe(
+        &mut self,
+        command: &crate::coordination::Command,
+    ) -> Option<(Arc<dyn crate::node_access::NodeLink>, String)> {
+        let crate::coordination::Command::Spawn { kind, .. } = command else {
+            return None;
+        };
+        let local = self.node.as_str().to_owned();
+        let engine = self.delivery_engine(&local)?;
+        let program = crate::start_prompt::program_of(engine.as_ref(), kind);
+        Some((self.node_link(&local).ok()?, program))
     }
 
     /// A start's answer, applied to the start it was for. One for a start
@@ -1207,28 +1280,38 @@ impl Runtime {
         }
         let now = super::unix_milliseconds();
         let key = (track.0.clone(), track.1 & !OPEN_BIT);
-        if matches!(&started, Err(reason) if reason.split('\u{1f}').next() == Some(SPAWN_BUSY)) {
-            let held_since = match self.automations.busy.get(track) {
-                Some((held_since, _)) => *held_since,
-                None => {
+        let refusal = started
+            .as_ref()
+            .err()
+            .and_then(|reason| reason.split('\u{1f}').next())
+            .filter(|code| WAIT_REFUSALS.contains(code));
+        if let Some(code) = refusal {
+            let waits_since = match self.automations.waiting.get(track) {
+                Some((waited, waits_since, _)) if waited == code => *waits_since,
+                _ => {
                     crate::diagnostic!(json!({
                         "component": "automations", "kind": "automation.start_waits",
                         "automation": key.0, "run": key.1, "purpose": purpose.name(),
-                        "number": purpose.number(), "reason": SPAWN_BUSY,
+                        "number": purpose.number(), "reason": code,
                     }));
                     asked_at
                 }
             };
-            self.automations.busy.insert(
+            let gap = if code == SPAWN_BUSY {
+                BUSY_GAP_MS
+            } else {
+                RESUME_GAP_MS
+            };
+            self.automations.waiting.insert(
                 track.clone(),
-                (held_since, asked_at.saturating_add(BUSY_GAP_MS)),
+                (code.to_owned(), waits_since, asked_at.saturating_add(gap)),
             );
             return false;
         }
-        if let Some((held_since, _)) = self.automations.busy.remove(track) {
-            // The wait for the line was no part of the start's own time.
+        if let Some((_, waits_since, _)) = self.automations.waiting.remove(track) {
+            // The wait was no part of the start's own time.
             if let Some(since) = self.automations.attempt_since.get_mut(track) {
-                *since = since.saturating_add(asked_at.saturating_sub(held_since));
+                *since = since.saturating_add(asked_at.saturating_sub(waits_since));
             }
         }
         let changed = match started {
@@ -2329,7 +2412,7 @@ impl Runtime {
             number: opening,
             agent_id: None,
             ask: Some(Ask {
-                command,
+                command: Some(command),
                 worktree: None,
             }),
         });
@@ -2530,7 +2613,7 @@ impl Purpose {
 /// are a person's to fix (B23, D-17); anything else is tried again.
 fn start_failure(code: String) -> Failure {
     match code.as_str() {
-        "agent_not_installed"
+        AGENT_NOT_INSTALLED
         | "agent_hook_off"
         | "agent_not_set_up"
         | "agent_hook_missing"
