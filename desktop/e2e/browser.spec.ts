@@ -346,6 +346,9 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   await expectOnSlot(page, form, f);
   expect(await inPage(form, "document.getElementById('out').textContent")).toBe("sent: 한글 이름");
   await expect.poll(async () => (await views()).filter((view) => view.url === form).length).toBe(1);
+  // On the desk it lays out at its slot's own size, no longer the off-screen one.
+  expect(await inPage(form, "innerWidth")).toBe((await viewOf(form)).bounds.width);
+  await compositorPresents(page);
   await windowShot(`off-desk-page-on-desk-${width}`, process.platform === "darwin");
 });
 }
