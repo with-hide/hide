@@ -45,6 +45,7 @@ mod github;
 mod github_poll;
 mod github_store;
 pub mod global_instruction;
+pub mod guest_panes;
 mod handle;
 pub mod herdr_import;
 pub mod input_gate;

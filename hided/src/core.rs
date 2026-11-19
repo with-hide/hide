@@ -69,6 +69,15 @@ enum Command {
         command: Box<hide_core::delivery::Command>,
         reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
     },
+    /// A letter a guest's node kept while this core was away
+    /// (`crate::peer_inbox`).
+    KeptLetterPrepare {
+        device_id: String,
+        pane_id: String,
+        terminal_id: String,
+        command: Box<hide_core::delivery::Command>,
+        reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
+    },
     MemoryPrepare {
         device_id: String,
         pane_id: String,
@@ -420,6 +429,30 @@ impl CoreHandle {
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
                 hint,
+                command: Box::new(command),
+                reply,
+            })
+            .map_err(|_| "delivery_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "delivery_unavailable".to_owned())?
+    }
+
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Core::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: hide_core::delivery::Command,
+    ) -> Result<hide_core::delivery::worker::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::KeptLetterPrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                terminal_id: terminal.to_owned(),
                 command: Box::new(command),
                 reply,
             })
@@ -932,6 +965,7 @@ impl CoreHandle {
     pub fn spawn(
         options: CoreOptions,
         panes: hide_node::ssh::PaneEventsSlot,
+        peers: Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
     ) -> Result<Self, String> {
         let node = options.node_id.clone();
         let state_dir = std::path::Path::new(&options.app_state_path)
@@ -976,7 +1010,7 @@ impl CoreHandle {
                 owner_loop(
                     options,
                     (own_node, core_engine),
-                    panes,
+                    (panes, peers),
                     (routes, terminal_reports),
                     command_rx,
                     ready_tx,
@@ -1521,7 +1555,10 @@ fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
 fn owner_loop(
     options: CoreOptions,
     (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
-    panes: hide_node::ssh::PaneEventsSlot,
+    (panes, peers): (
+        hide_node::ssh::PaneEventsSlot,
+        Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
+    ),
     (terminals, terminal_reports): (Arc<Router>, hide_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
@@ -1562,6 +1599,12 @@ fn owner_loop(
     // holders the device's node runs (PRD
     // engine-bundle-3-core-owns D-22).
     .with_device_home(device_home);
+    // Machines paired with this one are devices too (PRD
+    // device-connect-iroh D-61), reached on the connection the daemon keeps.
+    let devices = match peers {
+        Some(dial) => devices.with_peers(dial),
+        None => devices,
+    };
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
@@ -1784,6 +1827,20 @@ fn owner_loop(
                 let _ = reply.send(core.project_open_receipt(&request_id));
             }
 
+            Command::KeptLetterPrepare {
+                device_id,
+                pane_id,
+                terminal_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_kept_letter(
+                    &device_id,
+                    &pane_id,
+                    &terminal_id,
+                    *command,
+                ));
+            }
             Command::DeliveryPrepare {
                 device_id,
                 pane_id,
@@ -1994,6 +2051,7 @@ impl CoreHandle {
                 account_state_folder: false,
             },
             Default::default(),
+            None,
         )
         .unwrap()
     }

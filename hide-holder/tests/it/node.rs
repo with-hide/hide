@@ -964,6 +964,20 @@ fn completed_panes_from_another_boot_stay_closed() {
     node.service.close();
 }
 
+/// A guest's node tells its host which panes may still run from this list,
+/// and the host draws and types into each by the name it carries
+/// (`hided::guest_node`): the pane's own id, as its core and the node's
+/// sessions name it, never the name its record's file has, which holds no
+/// `:`. A second name for one pane is a second session on its one holder.
+#[test]
+fn the_panes_a_node_lists_as_live_carry_the_ids_their_core_names_them_by() {
+    let folder = Folder::new();
+    let node = Node::start(folder.home.path(), &folder.state);
+    node.start_pane(&folder.shell("w1:p1"));
+    node.screens.first_full("w1:p1");
+    assert_eq!(node.holders().live_pane_ids().unwrap(), ["w1:p1"]);
+}
+
 /// A redraw, and a view at the grid the pane already runs at, each bring a
 /// full frame from the holder, and what the program prints after either is
 /// drawn: the node waits for a full frame after both, and a holder answers

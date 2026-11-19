@@ -200,6 +200,12 @@ fn key(value: &str) -> bool {
 }
 
 pub fn run(env: &Env, command: Command) -> Result<(), String> {
+    // A letter sent from a pane of another Hide's work here, while that
+    // Hide is away, is kept by the pane's node and answered `queued` (PRD
+    // device-connect-iroh B12).
+    let letter = matches!(command, Command::Send { .. })
+        .then(|| serde_json::to_value(&command).ok())
+        .flatten();
     let result = (|| {
         if let Command::Pull {
             prompt_digest,
@@ -222,6 +228,22 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
         let hint = env.pane_id.clone();
         crate::workspace_cli::request_delivery(&mut credential, command, hint.as_deref())
     })();
+    let result = match (result, letter) {
+        (Err(code), Some(letter)) if code == crate::guest_node::away::OWNER_OFFLINE => {
+            crate::guest_node::away::ask(&env.state_dir, env.pane_id.as_deref(), Some(&letter))
+                .map(|mut answer| {
+                    if let Some(next) = answer["reason"]
+                        .as_str()
+                        .and_then(crate::guest_node::away::next_action)
+                    {
+                        answer["next_action"] = next.into();
+                    }
+                    answer
+                })
+                .ok_or(code)
+        }
+        (result, _) => result,
+    };
     match result {
         Ok(answer) => {
             println!("{answer}");

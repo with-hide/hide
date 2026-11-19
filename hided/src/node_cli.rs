@@ -18,7 +18,7 @@ pub fn version_line() -> String {
     )
 }
 
-const USAGE: &str = "usage: hided node serve|--version";
+const USAGE: &str = "usage: hided node serve [--guest <folder>]|--version";
 
 /// Runs the node subcommand named by `args`, the words after `node`.
 pub fn run(args: &[OsString]) -> Result<(), String> {
@@ -37,6 +37,16 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
             let terminals = hide_node::terminal::device::NodeTerminals::new();
             hide_host::serve::serve_with_terminals(input, io::stdout(), &terminals)
                 .map_err(|error| error.to_string())
+        }
+        // A guest's node, started and supervised by this machine's hided
+        // (PRD device-connect-iroh D-77).
+        ["serve", "--guest", dir] => crate::guest_node::run(dir),
+        // A word after `serve` this build does not know is a host of
+        // another build asking for what this one cannot do: it says so by
+        // its exit code, before any file is touched.
+        ["serve", ..] => {
+            eprintln!("{USAGE}");
+            std::process::exit(hide_peer::protocol::launch::EXIT_UNKNOWN_WORD)
         }
         ["--version"] => {
             println!("{}", version_line());

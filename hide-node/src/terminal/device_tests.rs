@@ -212,6 +212,109 @@ fn attach(node: &NodeTerminals, opened: &Receiver<Opened>, pane: &str) -> Opened
     opened.recv_timeout(WAIT).expect("the pane attached")
 }
 
+/// What a resident node's tap was handed, in order.
+#[derive(Default)]
+struct TapSeen(Mutex<Vec<(String, Vec<u8>)>>);
+
+impl OutputSink for TapSeen {
+    fn output(&self, pane: &str, bytes: &[u8], _full: bool) {
+        lock(&self.0).push((pane.to_owned(), bytes.to_vec()));
+    }
+    fn forget(&self, _pane: &str) {}
+    fn clipboard(&self, _pane: &str, _text: &[u8]) {}
+}
+
+impl TapSeen {
+    fn saw(&self, pane: &str, bytes: &[u8]) -> bool {
+        lock(&self.0)
+            .iter()
+            .any(|(seen, data)| seen == pane && data.ends_with(bytes))
+    }
+}
+
+/// PRD device-connect-iroh D-77 (5): a guest's node keeps a session on
+/// every pane for the host's tap, so its core's attach and release only say
+/// whether the pane goes up the link.
+#[test]
+fn a_resident_nodes_pane_goes_up_only_while_its_core_has_it_attached() {
+    let (opened_tx, opened) = channel();
+    let tap = Arc::new(TapSeen::default());
+    let node = NodeTerminals::resident(
+        Arc::clone(&tap) as Arc<dyn OutputSink>,
+        ResidentFolders {
+            state_dir: std::path::PathBuf::new(),
+            holders_home: std::path::PathBuf::new(),
+        },
+    );
+    node.start_service(Box::new(FakeAttacher {
+        opened: Mutex::new(opened_tx),
+        refuse: Mutex::new(None),
+    }))
+    .unwrap();
+    // The node's own session, as its tap takes one on a pane that runs. A
+    // pane's holder attaches at its own size; this attacher has none, so
+    // the size is given here.
+    TerminalNode::control(
+        &node,
+        TerminalControl::Attach {
+            pane: "w1:p1".into(),
+            size: Some(SIZE),
+            manual: false,
+        },
+    );
+    let pane = opened.recv_timeout(WAIT).expect("the node attached");
+    pane.frame(SIZE, true, b"\x1bcfor the host");
+    wait_for(|| tap.saw("w1:p1", b"for the host"));
+    assert!(
+        lock(&node.uplink.state).panes.is_empty(),
+        "a pane the core never attached went up the link"
+    );
+
+    // No link took a line yet, so nothing the node reported waits for one:
+    // a node that runs on with its guest away keeps nothing for a core
+    // that is not there, and its diagnostics go to its host's log.
+    {
+        let state = lock(&node.uplink.state);
+        assert!(state.stopped && state.reports.is_empty() && state.diagnostics.is_empty());
+    }
+
+    // The guest's core links and attaches it: the pane is drawn whole for
+    // it too.
+    node.relink();
+    node.line(
+        down(TerminalControl::Attach {
+            pane: "w1:p1".into(),
+            size: Some(SIZE),
+            manual: false,
+        })
+        .trim_ascii_end(),
+    );
+    pane.frame(SIZE, true, b"\x1bcfor both");
+    let went_up = loop {
+        if let TerminalUp::Output(output) = up(&node.next_up().unwrap()) {
+            break output;
+        }
+    };
+    assert_eq!(went_up.pane, "w1:p1");
+    assert!(went_up.full);
+    assert!(tap.saw("w1:p1", b"for both"));
+
+    // The core releases it: nothing more goes up, and the session stays,
+    // so the host's screen still draws the pane and types into it.
+    node.line(
+        down(TerminalControl::Release {
+            pane: "w1:p1".into(),
+            message: String::new(),
+        })
+        .trim_ascii_end(),
+    );
+    pane.frame(SIZE, false, b"after the release");
+    wait_for(|| tap.saw("w1:p1", b"after the release"));
+    assert!(lock(&node.uplink.state).panes.is_empty());
+    TerminalNode::key(&node, KeyTarget::Pane("w1:p1".into()), b"typed".to_vec(), 1);
+    assert_eq!(pane.next_input(), b"typed");
+}
+
 /// D-18, B18: one pane flooding its output holds neither another pane's
 /// keys nor its frames.
 #[test]

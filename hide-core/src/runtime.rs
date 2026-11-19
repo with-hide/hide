@@ -91,6 +91,7 @@ pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
 mod pane_reopen;
+mod peer_devices;
 pub(crate) mod plans;
 pub(crate) mod project_memory;
 mod project_open;

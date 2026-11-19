@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use hide_core::peer_machines::{
@@ -118,6 +118,10 @@ pub enum Ask {
         device: String,
         #[serde(default)]
         direction: Option<Direction>,
+        /// With the direction that takes a guest off this machine: end the
+        /// work it runs here at once instead of leaving it to run (B26).
+        #[serde(default)]
+        end_work: bool,
     },
     Request {
         device: String,
@@ -310,6 +314,9 @@ pub struct Pairing {
     relay: Mutex<Relay>,
     /// The machines the core was last told, and the turn to tell it.
     told: tokio::sync::Mutex<Option<Vec<PeerMachine>>>,
+    /// What runs the guests' work on this machine, handed in at the
+    /// daemon's start: it follows who is a guest here.
+    guests: OnceLock<Arc<crate::guests::Guests>>,
     /// When the terminal that holds the open share last asked.
     held: Mutex<Option<Instant>>,
     /// How a target's `hide` is reached over SSH.
@@ -361,6 +368,7 @@ impl Pairing {
             updates: Mutex::new(HashMap::new()),
             relay: Mutex::new(Relay::default()),
             told: tokio::sync::Mutex::new(None),
+            guests: OnceLock::new(),
             held: Mutex::new(None),
             ssh,
             ssh_dials: Arc::new(Semaphore::new(SSH_DIALS)),
@@ -397,6 +405,12 @@ impl Pairing {
                 "reason": code,
             }));
         }
+    }
+
+    /// What runs the guests' work on this machine. Given once, at the
+    /// daemon's start, before the endpoint opens.
+    pub fn follow_guests(&self, guests: Arc<crate::guests::Guests>) {
+        let _ = self.guests.set(guests);
     }
 
     /// The daemon's start opened no endpoint: the core hears the machines
@@ -524,6 +538,17 @@ impl Pairing {
     /// (D-41).
     async fn paired_changed(&self, machines: &[PeerMachine]) {
         self.always_on.peers_changed();
+        // A guest's work here follows its grant: one that holds none any
+        // more was taken off this machine (`Guests::granted`).
+        if let Some(guests) = self.guests.get() {
+            guests.granted(
+                machines
+                    .iter()
+                    .filter(|machine| machine.opened_by.is_some())
+                    .filter_map(|machine| PeerKey::from_hex(&machine.key).ok())
+                    .collect(),
+            );
+        }
         let event = json!({
             "schema_version": hide_core::SCHEMA_VERSION,
             "kind": "peer_machines",
@@ -804,7 +829,11 @@ impl Pairing {
                 }
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
-            Ask::Remove { device, direction } => {
+            Ask::Remove {
+                device,
+                direction,
+                end_work,
+            } => {
                 let paired = self.named(&peers, &device)?;
                 let (outgoing, incoming) = directions(&paired.machine, direction)?;
                 if outgoing {
@@ -812,6 +841,11 @@ impl Pairing {
                 }
                 if incoming {
                     service.remove_guest(&paired.key).map_err(store)?;
+                    // The guest is cut off first: its work is ended with
+                    // no way back in for it.
+                    if end_work && let Some(guests) = self.guests.get() {
+                        guests.end_work(paired.key);
+                    }
                 }
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }

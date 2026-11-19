@@ -628,7 +628,7 @@ impl PaneOutput {
 /// Each pane's program session is ended by the pid and start time its record
 /// names, and its holder ends with it; a holder still running after
 /// [`HOLDER_END`] fails the stop.
-fn end_holders(state_dir: &Path) -> Result<()> {
+pub fn end_holders(state_dir: &Path) -> Result<()> {
     let folder = hide_kit::layout::pane_records(state_dir);
     if !folder.exists() {
         return Ok(());

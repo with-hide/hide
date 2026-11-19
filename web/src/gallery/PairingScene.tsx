@@ -1,7 +1,8 @@
 // Pairing two Hides over an invented pair of machines (PRD
 // device-connect-iroh B1-B6, B21, B24-B27, B50): `view=devices` is Settings ›
 // Devices with a shared link and a paired machine in each state a row can be
-// in; `view=allow` and `view=request` are the allow window, with and without
+// in, and the MacBook's two terminals here so its removal offers to end them;
+// `view=allow` and `view=request` are the allow window, with and without
 // words; `view=join` is the pasted link's words, and `view=failed` how a
 // pairing ended; `view=other` is the same Devices list on a screen that is
 // not this computer's own window, which only lists (B52). It proves the
@@ -36,6 +37,9 @@ const PEERS: Peer[] = [
   peer("g", "Office PC", { opens: "removing", connected: false, path: null }),
   peer("h", "Linux box", { opens: "active", connected: false, path: null, update: "there" }),
 ];
+
+/** The MacBook runs two terminals here, so removing it offers to end them (B26). */
+const GUEST_PANES = [{ device_id: "macbook", key: key("a"), panes: [{ id: "guest:macbook:pane:w1:p1", pane: "w1:p1", since_unix_ms: 0 }, { id: "guest:macbook:pane:w1:p2", pane: "w1:p2", since_unix_ms: 0 }] }];
 
 const LOCAL: Device = { agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
 
@@ -78,7 +82,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
       connection: "live",
       pairing: pairingOf(view, lang),
       pairingResult: null,
-      rest: { navigator: { devices: [LOCAL], peers: view === "devices" || view === "other" ? PEERS : [], focused_device_id: "local", workspaces: [] }, status: { remote: [] }, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } },
+      rest: { navigator: { devices: [LOCAL], peers: view === "devices" || view === "other" ? PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: "local", workspaces: [] }, status: { remote: [] }, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } },
     } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
