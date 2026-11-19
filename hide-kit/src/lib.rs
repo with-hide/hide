@@ -1059,6 +1059,32 @@ pub fn apply_store(target: &KitTarget, changes: Vec<store::StoreChange>) -> stor
     )
 }
 
+/// This machine's store as a copy carries it to a device (PRD
+/// skill-mcp-manager B28): every item with its files, and an MCP server with
+/// its key values, read under the account's lock. Nothing of it may be
+/// logged; the device takes each item in as a `Receive` change.
+pub fn export_store(target: &KitTarget) -> store::StoreExport {
+    let refused = |refusal: KitRefusal| store::StoreExport {
+        items: Vec::new(),
+        refused: Some(store::StoreRefusal {
+            cause: store::StoreRefusalCause::Failed,
+            reason: refusal.detail,
+        }),
+    };
+    if let Err(refusal) = retirement_preflight(target) {
+        return refused(refusal);
+    }
+    let _lock = match lock_account(target) {
+        Ok(lock) => lock,
+        Err(refusal) => return refused(refusal),
+    };
+    let record = match record::load(&target.home, &target.install) {
+        Ok(record) => record,
+        Err(refusal) => return refused(refusal),
+    };
+    store::export(target, &record, &agents::Detection::probe(target))
+}
+
 /// The follow of the store's folders (PRD skill-mcp-manager D-33): a pass
 /// over the store when a folder an item follows changed, else `None` with
 /// nothing done but a stat of each such folder, so it can run every few

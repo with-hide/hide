@@ -175,7 +175,7 @@ pub(crate) fn fetch(
     fetched
 }
 
-fn fresh_id(prefix: &str) -> String {
+pub(crate) fn fresh_id(prefix: &str) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     format!(
         "{prefix}{}-{}-{}",

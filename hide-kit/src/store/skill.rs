@@ -18,8 +18,9 @@ use hide_agent_adapter::AccountPath;
 use sha2::{Digest, Sha256};
 
 use super::{
-    Applier, Column, Ctx, Entry, FileEntry, ItemBody, ItemKind, Place, SKILL_BYTE_LIMIT,
-    SKILL_FILE_LIMIT, SkillBody, Source, StoreItem, StoreRefusal, StoreRefusalCause,
+    Applier, Carried, CarriedFile, Column, Ctx, Entry, FileEntry, ItemBody, ItemKind, Place,
+    SKILL_BYTE_LIMIT, SKILL_FILE_LIMIT, SkillBody, Source, StoreItem, StoreRefusal,
+    StoreRefusalCause,
 };
 use crate::agents::{ADAPTERS, SkillDir};
 
@@ -196,6 +197,116 @@ impl Applier for SkillApplier {
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {
         Ok(())
     }
+
+    fn export(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<Carried, StoreRefusal> {
+        use base64::Engine;
+        let root = ctx.item_files(&item.id);
+        let files = walk(&root)?
+            .into_iter()
+            .map(|file| {
+                let bytes = std::fs::read(&file.path).map_err(|error| {
+                    StoreRefusal::new(
+                        StoreRefusalCause::Failed,
+                        format!("{} could not be read: {error}", file.path.display()),
+                    )
+                })?;
+                Ok(CarriedFile {
+                    executable: executable(&file.path),
+                    data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                    path: file.relative,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreRefusal>>()?;
+        Ok(Carried::Skill { files })
+    }
+
+    fn import(
+        &self,
+        _ctx: &Ctx<'_>,
+        name: &str,
+        content: &Carried,
+        into: &Path,
+    ) -> Result<ItemBody, StoreRefusal> {
+        let Carried::Skill { files } = content else {
+            return Err(StoreRefusal::new(
+                StoreRefusalCause::Failed,
+                format!("{name} was carried as another kind"),
+            ));
+        };
+        let decoded = into.with_file_name(format!(
+            "{}.decoded",
+            into.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let written = write_carried(files, &decoded);
+        let body = written.and_then(|()| take_in(&decoded, into));
+        let _ = std::fs::remove_dir_all(&decoded);
+        Ok(ItemBody::Skill(body?))
+    }
+}
+
+/// Writes a carried skill's files under `root`, within the skill limits and
+/// never outside it: a path that is absolute, climbs out or is not plain
+/// names is refused (B28).
+fn write_carried(files: &[CarriedFile], root: &Path) -> Result<(), StoreRefusal> {
+    use base64::Engine;
+    let refused = |reason: String| StoreRefusal::new(StoreRefusalCause::Failed, reason);
+    if files.len() > SKILL_FILE_LIMIT {
+        return Err(StoreRefusal::new(
+            StoreRefusalCause::TooLarge,
+            format!("a carried skill holds more than {SKILL_FILE_LIMIT} files"),
+        ));
+    }
+    let mut bytes = 0u64;
+    for file in files {
+        let parts = file.path.split('/').collect::<Vec<_>>();
+        if parts.iter().any(|part| {
+            part.is_empty() || *part == "." || *part == ".." || part.contains(['\\', ':', '\0'])
+        }) {
+            return Err(refused(format!(
+                "{} is not a path inside a skill",
+                file.path
+            )));
+        }
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(&file.data)
+            .map_err(|error| refused(format!("{} could not be read: {error}", file.path)))?;
+        bytes += data.len() as u64;
+        if bytes > SKILL_BYTE_LIMIT {
+            return Err(StoreRefusal::new(
+                StoreRefusalCause::TooLarge,
+                format!(
+                    "a carried skill holds more than {} MiB",
+                    SKILL_BYTE_LIMIT / 1024 / 1024
+                ),
+            ));
+        }
+        let target = parts
+            .iter()
+            .fold(root.to_path_buf(), |path, part| path.join(part));
+        if let Some(parent) = target.parent() {
+            hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
+                refused(format!(
+                    "{} could not be created: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        std::fs::write(&target, &data).map_err(|error| {
+            refused(format!(
+                "{} could not be written: {error}",
+                target.display()
+            ))
+        })?;
+        if file.executable {
+            hide_platform::fs::permissions::mark_executable(&target).map_err(|error| {
+                refused(format!(
+                    "{} could not be made runnable: {error}",
+                    target.display()
+                ))
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn key(path: &Path) -> String {

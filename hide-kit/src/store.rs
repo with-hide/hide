@@ -376,7 +376,130 @@ pub enum StoreChange {
     PreviewUpdate { item: String },
     /// Take the update a preview showed, at that commit (B23).
     Update { item: String, commit: String },
+    /// Take in an item another machine's store carried, with its content
+    /// (B28, D-15): only the core's copy job makes it, never the screen.
+    Receive { item: Box<CarriedItem> },
 }
+
+impl StoreChange {
+    /// The change as an outcome, a log line or the screen may hold it: what
+    /// only the store may keep (a carried skill's file bytes, an MCP
+    /// server's key values) emptied (D-11, B13). Every variant is named, so
+    /// a new one that carries a value has to say how it is emptied.
+    pub fn redacted(&self) -> StoreChange {
+        match self {
+            StoreChange::Receive { item } => StoreChange::Receive {
+                item: Box::new(item.redacted()),
+            },
+            StoreChange::Inspect { .. }
+            | StoreChange::Install { .. }
+            | StoreChange::Set { .. }
+            | StoreChange::Delete { .. }
+            | StoreChange::Restore { .. }
+            | StoreChange::Forget { .. }
+            | StoreChange::Adopt { .. }
+            | StoreChange::CheckUpdates
+            | StoreChange::PreviewUpdate { .. }
+            | StoreChange::Update { .. } => self.clone(),
+        }
+    }
+}
+
+/// An item as one machine's store hands it to another's (B28): what the
+/// receiving store keeps of it, and its kind's content.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CarriedItem {
+    pub kind: ItemKind,
+    pub name: String,
+    /// Where it came from; a folder the receiving machine cannot follow
+    /// arrives as a copy.
+    pub source: Source,
+    pub on: bool,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub off_for: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<Latest>,
+    pub content: Carried,
+}
+
+impl CarriedItem {
+    fn redacted(&self) -> Self {
+        Self {
+            content: self.content.emptied(),
+            ..self.clone()
+        }
+    }
+}
+
+/// What a kind carries of an item between machines, written and read by its
+/// [`Applier::export`] and [`Applier::import`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Carried {
+    /// A skill's files.
+    Skill { files: Vec<CarriedFile> },
+    /// An MCP server's spec and its key values; the MCP half names the keys'
+    /// type and how they are emptied.
+    Mcp {
+        body: McpBody,
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        keys: serde_json::Value,
+    },
+}
+
+impl Carried {
+    /// The content with every value emptied: a skill's files keep their
+    /// paths and no bytes, an MCP server keeps its spec and no key values.
+    fn emptied(&self) -> Self {
+        match self {
+            Carried::Skill { files } => Carried::Skill {
+                files: files
+                    .iter()
+                    .map(|file| CarriedFile {
+                        data: String::new(),
+                        ..file.clone()
+                    })
+                    .collect(),
+            },
+            Carried::Mcp { body, .. } => Carried::Mcp {
+                body: body.clone(),
+                keys: serde_json::Value::Null,
+            },
+        }
+    }
+
+    /// The bytes it carries, which a copy is capped by.
+    fn size(&self) -> u64 {
+        match self {
+            Carried::Skill { files } => files.iter().map(|file| file.data.len() as u64).sum(),
+            Carried::Mcp { keys, .. } => keys.to_string().len() as u64,
+        }
+    }
+}
+
+/// One file of a carried skill.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CarriedFile {
+    /// Relative to the skill's folder, `/` between names.
+    pub path: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub executable: bool,
+    /// The file's bytes, base64.
+    pub data: String,
+}
+
+/// This machine's store as a copy carries it to another (B28), or why it
+/// could not be read.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StoreExport {
+    pub items: Vec<CarriedItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<StoreRefusal>,
+}
+
+/// The most a copy carries in encoded bytes: one device call holds it whole
+/// under the helper's request limit.
+pub const COPY_BYTE_LIMIT: u64 = 30 * 1024 * 1024;
 
 /// Why a change was refused; nothing of it was done.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -679,6 +802,18 @@ pub(crate) trait Applier {
     /// The item is deleted for good: anything of it the store keeps beside
     /// its files goes (an MCP's keys, D-11).
     fn purge(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<(), String>;
+    /// What a copy to another machine carries of `item` (B28): a skill's
+    /// files, an MCP server's spec with its key values.
+    fn export(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<Carried, StoreRefusal>;
+    /// Writes what another machine carried into the store folder `into`,
+    /// which does not exist yet, and answers the item's body (B28).
+    fn import(
+        &self,
+        ctx: &Ctx<'_>,
+        name: &str,
+        content: &Carried,
+        into: &Path,
+    ) -> Result<ItemBody, StoreRefusal>;
 }
 
 fn appliers() -> [&'static dyn Applier; 2] {
@@ -910,7 +1045,7 @@ fn run(
                 log("store.change_refused", None, &refusal.reason);
             }
             outcomes.push(ChangeOutcome {
-                change: change.clone(),
+                change: change.redacted(),
                 refused,
             });
         }
@@ -1127,6 +1262,7 @@ fn change_one(
             fetched.diff_of(item).map(drop)
         }
         StoreChange::Update { item, commit } => update(ctx, store, item, commit),
+        StoreChange::Receive { item } => receive(ctx, store, item),
     }
 }
 
@@ -1295,6 +1431,125 @@ fn delete(ctx: &Ctx<'_>, store: &mut StoreRecord, id: &str) -> Result<(), StoreR
         },
     );
     Ok(())
+}
+
+/// Takes in an item another machine's store carried (B28). Its content is
+/// written beside the store first; it replaces an item of the same id only
+/// when they differ, the old one going to the undo list, and the same item
+/// again changes nothing (engineering rule 11). A folder source arrives as a
+/// copy, since this machine cannot follow another's folder.
+fn receive(
+    ctx: &Ctx<'_>,
+    store: &mut StoreRecord,
+    carried: &CarriedItem,
+) -> Result<(), StoreRefusal> {
+    if hides_own(&carried.name) || !valid_name(&carried.name) {
+        return Err(StoreRefusal::new(
+            StoreRefusalCause::NameTaken,
+            format!("{} cannot name an item", carried.name),
+        ));
+    }
+    let id = StoreItem::id_of(carried.kind, &carried.name);
+    let staged = ctx.staging().join(source::fresh_id("received-"));
+    let body = applier(carried.kind)
+        .import(ctx, &carried.name, &carried.content, &staged)
+        .inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&staged);
+        })?;
+    let item = StoreItem {
+        id: id.clone(),
+        kind: carried.kind,
+        name: carried.name.clone(),
+        source: match &carried.source {
+            Source::Folder { path } => Source::Copy { from: path.clone() },
+            other => other.clone(),
+        },
+        on: carried.on,
+        off_for: carried.off_for.clone(),
+        added_at_unix_ms: now_unix_ms(),
+        latest: carried.latest.clone(),
+        folder_missing: false,
+        fingerprint: None,
+        body,
+    };
+    if let Some(existing) = store.item(&id) {
+        if existing.digest() == item.digest()
+            && existing.source == item.source
+            && existing.on == item.on
+            && existing.off_for == item.off_for
+        {
+            let _ = std::fs::remove_dir_all(&staged);
+            return Ok(());
+        }
+        delete(ctx, store, &id).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&staged);
+        })?;
+    }
+    move_folder(&staged, &ctx.item_files(&id)).map_err(failed)?;
+    store.items.push(item);
+    Ok(())
+}
+
+/// This machine's store as a copy carries it to another (B28): every item
+/// with its kind's content, refused whole past [`COPY_BYTE_LIMIT`] or when an
+/// item cannot be carried, before anything is sent.
+pub(crate) fn export(target: &KitTarget, record: &Record, detection: &Detection) -> StoreExport {
+    let refused = |refusal: StoreRefusal| {
+        log("store.export_refused", None, &refusal.reason);
+        StoreExport {
+            items: Vec::new(),
+            refused: Some(refusal),
+        }
+    };
+    let dir = match store_dir(&target.home, false) {
+        Ok(dir) => dir,
+        Err(reason) => return refused(failed(reason)),
+    };
+    let store = match load(&dir) {
+        Ok(store) => store,
+        Err(reason) => return refused(failed(reason)),
+    };
+    let accounts = crate::targets::accounts(target);
+    let scope = Scope::default();
+    let ctx = Ctx {
+        target,
+        dir,
+        accounts: &accounts,
+        detection,
+        record,
+        scope: &scope,
+    };
+    let mut items = Vec::new();
+    let mut size = 0;
+    for item in &store.items {
+        let content = match applier(item.kind).export(&ctx, item) {
+            Ok(content) => content,
+            Err(refusal) => return refused(refusal),
+        };
+        size += content.size();
+        if size > COPY_BYTE_LIMIT {
+            return refused(StoreRefusal::new(
+                StoreRefusalCause::TooLarge,
+                format!(
+                    "the store holds more than {} MiB to copy",
+                    COPY_BYTE_LIMIT / 1024 / 1024
+                ),
+            ));
+        }
+        items.push(CarriedItem {
+            kind: item.kind,
+            name: item.name.clone(),
+            source: item.source.clone(),
+            on: item.on,
+            off_for: item.off_for.clone(),
+            latest: item.latest.clone(),
+            content,
+        });
+    }
+    StoreExport {
+        items,
+        refused: None,
+    }
 }
 
 fn push_trash(ctx: &Ctx<'_>, store: &mut StoreRecord, entry: TrashEntry) {

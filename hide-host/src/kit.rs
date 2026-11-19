@@ -178,6 +178,7 @@ fn bundled(
         }
         KitAction::Store { changes } => return to_value(hide_kit::apply_store(&target, changes)),
         KitAction::FollowStore => return to_value(hide_kit::follow_store(&target)),
+        KitAction::StoreExport => return to_value(hide_kit::export_store(&target)),
         KitAction::Status => hide_kit::status(&target),
         KitAction::Remove => return Err(not_removed()),
     };
@@ -225,6 +226,7 @@ pub fn run_build(
         }
         KitAction::Store { changes } => to_value(hide_kit::apply_store(&target, changes)),
         KitAction::FollowStore => to_value(hide_kit::follow_store(&target)),
+        KitAction::StoreExport => to_value(hide_kit::export_store(&target)),
         KitAction::Status => to_value(hide_kit::status(&target)),
         KitAction::Remove => Err(not_removed()),
     }
@@ -391,6 +393,7 @@ fn run_for_projects(
         }
         KitAction::Store { changes } => to_value(hide_kit::apply_store(&target(), changes)),
         KitAction::FollowStore => to_value(hide_kit::follow_store(&target())),
+        KitAction::StoreExport => to_value(hide_kit::export_store(&target())),
         KitAction::Status => to_value(hide_kit::status(&target())),
         KitAction::Remove => {
             let kit = hide_kit::remove(&target());

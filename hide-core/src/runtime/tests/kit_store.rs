@@ -7,8 +7,9 @@ use super::device_kit::{DEVICE, KitDevice, dispatch, kit, report, settle, with_c
 use super::*;
 use crate::agent_profiles::AnswerState;
 use hide_kit::store::{
-    Cell, CellState, ChangeOutcome, Column, ItemKind, ItemReport, Source, StoreChange,
-    StoreRefusal, StoreRefusalCause, StoreReport, Version,
+    Carried, CarriedFile, CarriedItem, Cell, CellState, ChangeOutcome, Column, ItemKind,
+    ItemReport, Source, StoreChange, StoreExport, StoreRefusal, StoreRefusalCause, StoreReport,
+    Version,
 };
 use hide_node_link::protocol::KitAction;
 
@@ -313,4 +314,86 @@ fn a_cell_changed_while_its_agent_ran_waits_for_a_new_session_until_that_session
     // That session ends and a new one starts: the new one read the change.
     feed(&mut runtime, &[("w1:p2", "claude", true)]);
     assert_eq!(marked(&runtime), Vec::new());
+}
+
+#[test]
+fn a_copy_from_this_mac_reaches_the_device_whole_and_its_answer_holds_no_file_bytes() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = with_consent(Some(helper.clone()));
+    let carried = CarriedItem {
+        kind: ItemKind::Skill,
+        name: "style".to_owned(),
+        source: Source::Folder {
+            path: "/Users/me/skills/style".to_owned(),
+        },
+        on: true,
+        off_for: Default::default(),
+        latest: None,
+        content: Carried::Skill {
+            files: vec![CarriedFile {
+                path: "SKILL.md".to_owned(),
+                executable: false,
+                data: "U0tJTEwgYnl0ZXM=".to_owned(),
+            }],
+        },
+    };
+    let received = StoreChange::Receive {
+        item: Box::new(carried.clone()),
+    };
+    let outcome = ChangeOutcome {
+        change: received.redacted(),
+        refused: None,
+    };
+    helper.answer_store(Ok(serde_json::to_value(store_report(
+        vec![outcome.clone()],
+        None,
+    ))
+    .unwrap()));
+
+    assert!(dispatch(
+        &shared,
+        "kit_store_copy",
+        serde_json::json!({"device_id": DEVICE, "request_id": "c1"}),
+    ));
+    // This Mac's kit worker reads its store and hands the answer back.
+    let to = shared.lock().unwrap().take_store_export();
+    assert_eq!(to.as_deref(), Some(DEVICE));
+    assert!(shared.lock().unwrap().ingest_store_export(
+        DEVICE,
+        Ok(StoreExport {
+            items: vec![carried],
+            refused: None,
+        }),
+    ));
+    settle(&shared);
+
+    assert_eq!(
+        store_calls(&helper),
+        vec![KitAction::Store {
+            changes: vec![received.clone()]
+        }],
+        "the device gets the item with its files"
+    );
+    let answered = answer(&shared).unwrap();
+    assert_eq!(
+        (answered.request_id.as_str(), answered.state),
+        ("c1", AnswerState::Done)
+    );
+    assert_eq!(answered.outcomes, vec![outcome]);
+    let wire = serde_json::to_string(&shared.lock().unwrap().snapshot().status).unwrap();
+    assert!(!wire.contains("U0tJTEwgYnl0ZXM="), "{wire}");
+
+    // The screen cannot hand a device an item of its own making.
+    assert!(dispatch(
+        &shared,
+        "kit_store",
+        serde_json::json!({
+            "device_id": DEVICE,
+            "request_id": "r1",
+            "changes": [serde_json::to_value(&received).unwrap()],
+        }),
+    ));
+    assert_eq!(answer(&shared).unwrap().state, AnswerState::Refused);
+    settle(&shared);
+    assert_eq!(store_calls(&helper).len(), 1);
 }

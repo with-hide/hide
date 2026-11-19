@@ -1391,6 +1391,15 @@ pub(super) struct KitStorePayload {
     pub(super) changes: Vec<hide_kit::store::StoreChange>,
 }
 
+/// The store screen's [이 Mac에서 복사] for one device (PRD skill-mcp-manager
+/// B28): this Mac's store goes to that device's; the answer lands in
+/// `status.store_answer` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStoreCopyPayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
+}
+
 /// A Settings tab that shows the kit opened: this Mac's parts are read again
 /// once, so a part removed by hand shows as removed.
 #[derive(Debug, Deserialize)]
@@ -1831,6 +1840,7 @@ pub(super) enum Event {
     KitReinstall(KitReinstallPayload),
     KitAgentSet(KitAgentSetPayload),
     KitStore(KitStorePayload),
+    KitStoreCopy(KitStoreCopyPayload),
     AgentPermissionSet(super::agent_permission::AgentPermissionSetPayload),
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
@@ -2191,6 +2201,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "kit_reinstall" => decode!(KitReinstallPayload, KitReinstall),
         "kit_agent_set" => decode!(KitAgentSetPayload, KitAgentSet),
         "kit_store" => decode!(KitStorePayload, KitStore),
+        "kit_store_copy" => decode!(KitStoreCopyPayload, KitStoreCopy),
         "agent_permission_set" => decode!(
             super::agent_permission::AgentPermissionSetPayload,
             AgentPermissionSet
@@ -2592,6 +2603,9 @@ impl Runtime {
             }
             Event::KitStore(payload) => {
                 self.request_store_change(&payload.device_id, payload.request_id, payload.changes)
+            }
+            Event::KitStoreCopy(payload) => {
+                self.request_store_copy(&payload.device_id, payload.request_id)
             }
             Event::CodexDaemonDisable(payload) => {
                 self.request_codex_daemon_disable(&payload.device_id)

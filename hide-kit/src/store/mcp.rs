@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
-    Applier, Column, Ctx, Entry, ItemBody, ItemKind, Place, Source, StoreItem, StoreRefusal,
-    StoreRefusalCause, Version,
+    Applier, Carried, Column, Ctx, Entry, ItemBody, ItemKind, Place, Source, StoreItem,
+    StoreRefusal, StoreRefusalCause, Version,
 };
 use crate::agents::ADAPTERS;
 
@@ -101,5 +101,23 @@ impl Applier for McpApplier {
 
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {
         Ok(())
+    }
+
+    /// Carries the server's spec and its key values read from Hide's key
+    /// file (D-11, B28); the keys travel only inside the device link.
+    fn export(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<Carried, StoreRefusal> {
+        Err(StoreRefusal::new(StoreRefusalCause::Unsupported, NOT_YET))
+    }
+
+    /// Keeps the carried spec as the body and writes the key values into
+    /// Hide's key file.
+    fn import(
+        &self,
+        _ctx: &Ctx<'_>,
+        _name: &str,
+        _content: &Carried,
+        _into: &Path,
+    ) -> Result<ItemBody, StoreRefusal> {
+        Err(StoreRefusal::new(StoreRefusalCause::Unsupported, NOT_YET))
     }
 }

@@ -79,28 +79,36 @@ impl KitPump {
                         break;
                     };
                     let now = Instant::now();
-                    let Ok((job, store, diagnosis_due)) = core.lock().map(|mut locked| {
+                    let Ok((job, store, export, diagnosis_due)) = core.lock().map(|mut locked| {
                         locked.schedule_store(now);
                         let job = locked.take_local_kit_job(now).map(|job| {
                             let profiles = locked.profiles_due(node.as_str(), &job);
                             (job, locked.retirement_projects(node.as_str()), profiles)
                         });
-                        // The store's work runs once no kit job waits.
+                        // The store's work runs once no kit job waits, and a
+                        // copy to a device once no store work does.
                         let store = job
                             .is_none()
                             .then(|| locked.take_local_store_job())
+                            .flatten();
+                        let export = (job.is_none() && store.is_none())
+                            .then(|| locked.take_store_export())
                             .flatten();
                         let due = next_diagnosis.is_none()
                             || (locked.ui_attached()
                                 && locked.settings_observed()
                                 && next_diagnosis.is_some_and(|next| now >= next));
-                        (job, store, due)
+                        (job, store, export, due)
                     }) else {
                         break;
                     };
                     drop(core);
                     let stored =
                         store.map(|store| call_store(link.as_ref(), &store, LOCAL_CLI_DIR));
+                    let exported = export.map(|device| {
+                        let read = export_store(link.as_ref());
+                        (device, read)
+                    });
                     let mut applied = false;
                     let mut profiles_due = false;
                     let report = job.map(|(job, retirement_projects, profiles)| {
@@ -145,6 +153,9 @@ impl KitPump {
                             Some(answered) => locked.ingest_store_answer(node.as_str(), answered),
                             None => false,
                         };
+                        if let Some((device, read)) = exported {
+                            changed |= locked.ingest_store_export(&device, read);
+                        }
                         changed |= match &report {
                             Some(Ok(report)) => locked.ingest_kit_report(node.as_str(), report),
                             Some(Err((cause, detail))) => {
@@ -414,6 +425,19 @@ fn call_store(link: &dyn NodeLink, job: &StoreJob, cli_dir: &str) -> crate::runt
                 .map_err(|error| error.to_string())
         }
     }
+}
+
+/// Reads this Mac's store for a copy to a device (B28), with the runtime
+/// lock released. The answer holds files and key values: it is handed on as
+/// it is and never logged.
+fn export_store(link: &dyn NodeLink) -> Result<hide_kit::store::StoreExport, String> {
+    let kit = hide_node_link::protocol::Call::Kit {
+        action: hide_node_link::protocol::KitAction::StoreExport,
+        cli_dir: LOCAL_CLI_DIR.to_owned(),
+        retirement_projects: Vec::new(),
+    };
+    call_as::<hide_kit::store::StoreExport>(link, kit, STORE_TIMEOUT)
+        .map_err(|error| error.to_string())
 }
 
 /// A list of profiles is a file read and the kit's judgment of each.

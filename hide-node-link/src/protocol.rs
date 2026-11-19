@@ -428,10 +428,11 @@ use crate::error::HostError;
 /// task and start (`panes::HookStatusReport::subagents`), which a core on 97
 /// refuses as a field it does not know, so a helper upgrades with its core.
 /// 99: the kit carries the store of skills and MCP items (PRD
-/// skill-mcp-manager): a kit report carries the store's, and the `store`
-/// pass and the `follow_store` check answer the store's report alone; a
-/// helper on 98 knows neither call, so it is refused at Hello and upgraded
-/// with its core.
+/// skill-mcp-manager): a kit report carries the store's, the `store` pass
+/// and the `follow_store` check answer the store's report alone, and
+/// `store_export` reads a store for a copy to a device; a helper on 98 knows
+/// none of these calls, so it is refused at Hello and upgraded with its
+/// core.
 pub const PROTOCOL_VERSION: u32 = 99;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
@@ -1576,7 +1577,8 @@ impl Call {
 /// What a `kit` request does. `apply` and `reinstall` answer a
 /// `hide_kit::KitReport`, `status` answers one without changing anything,
 /// `store` answers a `hide_kit::store::StoreReport`, `follow_store` one or
-/// `null`, and `remove` answers a [`KitRemoved`].
+/// `null`, `store_export` a `hide_kit::store::StoreExport`, and `remove`
+/// answers a [`KitRemoved`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KitAction {
@@ -1609,6 +1611,12 @@ pub enum KitAction {
     /// (`hide_kit::follow_store`): a pass when a followed folder changed,
     /// answered with its report, else `null`.
     FollowStore,
+    /// This machine's store as a copy to a device carries it
+    /// (`hide_kit::export_store`, PRD skill-mcp-manager B28), answered with a
+    /// `hide_kit::store::StoreExport` that holds each skill's files and each
+    /// MCP server's key values: the core keeps it in memory and hands each
+    /// item to the device as a `receive` change, and logs none of it.
+    StoreExport,
     Status,
     /// The device is being removed from Hide: Hide's parts come off, then
     /// the helper root.

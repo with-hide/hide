@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::store::{
-    CellState, ItemKind, Source, SourceSpec, StoreChange, StoreRefusalCause, StoreReport,
+    Carried, CellState, ItemKind, Source, SourceSpec, StoreChange, StoreRefusalCause, StoreReport,
     TrashCause, UNDO_LIMIT, Version,
 };
 use hide_agent_adapter::{AccountRef, Profile, ProfileId};
@@ -831,5 +831,110 @@ fn a_repository_without_a_skill_or_access_says_so_and_asks_nobody() {
             .unwrap_or(0),
         0,
         "a failed read leaves nothing staged"
+    );
+}
+
+#[test]
+fn a_copy_carries_each_skill_with_its_files_to_another_machines_store_once() {
+    let here = every_agent();
+    let source = here.root.join("mine/writer");
+    write(&source.join("SKILL.md"), &skill_md("writer", "Write."));
+    let script = source.join("scripts/run.sh");
+    write(&script, "#!/bin/sh\necho hi\n");
+    hide_platform::fs::permissions::mark_executable(&script).unwrap();
+    install(
+        &here,
+        SourceSpec::Folder {
+            path: source.display().to_string(),
+        },
+        &["writer"],
+    );
+    store(
+        &here,
+        vec![StoreChange::Set {
+            item: "skill:writer".to_owned(),
+            column: Some("antigravity".to_owned()),
+            on: false,
+        }],
+    );
+
+    let export = crate::export_store(&here.target);
+    assert_eq!(export.refused, None, "{:?}", export.refused);
+    assert_eq!(export.items.len(), 1);
+
+    let there = every_agent();
+    let received = StoreChange::Receive {
+        item: Box::new(export.items[0].clone()),
+    };
+    let report = store(&there, vec![received.clone()]);
+    let StoreChange::Receive { item } = &report.outcomes[0].change else {
+        panic!("{report:#?}");
+    };
+    assert!(
+        matches!(&item.content, Carried::Skill { files }
+            if !files.is_empty() && files.iter().all(|file| file.data.is_empty())),
+        "an outcome names the files and holds none of their bytes"
+    );
+    let row = report
+        .items
+        .iter()
+        .find(|item| item.id == "skill:writer")
+        .unwrap();
+    assert_eq!(
+        row.version,
+        Version::Copy,
+        "a folder this machine cannot follow arrives as a copy"
+    );
+    assert!(!report.follows);
+    let mut expected = all(CellState::On);
+    expected.insert("antigravity".to_owned(), CellState::Off);
+    assert_eq!(cells(&report, "skill:writer"), expected);
+    for folder in &folders(&there)[..2] {
+        assert_eq!(
+            std::fs::read_to_string(folder.join("writer/SKILL.md")).unwrap(),
+            skill_md("writer", "Write.")
+        );
+        assert!(
+            hide_platform::fs::permissions::is_executable(&folder.join("writer/scripts/run.sh"))
+                .unwrap()
+        );
+    }
+    assert!(!there.home().join(".gemini/config/skills/writer").exists());
+
+    // The same copy again changes nothing.
+    let skills = there.home().join(".claude/skills");
+    let before = tree(&skills);
+    let again = store(&there, vec![received]);
+    assert!(again.trash.is_empty());
+    assert_eq!(tree(&skills), before);
+
+    // A carried path that climbs out of the skill is refused, and nothing is
+    // written outside it.
+    let mut climbing = export.items[0].clone();
+    let Carried::Skill { files } = &mut climbing.content else {
+        unreachable!()
+    };
+    files[0].path = "../escape".to_owned();
+    let refused = crate::apply_store(
+        &there.target,
+        vec![StoreChange::Receive {
+            item: Box::new(climbing),
+        }],
+    );
+    assert_eq!(
+        refused.outcomes[0]
+            .refused
+            .as_ref()
+            .map(|refusal| refusal.cause),
+        Some(StoreRefusalCause::Failed)
+    );
+    let staging = there.home().join(".hide/store/staging");
+    assert!(
+        std::fs::read_dir(&staging)
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+            == 0,
+        "nothing stays in {}",
+        staging.display()
     );
 }

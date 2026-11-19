@@ -97,6 +97,9 @@ struct SessionMark {
 pub(super) struct Stores {
     local_pending: Option<StoreJob>,
     device_pending: BTreeMap<String, StoreJob>,
+    /// The devices waiting for a copy of this Mac's store (B28), read on
+    /// this Mac's kit worker one at a time.
+    exports: BTreeSet<String>,
     due: BTreeMap<String, Due>,
     marks: BTreeMap<String, Vec<SessionMark>>,
 }
@@ -105,6 +108,7 @@ impl Stores {
     /// A device that went takes its queued work, schedule and marks along.
     pub(super) fn forget(&mut self, device_id: &str) {
         self.device_pending.remove(device_id);
+        self.exports.remove(device_id);
         self.due.remove(device_id);
         self.marks.remove(device_id);
     }
@@ -170,15 +174,84 @@ impl Runtime {
         {
             return false;
         }
-        let refusal = if request_id.is_empty() || request_id.len() > REQUEST_ID_LIMIT {
-            Some((
-                "store.bad_request",
-                "a store request needs a short request id".to_owned(),
-            ))
-        } else if changes.is_empty() || changes.len() > REQUEST_CHANGES_LIMIT {
+        let refusal = if changes.is_empty() || changes.len() > REQUEST_CHANGES_LIMIT {
             Some((
                 "store.bad_request",
                 format!("a store request carries 1 to {REQUEST_CHANGES_LIMIT} changes"),
+            ))
+        } else if changes
+            .iter()
+            .any(|change| matches!(change, StoreChange::Receive { .. }))
+        {
+            // What another machine carried comes only from the copy job,
+            // never from the screen.
+            Some((
+                "store.bad_request",
+                "a store request carries no received item".to_owned(),
+            ))
+        } else {
+            self.store_request_refusal(device_id, &request_id, changes.len())
+        };
+        let answer = StoreAnswer::pending(
+            request_id,
+            device_id,
+            changes.iter().map(StoreChange::redacted).collect(),
+        );
+        if let Some(refusal) = refusal {
+            self.refuse_store_request(answer, refusal);
+            return true;
+        }
+        self.snapshot.status.store_answer = Some(answer);
+        self.queue_store(device_id, StoreJob::Pass(changes), true);
+        true
+    }
+
+    /// The store screen's [이 Mac에서 복사] for a device (`kit_store_copy`,
+    /// B28, D-15): this Mac's store is read on its own kit worker, and each
+    /// item, with its files and an MCP server's key values, is handed to the
+    /// device as a `Receive` change over the device link. What is read stays
+    /// in the core's memory until the device's pass takes it; the answer
+    /// lands in `status.store_answer` like any request, with nothing of a
+    /// file's bytes or a key's value in it.
+    pub(super) fn request_store_copy(&mut self, device_id: &str, request_id: String) -> bool {
+        if self
+            .snapshot
+            .status
+            .store_answer
+            .as_ref()
+            .is_some_and(|answer| answer.request_id == request_id && answer.device_id == device_id)
+        {
+            return false;
+        }
+        let refusal = if device_id == self.node.as_str() {
+            Some((
+                "store.bad_request",
+                "a copy goes from this Mac to a device".to_owned(),
+            ))
+        } else {
+            self.store_request_refusal(device_id, &request_id, 0)
+        };
+        let answer = StoreAnswer::pending(request_id, device_id, Vec::new());
+        if let Some(refusal) = refusal {
+            self.refuse_store_request(answer, refusal);
+            return true;
+        }
+        self.snapshot.status.store_answer = Some(answer);
+        self.stores.exports.insert(device_id.to_owned());
+        true
+    }
+
+    /// Why a store request for `device_id` cannot be queued, if it cannot.
+    fn store_request_refusal(
+        &self,
+        device_id: &str,
+        request_id: &str,
+        changes: usize,
+    ) -> Option<(&'static str, String)> {
+        if request_id.is_empty() || request_id.len() > REQUEST_ID_LIMIT {
+            Some((
+                "store.bad_request",
+                "a store request needs a short request id".to_owned(),
             ))
         } else if device_id != self.node.as_str() && !self.device_registration_exists(device_id) {
             Some((
@@ -190,7 +263,7 @@ impl Runtime {
         } else if self
             .stores
             .queued_changes(device_id, device_id == self.node.as_str())
-            + changes.len()
+            + changes
             > QUEUED_CHANGES_LIMIT
         {
             Some((
@@ -199,22 +272,105 @@ impl Runtime {
             ))
         } else {
             None
-        };
-        let answer = StoreAnswer::pending(request_id, device_id, changes.clone());
-        if let Some((code, reason)) = refusal {
-            crate::diagnostic!(serde_json::json!({
-                "component": "store",
-                "kind": "request.refused",
-                "device_id": device_id,
-                "request_id": answer.request_id,
-                "code": code,
-                "reason": reason,
-            }));
-            self.snapshot.status.store_answer = Some(answer.refused());
-            return true;
         }
-        self.snapshot.status.store_answer = Some(answer);
-        self.queue_store(device_id, StoreJob::Pass(changes), true);
+    }
+
+    fn refuse_store_request(&mut self, answer: StoreAnswer, (code, reason): (&str, String)) {
+        crate::diagnostic!(serde_json::json!({
+            "component": "store",
+            "kind": "request.refused",
+            "device_id": answer.device_id,
+            "request_id": answer.request_id,
+            "code": code,
+            "reason": reason,
+        }));
+        self.snapshot.status.store_answer = Some(answer.refused());
+    }
+
+    /// The next device waiting for a copy of this Mac's store, once this
+    /// Mac's kit worker has nothing else to run.
+    pub(crate) fn take_store_export(&mut self) -> Option<String> {
+        self.stores.exports.pop_first()
+    }
+
+    /// What this Mac's store answered for a copy to `device_id`: each item
+    /// goes to the device as a `Receive` change, and the request waits for
+    /// the device's pass; a store that could not be read, or a copy past
+    /// what the device may hold queued, ends the request refused. True when
+    /// the snapshot changed.
+    pub(crate) fn ingest_store_export(
+        &mut self,
+        device_id: &str,
+        exported: Result<hide_kit::store::StoreExport, String>,
+    ) -> bool {
+        let waiting = |runtime: &Runtime| {
+            runtime
+                .snapshot
+                .status
+                .store_answer
+                .as_ref()
+                .is_some_and(|answer| {
+                    answer.state == AnswerState::Pending
+                        && answer.device_id == device_id
+                        && !answer.sent
+                        && answer.changes.is_empty()
+                })
+        };
+        let reason = match exported {
+            Err(reason) => reason,
+            Ok(export) => match export.refused {
+                Some(refusal) => refusal.reason,
+                None if self.stores.queued_changes(device_id, false) + export.items.len()
+                    > QUEUED_CHANGES_LIMIT =>
+                {
+                    format!(
+                        "{device_id} would have more than {QUEUED_CHANGES_LIMIT} store changes waiting"
+                    )
+                }
+                None if !self.device_registration_exists(device_id) => {
+                    format!("Device {device_id} is not registered")
+                }
+                None => {
+                    let changes = export
+                        .items
+                        .into_iter()
+                        .map(|item| StoreChange::Receive {
+                            item: Box::new(item),
+                        })
+                        .collect::<Vec<_>>();
+                    let answered = waiting(self);
+                    if let Some(answer) = self
+                        .snapshot
+                        .status
+                        .store_answer
+                        .as_mut()
+                        .filter(|_| answered)
+                    {
+                        if changes.is_empty() {
+                            answer.state = AnswerState::Done;
+                            return true;
+                        }
+                        answer.changes = changes.iter().map(StoreChange::redacted).collect();
+                    }
+                    if !changes.is_empty() {
+                        self.queue_store(device_id, StoreJob::Pass(changes), true);
+                    }
+                    return answered;
+                }
+            },
+        };
+        crate::diagnostic!(serde_json::json!({
+            "component": "store",
+            "kind": "copy.refused",
+            "device_id": device_id,
+            "reason": reason,
+        }));
+        if !waiting(self) {
+            return false;
+        }
+        if let Some(answer) = self.snapshot.status.store_answer.as_mut() {
+            answer.state = AnswerState::Refused;
+        }
         true
     }
 
@@ -268,7 +424,13 @@ impl Runtime {
         if let Some(answer) = self.snapshot.status.store_answer.as_mut()
             && answer.state == AnswerState::Pending
             && answer.device_id == device_id
-            && job.changes().ends_with(&answer.changes)
+            && !answer.changes.is_empty()
+            && job
+                .changes()
+                .iter()
+                .map(StoreChange::redacted)
+                .collect::<Vec<_>>()
+                .ends_with(&answer.changes)
         {
             answer.sent = true;
         }
