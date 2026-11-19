@@ -147,9 +147,13 @@ pub fn retire(user_home: &Path, keep_empty: bool, settle: bool) -> HostResult<Ho
     // failure before it is found says nothing about the folder, and is the
     // call's.
     if !marker_present(&home_path)? {
-        retired.kept = !(!keep_empty
-            && what_is_left(&home_path)? == Left::Automations
-            && !recorded_session(user_home, &home_path)?);
+        // A folder without the marker is the operator's unless it holds the
+        // automations' folder alone; one that cannot be read is kept, as it
+        // always was.
+        let only_automations = !keep_empty
+            && what_is_left(&home_path).is_ok_and(|left| left == Left::Automations)
+            && recorded_session(user_home, &home_path).is_ok_and(|recorded| !recorded);
+        retired.kept = !only_automations;
         return Ok(retired);
     }
     retired.marked = true;
@@ -1145,6 +1149,27 @@ mod tests {
         let retired = retire(other.path(), false, true).unwrap();
         assert!(retired.kept && !retired.marked);
         assert!(empty.is_dir());
+    }
+
+    /// A `~/hide` without the marker that cannot be listed is kept, as it
+    /// was before the automations' folder counted: an answer, not a failure.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_without_the_marker_that_cannot_be_listed_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join(HOME_DIR_NAME);
+        std::fs::create_dir_all(home.join(AUTOMATIONS_DIR)).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let binds = std::fs::read_dir(&home).is_err();
+        let result = retire(dir.path(), false, true);
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !binds {
+            return; // the mode does not bind this user: nothing to prove
+        }
+        let retired = result.unwrap();
+        assert!(retired.kept && !retired.marked, "{retired:?}");
+        assert!(home.join(AUTOMATIONS_DIR).is_dir());
     }
 
     /// B11: a folder that cannot be set aside is a failure reported with the
