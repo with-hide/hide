@@ -301,6 +301,7 @@ export function automationsFrame(t: T, state: DemoState): ServerFrame {
   const at = (daysAgo: number, hour: number) => new Date(day.getFullYear(), day.getMonth(), day.getDate() - daysAgo, hour).getTime();
   const run = (number: number, started: number, minutes: number, trigger: "scheduled" | "manual" | "missed" = "scheduled"): PhoneAutomationRecord => ({
     kind: "run", number, trigger, started_at_unix_ms: started, ended_at_unix_ms: started + minutes * MINUTE, state: "succeeded", attempt: 1, seen: true,
+    spend: { tokens: minutes * 4_100, micro_usd: minutes * 140_000, unpriced: false },
   });
   const sample = (id: string, name: string, base: Omit<PhoneAutomation, "id" | "name" | "running" | "records">, history: PhoneAutomationRecord[]): PhoneAutomation => {
     const manual = state.manualRuns.filter((entry) => entry.automation === id);
