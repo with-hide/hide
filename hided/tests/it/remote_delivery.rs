@@ -840,12 +840,13 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
     })
 }
 
-/// `hide device switch` for the fixture's device, at a terminal of the
-/// core's machine: whether it succeeded, and the line it answered.
-fn switch_device(fixture: &Fixture, words: &[&str]) -> Result<(bool, Value)> {
+/// `hide device switch` for the fixture's device, named by its id or the
+/// alias it was added by, at a terminal of the core's machine: whether it
+/// succeeded, and the line it answered.
+fn switch_device(fixture: &Fixture, device: &str, words: &[&str]) -> Result<(bool, Value)> {
     let mut command = fixture.local.environment.command(&fixture.hide);
     command
-        .args(["device", "switch", fixture::DEVICE, "--json"])
+        .args(["device", "switch", device, "--json"])
         .args(words);
     let ran = fixture::capture(command)?;
     let text = String::from_utf8_lossy(&ran.stdout).into_owned();
@@ -905,7 +906,8 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
 
         // The account runs no Hide of its own: the switch asks first,
         // starts nothing there, and the device stays the helper's (B41).
-        let (ok, answer) = switch_device(fixture, &[])?;
+        // Named by the alias it was added by, as a terminal knows it.
+        let (ok, answer) = switch_device(fixture, "delivery-fixture", &[])?;
         ensure!(
             ok && answer["value"]["switch"] == "install_needed"
                 && answer["value"]["device_id"] == fixture::DEVICE,
@@ -921,10 +923,16 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
             "a Hide was started on the account before the operator allowed it"
         );
 
+        // The build this core's node runs from on that machine, placed in
+        // the helper root as that machine's Hide would place it: a
+        // development build is larger than a build may be, so it would
+        // refuse to (`shipped::place_guest_build`).
+        let programs = fixture.hide.parent().context("the staged build")?;
+        crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
         let journey = (|| -> Result<()> {
             // Allowed: a Hide of the account's own is started over the
             // same SSH login, from the helper's build, and paired with.
-            let (ok, answer) = switch_device(fixture, &["--install"])?;
+            let (ok, answer) = switch_device(fixture, fixture::DEVICE, &["--install"])?;
             ensure!(
                 ok && answer["value"]["switch"] == "done" && answer["value"]["folder"] == "taken",
                 "the switch: {answer}"

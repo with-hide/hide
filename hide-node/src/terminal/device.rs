@@ -599,6 +599,10 @@ impl NodeTerminals {
         terminals.screen = Some(tap);
         terminals.resident = Some(folders);
         terminals.uplink.admit_by_attach();
+        // It starts with no link: until its first one (`relink`), nothing
+        // waits to go up, and its diagnostics go where a node with no link
+        // sends them (`forward_diagnostic_or`).
+        terminals.uplink.stop();
         terminals
     }
 

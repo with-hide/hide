@@ -586,6 +586,12 @@ impl GuestNode {
         // The node is another build's Hide: it gets the login's variables
         // and none of this daemon's own.
         hide_platform::process::restrict_to_login_environment(&mut command);
+        // The login's shell is the login's too: the node's kit asks it where
+        // the account keeps its programs, as a device's node does under the
+        // `sshd` that names it.
+        if let Ok(shell) = hide_platform::host::default_shell() {
+            command.env("SHELL", shell);
+        }
         command
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
