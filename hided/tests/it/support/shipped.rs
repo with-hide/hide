@@ -143,3 +143,38 @@ fn byte_copy(from: &Path, to: &Path) -> Result<()> {
     )?;
     Ok(())
 }
+
+/// Puts the shipped build in `programs` under the install root `root`, as a
+/// host does once every file of a build matched, and answers the build's
+/// name. A journey between two Hides places it itself: a development
+/// build's programs are larger than a build may be
+/// (`hide_peer_protocol::build::MAX_BYTES`, a release kit's size), so a host
+/// refuses to place or take them.
+pub fn place_guest_build(programs: &Path, root: &Path) -> String {
+    use hide_node::ssh::host::{HelperPackages, guest_build};
+    use hide_platform::fs::{Access, atomic, private};
+    let build = HelperPackages::new(Some(programs.to_path_buf()), hided::cli::RELEASE)
+        .guest_build(std::env::consts::OS, std::env::consts::ARCH)
+        .unwrap_or_else(|error| panic!("the shipped build is not whole: {error:?}"));
+    let folder = root.join(build.id());
+    private::create_dir_all(&folder).unwrap();
+    for (index, file) in build.files().iter().enumerate() {
+        let access = match file.executable {
+            true => Access::PrivateExecutable,
+            false => Access::Private,
+        };
+        atomic::write_file(
+            &folder.join(&file.path),
+            build.bytes(index).unwrap(),
+            access,
+        )
+        .unwrap();
+    }
+    atomic::write_file(
+        &folder.join(guest_build::MARKER),
+        build.id().as_bytes(),
+        Access::Private,
+    )
+    .unwrap();
+    build.id().to_owned()
+}

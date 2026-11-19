@@ -23,6 +23,9 @@ mod systemd;
 mod task_scheduler;
 
 const NO_LOGIN_AGENTS: &str = "this system has no login agents";
+/// Why [`UserAgents::of_home`] keeps a HOME from the account's login agents.
+pub const NOT_THE_ACCOUNT_HOME: &str =
+    "HOME is not the account's own home, so the account's login agents are left alone";
 const NO_POWER_SETTINGS: &str = "this system has no power settings to read";
 const NO_ONE_SHOT_JOBS: &str = "this system starts no one-shot job in the login session";
 const NO_LINGER: &str = "this system's agents run only while the account is logged in";
@@ -37,9 +40,9 @@ enum System {
     Launchd(launchd::Launchd),
     Systemd(systemd::Systemd),
     TaskScheduler(task_scheduler::TaskScheduler),
-    /// No login agents: nothing is installed or unloaded and no command
-    /// runs.
-    None,
+    /// No login agents, and why: nothing is installed or unloaded and no
+    /// command runs.
+    None(&'static str),
 }
 
 /// Which system's agents a fixture stands in for.
@@ -84,15 +87,30 @@ impl UserAgents {
         #[cfg(windows)]
         let system = System::TaskScheduler(task_scheduler::TaskScheduler::current());
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-        let system = System::None;
+        let system = System::None(NO_LOGIN_AGENTS);
         Self { system }
     }
 
-    /// A system with no login agents. A test fixture's HOME gets this, so
-    /// nothing a test runs reaches the account's real login agents.
+    /// A system with no login agents.
     pub fn none() -> Self {
         Self {
-            system: System::None,
+            system: System::None(NO_LOGIN_AGENTS),
+        }
+    }
+
+    /// The login agents of a program whose HOME is `home`: the system's
+    /// ([`Self::current`]) only when `home` is the account's own home as
+    /// the system names it ([`account_home`]), and none otherwise, with
+    /// [`NOT_THE_ACCOUNT_HOME`] as the reason. The system's agents are the
+    /// account's whatever HOME says, so a test's HOME, or an isolated run's,
+    /// would otherwise install into the account's real ones.
+    pub fn of_home(home: &Path) -> Self {
+        let own = account_home().and_then(|own| crate::fs::identity::canonical(&own));
+        match (own, crate::fs::identity::canonical(home)) {
+            (Ok(own), Ok(home)) if own == home => Self::current(),
+            _ => Self {
+                system: System::None(NOT_THE_ACCOUNT_HOME),
+            },
         }
     }
 
@@ -121,7 +139,7 @@ impl UserAgents {
     pub fn supported(&self) -> io::Result<()> {
         match &self.system {
             System::Launchd(_) | System::Systemd(_) | System::TaskScheduler(_) => Ok(()),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -132,7 +150,7 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.login(home, stop),
             System::Systemd(systemd) => systemd.login(home, stop),
             System::TaskScheduler(tasks) => Ok(tasks.login()),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -144,7 +162,7 @@ impl UserAgents {
         match &self.system {
             System::Systemd(systemd) => systemd.linger(home, stop),
             System::Launchd(_) | System::TaskScheduler(_) => Err(unsupported(NO_LINGER)),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -153,7 +171,7 @@ impl UserAgents {
     pub fn sleeps_on_power(&self, home: &Path, stop: &AtomicBool) -> io::Result<Option<Duration>> {
         match &self.system {
             System::Launchd(launchd) => launchd.sleeps_on_power(home, stop),
-            System::Systemd(_) | System::TaskScheduler(_) | System::None => {
+            System::Systemd(_) | System::TaskScheduler(_) | System::None(_) => {
                 Err(unsupported(NO_POWER_SETTINGS))
             }
         }
@@ -175,7 +193,7 @@ impl UserAgents {
             System::Systemd(systemd) => systemd.install(agent, marker, home, stop),
             // The task cannot test the marker; its program does.
             System::TaskScheduler(tasks) => tasks.install(agent, home, stop),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -196,7 +214,7 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.adopt(agent, marker, home, stop),
             System::Systemd(systemd) => systemd.adopt(agent, marker, home, stop),
             System::TaskScheduler(tasks) => tasks.adopt(agent, home, stop),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -216,7 +234,7 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.load(label, home, stop),
             System::Systemd(systemd) => systemd.load(label, home, stop),
             System::TaskScheduler(tasks) => tasks.load(label, home, stop),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -237,7 +255,7 @@ impl UserAgents {
         match &self.system {
             System::Launchd(launchd) => launchd.start_once(agent, folder, home, stop),
             System::Systemd(_) | System::TaskScheduler(_) => Err(unsupported(NO_ONE_SHOT_JOBS)),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -247,7 +265,7 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.start(label, home, stop),
             System::Systemd(systemd) => systemd.start(label, home, stop),
             System::TaskScheduler(tasks) => tasks.start(label, home, stop),
-            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+            System::None(reason) => Err(unsupported(reason)),
         }
     }
 
@@ -264,7 +282,7 @@ impl UserAgents {
         match &self.system {
             System::Launchd(launchd) => launchd.last_exit(label, home, stop),
             System::Systemd(systemd) => systemd.last_exit(label, home, stop),
-            System::TaskScheduler(_) | System::None => Ok(None),
+            System::TaskScheduler(_) | System::None(_) => Ok(None),
         }
     }
 
@@ -276,7 +294,7 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.is_loaded(label, home, stop),
             System::Systemd(systemd) => systemd.is_loaded(label, home, stop),
             System::TaskScheduler(tasks) => tasks.is_registered(label, home, stop),
-            System::None => Ok(false),
+            System::None(_) => Ok(false),
         }
     }
 
@@ -287,7 +305,7 @@ impl UserAgents {
             System::Launchd(_) => launchd::Launchd::is_installed(label, home),
             System::Systemd(_) => systemd::Systemd::is_installed(label, home),
             System::TaskScheduler(_) => task_scheduler::TaskScheduler::is_installed(label, home),
-            System::None => Ok(false),
+            System::None(_) => Ok(false),
         }
     }
 
@@ -299,7 +317,7 @@ impl UserAgents {
             System::Launchd(launchd) => launchd.unload(label, home, stop),
             System::Systemd(systemd) => systemd.unload(label, home, stop),
             System::TaskScheduler(tasks) => tasks.unload(label, home, stop),
-            System::None => Ok(()),
+            System::None(_) => Ok(()),
         }
     }
 
@@ -318,7 +336,7 @@ impl UserAgents {
             System::Launchd(_) => launchd::Launchd::forget(label, home),
             System::Systemd(systemd) => systemd.forget(label, home, stop),
             System::TaskScheduler(tasks) => tasks.forget(label, home, stop),
-            System::None => Ok(()),
+            System::None(_) => Ok(()),
         }
     }
 }

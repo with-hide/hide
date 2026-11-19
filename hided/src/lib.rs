@@ -18,6 +18,7 @@ pub mod build_order;
 pub mod cli;
 pub mod cli_contract;
 pub mod core;
+pub mod core_install;
 pub mod core_move;
 pub mod core_update;
 pub mod delivery_cli;

@@ -333,6 +333,12 @@ pub(super) struct RegisterDevicePayload {
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
     pub(super) host_consent: bool,
+    /// The device is added to be switched to its machine's own connection
+    /// at once, as every Add over SSH is (PRD device-connect-iroh B41): it
+    /// is not left on the helper when that switch stops before anything
+    /// was started there.
+    #[serde(default)]
+    pub(super) switch_first: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1437,6 +1443,8 @@ pub(super) struct GuestPanesPayload {
     pub(super) guests: Vec<crate::guest_panes::GuestPanes>,
 }
 
+pub(super) use super::device_switch::DeviceSwitchPayload;
+
 /// One Hide AI settings event, carrying whatever it is about.
 ///
 /// It folds what a single screen does into one event, the way
@@ -1838,6 +1846,7 @@ pub(super) enum Event {
     UiAttached(UiAttachedPayload),
     PeerMachines(PeerMachinesPayload),
     GuestPanes(GuestPanesPayload),
+    DeviceSwitch(DeviceSwitchPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
@@ -2206,6 +2215,12 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             Event::GuestPanes(payload) if crate::guest_panes::valid(&payload.guests) => Ok(event),
             _ => Err(invalid_payload("guest_panes")),
         }),
+        "device_switch" => {
+            decode!(DeviceSwitchPayload, DeviceSwitch).and_then(|event| match &event {
+                Event::DeviceSwitch(payload) if payload.valid() => Ok(event),
+                _ => Err(invalid_payload("device_switch")),
+            })
+        }
         "peer_machines" => {
             decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
                 Event::PeerMachines(payload) if crate::peer_machines::valid(&payload.machines) => {
@@ -2618,6 +2633,7 @@ impl Runtime {
                 }
                 changed
             }
+            Event::DeviceSwitch(payload) => self.device_switch(payload),
             Event::PeerMachines(payload) => {
                 let changed = self.snapshot.navigator.peers != payload.machines;
                 if changed {
@@ -4721,6 +4737,7 @@ impl Runtime {
                     pane_read_records: current.pane_read_records,
                     pane_completions: current.pane_completions,
                     pane_launches: current.pane_launches,
+                    device_switch_opens: current.device_switch_opens,
                     request_verbs: current.request_verbs,
                     // `agent_sleep_set` owns the setting and the core owns
                     // the sleep records; a shared save carries both through.

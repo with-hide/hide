@@ -1022,6 +1022,45 @@ pub const COMMANDS: &[Spec] = &[
             "device_wait_timeout",
         ],
     },
+    // Switches an SSH device to the connection of the Hide on its machine:
+    // the two are paired over the device's SSH login, and the device keeps
+    // its id, its name and its running terminals. `held` names the machine
+    // that switched it first; `--own-folder` goes on without its terminals.
+    // `install_needed` is a machine that runs no Hide of its own, where
+    // `--install` starts one from this machine's helper build.
+    Spec {
+        words: &["device", "switch"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            switch("--install"),
+            switch("--own-folder"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_switched"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "switch_unsupported",
+            "switch_running",
+            "switch_not_connected",
+            "ssh_core_not_started",
+            "ssh_not_reached",
+            "ssh_busy",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "device_already_connected",
+        ],
+    },
     // What a machine about to pair over SSH runs on its target first: it
     // changes nothing there and answers whether a Hide of that account's
     // own runs. A refusal carries the same `look`, with `core` false on an
@@ -1052,6 +1091,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--device", Key),
             required("--name", Text),
             switch("--wsl"),
+            optional("--helper", Text),
         ],
         rest: None,
         answers: &["device_accepted"],
@@ -1061,6 +1101,21 @@ pub const COMMANDS: &[Spec] = &[
             "device_already_connected",
             "device_limit",
         ],
+    },
+    // What a machine that switched its device here runs once this machine
+    // admitted it: each `--project` is a folder of the account that machine
+    // had registered on its device, which this machine's own Hide then
+    // lists as a project too. It answers how many it lists; a folder that
+    // is gone, outside the account's home or refused is left out.
+    Spec {
+        words: &["device", "projects-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &["--project"],
+        options: &[repeated("--project", Text, hide_core::SWITCHED_PROJECTS)],
+        rest: None,
+        answers: &["device_projects_listed"],
+        refusals: &[],
     },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
@@ -2165,8 +2220,10 @@ fn answers() -> Value {
     map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
     map.insert("device_allowed".into(), shape(&["answered"]));
     map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_switched".into(), shape(&["device_id", "switch"]));
     map.insert("device_accepted".into(), shape(&["accepted"]));
     map.insert("device_looked".into(), shape(&["look"]));
+    map.insert("device_projects_listed".into(), shape(&["projects"]));
     map.insert(
         "device_paired".into(),
         shape(&["device_id", "name", "paired"]),
@@ -2473,6 +2530,13 @@ mod tests {
                 .take_while(|argument| argument["required"] != false)
             {
                 base.push(exported_sample(&argument["value"]));
+            }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
             }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();

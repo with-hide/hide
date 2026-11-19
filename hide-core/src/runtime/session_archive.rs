@@ -487,6 +487,112 @@ impl Runtime {
         Ok(Some(id))
     }
 
+    /// Keeps the conversation of an agent whose pane the restore after its
+    /// device's switch closed (PRD device-connect-iroh D-49, B36), from what
+    /// the device's engine saved of it: the pane had no holder on the new
+    /// connection, so no row of it is read there. The project is the one
+    /// whose checkout, as the device lists them now, or else whose
+    /// registered folder holds the pane's folder. Whether a record was
+    /// kept: a shell holds no conversation, and one archived already stays
+    /// as it is.
+    pub(super) fn archive_not_carried(
+        &mut self,
+        device: &str,
+        left: &crate::session_sync::NotCarried,
+    ) -> Result<bool, &'static str> {
+        let Some(kind) = left.agent.clone() else {
+            return Ok(false);
+        };
+        let session = left
+            .session
+            .clone()
+            .filter(|session| !session.is_empty())
+            .ok_or(NotKept::SessionUnknown.code())?;
+        let within = |folder: &str| {
+            left.cwd == folder
+                || left
+                    .cwd
+                    .strip_prefix(folder)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        };
+        let listed = self
+            .archive_workspaces(Some(device))
+            .iter()
+            .flat_map(|workspace| {
+                workspace
+                    .checkouts
+                    .iter()
+                    .map(move |checkout| (workspace, checkout))
+            })
+            .filter(|(_, checkout)| within(&checkout.path))
+            .max_by_key(|(_, checkout)| checkout.path.len())
+            .map(|(workspace, checkout)| {
+                (
+                    workspace.path.clone(),
+                    workspace.label.clone(),
+                    checkout.path.clone(),
+                )
+            });
+        let registered = || {
+            self.snapshot
+                .ui_state
+                .workspace_registrations
+                .iter()
+                .filter(|project| project.device_id == device && within(&project.path))
+                .max_by_key(|project| project.path.len())
+                .map(|project| {
+                    (
+                        project.path.clone(),
+                        project.label.clone(),
+                        project.path.clone(),
+                    )
+                })
+        };
+        let (project_root, project_label, checkout_path) = listed
+            .or_else(registered)
+            .ok_or(NotKept::CheckoutUnlisted.code())?;
+        let pane_id = crate::address::scoped_pane_id(device, &left.pane_id);
+        let profile = self
+            .snapshot
+            .ui_state
+            .pane_launches
+            .get(&pane_id)
+            .filter(|launch| launch.kind == kind)
+            .and_then(|launch| launch.profile.clone());
+        let starred_at_unix_ms = self
+            .revisit_mark(&pane_id)
+            .and_then(|mark| mark.starred_at_unix_ms);
+        let ended = EndedConversation {
+            project_root,
+            project_label,
+            member: ArchivedMember {
+                machine: device.to_owned(),
+                pane_id,
+                title: left.name.clone().unwrap_or_else(|| kind.clone()),
+                kind,
+                native_session_id: session,
+                source_reference: None,
+                cwd: Some(left.cwd.clone()),
+                checkout_path,
+                last_line: None,
+                pulls: Vec::new(),
+                registration: None,
+                parent: None,
+                depth: 0,
+                closed: false,
+                resume: Resume::Idle,
+                profile,
+            },
+            starred_at_unix_ms,
+        };
+        self.archive_ended(ended)
+            .map(|kept| kept.is_some())
+            .map_err(|refusal| match refusal {
+                AdmitRefusal::Full => "archive_full",
+                AdmitRefusal::Fault(reason) => reason,
+            })
+    }
+
     /// Takes back the record [`Self::archive_ended`] admitted for a pane
     /// whose close did not happen: the conversation still runs there, so
     /// it is not under 보관됨. A record whose pane has left is kept.
