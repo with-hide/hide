@@ -1044,6 +1044,7 @@ impl Pairing {
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
         let target = alias.to_owned();
         let (helper_root, press) = (source.helper_root.clone(), source.sign_in.clone());
+        let projects = source.projects.clone();
         // The install's step is told from the thread that runs ssh.
         let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
         let installed = device.to_owned();
@@ -1059,20 +1060,25 @@ impl Pairing {
                     me: &me,
                     key: &key,
                     helper_root: (!own_folder).then_some(helper_root.as_str()),
+                    projects: &projects,
                     press,
                     install,
                     installing: &installing,
                 })
             })
             .await??;
-        let (paired, folder) = match switched {
+        let (paired, folder, needs) = match switched {
             pairing_ssh::Switched::HeldBy(by) => {
                 return Ok(json!({ "switch": "held", "by": by }));
             }
             pairing_ssh::Switched::InstallNeeded { system } => {
                 return Ok(json!({ "switch": "install_needed", "system": system }));
             }
-            pairing_ssh::Switched::Paired { paired, folder } => (paired, folder),
+            pairing_ssh::Switched::Paired {
+                paired,
+                folder,
+                needs,
+            } => (paired, folder, needs),
         };
         // The machine the device is: the one that just answered, or the
         // one this machine is paired with already under the device's id.
@@ -1085,8 +1091,13 @@ impl Pairing {
                 .map(|paired| paired.key)
                 .ok_or("device_unknown")?,
         };
-        self.switch_step(device, "connecting", json!({ "key": host.to_hex() }))
-            .await;
+        // What the Hide started there still needs goes with the step, and
+        // onto the device's row once it is that machine's (B30).
+        let mut connecting = json!({ "key": host.to_hex() });
+        if let Some(needs) = &needs {
+            connecting["needs"] = needs.payload();
+        }
+        self.switch_step(device, "connecting", connecting).await;
         if let Some(paired) = paired {
             match service.adopt(paired.accepted, paired.first) {
                 // Adopted before, by a switch that stopped after it.

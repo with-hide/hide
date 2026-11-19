@@ -212,29 +212,47 @@ pub fn accept(
     key: &PeerKey,
 ) -> Result<Paired, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let answer = accept_on(&upstream, reach, alias, request, me, key, None);
+    let asked = Accept {
+        alias,
+        request,
+        me,
+        key,
+        helper: None,
+        projects: &[],
+    };
+    let answer = accept_on(&upstream, reach, &asked);
     let login = upstream.direct_host();
     upstream.close();
     paired(&answer?["accepted"], login).ok_or("ssh_update_there")
 }
 
+/// What one `accept-ssh` asks of the target `alias` names.
+struct Accept<'a> {
+    alias: &'a str,
+    request: &'a str,
+    me: &'a Me,
+    key: &'a PeerKey,
+    /// The root this machine's device helper is installed under there,
+    /// when it also asks for that helper's folder (D-49).
+    helper: Option<&'a str>,
+    /// The folders this machine had registered as projects on its device
+    /// there, which the target's own Hide then lists too (D-48).
+    projects: &'a [String],
+}
+
 /// Runs the target's `accept-ssh` on `upstream`'s session and answers the
-/// value it printed. With `helper`, the root this machine's device helper
-/// is installed under there, it also asks for that helper's folder (D-49).
+/// value it printed.
 fn accept_on(
     upstream: &Upstream,
     reach: &Reach,
-    alias: &str,
-    request: &str,
-    me: &Me,
-    key: &PeerKey,
-    helper: Option<&str>,
+    asked: &Accept<'_>,
 ) -> Result<Value, &'static str> {
-    let key = key.to_hex();
+    let (alias, me) = (asked.alias, asked.me);
+    let key = asked.key.to_hex();
     let mut words = vec![
         "accept-ssh",
         "--request",
-        request,
+        asked.request,
         "--key",
         &key,
         "--device",
@@ -242,8 +260,11 @@ fn accept_on(
         "--name",
         &me.name,
     ];
-    if let Some(root) = helper {
+    if let Some(root) = asked.helper {
         words.extend(["--helper", root]);
+    }
+    for project in asked.projects {
+        words.extend(["--project", project.as_str()]);
     }
     let mut answer = match run(upstream, reach, &words) {
         Ok(Said::Answer(answer)) => answer,
@@ -289,6 +310,61 @@ pub enum Folder {
     Kept,
 }
 
+/// What a Hide started on a machine over SSH needs from the operator to
+/// stay reachable with no one at that machine (PRD device-connect-iroh
+/// B30).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Needs {
+    /// A Mac's core starts at a login, so after a restart it is back only
+    /// with automatic login on.
+    AutoLogin,
+    /// Linux: the account may not turn linger on itself, so the core ends
+    /// with its last session until an administrator runs `command`.
+    Linger { command: String },
+}
+
+impl Needs {
+    /// As the core's `device_switch` event carries it.
+    pub fn payload(&self) -> Value {
+        match self {
+            Self::AutoLogin => serde_json::json!({ "kind": "auto_login" }),
+            Self::Linger { command } => {
+                serde_json::json!({ "kind": "linger", "command": command })
+            }
+        }
+    }
+}
+
+/// What the Hide just started on the target needs: read from the system it
+/// runs on, and on Linux from its own `hide always-on linger`, which turns
+/// linger on when the account may. A target that does not answer needs
+/// nothing this machine can name; the switch goes on either way.
+fn needs_of(upstream: &Upstream, reach: &Reach, alias: &str) -> Option<Needs> {
+    match upstream.system().ok()?.as_str() {
+        "macos" => Some(Needs::AutoLogin),
+        "linux" => match run_hide(upstream, reach, &["always-on", "linger", "--json"]) {
+            Ok(Said::Answer(answer)) => linger_needs(&answer),
+            Ok(_) => None,
+            Err(error) => {
+                log(alias, "linger", &error);
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+/// The command an administrator runs, when the target's answer names one.
+fn linger_needs(answer: &Value) -> Option<Needs> {
+    let value = &answer["value"];
+    (answer["ok"] == true && value["linger"] == "needs_administrator")
+        .then(|| value["command"].as_str())
+        .flatten()
+        .map(|command| Needs::Linger {
+            command: command.to_owned(),
+        })
+}
+
 /// How far a helper device's switch got on the SSH login alone.
 pub enum Switched {
     /// The target's Hide saved a grant for this machine, or holds one
@@ -296,6 +372,9 @@ pub enum Switched {
     Paired {
         paired: Option<Paired>,
         folder: Folder,
+        /// What the Hide this switch started there still needs from the
+        /// operator to stay reachable; none for a Hide that ran already.
+        needs: Option<Needs>,
     },
     /// Another machine took the helper's folder first, named as the target
     /// knows it: nothing was saved, and the operator is asked before this
@@ -317,6 +396,9 @@ pub struct Switch<'a> {
     /// when this machine asks for the helper's folder: not after its
     /// operator agreed to go on without it (D-75).
     pub helper_root: Option<&'a str>,
+    /// The folders this machine registered as projects on the device,
+    /// which the machine's own Hide lists from then on (D-48).
+    pub projects: &'a [String],
     /// Where the login's questions go: the device's row.
     pub press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
     /// The operator allowed a Hide to be started on a target that runs
@@ -345,6 +427,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
             return Err("ssh_not_reached");
         }
     };
+    let mut started = false;
     match looked {
         Looked::Ready => {}
         Looked::Absent if switch.install => {
@@ -352,7 +435,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
             start_core(upstream, switch.reach, switch.alias)?;
             // The core that was started answers for the account now.
             match run(upstream, switch.reach, &["look-ssh"]).map(look_of) {
-                Ok(Looked::Ready) => {}
+                Ok(Looked::Ready) => started = true,
                 Ok(_) => return Err("ssh_core_not_started"),
                 Err(error) => {
                     log(switch.alias, "look", &error);
@@ -371,11 +454,14 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
     let accepted = accept_on(
         upstream,
         switch.reach,
-        switch.alias,
-        switch.request,
-        switch.me,
-        switch.key,
-        switch.helper_root,
+        &Accept {
+            alias: switch.alias,
+            request: switch.request,
+            me: switch.me,
+            key: switch.key,
+            helper: switch.helper_root,
+            projects: switch.projects,
+        },
     );
     let answer = match accepted {
         // Paired already, and going on without the helper's folder: there
@@ -384,6 +470,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
             return Ok(Switched::Paired {
                 paired: None,
                 folder: Folder::Kept,
+                needs: None,
             });
         }
         answer => answer?,
@@ -400,11 +487,30 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
         None if switch.helper_root.is_none() => Folder::Kept,
         _ => return Err("ssh_update_there"),
     };
+    // A project the target left out stays the device's here and is none of
+    // its own Hide's: the pairing stands either way, so it is only logged.
+    let listed = answer["projects"].as_u64().unwrap_or(0);
+    if listed < switch.projects.len() as u64 {
+        hide_core::diagnostic!(serde_json::json!({
+            "component": "pairing",
+            "kind": "ssh.projects_left_out",
+            "alias": switch.alias,
+            "asked": switch.projects.len(),
+            "listed": listed,
+        }));
+    }
     let paired = match &answer["accepted"] {
         Value::Null if switch.helper_root.is_some() => None,
         accepted => Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?),
     };
-    Ok(Switched::Paired { paired, folder })
+    let needs = started
+        .then(|| needs_of(upstream, switch.reach, switch.alias))
+        .flatten();
+    Ok(Switched::Paired {
+        paired,
+        folder,
+        needs,
+    })
 }
 
 /// The addresses the SSH login reached, at the port the target's endpoint
@@ -489,6 +595,31 @@ mod tests {
             look_of(said(1, &line(json!({"ok":false,"error":{"code":"usage"}})))),
             Looked::UpdateThere
         );
+    }
+
+    /// Only an answer that names the command an administrator runs is a
+    /// need: an account that lingers, a system that uses no linger and an
+    /// answer this build cannot read need nothing shown (B30).
+    #[test]
+    fn linger_is_needed_only_with_the_command_that_turns_it_on() {
+        let answered = |value: Value| linger_needs(&json!({"ok": true, "value": value}));
+        assert_eq!(
+            answered(json!({
+                "linger": "needs_administrator",
+                "command": "sudo loginctl enable-linger hy",
+            })),
+            Some(Needs::Linger {
+                command: "sudo loginctl enable-linger hy".to_owned()
+            })
+        );
+        assert_eq!(answered(json!({"linger": "on"})), None);
+        assert_eq!(answered(json!({"linger": "not_used"})), None);
+        assert_eq!(answered(json!({"linger": "needs_administrator"})), None);
+        assert_eq!(
+            linger_needs(&json!({"ok": false, "error": {"code": "usage"}})),
+            None
+        );
+        assert_eq!(Needs::AutoLogin.payload(), json!({"kind": "auto_login"}));
     }
 
     /// The command folder is spelled for the system that runs it, from the

@@ -287,15 +287,29 @@ pub(super) fn runtime_with_home() -> Runtime {
 /// `windows_drives`: a WSL distribution, or none for any other machine.
 fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
     let folder = scratch_dir("hide-core-devices-");
+    let mut runtime = runtime_reading(
+        &folder.path().join("state.json"),
+        crate::node::test_node(),
+        &folder.path().join("home"),
+        windows_drives,
+    );
+    runtime.test_dirs.push(folder);
+    runtime
+}
+
+/// A runtime of `node` started from the store at `state`, as a core's
+/// start reads it, with `home` as the account's home.
+fn runtime_reading(
+    state: &std::path::Path,
+    node: crate::node::NodeId,
+    home: &std::path::Path,
+    windows_drives: Option<&str>,
+) -> Runtime {
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         home: None,
-        node_id: crate::node::test_node(),
-        app_state_path: folder
-            .path()
-            .join("state.json")
-            .to_string_lossy()
-            .into_owned(),
+        node_id: node,
+        app_state_path: state.to_string_lossy().into_owned(),
         host_helper_root: None,
         host_cli_dir: None,
         workspace_views_path: None,
@@ -306,18 +320,16 @@ fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
         windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
     };
-    let mut runtime = Runtime::new(
+    Runtime::new(
         options,
         environment::EnvironmentReport {
             statuses: Vec::new(),
-            home_path: Some(folder.path().join("home")),
+            home_path: Some(home.to_path_buf()),
             codex_home: None,
         },
-        std::sync::Arc::new(hide_node::Local::new(Some(folder.path().join("home")))),
+        std::sync::Arc::new(hide_node::Local::new(Some(home.to_path_buf()))),
         crate::node::test_devices(),
-    );
-    runtime.test_dirs.push(folder);
-    runtime
+    )
 }
 
 /// PRD wsl-device B16 for a core that itself runs in a distribution: its own
@@ -1239,6 +1251,138 @@ fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
 }
 
+/// PRD device-connect-iroh D-34 (1), D-49: the helper device each released
+/// build registered, with the project and the terminals its agents ran in,
+/// is switched by this build under the id the upgrade named it by. The same
+/// registration becomes its machine's, with its name and what the operator
+/// allowed there, and every other record of the store is saved as it was:
+/// the projects, tabs, agents and sessions that name the device name it
+/// still, so its terminals are taken up again under the ids they had.
+#[test]
+fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
+    use crate::model::LinkOrigin;
+    use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    // Everything the store keeps but the devices themselves.
+    let rest = |runtime: &Runtime| {
+        let mut stored = serde_json::to_value(&runtime.snapshot.ui_state).expect("the store");
+        stored
+            .as_object_mut()
+            .expect("the store is an object")
+            .remove("device_registrations");
+        stored
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        // The store is read by the start itself, so what is in front and
+        // every other record is the release's own.
+        let state = started(&folder);
+        let mut runtime = runtime_reading(
+            &state.path().join(crate::node_migration::CORE_STATE),
+            node_of(state.path()),
+            &state.path().join("home"),
+            None,
+        );
+        let helper = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.origin.dials_helper())
+            .cloned()
+            .unwrap_or_else(|| panic!("{tag}: the release registered no helper device"));
+        let devices = runtime.snapshot.ui_state.device_registrations.len();
+        // The release left a project on the device, which its machine's own
+        // Hide is handed (D-48).
+        let source = runtime
+            .device_switch_source(&helper.id)
+            .unwrap_or_else(|code| panic!("{tag}: the upgraded device cannot be switched: {code}"));
+        assert!(
+            !source.projects.is_empty(),
+            "{tag}: no project on the device"
+        );
+        let before = rest(&runtime);
+        // The terminals its agents ran in are known by the launches the
+        // store keeps under each pane, which the wire leaves out.
+        let launches = runtime.snapshot.ui_state.pane_launches.clone();
+        let there = format!("remote:{}:pane:", helper.id);
+        assert!(
+            launches.keys().any(|pane| pane.starts_with(&there)),
+            "{tag}: no agent ran in a terminal of the device"
+        );
+
+        dispatch(
+            &mut runtime,
+            "device_switch",
+            serde_json::json!({"device_id": helper.id, "step": "connecting", "key": key}),
+        );
+        assert_eq!(
+            runtime.device_registration(&helper.id),
+            Some(&helper),
+            "{tag}: the device changed before its machine was paired"
+        );
+        dispatch(
+            &mut runtime,
+            "peer_machines",
+            serde_json::json!({ "machines": [{
+                "key": key, "device_id": helper.id, "name": "device",
+                "opens": "active", "opened_by": null, "connected": false, "path": null,
+                "reason": null, "update": null,
+            }]}),
+        );
+
+        let switched = runtime
+            .device_registration(&helper.id)
+            .unwrap_or_else(|| panic!("{tag}: the device is gone"))
+            .clone();
+        assert_eq!(
+            switched.origin,
+            LinkOrigin::Peer {
+                key: key.clone(),
+                switched: true
+            },
+            "{tag}"
+        );
+        assert_eq!(
+            (&switched.label, &switched.host_consent),
+            (&helper.label, &helper.host_consent),
+            "{tag}"
+        );
+        assert_eq!(
+            runtime.snapshot.ui_state.device_registrations.len(),
+            devices,
+            "{tag}"
+        );
+        assert_eq!(
+            runtime.snapshot.ui_state.pane_launches, launches,
+            "{tag}: a terminal's launch changed"
+        );
+        let after = rest(&runtime);
+        let changed: Vec<_> = before
+            .as_object()
+            .expect("the store is an object")
+            .iter()
+            .filter(|(name, value)| after.get(name.as_str()) != Some(value))
+            .map(|(name, value)| format!("{name}: {value} -> {:?}", after.get(name.as_str())))
+            .collect();
+        assert!(
+            changed.is_empty()
+                && after.as_object().map(serde_json::Map::len)
+                    == before.as_object().map(serde_json::Map::len),
+            "{tag}: the switch changed another record: {changed:#?}"
+        );
+    }
+}
+
 /// A helper device is switched to its machine's own connection under the
 /// registration it has (PRD device-connect-iroh D-49, B36, B41): the steps
 /// hided says are drawn on its row, a switch that stops leaves the helper
@@ -1280,6 +1424,35 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     runtime.rebuild_device_rows();
     let helper = runtime.device_registration("build-box-id").unwrap().clone();
 
+    // What hided switches it from names the projects registered on it and
+    // no other machine's (D-48), by its id or the alias it is dialed by.
+    for (id, device, path) in [
+        ("workspace:app", "build-box-id", "/home/me/app"),
+        ("workspace:here", crate::node::TEST_NODE, "/Users/me/here"),
+    ] {
+        runtime.snapshot.ui_state.workspace_registrations.push(
+            crate::model::WorkspaceRegistration {
+                primary_checkout_id: None,
+                id: id.to_owned(),
+                label: id.to_owned(),
+                path: path.to_owned(),
+                device_id: device.to_owned(),
+                pinned: false,
+            },
+        );
+    }
+    for named in ["build-box-id", "build-box"] {
+        let source = runtime
+            .device_switch_source(named)
+            .expect("a device to switch");
+        assert_eq!(source.device_id, "build-box-id", "{named}");
+        assert_eq!(source.projects, ["/home/me/app"], "{named}");
+    }
+    assert_eq!(
+        runtime.device_switch_source("nowhere").err(),
+        Some("device_unknown")
+    );
+
     // Each step is drawn on the device's row.
     for (said, drawn) in [
         ("checking", DeviceSwitchState::Checking),
@@ -1300,10 +1473,27 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     assert_eq!(switch.reason.as_deref(), Some("ssh_not_reached"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
 
-    // Paired, and not confirmed yet: still the helper's.
+    // Paired, and not confirmed yet: still the helper's. The switch started
+    // a Hide there, which said what it still needs (B30); one spelled as no
+    // row can draw it is not taken.
     let mut connecting = step("connecting");
     connecting["key"] = serde_json::json!(key);
+    let mut unspelled = connecting.clone();
+    unspelled["needs"] = serde_json::json!({"kind": "linger"});
+    dispatch(&mut runtime, "device_switch", unspelled);
+    assert_eq!(
+        device(&runtime, "build-box-id")
+            .switch
+            .as_ref()
+            .map(|switch| switch.state),
+        Some(DeviceSwitchState::Failed),
+        "a step that names a linger without its command was taken"
+    );
+    connecting["needs"] = serde_json::json!({
+        "kind": "linger", "command": "sudo loginctl enable-linger hy",
+    });
     dispatch(&mut runtime, "device_switch", connecting.clone());
+    assert_eq!(device(&runtime, "build-box-id").needs, None);
     dispatch(&mut runtime, "peer_machines", machines("confirming"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
     assert_eq!(
@@ -1332,6 +1522,15 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
     assert_eq!((row.ssh_alias.as_deref(), &row.switch), (None, &None));
+    // What that machine's Hide still needs is on the row from then on.
+    let needs = row.needs.clone().expect("what the machine's Hide needs");
+    assert_eq!(
+        (needs.kind, needs.command.as_deref()),
+        (
+            crate::model::DeviceNeeds::Linger,
+            Some("sudo loginctl enable-linger hy")
+        )
+    );
     // Saved as it is, and read back the same.
     let stored = serde_json::to_value(&switched).unwrap();
     assert_eq!(stored["peer_switched"], true);

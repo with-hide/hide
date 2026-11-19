@@ -1317,6 +1317,9 @@ pub struct Runtime {
     /// one is under way or stopped (`device_switch`). Never saved: a switch
     /// is one press of the operator, asked again after a restart.
     device_switches: HashMap<String, device_switch::DeviceSwitch>,
+    /// What the Hide a switch started on a device's machine still needs
+    /// (`DeviceSnapshot::needs`), by device; an entry goes with its device.
+    device_needs: HashMap<String, crate::model::DeviceNeedsSnapshot>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2467,6 +2470,7 @@ impl Runtime {
             retired_remote_syncs: Vec::new(),
             remote_device_tests: HashMap::new(),
             device_switches: HashMap::new(),
+            device_needs: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

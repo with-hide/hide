@@ -982,6 +982,37 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
                 "the helper folder's guest: {claim:?}"
             );
 
+            // The project this machine registered on the device is a
+            // project of that machine's own Hide too (D-48).
+            let own: Value = serde_json::from_slice(&std::fs::read(state.join("hided.json"))?)?;
+            let own = fixture::Daemon {
+                port: own["port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+                    .context("the account's Hide names no port")?,
+                token: own["token"]
+                    .as_str()
+                    .context("the account's Hide names no token")?
+                    .to_owned(),
+            };
+            let project = account.home.join("project");
+            wait_for("the device's project in its machine's own Hide", || {
+                let listed = |row: &Value| row["path"] == project.to_string_lossy().as_ref();
+                Ok(own
+                    .snapshot()?
+                    .pointer("/navigator/workspaces")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            listed(row)
+                                || row["checkouts"]
+                                    .as_array()
+                                    .is_some_and(|checkouts| checkouts.iter().any(listed))
+                        })
+                    })
+                    .then_some(()))
+            })?;
+
             // The terminal carried on: the agent is in the pane it was in,
             // and the program in it is the one that ran before.
             wait_for("the device's agent in its pane again", || {
@@ -1002,12 +1033,16 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
         let mut stop = account.command(&fixture.remote.hide);
         stop.arg("stop");
         let stopped = fixture::capture(stop)?;
+        // So is the terminal that Hide opened for the project it was handed,
+        // as it does for every project added to it: a holder outlives the
+        // Hide that started it.
+        let ended = fixture::end_holders(&state);
         journey?;
         ensure!(
             stopped.status.success(),
             "the account's own Hide did not stop: {}",
             String::from_utf8_lossy(&stopped.stderr)
         );
-        Ok(())
+        ended
     })
 }
