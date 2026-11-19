@@ -33,7 +33,7 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     await withControl(daemon, (control) => closePane(control, source));
     // The record is a tab on the Agent tab's desk, which outlives the pane
     // (PRD lane-desk-pair-view D-12, B35); its tab's ✕ closes it.
-    await expect(page.locator(`[data-pane-view="${source}"]`)).toHaveCount(0, { timeout: 30_000 });
+    await expect(page.locator(`[data-pane-view="${source}"]`)).toHaveCount(0);
     await expect(record).toContainText("Restore this conversation 진행해줘");
     await closeFrontCard(page);
     await expect(record).toHaveCount(0, { timeout: 30_000 });

@@ -135,8 +135,7 @@ export async function enterWorkspaceWithLane(page: Page, project?: string): Prom
  */
 export async function showDocuments(page: Page): Promise<void> {
   const button = page.locator('[data-lane-tool="documents"]');
-  // An open typed into a pane lands on the desk only once the command has run there.
-  await expect(button).toBeEnabled({ timeout: 20_000 });
+  await expect(button).toBeEnabled({ timeout: 20_000 }); // wait-ok: an open typed into a pane lands on the desk once the command has run there
   if ((await button.getAttribute("aria-pressed")) !== "true") await button.click();
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
