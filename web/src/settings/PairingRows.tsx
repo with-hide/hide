@@ -190,6 +190,24 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
 }
 
 /**
+ * What becomes of the work a removed machine ran on this computer (B26).
+ * Today there is one answer, the default: it stays, and shows on this
+ * computer's screen only. Ending that machine's panes instead (B26's
+ * second choice, B60) is the guest node's to do: that choice goes here
+ * beside this one, and the removal then carries which was chosen.
+ */
+function RemovedWork() {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="space-y-xs" data-peer-remove-work="keep">
+      <div className="text-body text-subtle-foreground">{t("pairing.remove.workTitle")}</div>
+      <div className="text-body text-foreground">{t("pairing.remove.workKeep")}</div>
+      <Note>{t("pairing.remove.workKeepNote")}</Note>
+    </div>
+  );
+}
+
+/**
  * Every paired machine, and on this computer's own window the share row,
  * each machine's actions and the confirm a removal asks (B26, B52).
  */
@@ -217,10 +235,11 @@ export function PairedRows({ actions }: { actions: Actions }) {
           <AlertDialogContent data-peer-remove-confirm={`${removing.peer.device_id}:${removing.direction}`}>
             <AlertDialogHeader>
               <AlertDialogTitle>{t(removing.direction === "incoming" ? "pairing.remove.incomingTitle" : "pairing.remove.outgoingTitle", { name: removing.peer.name })}</AlertDialogTitle>
-              <AlertDialogDescription>{t(removing.direction === "incoming" ? "pairing.remove.incomingDescription" : "pairing.remove.outgoingDescription")}</AlertDialogDescription>
+              <AlertDialogDescription className="break-keep">{t(removing.direction === "incoming" ? "pairing.remove.incomingDescription" : "pairing.remove.outgoingDescription")}</AlertDialogDescription>
             </AlertDialogHeader>
+            {removing.direction === "incoming" ? <RemovedWork /> : null}
             <AlertDialogFooter>
-              <AlertDialogCancel>{t("pairing.remove.keep")}</AlertDialogCancel>
+              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
               <AlertDialogAction
                 data-peer-remove-go="true"
                 onClick={() => actions.pairing("remove", { device: removing.peer.key, direction: removing.direction })}

@@ -111,6 +111,24 @@ it("lists the paired machines and offers nothing on a screen that is not this co
   await unmount();
 });
 
+it("asks before removing a machine that opens this computer, with its work left by default (B26)", async () => {
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active" });
+  const { q, press, events, unmount } = await mount(idle, [guest]);
+  // Radix opens the menu on Enter at its trigger.
+  await act(async () => { q('[data-peer-menu="macbook"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-remove-incoming="macbook"]');
+  const confirm = q('[data-peer-remove-confirm="macbook:incoming"]');
+  expect(confirm?.textContent).toContain("What already ran here and the files it read cannot be undone.");
+  // The work is left by default, and backing out is Cancel, never that choice's name.
+  expect(q('[data-peer-remove-work="keep"]')?.textContent).toBe("The work it ran on this computerLeave it runningIt stays, and shows on this computer's screen only");
+  expect([...(confirm?.querySelectorAll("button") ?? [])].map((button) => button.textContent)).toEqual(["Cancel", "Remove"]);
+  expect(events.filter((event) => event.kind === "pairing_remove")).toHaveLength(0);
+  await press("[data-peer-remove-go]");
+  expect(last(events)).toMatchObject({ kind: "pairing_remove", payload: { device: guest.key, direction: "incoming" } });
+  expect(q("[data-peer-remove-confirm]")).toBeNull();
+  await unmount();
+});
+
 it("says what came of a request and offers to ask again (B50)", async () => {
   const guest = peer({ device_id: "macbook", name: "MacBook", opens: null, opened_by: "active" });
   const { q, press, events, unmount } = await mount({ ...idle, requests: [{ key: guest.key, state: "declined" }] }, [guest]);
