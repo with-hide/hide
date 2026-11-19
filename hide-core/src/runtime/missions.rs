@@ -1225,21 +1225,30 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             }
         }
         WakeEvent::LineMet => {
-            let line = wake.line.as_ref().map_or_else(|| "-".to_owned(), ToString::to_string);
+            let line = wake
+                .line
+                .as_ref()
+                .map_or_else(|| "-".to_owned(), ToString::to_string);
             news(
                 format!("Node {} can start: line {line} passed", wake.node),
                 &start_words(mission, node),
             )
         }
         WakeEvent::LineReopened => {
-            let line = wake.line.as_ref().map_or_else(|| "-".to_owned(), ToString::to_string);
+            let line = wake
+                .line
+                .as_ref()
+                .map_or_else(|| "-".to_owned(), ToString::to_string);
             let running: Vec<&str> = mission
                 .nodes
                 .iter()
                 .filter(|other| {
                     other.started()
                         && !other.status.finished()
-                        && wake.line.as_ref().is_some_and(|line| other.depends_on.contains(line))
+                        && wake
+                            .line
+                            .as_ref()
+                            .is_some_and(|line| other.depends_on.contains(line))
                 })
                 .map(|other| other.key.as_str())
                 .collect();

@@ -766,7 +766,10 @@ mod tests {
                 json!({"kind": "nodes", "keys": ["show", "docs:c1"]}),
                 "기다림 show, docs 줄 c1",
             ),
-            (json!({"kind": "below", "node": "show"}), "기다림 show 머지 먼저"),
+            (
+                json!({"kind": "below", "node": "show"}),
+                "기다림 show 머지 먼저",
+            ),
             (json!({"kind": "start"}), "시작 전"),
             (json!({"kind": "worker"}), "기다림 작업자"),
             (json!({"kind": "review"}), "기다림 리뷰"),

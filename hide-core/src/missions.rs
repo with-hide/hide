@@ -1949,7 +1949,9 @@ impl crate::dag::Node for MissionNode {
         &self.key
     }
     fn depends_on(&self) -> impl Iterator<Item = &str> {
-        self.depends_on.iter().map(|dependency| dependency.node.as_str())
+        self.depends_on
+            .iter()
+            .map(|dependency| dependency.node.as_str())
     }
 }
 
@@ -1958,7 +1960,9 @@ impl crate::dag::Node for NodeInput {
         &self.key
     }
     fn depends_on(&self) -> impl Iterator<Item = &str> {
-        self.depends_on.iter().map(|dependency| dependency.node.as_str())
+        self.depends_on
+            .iter()
+            .map(|dependency| dependency.node.as_str())
     }
 }
 
@@ -4798,10 +4802,7 @@ pub(crate) mod tests {
         assert!(back.get("lines_met").is_none());
         let lines: Vec<Dependency> =
             serde_json::from_value(serde_json::json!(["a", "core:c1"])).unwrap();
-        assert_eq!(
-            serde_json::to_string(&lines).unwrap(),
-            r#"["a","core:c1"]"#
-        );
+        assert_eq!(serde_json::to_string(&lines).unwrap(), r#"["a","core:c1"]"#);
     }
 
     #[test]

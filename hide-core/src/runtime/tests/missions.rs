@@ -17826,7 +17826,12 @@ fn a_node_waiting_on_a_line_starts_when_it_passes_stacked_on_that_branch_and_mer
     );
     assert!(line_wakes(&runtime, WakeEvent::LineMet).is_empty());
 
-    command(&mut runtime, "recipient", record_of("core", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("core", "c1", json!({})),
+    )
+    .unwrap();
     runtime.drive_mission_health(now + 1);
     let host = node_view(&runtime, "host");
     assert_eq!(host.waiting_on, Some(WaitingOn::Start));
@@ -17838,7 +17843,10 @@ fn a_node_waiting_on_a_line_starts_when_it_passes_stacked_on_that_branch_and_mer
     let told = line_wakes(&runtime, WakeEvent::LineMet);
     assert_eq!(told.len(), 1, "one letter for one pass");
     assert_eq!(
-        (told[0].node.as_str(), told[0].line.as_ref().map(ToString::to_string)),
+        (
+            told[0].node.as_str(),
+            told[0].line.as_ref().map(ToString::to_string)
+        ),
         ("host", Some("core:c1".to_owned()))
     );
     let mission = runtime.missions.book.get("mission-1").unwrap();
@@ -17866,7 +17874,10 @@ fn a_node_waiting_on_a_line_starts_when_it_passes_stacked_on_that_branch_and_mer
     .unwrap();
     runtime.drive_mission_health(now + 3);
     assert_eq!(node_view(&runtime, "host").base_pr, Some(11));
-    assert_eq!(runtime.mission_view_of("mission-1").unwrap().stack_waiting, 1);
+    assert_eq!(
+        runtime.mission_view_of("mission-1").unwrap().stack_waiting,
+        1
+    );
 
     // Its own lines met, it waits on core's merge before its own.
     command(&mut runtime, "reviewer", record_of("host", "c1", json!({}))).unwrap();
@@ -17911,12 +17922,21 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
     stacked_on_a_line(&mut runtime);
     let now = crate::runtime::unix_milliseconds();
     // Before host starts, a line that passes and fails again is only waited on.
-    command(&mut runtime, "recipient", record_of("core", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("core", "c1", json!({})),
+    )
+    .unwrap();
     runtime.drive_mission_health(now);
     command(
         &mut runtime,
         "recipient",
-        record_of("core", "c1", json!({"pass": false, "evidence": "the wire moved"})),
+        record_of(
+            "core",
+            "c1",
+            json!({"pass": false, "evidence": "the wire moved"}),
+        ),
     )
     .unwrap();
     runtime.drive_mission_health(now + 1);
@@ -17928,7 +17948,12 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
         })
     );
 
-    command(&mut runtime, "recipient", record_of("core", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("core", "c1", json!({})),
+    )
+    .unwrap();
     runtime.drive_mission_health(now + 2);
     command(
         &mut runtime,
@@ -17940,7 +17965,11 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
     command(
         &mut runtime,
         "recipient",
-        record_of("core", "c1", json!({"pass": false, "evidence": "the wire moved"})),
+        record_of(
+            "core",
+            "c1",
+            json!({"pass": false, "evidence": "the wire moved"}),
+        ),
     )
     .unwrap();
     runtime.drive_mission_health(now + 4);
@@ -17948,7 +17977,10 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
     let told = line_wakes(&runtime, WakeEvent::LineReopened);
     assert_eq!(told.len(), 1, "one letter for one opening");
     assert_eq!(
-        (told[0].node.as_str(), told[0].line.as_ref().map(ToString::to_string)),
+        (
+            told[0].node.as_str(),
+            told[0].line.as_ref().map(ToString::to_string)
+        ),
         ("core", Some("core:c1".to_owned()))
     );
     let mission = runtime.missions.book.get("mission-1").unwrap();
@@ -17960,12 +17992,21 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
     assert_eq!(node_view(&runtime, "host").status, NodeStatus::Working);
 
     // Passing and opening once more is a second opening, and a second letter.
-    command(&mut runtime, "recipient", record_of("core", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("core", "c1", json!({})),
+    )
+    .unwrap();
     runtime.drive_mission_health(now + 6);
     command(
         &mut runtime,
         "recipient",
-        record_of("core", "c1", json!({"pass": false, "evidence": "moved again"})),
+        record_of(
+            "core",
+            "c1",
+            json!({"pass": false, "evidence": "moved again"}),
+        ),
     )
     .unwrap();
     runtime.drive_mission_health(now + 7);

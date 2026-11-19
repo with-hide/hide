@@ -585,7 +585,9 @@ pub(super) fn follow_lines(mission: &mut Mission) -> bool {
                     reopened.push(dependency.clone());
                 }
             }
-            if let Some(first) = met.iter().find(|dependency| !node.lines_met.contains(dependency))
+            if let Some(first) = met
+                .iter()
+                .find(|dependency| !node.lines_met.contains(dependency))
                 && crate::mission_health::could_start(mission, node)
             {
                 startable.push((node.key.clone(), first.clone()));
