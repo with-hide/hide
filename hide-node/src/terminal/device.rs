@@ -386,6 +386,12 @@ impl Uplink {
         self.ready.notify_one();
     }
 
+    /// A new link takes the lines from here on: what a link that ended
+    /// stopped is sent again.
+    fn restart(&self) {
+        lock(&self.state).stopped = false;
+    }
+
     fn stop(&self) {
         let mut state = lock(&self.state);
         state.stopped = true;
@@ -439,6 +445,20 @@ pub fn forward_diagnostic(record: serde_json::Value) {
     }
 }
 
+/// [`forward_diagnostic`] for a node that outlives its links: a record goes
+/// up the link while one takes lines, and to `otherwise` while none does,
+/// where the device's node drops it.
+pub fn forward_diagnostic_or(record: serde_json::Value, otherwise: impl FnOnce(serde_json::Value)) {
+    let uplink = DIAGNOSTICS
+        .get()
+        .and_then(|current| lock(current).upgrade())
+        .filter(|uplink| !lock(&uplink.state).stopped);
+    match uplink {
+        Some(uplink) => uplink.push_diagnostic(record),
+        None => otherwise(record),
+    }
+}
+
 /// Where a node's pane output goes: up its link and, on a node that draws
 /// its own panes on its own screens, to those screens too.
 struct NodeOutputs {
@@ -464,6 +484,12 @@ impl OutputSink for NodeOutputs {
         self.screen.clipboard(pane, text);
         self.uplink.push_clipboard(pane, text);
     }
+
+    /// The link's reader draws at the view it asked for; only the node's
+    /// own screens are told.
+    fn grid(&self, pane: &str, rows: u16, cols: u16) {
+        self.screen.grid(pane, rows, cols);
+    }
 }
 
 /// A device node's terminal service, as its link's serve loop reaches it.
@@ -472,9 +498,24 @@ pub struct NodeTerminals {
     /// The node's pane holders, once its core started its terminals over
     /// them (`Call::HoldersStart`).
     holders: Mutex<Option<Arc<dyn hide_node_link::holders::PaneHolders>>>,
+    /// The same holders as this node started them, for what it asks of
+    /// them itself.
+    local: Mutex<Option<Arc<super::holder::Holders>>>,
     uplink: Arc<Uplink>,
     /// The node's own screens, for a node whose core runs elsewhere.
     screen: Option<Arc<dyn OutputSink>>,
+    /// Where a node that outlives its links keeps its holders, in place of
+    /// the device node's folders.
+    resident: Option<ResidentFolders>,
+}
+
+/// The folders of a node that outlives its links (a guest's node, PRD
+/// device-connect-iroh D-77): its own state folder, and the folder its
+/// holders' version folders sit under in place of the account's home.
+#[derive(Clone, Debug)]
+pub struct ResidentFolders {
+    pub state_dir: std::path::PathBuf,
+    pub holders_home: std::path::PathBuf,
 }
 
 impl Default for NodeTerminals {
@@ -490,8 +531,40 @@ impl NodeTerminals {
         Self {
             service: Mutex::default(),
             holders: Mutex::default(),
+            local: Mutex::default(),
             uplink: Arc::default(),
             screen: None,
+            resident: None,
+        }
+    }
+
+    /// The service of a node that outlives its links: its service, holders
+    /// and panes stay when a link ends, and only what goes up the link
+    /// stops until the next one ([`NodeTerminals::relink`]). Its output
+    /// reaches `tap` always, and the link while there is one.
+    pub fn resident(tap: Arc<dyn OutputSink>, folders: ResidentFolders) -> Self {
+        let mut terminals = Self::new();
+        terminals.screen = Some(tap);
+        terminals.resident = Some(folders);
+        terminals
+    }
+
+    /// A new link starts: its lines go up again.
+    pub fn relink(&self) {
+        self.uplink.restart();
+    }
+
+    /// The holders this node started, once it has.
+    pub fn holders(&self) -> Option<Arc<dyn hide_node_link::holders::PaneHolders>> {
+        lock(&self.holders).clone()
+    }
+
+    /// How many of this node's panes may still run; none before it started
+    /// its holders.
+    pub fn live_panes(&self) -> Result<usize, String> {
+        match lock(&self.local).as_ref() {
+            Some(holders) => holders.live_panes(),
+            None => Ok(0),
         }
     }
 
@@ -523,9 +596,10 @@ impl NodeTerminals {
 
     fn take_control(&self, control: TerminalControl) {
         match control {
-            // A node with no screen of its own always sends its output up.
+            // A node with no screen of its own always sends its output up,
+            // and so does one whose tap is another machine's window.
             TerminalControl::Mirror { on } => {
-                if self.screen.is_some() {
+                if self.screen.is_some() && self.resident.is_none() {
                     self.uplink.withhold(!on);
                 }
             }
@@ -570,21 +644,28 @@ impl hide_host::serve::Terminals for NodeTerminals {
         }
         let home = hide_platform::host::home_dir()
             .map_err(|error| format!("pane holders need the account's home: {error}"))?;
-        let state_dir = hide_kit::layout::device_node_state(&home);
+        let (holders_home, state_dir) = match &self.resident {
+            Some(folders) => (folders.holders_home.clone(), folders.state_dir.clone()),
+            None => (home.clone(), hide_kit::layout::device_node_state(&home)),
+        };
         let super::holder::LocalTerminals {
             service: started,
             holders: opened,
         } = super::holder::Holders::start_local(
             super::holder::HolderFolders {
-                home: &home,
+                home: &holders_home,
                 state_dir: &state_dir,
             },
             self.outputs(),
             Arc::new(UplinkReports(Arc::clone(&self.uplink))),
         )?;
-        let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(
-            super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home),
-        );
+        *lock(&self.local) = Some(Arc::clone(&opened));
+        let panes =
+            super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home);
+        let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(match self.resident {
+            Some(_) => panes.scanning_again(),
+            None => panes,
+        });
         *service = Some(started);
         *holders = Some(Arc::clone(&panes));
         *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
@@ -664,6 +745,11 @@ impl hide_host::serve::Terminals for NodeTerminals {
 
     fn stop(&self) {
         self.uplink.stop();
+        // A node that outlives its links keeps its service and its panes'
+        // sessions: its tap still draws them, and the next link finds them.
+        if self.resident.is_some() {
+            return;
+        }
         // Closed outside the lock, and only then is the link's end done:
         // each session is released and its attach child has exited, so a
         // core that starts in this process next (a move back) attaches

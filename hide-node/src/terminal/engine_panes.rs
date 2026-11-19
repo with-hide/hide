@@ -35,6 +35,11 @@ pub struct LocalPanes {
     shell: PaneShell,
     install: Option<PaneInstall>,
     owner: Option<Arc<hide_kit::panes::Owner>>,
+    /// Whether each ask for what the start found, after the first, looks
+    /// at every record again ([`LocalPanes::scanning_again`]).
+    scans_again: bool,
+    /// How many times the owner was asked what its start found.
+    asked: std::sync::atomic::AtomicUsize,
 }
 
 /// How a pane started with no program runs this machine's shell.
@@ -84,7 +89,18 @@ impl LocalPanes {
             shell,
             install: None,
             owner: None,
+            scans_again: false,
+            asked: Default::default(),
         }
+    }
+
+    /// For a node that outlives its links: one ownership serves every link,
+    /// so each link's ask for what the start found, after the first, looks
+    /// at every record again and answers what is there now, in place of
+    /// what the node's own start found before panes started and ended.
+    pub fn scanning_again(mut self) -> Self {
+        self.scans_again = true;
+        self
     }
 
     /// The panes of `holders` on the account `home` belongs to: a pane with
@@ -301,6 +317,8 @@ impl PaneHolders for LocalPanes {
             shell: self.shell.clone(),
             install: self.install.clone(),
             owner: Some(owner),
+            scans_again: self.scans_again,
+            asked: Default::default(),
         }))
     }
 
@@ -635,6 +653,18 @@ impl PaneHolders for LocalPanes {
     }
 
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError> {
+        let asked = self
+            .asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.scans_again
+            && asked > 0
+            && let Some(owner) = &self.owner
+            && !self.holders.recover(owner, &self.service).complete
+        {
+            return Err(HolderError::Unreachable {
+                message: "the node could not complete its pane record scan".to_owned(),
+            });
+        }
         self.holders
             .recovered(timeout)
             .ok_or_else(|| HolderError::Refused {

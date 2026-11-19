@@ -49,6 +49,7 @@ pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
 
+pub mod guest_node;
 mod hook_request;
 pub mod node_panes;
 pub mod node_role;
