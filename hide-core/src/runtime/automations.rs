@@ -683,16 +683,10 @@ impl Runtime {
             at_unix_ms: now,
         });
         automation.next_due_unix_ms = None;
-        self.finish_run(
-            key,
-            RunState::Failed,
-            Some(pause_code(reason)),
-            Close::Now,
-            now,
-        );
+        self.finish_run(key, RunState::Failed, Some(reason.code()), Close::Now, now);
         crate::diagnostic!(json!({
             "component": "automations", "kind": "automation.paused_for_person",
-            "automation": key.0, "run": key.1, "reason": pause_code(reason),
+            "automation": key.0, "run": key.1, "reason": reason.code(),
         }));
     }
 
@@ -2312,7 +2306,7 @@ impl Runtime {
         // stops the automation (B23); the answer says why.
         if let Gate::Pause(reason) = gate {
             self.pause_for_person(&(id.clone(), number), reason, now);
-            return Ok(json!({"id": id, "run": number, "paused": pause_code(reason)}));
+            return Ok(json!({"id": id, "run": number, "paused": reason.code()}));
         }
         Ok(json!({"id": id, "run": number}))
     }
@@ -2730,16 +2724,4 @@ fn row_conversation(row: &crate::model::SidebarAgentSnapshot) -> Option<Conversa
         kind: row.agent_kind.clone(),
         id: row.session_id.clone()?,
     })
-}
-
-fn pause_code(reason: PauseReason) -> &'static str {
-    match reason {
-        PauseReason::Operator => "automation_paused",
-        PauseReason::LoginExpired => "automation_login_expired",
-        PauseReason::FolderMissing => "automation_folder_missing",
-        PauseReason::AgentMissing => "automation_agent_missing",
-        PauseReason::FolderDetached => "automation_folder_detached",
-        PauseReason::MachineChanged => MACHINE_CHANGED,
-        PauseReason::FolderInRepository => "automation_folder_in_repository",
-    }
 }

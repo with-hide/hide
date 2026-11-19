@@ -268,7 +268,7 @@ fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@10:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@11:"));
     assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
@@ -1777,4 +1777,47 @@ fn switching_pi_off_forgets_hides_folder_trust_and_keeps_the_operators() {
         read(),
         serde_json::json!({ operators.to_str().unwrap(): false })
     );
+}
+
+/// A stub's text moves only with its version: a stub whose text changes at
+/// the same version reads, on every machine that has the released stub, as
+/// one the operator edited (`Skill::observe_in`), so it is never replaced.
+/// A change to a stub's text, the session-start table included, raises its
+/// version and pins the new text here.
+#[test]
+fn a_stub_text_changes_only_with_its_version() {
+    use sha2::Digest;
+    let pinned = [
+        (
+            "hide",
+            11,
+            "2ca4af473a6979f17bed3958032ddde099002c01490c8d6593c7a1eaa858d645",
+        ),
+        (
+            "hide-mission",
+            3,
+            "a7ea89f57899a6d251afb12277cfd835c1da5bc2b5b6067759ab22b7baf1b08f",
+        ),
+        (
+            "hide-issue",
+            1,
+            "01a4b9e83e9a1caafb4e2caafca4ee82ea7d9fb62fac79c88ec29b06a51bb798",
+        ),
+    ];
+    for skill in SKILLS {
+        let digest: String = sha2::Sha256::digest(skill.text().as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let (_, version, text) = pinned
+            .iter()
+            .find(|(name, ..)| *name == skill.name)
+            .unwrap_or_else(|| panic!("{} is not pinned", skill.name));
+        assert_eq!(
+            (skill.version, digest.as_str()),
+            (*version, *text),
+            "the {} stub's text changed: raise its version and pin the new text's digest",
+            skill.name
+        );
+    }
 }
