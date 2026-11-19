@@ -608,12 +608,6 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     assert_eq!(pairing_frames, 0);
 }
 
-/// B7 for a machine that already runs its own Hide, reached over SSH: the
-/// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
-/// the target's `hide device accept-ssh` with no words to compare, and
-/// confirms over the connection. Nothing is installed on the target, and
-/// adding the same machine again says it is already connected (B51).
-#[cfg(unix)]
 /// A stand-in `wsl.exe` for one distribution, Ubuntu: it runs the command it
 /// is given as the account the `account` file beside it names, with none of
 /// this process's own `HIDE_` variables, as a distribution has none of its
@@ -812,6 +806,12 @@ async fn a_pc_reaches_its_distributions_hide_through_hide_device_carry() {
     transport.close().await;
 }
 
+/// B7 for a machine that already runs its own Hide, reached over SSH: the
+/// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
+/// the target's `hide device accept-ssh` with no words to compare, and
+/// confirms over the connection. Nothing is installed on the target, and
+/// adding the same machine again says it is already connected (B51).
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
