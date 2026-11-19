@@ -12,17 +12,17 @@ describe("the strip above a node's window while it waits for its core (B16)", ()
     const { t } = await createInterfaceI18n("ko");
     const base = { refused: false, coreMachine: "Mac mini" };
     expect(windowStrip({ ...base, connection: "connecting", link: { phase: "updating", machine: null, alias: "mini" } }, t)?.text).toBe("Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 실행돼요");
-    expect(windowStrip({ ...base, connection: "reconnecting", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } }, t)).toEqual({ kind: "unreachable", mark: "warn", text: "Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중" });
+    expect(windowStrip({ ...base, connection: "reconnecting", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } }, t)).toEqual({ kind: "unreachable", mark: "warn", text: "Mac mini의 core에 연결할 수 없어요 · 이전 대기 중" });
     expect(windowStrip({ ...base, connection: "live", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } }, t)).toBeNull();
     // The operator ended the link (B16): the strip offers it back.
     expect(windowStrip({ ...base, connection: "connecting", link: { phase: "disconnected", machine: null, alias: "mini" } }, t)).toEqual({ kind: "disconnected", mark: "warn", text: "Mac mini core와 연결을 끊었어요", action: "reconnect" });
     expect(windowStrip({ ...base, connection: "reconnecting", link: { phase: "connecting", machine: null, alias: "mini" } }, t)?.kind).toBe("reconnecting");
     // The core's hello names its machine by its host name; a window that drew the core names it as its rows do.
-    expect(windowStrip({ ...base, connection: "reconnecting", link: { phase: "waiting", machine: "Mac-mini.local", alias: "mini-ssh" } }, t)?.text).toBe("Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중");
-    expect(windowStrip({ ...base, coreMachine: "", connection: "reconnecting", link: { phase: "waiting", machine: "Mac-mini.local", alias: "mini-ssh" } }, t)?.text).toBe("Mac-mini.local의 core에 연결할 수 없어요 · 다시 연결하는 중");
+    expect(windowStrip({ ...base, connection: "reconnecting", link: { phase: "waiting", machine: "Mac-mini.local", alias: "mini-ssh" } }, t)?.text).toBe("Mac mini의 core에 연결할 수 없어요 · 이전 대기 중");
+    expect(windowStrip({ ...base, coreMachine: "", connection: "reconnecting", link: { phase: "waiting", machine: "Mac-mini.local", alias: "mini-ssh" } }, t)?.text).toBe("Mac-mini.local의 core에 연결할 수 없어요 · 이전 대기 중");
     // A window opened while its link is down has drawn no core: it names the machine by the alias it is dialed by.
     const fresh = { ...base, coreMachine: "" };
-    expect(windowStrip({ ...fresh, connection: "reconnecting", link: { phase: "waiting", machine: null, alias: "mini" } }, t)?.text).toBe("mini의 core에 연결할 수 없어요 · 다시 연결하는 중");
+    expect(windowStrip({ ...fresh, connection: "reconnecting", link: { phase: "waiting", machine: null, alias: "mini" } }, t)?.text).toBe("mini의 core에 연결할 수 없어요 · 이전 대기 중");
     expect(windowStrip({ ...fresh, connection: "connecting", link: { phase: "disconnected", machine: null, alias: "mini" } }, t)?.text).toBe("mini core와 연결을 끊었어요");
   });
 

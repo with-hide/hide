@@ -8,7 +8,7 @@ import type { Device, DeviceHost, Kit, SnapshotRest } from "../snapshot";
 import { REFERENCE_FOLDS, sidebarScene, type SceneContent } from "./sceneData";
 
 /** The states a frame of `design/review-targets.json` names, in the order the review lists them. */
-export const CORE_LINK_STATES = ["devices", "device-kit-failed", "device-unsupported", "node-menu"] as const;
+export const CORE_LINK_STATES = ["devices", "device-kit-failed", "device-unsupported", "node-menu", "node-split-failed"] as const;
 export const CORE_WINDOW_STATES = ["rail-node", "rail-core", "window-updating", "window-unreachable", "window-sign-in", "window-disconnected", "window-asks", "window-host-key", "window-host-key-changed"] as const;
 export type CoreLinkState = (typeof CORE_LINK_STATES)[number] | (typeof CORE_WINDOW_STATES)[number];
 
@@ -66,7 +66,7 @@ export const WINDOW_STATES: Partial<Record<CoreLinkState, { connection: "connect
 /** Which side each state is drawn from. */
 export function sideOf(state: CoreLinkState): CoreLinkSide {
   if (state === "rail-core") return "linked";
-  return state === "node-menu" || state === "rail-node" || state === "window-updating" || state === "window-unreachable" || state === "window-sign-in" || state === "window-disconnected" || state === "window-asks" || state === "window-host-key" || state === "window-host-key-changed" ? "node" : "core";
+  return state === "node-menu" || state === "node-split-failed" || state === "rail-node" || state === "window-updating" || state === "window-unreachable" || state === "window-sign-in" || state === "window-disconnected" || state === "window-asks" || state === "window-host-key" || state === "window-host-key-changed" ? "node" : "core";
 }
 
 /** The device whose ⋯ menu a state opens, and the item it points at. */

@@ -271,6 +271,22 @@ it("puts a node's own machine first as This Mac, with the end of its link in its
   await unmount();
 });
 
+it("says on a node's own row why its machine was not made a Hide of its own, with a Retry that asks the node again (PRD device-connect-iroh B45)", async () => {
+  window.location.hash = "#token=t&node=mbp";
+  const next = state([remote("mini"), remote("mbp", { label: "MacBook Pro", dials_in: true, ssh_alias: null })]);
+  (next.rest.navigator.devices[0] as Record<string, unknown>).machine_name = "Mac Studio";
+  const { events, q, unmount } = await mount(next);
+  expect(q("[data-device-split]")).toBeNull();
+  await act(async () => useShellStore.setState({ coreSplit: "split_refused" }));
+  expect(q('[data-device-row="mbp"] [data-device-split="split_refused"]')?.textContent).toContain("Hide on Mac Studio refused");
+  // Only the window's own machine says it: the other rows are the core's to draw.
+  expect(document.querySelectorAll("[data-device-split]")).toHaveLength(1);
+  await act(async () => q('[data-device-split-retry="mbp"]')!.click());
+  expect(sent(events, "core_link")).toEqual([{ schema_version: 2, kind: "core_link", payload: { action: "retry" } }]);
+  window.location.hash = "";
+  await unmount();
+});
+
 // PRD system-ssh-device-link: what ssh asks and how it failed, on the device's row.
 const waiting = (id: string, sign_in: Device["sign_in"]) => {
   const next = state([remote(id, { state: "unavailable", sign_in, host: { ...host, state: "connecting" } })]);

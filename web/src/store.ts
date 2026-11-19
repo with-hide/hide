@@ -2,7 +2,7 @@ import type { StoredBuffer } from "./buffers";
 import type { TerminalFrame, UsageSnapshot } from "./generated/hided-ws";
 import { create } from "zustand";
 import type { ConnectionState } from "./connection";
-import type { CoreLink } from "./coreLink";
+import type { CoreLink, CoreLinkLive, SplitFailure } from "./coreLink";
 import { frontDeviceId, localDeviceId } from "./devices";
 import { appliedAfter } from "./operatorFocus";
 import { remoteContext, remoteView } from "./remote";
@@ -158,6 +158,8 @@ type Store = {
   pairingResult: PairingResult | null;
   /** Where this node's link to its core stands while its screen waits (`core_link` frame); null once the core draws it. */
   coreLink: CoreLink | null;
+  /** Why this node was not split from its core on this connection (`core_link` frame, phase `live`); null when it was not tried, did not fail, or the window is no node's. */
+  coreSplit: SplitFailure | null;
   revision: number;
   /** The hub's cursor after the last `terminal` frame; null after a whole snapshot until the hub names the new one. */
   terminalSequence: number | null;
@@ -372,6 +374,7 @@ export const useShellStore = create<Store>((set, get) => ({
   pairing: null,
   pairingResult: null,
   coreLink: null,
+  coreSplit: null,
   revision: 0,
   terminalSequence: null,
   terminalEpoch: null,
@@ -672,7 +675,11 @@ export const useShellStore = create<Store>((set, get) => ({
       return [];
     }
     if (frame.type === "core_link") {
-      set({ coreLink: frame.payload as unknown as CoreLink });
+      const link = frame.payload as unknown as CoreLink | CoreLinkLive;
+      // Once the core draws the screen the node's daemon says only what the core cannot know of this machine's
+      // link; a link that waits again starts a new connection, whose split is tried again.
+      if (link.phase === "live") set({ coreSplit: link.split_failed ?? null });
+      else set({ coreLink: link, coreSplit: null });
       return [];
     }
     if (frame.type === "file_index_result") {

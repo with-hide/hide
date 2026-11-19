@@ -4,6 +4,7 @@
 // link; the window asks with one `core_link` event and draws what the frames
 // say.
 
+import type { TFunction } from "i18next";
 import type { DeviceProblem, DeviceSignIn } from "./snapshot";
 
 /**
@@ -21,3 +22,28 @@ export type CoreLink = {
   problem?: DeviceProblem | null;
   sign_in?: DeviceSignIn | null;
 };
+
+/**
+ * Why this machine was not made a Hide of its own, paired with its core's machine, on this connection (PRD
+ * device-connect-iroh B45): the core's machine was not reached over SSH, its Hide refused, or this machine could not
+ * save its side. The node goes on as before, and the window's own device row says the cause with a Retry.
+ */
+export type SplitFailure = "split_not_reached" | "split_refused" | "split_not_saved";
+
+/**
+ * What a node's daemon tells a screen the core draws (`core_link` frame, phase `live`): only what the core cannot
+ * know of this machine's link.
+ */
+export type CoreLinkLive = { phase: "live"; split_failed: SplitFailure | null };
+
+/** The one line the window's own device row says for a split that did not happen; a cause this build does not name reads as a refusal. */
+export function splitFailureLine(failure: SplitFailure, machine: string, t: TFunction<"translation">): string {
+  switch (failure) {
+    case "split_not_reached":
+      return t("coreLink.split.notReached", { machine });
+    case "split_not_saved":
+      return t("coreLink.split.notSaved", { machine });
+    default:
+      return t("coreLink.split.refused", { machine });
+  }
+}

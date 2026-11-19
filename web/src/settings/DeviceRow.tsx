@@ -13,6 +13,7 @@ import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
 import { switchOffered } from "../deviceSwitch";
 import { ownWindow } from "../pairing";
+import { splitFailureLine } from "../coreLink";
 import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
@@ -79,7 +80,7 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           ) : null}
         </span>
       }
-      detail={<DeviceAttention device={device} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
+      detail={<DeviceAttention device={device} place={place} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
     >
       <Status tone={line.tone} data-device-state={`${device.id}:${device.state}`}>
         {line.text}
@@ -172,8 +173,10 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
 }
 
 /** The lines under a device that something needs the operator for; a healthy device has none. */
-function DeviceAttention({ device, actions, switchable, onAct, onAllow }: { device: Device; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
+function DeviceAttention({ device, place, actions, switchable, onAct, onAllow }: { device: Device; place: DeviceRowPlace; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t, i18n } = useInterfaceTranslation();
+  // A node whose machine was not made a Hide of its own says why on its own row, with the Retry (PRD device-connect-iroh B45).
+  const splitFailed = useShellStore((s) => (place.own && place.windowIsNode ? s.coreSplit : null));
   // SSH trust, sign-in and helper consent belong to a device this core dials, not to a node that dials in.
   const remote = device.kind === "remote" && device.dials_in !== true;
   const signIn = remote ? (device.sign_in ?? null) : null;
@@ -191,6 +194,22 @@ function DeviceAttention({ device, actions, switchable, onAct, onAllow }: { devi
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
+    splitFailed ? (
+      <div key="split" className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-split={splitFailed}>
+        <Status tone="warn">{splitFailureLine(splitFailed, place.coreName, t)}</Status>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            onAct();
+            actions.coreLink("retry");
+          }}
+          data-device-split-retry={device.id}
+        >
+          {t("common.retry")}
+        </Button>
+      </div>
+    ) : null,
     switchable && device.switch ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
     deviceLinkShown(device) ? <DeviceLink key="link" device={device} actions={actions} /> : null,
     ownWords ? (

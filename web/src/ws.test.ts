@@ -159,6 +159,24 @@ it("a reconnect names the core its revision came from", async () => {
   shell.close();
 });
 
+// What a node's daemon says of its own link once the core draws the screen
+// (PRD device-connect-iroh B45) stays through the snapshots that follow, and
+// goes when the link waits again, which is a new connection's try.
+it("keeps why a node was not split while the core draws its screen, until its link waits again", () => {
+  const shell = connectShell({ onChunks: () => {}, onCopy: () => {} });
+  const first = made(0);
+  first.open();
+  first.frame({ type: "core_link", payload: { phase: "live", split_failed: "split_refused" } });
+  first.frame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+  expect(useShellStore.getState().coreSplit).toBe("split_refused");
+  expect(useShellStore.getState().coreLink).toBeNull();
+  first.frame({ type: "core_link", payload: { phase: "connecting", machine: null, alias: "mini" } });
+  expect(useShellStore.getState().coreSplit).toBeNull();
+  first.frame({ type: "core_link", payload: { phase: "live", split_failed: null } });
+  expect(useShellStore.getState().coreSplit).toBeNull();
+  shell.close();
+});
+
 // A node's held screen sends only where its link stands; the window turns
 // live, and counts as connected, with the first snapshot the core draws.
 it("a held node's page reports access when its first snapshot draws it", () => {
