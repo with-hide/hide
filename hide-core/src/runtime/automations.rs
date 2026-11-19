@@ -61,10 +61,17 @@ const WAIT_LIMIT_MS: u64 = 15 * 60 * 1000;
 /// The start's answer when another start holds this machine's start line.
 const SPAWN_BUSY: &str = "spawn_busy";
 /// The refusals of a start that started nothing and that a later ask of
-/// the same intent may pass: the start line held, and a Codex start on a
+/// the same intent may pass: the start line held, a Codex start on a
 /// machine whose kit has not read its Codex yet (the unused pane is closed
-/// by the spawn). Asked again under the intent, outside its deadline.
-const WAIT_REFUSALS: [&str; 2] = [SPAWN_BUSY, crate::codex_launch::CAPABILITY_UNKNOWN];
+/// by the spawn), and a tab asked of the folder's workspace while its last
+/// pane closes (the last run's terminal; the engine ends that start, and
+/// the next ask opens the folder again). Asked again under the intent,
+/// outside its deadline.
+const WAIT_REFUSALS: [&str; 3] = [
+    SPAWN_BUSY,
+    crate::codex_launch::CAPABILITY_UNKNOWN,
+    crate::coordination::WORKSPACE_CLOSING,
+];
 /// The refusal of a start whose agent's program this machine does not find
 /// (`Call::AgentInstalled`), which a person fixes (B23).
 const AGENT_NOT_INSTALLED: &str = "agent_not_installed";
@@ -149,6 +156,9 @@ pub(crate) struct AutomationsRuntime {
     /// opening's: a pane such a start made is the run's before its agent
     /// registers (`started::StartingPane`).
     asking: HashSet<String>,
+    /// What last kept each finished run's terminal open, so the hold is
+    /// logged when it changes, not on every look.
+    close_held: HashMap<RunKey, &'static str>,
     /// The paths of this machine's automation folders, which no list shows.
     unlisted: HashSet<String>,
     last_tick_unix_ms: Option<u64>,
@@ -1297,10 +1307,12 @@ impl Runtime {
                     asked_at
                 }
             };
-            let gap = if code == SPAWN_BUSY {
-                BUSY_GAP_MS
-            } else {
+            // A kit read takes its while; the line and a closing pane free
+            // within seconds.
+            let gap = if code == crate::codex_launch::CAPABILITY_UNKNOWN {
                 RESUME_GAP_MS
+            } else {
+                BUSY_GAP_MS
             };
             self.automations.waiting.insert(
                 track.clone(),
@@ -1325,10 +1337,16 @@ impl Runtime {
                 self.automations.attempt_since.insert(track.clone(), now);
                 match purpose {
                     Purpose::Attempt(_) => {
+                        let conversation = self.registered_conversation(&agent_id);
                         let run = self.run_mut(&key).expect("waited on above");
                         run.branch = run.ask.take().and_then(|ask| ask.worktree);
                         run.agent_id = Some(agent_id);
                         run.state = RunState::Running;
+                        // Named from the start, so a run that ends before its
+                        // row is read can still be opened again (B17).
+                        if conversation.is_some() {
+                            run.conversation = conversation;
+                        }
                     }
                     Purpose::Open(_) => {
                         let opened = self
@@ -1522,6 +1540,21 @@ impl Runtime {
         changed
     }
 
+    /// The conversation an agent's registration names: the session its
+    /// pane reported when the agent registered, the one its row reads once
+    /// it is bound (`row_conversation`), and its agent's kind.
+    fn registered_conversation(&self, agent_id: &str) -> Option<Conversation> {
+        let ledger = self.delivery_state().ok()?;
+        let record = ledger.agents.iter().find(|record| record.id == agent_id)?;
+        if !hide_session::valid_native_id(&record.session) {
+            return None;
+        }
+        Some(Conversation {
+            kind: record.actor.kind.clone(),
+            id: record.session.clone(),
+        })
+    }
+
     fn run_agent(&self, key: &RunKey) -> AgentChoice {
         self.automations
             .book
@@ -1637,12 +1670,19 @@ impl Runtime {
                 }
                 RowLook::Shown(row) => {
                     self.automations.absent_since.remove(key);
-                    if crate::agent_state::rest_refusal(&row).is_some()
-                        || row.blocked
-                        || row.group == crate::agent_state::AgentGroup::NeedsYou.name()
-                        || self.automations.viewing.contains_key(key)
-                        || self.run_held_awake(&row)
-                    {
+                    let hold = self.close_hold(key, &row);
+                    if self.automations.close_held.get(key).copied() != hold {
+                        crate::diagnostic!(json!({
+                            "component": "automations", "kind": "automation.close_held",
+                            "automation": key.0, "run": key.1, "pane_id": row.pane_id,
+                            "hold": hold,
+                        }));
+                        match hold {
+                            Some(hold) => self.automations.close_held.insert(key.clone(), hold),
+                            None => self.automations.close_held.remove(key),
+                        };
+                    }
+                    if hold.is_some() {
                         return false;
                     }
                 }
@@ -1650,6 +1690,7 @@ impl Runtime {
             }
         }
         self.automations.absent_since.remove(key);
+        self.automations.close_held.remove(key);
         if let Some(run) = self.run_mut(key) {
             run.closing = false;
         }
@@ -1657,25 +1698,58 @@ impl Runtime {
         true
     }
 
-    /// Whether a window draws the row's pane, or a letter is on its way to
-    /// it. With no window attached nothing is on screen, whatever pane the
-    /// core has selected (a window marking the run viewed is `drive_close`'s).
-    fn run_held_awake(&self, row: &crate::model::SidebarAgentSnapshot) -> bool {
-        let on_screen = if self.ui_attached() {
-            self.agent_sleep_on_screen(None)
-        } else {
-            HashSet::new()
-        };
+    /// What keeps a finished run's terminal open now, if anything: a
+    /// refusal it rests on, a block, Needs You, the automation screen
+    /// showing it, a window drawing its tab (with no window attached
+    /// nothing is on screen, whatever pane the core has selected), or a
+    /// letter on its way to its agent.
+    fn close_hold(
+        &self,
+        key: &RunKey,
+        row: &crate::model::SidebarAgentSnapshot,
+    ) -> Option<&'static str> {
+        if crate::agent_state::rest_refusal(row).is_some() {
+            return Some("refusal");
+        }
+        if row.blocked {
+            return Some("blocked");
+        }
+        if row.group == crate::agent_state::AgentGroup::NeedsYou.name() {
+            return Some("needs_you");
+        }
+        if self.automations.viewing.contains_key(key) {
+            return Some("viewing");
+        }
+        if self.ui_attached()
+            && !self.front_unlisted()
+            && self.agent_sleep_on_screen(None).contains(&row.pane_id)
+        {
+            return Some("on_screen");
+        }
         let letters = self
             .delivery_state()
             .map(|ledger| crate::agent_sleep::LetterWaits::of(&ledger))
             .unwrap_or_default();
-        crate::agent_sleep::Awake {
-            on_screen: &on_screen,
-            backoff_until: &HashMap::new(),
-            letters: &letters,
-        }
-        .holds(row, super::unix_milliseconds())
+        letters.holds(row).then_some("letter")
+    }
+
+    /// Whether the checkout in front is in a project no list shows (an
+    /// automation's own folder). No Workspace draws it: the keys typed into
+    /// a run's terminal in the automation screen put the focus there, and it
+    /// stays once the screen looks away, so only `viewing` says the run is
+    /// shown (B17).
+    fn front_unlisted(&self) -> bool {
+        let navigator = &self.snapshot.navigator;
+        let Some(front) = navigator.focused_checkout_id.as_deref() else {
+            return false;
+        };
+        navigator.workspaces.iter().any(|workspace| {
+            workspace.unlisted
+                && workspace
+                    .checkouts
+                    .iter()
+                    .any(|checkout| checkout.id == front)
+        })
     }
 
     /// Runs this machine's closes that are due on workers: a run's own close
@@ -2341,6 +2415,7 @@ impl Runtime {
             self.clean_up_run(&key, now);
         }
         self.automations.viewing.retain(|key, _| key.0 != id);
+        self.automations.close_held.retain(|key, _| key.0 != id);
         let automation = self.automations.book.automations.remove(index);
         if automation.folder.default {
             self.retire_own_folder(&automation.folder.path);

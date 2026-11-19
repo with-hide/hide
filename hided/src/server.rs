@@ -1421,6 +1421,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "workspace_closing" => {
+            "The folder's last terminal is still closing; wait a moment, then run the same command again with the same intent"
+        }
         "holder_cap" => {
             "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
         }
@@ -5653,6 +5656,7 @@ mod tests {
         assert!(blank.ends_with("The shell was waited for 30 s"), "{blank}");
         for code in [
             "spawn_busy",
+            "workspace_closing",
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",
