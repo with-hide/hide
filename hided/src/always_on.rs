@@ -7,8 +7,8 @@
 //!
 //! [`reconcile`] is the one decision: it reads the folder's peer records
 //! and puts the item in or takes it out. The daemon runs it once at its
-//! start, and whatever changes the peer records runs it after each saved
-//! change ([`after_peer_change`]); a paired core also never ends for idle
+//! start, and the pairing after every change to the machines this one is
+//! paired with ([`Follower`]); a paired core also never ends for idle
 //! ([`paired`], `server::watch_idle`). Paired means a finished pairing,
 //! never one still waiting (`peer_host::pairing_confirmed`).
 
@@ -137,53 +137,78 @@ pub fn install_this_build(program: &Path, root: &Path) -> Result<PathBuf, String
     .install_here(root)
 }
 
-/// One reconcile at a time in this process: two would both install.
-static RECONCILING: Mutex<()> = Mutex::new(());
+/// The daemon's login item kept to its folder's peer records: the daemon
+/// asks at its start, and the pairing after every change to the machines
+/// this one is paired with (`pairing::Pairing::paired_changed`).
+#[derive(Clone)]
+pub struct Follower {
+    home: PathBuf,
+    state_dir: PathBuf,
+    /// Whether the login item started this core ([`Asker::under_item`]).
+    under_item: bool,
+}
 
-/// [`reconcile`] for the daemon of `state_dir`, on a thread of its own,
-/// since putting a build in place copies it; the outcome goes to the log.
-/// Whatever saves a change to the folder's peer records calls this after
-/// the save, and the daemon once at its start.
-pub fn after_peer_change(home: PathBuf, state_dir: PathBuf, under_item: bool) {
-    let spawned = std::thread::Builder::new()
-        .name("always-on".to_owned())
-        .spawn(move || {
-            let _one = RECONCILING
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let outcome = std::env::current_exe()
-                .map_err(|error| format!("this hided has no path: {error}"))
-                .and_then(|program| {
-                    let asker = Asker {
-                        program: &program,
-                        under_item,
-                    };
-                    reconcile(&agents_for(&home), &home, &state_dir, &asker, |root| {
-                        install_this_build(asker.program, root)
-                    })
-                });
-            match outcome {
-                Ok(Outcome::Kept | Outcome::Nothing) => {}
-                Ok(outcome) => hide_core::diagnostic!(json!({
-                    "component": "always_on",
-                    "kind": "always_on.reconciled",
-                    "outcome": outcome,
-                })),
-                Err(message) => hide_core::diagnostic!(json!({
-                    "component": "always_on",
-                    "kind": "always_on.failed",
-                    "message": message,
-                })),
-            }
-        });
-    if let Err(error) = spawned {
-        hide_core::diagnostic!(json!({
-            "component": "always_on",
-            "kind": "always_on.failed",
-            "message": error.to_string(),
-        }));
+impl Follower {
+    pub fn new(home: PathBuf, state_dir: PathBuf, under_item: bool) -> Self {
+        Self {
+            home,
+            state_dir,
+            under_item,
+        }
+    }
+
+    /// [`reconcile`] on a thread of its own, since putting a build in place
+    /// copies it, one at a time in this process; the outcome goes to the
+    /// log.
+    pub fn peers_changed(&self) {
+        let Self {
+            home,
+            state_dir,
+            under_item,
+        } = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("always-on".to_owned())
+            .spawn(move || {
+                let _one = RECONCILING
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let outcome = std::env::current_exe()
+                    .map_err(|error| format!("this hided has no path: {error}"))
+                    .and_then(|program| {
+                        let asker = Asker {
+                            program: &program,
+                            under_item,
+                        };
+                        reconcile(&agents_for(&home), &home, &state_dir, &asker, |root| {
+                            install_this_build(asker.program, root)
+                        })
+                    });
+                match outcome {
+                    Ok(Outcome::Kept | Outcome::Nothing) => {}
+                    Ok(outcome) => hide_core::diagnostic!(json!({
+                        "component": "always_on",
+                        "kind": "always_on.reconciled",
+                        "outcome": outcome,
+                    })),
+                    Err(message) => hide_core::diagnostic!(json!({
+                        "component": "always_on",
+                        "kind": "always_on.failed",
+                        "message": message,
+                    })),
+                }
+            });
+        if let Err(error) = spawned {
+            hide_core::diagnostic!(json!({
+                "component": "always_on",
+                "kind": "always_on.failed",
+                "message": error.to_string(),
+            }));
+        }
     }
 }
+
+/// One reconcile at a time in this process: two would both install.
+static RECONCILING: Mutex<()> = Mutex::new(());
 
 pub mod cli;
 
