@@ -13,7 +13,7 @@ import { setAgentState } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { sendEvent } from "./wire";
 
-test.describe.configure({ timeout: 240_000 });
+test.describe.configure({ timeout: 240_000 }); // wait-ok: a fixture with an agent pane, a daemon and a run's agent, started and stopped whole
 
 type Stack = { fixture: CallerFixture; daemon: Daemon };
 
@@ -37,7 +37,7 @@ function stop(stack: Stack): void {
 async function open(page: Page, daemon: Daemon): Promise<void> {
   await page.goto("about:blank");
   await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-  await expect(page.locator("[data-sidebar-automations]")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("[data-sidebar-automations]")).toBeVisible({ timeout: 30_000 }); // wait-ok: the first snapshot after hided starts, which draws the sidebar
 }
 
 /** Makes an automation through the same call the form sends, answered to this window. */
@@ -170,10 +170,10 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "run");
     await expect(page.locator('[data-automation-run-head="1"] [data-automation-run-tag="manual"]')).toBeVisible();
     const terminal = page.locator('[data-automation-run-terminal="pane"]');
-    await expect(terminal).toBeVisible({ timeout: 60_000 });
+    await expect(terminal).toBeVisible({ timeout: 60_000 }); // wait-ok: the run's agent started by the core and its pane attached to the screen
     const pane = await terminal.getAttribute("data-automation-run-pane");
     if (!pane) throw new Error("the run's terminal names no pane");
-    await expect(terminal.locator(".xterm-rows")).toContainText("claude fixture ready", { timeout: 30_000 });
+    await expect(terminal.locator(".xterm-rows")).toContainText("claude fixture ready", { timeout: 30_000 }); // wait-ok: the fixture's claude stand-in printed its ready line in the run's pane
     await terminal.locator(".xterm-screen").click();
     await page.keyboard.type("hello run");
     await expect(terminal.locator(".xterm-rows")).toContainText("hello run");
@@ -185,7 +185,7 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     // B15: the run's agent held at a permission prompt raises it in Needs You under its automation, and the row opens the run.
     await setAgentState(stack.daemon, pane, "blocked");
     const raised = page.locator(`[data-project-list] [data-raised-group="needs_you"] [data-pane="${pane}"]`);
-    await expect(raised).toHaveCount(1, { timeout: 30_000 });
+    await expect(raised).toHaveCount(1, { timeout: 30_000 }); // wait-ok: the core read the blocked state and raised the run in Needs You
     await expect(raised.locator("[data-agent-task]")).toContainText("야간 점검");
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await raised.locator("[data-agent-open]").click();
@@ -195,7 +195,7 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
     await page.locator('[data-automation-run-stop="1"]').click();
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     const run = page.locator('[data-automation-record="run"][data-automation-record-number="1"]');
-    await expect(run).toHaveAttribute("data-automation-run-state", "stopped", { timeout: 30_000 });
+    await expect(run).toHaveAttribute("data-automation-run-state", "stopped", { timeout: 30_000 }); // wait-ok: the core recorded the stop the run's agent answered
     await expect(run).toHaveAttribute("data-automation-run-reason", "stopped_by_person");
   } finally {
     stop(stack);
@@ -214,19 +214,19 @@ test.fixme("a finished run whose terminal the core closed opens its conversation
     const run = page.locator('[data-automation-record="run"][data-automation-record-number="1"]');
     await run.click();
     const terminal = page.locator('[data-automation-run-terminal="pane"]');
-    await expect(terminal).toBeVisible({ timeout: 60_000 });
+    await expect(terminal).toBeVisible({ timeout: 60_000 }); // wait-ok: the run's agent started by the core and its pane attached to the screen
     const pane = await terminal.getAttribute("data-automation-run-pane");
     if (!pane) throw new Error("the run's terminal names no pane");
     // B17: the run works and finishes its turn; looked at and no longer shown, its terminal closes.
     await setAgentState(stack.daemon, pane, "working");
     await setAgentState(stack.daemon, pane, "idle");
-    await expect(page.locator('[data-automation-run-head="1"]')).toHaveAttribute("data-automation-run-state", "succeeded", { timeout: 60_000 });
+    await expect(page.locator('[data-automation-run-head="1"]')).toHaveAttribute("data-automation-run-state", "succeeded", { timeout: 60_000 }); // wait-ok: the run's agent answered and the core recorded the run as done
     await page.locator("[data-automation-run-head] [data-automation-back]").click();
     await untilLogged(stack.daemon, { kind: "automation.terminal_closed", pane_id: pane }, 1, "the run's terminal closed", 60_000);
     // Pressed again, it opens the conversation the stand-in reported, reading as opened.
     await run.click();
-    await expect(page.locator('[data-automation-run-head="1"] [data-automation-run-tag="opened"]')).toBeVisible({ timeout: 60_000 });
-    await expect(terminal.locator(".xterm-rows")).toContainText("claude fixture ready", { timeout: 30_000 });
+    await expect(page.locator('[data-automation-run-head="1"] [data-automation-run-tag="opened"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the core opened the finished run's conversation again
+    await expect(terminal.locator(".xterm-rows")).toContainText("claude fixture ready", { timeout: 30_000 }); // wait-ok: the resumed claude stand-in printed its ready line
   } finally {
     stop(stack);
   }
