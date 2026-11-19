@@ -40,11 +40,11 @@ impl Target {
     fn new() -> Self {
         // The test-only keys are read only under a fixture HOME; the
         // folder goes with the test.
-        let root = crate::support::fixture_root("hcmc-");
+        let root = crate::fixtures::fixture_root("hcmc-");
         let home = hide_platform::fs::identity::canonical(root.path())
             .unwrap()
             .join("home");
-        crate::support::fixture_home(&home);
+        crate::fixtures::fixture_home(&home);
         let shell = home.join("login-shell");
         stand_in(
             &shell,
