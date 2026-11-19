@@ -1,17 +1,17 @@
 //! The MCP servers Hide writes into each agent's own MCP file (PRD
-//! skill-mcp-manager B11, B14, B22, B27; docs/agent-hooks.md, MCP servers).
+//! skill-mcp-manager B11, B14, B27; docs/agent-hooks.md, MCP servers).
 //!
 //! An agent's definition names the file (`[account.paths] mcp`, profile
 //! accounts included) and its shape (`mcp_format`,
 //! [`hide_agent_adapter::McpFormat`]); this module holds one converter per
 //! shape, never one per agent, and each shape says which transports it
-//! takes ([`accepts`]). A converter writes and takes out Hide's own entries
-//! only: an entry is Hide's when Hide's record of that file names it
-//! ([`record`]), and an entry of the same name that the record does not name
-//! is the operator's, which Hide reports and never overwrites. Every other
-//! byte of the file is kept: a JSON file goes through the same lossless read
-//! and compare-before-replace as the hook files, a TOML file through
-//! `toml_edit`, which keeps the rest of the document as it was written.
+//! takes ([`accepts`]). A write puts one entry in and a removal takes one
+//! out, and every other byte of the file is kept: a JSON file goes through
+//! the same lossless read and compare-before-replace as the hook files, a
+//! TOML file through `toml_edit`, which keeps the rest of the document as
+//! it was written. Which entries are Hide's is the store's record
+//! (`hide_kit::store`), which compares an entry's [`Server::digest`] with
+//! the one it wrote; this module decides no ownership.
 //!
 //! A server as Hide keeps it ([`Server`]) holds the names of its variables
 //! and headers and never their values: those are the operator's keys, which
@@ -21,9 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use hide_agent_adapter::{AccountPath, AgentAdapter, McpFormat};
 use serde::{Deserialize, Serialize};
@@ -181,12 +179,33 @@ pub fn accepts(format: McpFormat, transport: Transport) -> bool {
     shape(format).transports.contains(&transport)
 }
 
-/// The most entries Hide's record keeps: every server in every account
-/// file of one home, far more than an operator keeps.
-pub const RECORD_LIMIT: usize = 4096;
-/// How long a change waits for another change of Hide's MCP record, which
-/// holds it across one file's read and write.
-const RECORD_WAIT: Duration = Duration::from_secs(5);
+/// Whether `format` can hold a server named `name` in the table Hide
+/// writes: OpenCode reads a server named `servers` there as its second
+/// shape's table.
+pub fn takes_name(format: McpFormat, name: &str) -> bool {
+    valid_name(name) && !shape(format).reserved.contains(&name)
+}
+
+impl Server {
+    /// What the store compares an agent's entry with (`hide_kit::store`):
+    /// the server's name, how it is reached and the names of its keys, in a
+    /// fixed order, never a key's value, so the digest can be kept, logged
+    /// and sent where a key cannot. A key changed in Hide is written by
+    /// the key's own change, not found by a digest.
+    pub fn digest(&self) -> String {
+        use sha2::Digest as _;
+        let mut reach = self.reach.clone();
+        match &mut reach {
+            Reach::Local { env, .. } => env.sort(),
+            Reach::Remote { headers, .. } => headers.sort(),
+        }
+        let text = serde_json::to_string(&(&self.name, &reach)).expect("a server serializes");
+        sha2::Sha256::digest(text.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
 
 /// One agent's MCP file in one account.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,20 +213,22 @@ pub struct McpFile {
     agent: String,
     format: McpFormat,
     path: PathBuf,
-    /// The account's home, under which Hide keeps its record.
-    home: PathBuf,
 }
 
 impl McpFile {
     /// `adapter`'s MCP file in the account `at`, `None` for an agent Hide
     /// writes no MCP server for.
     pub fn of(adapter: &AgentAdapter, at: AccountAt<'_>) -> Option<Self> {
-        let format = adapter.mcp_format()?;
+        Self::at(adapter, at.place(adapter, AccountPath::Mcp))
+    }
+
+    /// `adapter`'s MCP file at `path`, a place its definition named once:
+    /// what a record of a place kept after its account went.
+    pub fn at(adapter: &AgentAdapter, path: PathBuf) -> Option<Self> {
         Some(Self {
             agent: adapter.id.to_owned(),
-            format,
-            path: at.place(adapter, AccountPath::Mcp),
-            home: at.home().to_path_buf(),
+            format: adapter.mcp_format()?,
+            path,
         })
     }
 
@@ -224,42 +245,54 @@ impl McpFile {
     }
 }
 
-/// What writing a server found.
+/// What a write did.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Put {
-    /// Hide wrote its entry.
+pub enum Written {
+    /// The file holds the server's entry now.
     Written,
-    /// Hide's entry already says this, so nothing was written (B27).
+    /// The entry already said this, so no byte changed (B27).
     Unchanged,
-    /// The file has an entry of this name that is not Hide's: the
-    /// operator's, which stays as it is (B22, D-16).
-    Theirs,
     /// The agent does not take this server's transport, or its name (B14).
     Unsupported,
 }
 
-/// One entry of an agent's MCP file, Hide's or not.
+/// One entry of an agent's MCP file.
 #[derive(Debug)]
 pub struct Found {
     pub name: String,
     /// The server and its keys, `None` for an entry Hide cannot read in
     /// the file's shape.
     pub server: Option<(Server, Keys)>,
-    /// Hide's record names it as Hide's.
-    pub hide: bool,
 }
 
-/// Writes `server` with `keys` as Hide's entry in `file`, leaving every
-/// other entry and byte of the file as it is. A key the server names and
-/// `keys` lacks, or one that starts with `!`, is refused before anything is
-/// written.
-pub fn put(file: &McpFile, server: &Server, keys: &Keys) -> Result<Put, InstallFailure> {
+/// Every entry of `file`, in the tables the agent reads (B19); none when
+/// the file is not there.
+pub fn entries(file: &McpFile) -> Result<Vec<Found>, InstallFailure> {
     let shape = shape(file.format);
-    if !accepts(file.format, server.reach.transport())
-        || !valid_name(&server.name)
-        || shape.reserved.contains(&server.name.as_str())
-    {
-        return Ok(Put::Unsupported);
+    let document = Document::read(shape, &file.path)?;
+    Ok(document
+        .entries(shape, &file.path)?
+        .into_iter()
+        .map(|(_, name, server)| Found { name, server })
+        .collect())
+}
+
+/// The entry `name` of `file`: the first the agent reads, in the table
+/// Hide writes before any other.
+pub fn entry(file: &McpFile, name: &str) -> Result<Option<Found>, InstallFailure> {
+    Ok(entries(file)?.into_iter().find(|found| found.name == name))
+}
+
+/// Writes `server` with `keys` as the entry `name` of `file`, in place of
+/// any entry of that name, and leaves every other entry and byte of the
+/// file as it is (B11). Whose the entry is, is the caller's to decide: the
+/// store writes only over its own (B22). A key the server names and `keys`
+/// lacks, or one that starts with `!`, is refused before anything is
+/// written.
+pub fn write(file: &McpFile, server: &Server, keys: &Keys) -> Result<Written, InstallFailure> {
+    let shape = shape(file.format);
+    if !accepts(file.format, server.reach.transport()) || !takes_name(file.format, &server.name) {
+        return Ok(Written::Unsupported);
     }
     let wanted: Keys = server
         .reach
@@ -282,145 +315,28 @@ pub fn put(file: &McpFile, server: &Server, keys: &Keys) -> Result<Put, InstallF
         Syntax::Json => Entry::Json(format::json_entry(shape, server, &wanted).map_err(refused)?),
         Syntax::Toml => Entry::Toml(format::toml_entry(shape, server, &wanted).map_err(refused)?),
     };
-    let _held = hold(&file.home)?;
-    let mut record = read_record(&file.home)?;
-    let recorded = record.iter().any(|kept| kept.is(file, &server.name));
     let _agent = agent_lock(file)?;
     let mut document = Document::read(shape, &file.path)?;
     let found = document.find(shape, &file.path, &server.name)?;
-    if !recorded && !found.is_empty() {
-        return Ok(Put::Theirs);
-    }
-    let current = found.iter().find(|(table, _)| *table == 0);
-    if found.len() == 1
-        && current.is_some_and(|(_, read)| {
-            read.as_ref()
-                .is_some_and(|(read, keys)| read == server && *keys == wanted)
-        })
+    if let [(0, Some((read, read_keys)))] = found.as_slice()
+        && read == server
+        && *read_keys == wanted
     {
-        return Ok(Put::Unchanged);
+        return Ok(Written::Unchanged);
     }
-    // An entry in a table Hide does not write (one the operator had there
-    // before Hide took it in) moves to Hide's; one in Hide's is replaced
-    // where it is.
+    // An entry in a table Hide does not write (one the agent's own second
+    // shape holds) moves to Hide's; one in Hide's is replaced where it is.
     for (table, _) in found.iter().filter(|(table, _)| *table != 0) {
         document.remove(shape, &file.path, *table, &server.name)?;
     }
     document.insert(shape, &file.path, &server.name, entry)?;
-    if recorded {
-        document.write(&file.path)?;
-        return Ok(Put::Written);
-    }
-    // The record names the entry before the file holds it, so a crash
-    // between the two leaves a name Hide takes as its own with no entry,
-    // never an entry of Hide's no record names. A failed write takes the
-    // name back out: left there, it would make an entry the operator adds
-    // later look like Hide's.
-    remember(&mut record, file, &server.name)?;
-    write_record(&file.home, &record)?;
-    if let Err(failure) = document.write(&file.path) {
-        record.retain(|kept| !kept.is(file, &server.name));
-        let _ = write_record(&file.home, &record);
-        return Err(failure);
-    }
-    Ok(Put::Written)
+    document.write(&file.path)?;
+    Ok(Written::Written)
 }
 
-/// Takes Hide's entry `name` out of `file`; an entry Hide's record does not
-/// name stays. Answers whether an entry went.
-pub fn take(file: &McpFile, name: &str) -> Result<bool, InstallFailure> {
-    if !record_path(&file.home).exists() {
-        return Ok(false);
-    }
-    let _held = hold(&file.home)?;
-    let mut record = read_record(&file.home)?;
-    if !record.iter().any(|kept| kept.is(file, name)) {
-        return Ok(false);
-    }
-    let removed = take_out(file, name)?;
-    record.retain(|kept| !kept.is(file, name));
-    write_record(&file.home, &record)?;
-    Ok(removed)
-}
-
-/// Takes every entry Hide keeps in `file` out: the agent turned off, or its
-/// profile or machine gone (B25, B30). Answers the names that went.
-pub fn take_all(file: &McpFile) -> Result<Vec<String>, InstallFailure> {
-    if !record_path(&file.home).exists() {
-        return Ok(Vec::new());
-    }
-    let _held = hold(&file.home)?;
-    let mut record = read_record(&file.home)?;
-    let mut gone = Vec::new();
-    for kept in record.iter().filter(|kept| kept.in_file(file)) {
-        if take_out(file, &kept.name)? {
-            gone.push(kept.name.clone());
-        }
-    }
-    record.retain(|kept| !kept.in_file(file));
-    write_record(&file.home, &record)?;
-    Ok(gone)
-}
-
-/// The entries of `file`, each with whether it is Hide's: what the
-/// operator put there by hand is the rest (B19, B21, B22).
-pub fn read(file: &McpFile) -> Result<Vec<Found>, InstallFailure> {
-    let shape = shape(file.format);
-    let record = read_record(&file.home)?;
-    let document = Document::read(shape, &file.path)?;
-    Ok(document
-        .entries(shape, &file.path)?
-        .into_iter()
-        .map(|(_, name, server)| Found {
-            hide: record.iter().any(|kept| kept.is(file, &name)),
-            name,
-            server,
-        })
-        .collect())
-}
-
-/// Makes the operator's entry `name` in `file` Hide's, once its server is
-/// in Hide's store (B20, D-17): Hide's record names it, so turning the
-/// server off or deleting it takes it out, and the next write puts Hide's
-/// entry in its place. Answers whether the file has such an entry.
-pub fn adopt(file: &McpFile, name: &str) -> Result<bool, InstallFailure> {
-    let shape = shape(file.format);
-    let _held = hold(&file.home)?;
-    let mut record = read_record(&file.home)?;
-    if record.iter().any(|kept| kept.is(file, name)) {
-        return Ok(true);
-    }
-    let document = Document::read(shape, &file.path)?;
-    if document.find(shape, &file.path, name)?.is_empty() {
-        return Ok(false);
-    }
-    remember(&mut record, file, name)?;
-    write_record(&file.home, &record)?;
-    Ok(true)
-}
-
-/// Every file Hide keeps an entry in under `home`, with the names: what a
-/// machine's removal takes out (B30).
-pub fn recorded(home: &Path) -> Result<Vec<(McpFile, Vec<String>)>, InstallFailure> {
-    let mut files: Vec<(McpFile, Vec<String>)> = Vec::new();
-    for kept in read_record(home)? {
-        let file = McpFile {
-            agent: kept.agent.clone(),
-            format: kept.format,
-            path: kept.file.clone(),
-            home: home.to_path_buf(),
-        };
-        match files.iter_mut().find(|(each, _)| *each == file) {
-            Some((_, names)) => names.push(kept.name),
-            None => files.push((file, vec![kept.name])),
-        }
-    }
-    Ok(files)
-}
-
-/// Takes `name` out of every table of `file` it is in, under the agent's
-/// lock; the caller holds Hide's.
-fn take_out(file: &McpFile, name: &str) -> Result<bool, InstallFailure> {
+/// Takes the entry `name` out of every table of `file` that holds it.
+/// Answers whether one went.
+pub fn remove(file: &McpFile, name: &str) -> Result<bool, InstallFailure> {
     let shape = shape(file.format);
     if !file.path.exists() {
         return Ok(false);
@@ -446,18 +362,18 @@ fn take_out(file: &McpFile, name: &str) -> Result<bool, InstallFailure> {
 fn agent_lock(
     file: &McpFile,
 ) -> Result<Option<crate::folder_trust::lock_folder::LockFolder>, InstallFailure> {
-    if file.agent == hide_agent_adapter::AgentId::ClaudeCode.adapter().id {
-        if let Some(parent) = file.path.parent() {
-            hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
-                InstallFailure::NotWritable {
-                    path: file.path.display().to_string(),
-                    detail: error.to_string(),
-                }
-            })?;
-        }
-        return crate::folder_trust::claude::lock(&file.path).map(Some);
+    if file.agent != hide_agent_adapter::AgentId::ClaudeCode.adapter().id {
+        return Ok(None);
     }
-    Ok(None)
+    if let Some(parent) = file.path.parent() {
+        hide_platform::fs::private::create_dir_all(parent).map_err(|error| {
+            InstallFailure::NotWritable {
+                path: file.path.display().to_string(),
+                detail: error.to_string(),
+            }
+        })?;
+    }
+    crate::folder_trust::claude::lock(&file.path).map(Some)
 }
 
 /// What an entry says: its server and keys, `None` when Hide cannot read
@@ -733,119 +649,6 @@ fn toml_item_mut<'a>(
         return Err(not_table());
     }
     Ok(Some(at))
-}
-
-/// One entry Hide wrote, by the file it is in.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct Recorded {
-    agent: String,
-    format: McpFormat,
-    file: PathBuf,
-    name: String,
-}
-
-impl Recorded {
-    fn of(file: &McpFile, name: &str) -> Self {
-        Self {
-            agent: file.agent.clone(),
-            format: file.format,
-            file: file.path.clone(),
-            name: name.to_owned(),
-        }
-    }
-
-    fn in_file(&self, file: &McpFile) -> bool {
-        self.file == file.path && self.agent == file.agent
-    }
-
-    fn is(&self, file: &McpFile, name: &str) -> bool {
-        self.in_file(file) && self.name == name
-    }
-}
-
-/// Where Hide keeps its own records of the agents' files under a home,
-/// beside its folder trust record (`crate::folder_trust`).
-fn agent_hooks_dir(home: &Path) -> PathBuf {
-    home.join(".hide").join("agent-hooks")
-}
-
-fn record_path(home: &Path) -> PathBuf {
-    agent_hooks_dir(home).join("mcp.json")
-}
-
-/// Hide's lock on its MCP record of `home`, held across a whole change, so
-/// two changes never read the same record and drop each other's entry.
-fn hold(home: &Path) -> Result<hide_platform::fs::lock::Lock, InstallFailure> {
-    let path = agent_hooks_dir(home).join("mcp.lock");
-    let failure = |detail: String| InstallFailure::NotWritable {
-        path: path.display().to_string(),
-        detail,
-    };
-    hide_platform::fs::private::create_dir_all(&agent_hooks_dir(home))
-        .map_err(|error| failure(error.to_string()))?;
-    let file = hide_platform::fs::private::open_or_create_file(&path)
-        .map_err(|error| failure(error.to_string()))?;
-    match hide_platform::fs::lock::lock_file(
-        file,
-        hide_platform::fs::lock::Mode::Exclusive,
-        RECORD_WAIT,
-        &|| false,
-    )
-    .map_err(|error| failure(error.to_string()))?
-    {
-        hide_platform::fs::lock::Waited::Locked(held) => Ok(held),
-        hide_platform::fs::lock::Waited::TimedOut | hide_platform::fs::lock::Waited::Cancelled => {
-            Err(failure(format!(
-                "another change of Hide's MCP entries held the lock for more than {} s",
-                RECORD_WAIT.as_secs()
-            )))
-        }
-    }
-}
-
-fn read_record(home: &Path) -> Result<Vec<Recorded>, InstallFailure> {
-    let path = record_path(home);
-    match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| InstallFailure::Unreadable {
-            path: path.display().to_string(),
-            detail: error.to_string(),
-        }),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(InstallFailure::Unreadable {
-            path: path.display().to_string(),
-            detail: error.to_string(),
-        }),
-    }
-}
-
-fn write_record(home: &Path, record: &[Recorded]) -> Result<(), InstallFailure> {
-    let path = record_path(home);
-    let failure = |detail: String| InstallFailure::NotWritable {
-        path: path.display().to_string(),
-        detail,
-    };
-    let bytes = serde_json::to_vec(record).map_err(|error| failure(error.to_string()))?;
-    hide_platform::fs::atomic::write_file(&path, &bytes, hide_platform::fs::Access::Private)
-        .map(drop)
-        .map_err(|error| failure(error.to_string()))
-}
-
-/// Adds `name` in `file` to the record. Entries of files that are gone go
-/// first: a file the operator or an uninstall removed holds nothing of
-/// Hide's, so the cap is only reached by entries of files that exist, and
-/// at the cap the add is refused, since none of those can be dropped.
-fn remember(record: &mut Vec<Recorded>, file: &McpFile, name: &str) -> Result<(), InstallFailure> {
-    record.retain(|kept| kept.file.exists());
-    if record.len() >= RECORD_LIMIT {
-        return Err(InstallFailure::NotWritable {
-            path: record_path(&file.home).display().to_string(),
-            detail: format!(
-                "Hide's MCP record already holds {RECORD_LIMIT} entries of files that exist"
-            ),
-        });
-    }
-    record.push(Recorded::of(file, name));
-    Ok(())
 }
 
 #[cfg(test)]

@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use hide_agent_adapter::{AccountRef, AgentAdapter, NodeEnv, Profile, adapter};
 use hide_agent_hooks::account::AccountAt;
-use hide_agent_hooks::mcp::{self, Keys, McpFile, Put, Reach, Remote, Secret, Server, Transport};
+use hide_agent_hooks::mcp::{
+    self, Keys, McpFile, Reach, Remote, Secret, Server, Transport, Written,
+};
 use serde_json::{Value, json};
 
 const KEY: &str = "ghp_k3y-under-test";
@@ -244,8 +246,8 @@ fn each_agent_gets_hides_server_in_its_own_shape_and_keeps_the_rest_of_its_file(
 
         let (server, keys) = github();
         assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Written,
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Written,
             "{}",
             agent.kind
         );
@@ -255,8 +257,8 @@ fn each_agent_gets_hides_server_in_its_own_shape_and_keeps_the_rest_of_its_file(
 
         let (server, keys) = linear();
         assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Written,
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Written,
             "{}",
             agent.kind
         );
@@ -267,15 +269,15 @@ fn each_agent_gets_hides_server_in_its_own_shape_and_keeps_the_rest_of_its_file(
             agent.kind
         );
 
-        let sse = mcp::put(&file, &asana(), &Keys::new()).unwrap();
+        let sse = mcp::write(&file, &asana(), &Keys::new()).unwrap();
         match &agent.sse {
             Some(entry) => {
-                assert_eq!(sse, Put::Written, "{}", agent.kind);
+                assert_eq!(sse, Written::Written, "{}", agent.kind);
                 assert_eq!(&servers(&agent, &path)["asana"], entry, "{}", agent.kind);
                 assert!(mcp::accepts(file.format(), Transport::Sse));
             }
             None => {
-                assert_eq!(sse, Put::Unsupported, "{}", agent.kind);
+                assert_eq!(sse, Written::Unsupported, "{}", agent.kind);
                 assert!(
                     !servers(&agent, &path).contains_key("asana"),
                     "{}",
@@ -288,16 +290,11 @@ fn each_agent_gets_hides_server_in_its_own_shape_and_keeps_the_rest_of_its_file(
         // Every server Hide wrote comes out, and the file is byte for byte
         // the operator's again.
         for name in ["github", "linear", "asana"] {
-            mcp::take(&file, name).unwrap();
+            mcp::remove(&file, name).unwrap();
         }
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             agent.original,
-            "{}",
-            agent.kind
-        );
-        assert!(
-            mcp::recorded(home.path()).unwrap().is_empty(),
             "{}",
             agent.kind
         );
@@ -312,11 +309,11 @@ fn writing_the_same_server_again_changes_no_byte_and_a_new_key_rewrites_it() {
         let path = home.path().join(agent.file);
         write(&path, agent.original);
         let (server, keys) = github();
-        assert_eq!(mcp::put(&file, &server, &keys).unwrap(), Put::Written);
+        assert_eq!(mcp::write(&file, &server, &keys).unwrap(), Written::Written);
         let written = std::fs::read(&path).unwrap();
         assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Unchanged,
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Unchanged,
             "{}",
             agent.kind
         );
@@ -325,8 +322,8 @@ fn writing_the_same_server_again_changes_no_byte_and_a_new_key_rewrites_it() {
         // A key edited in Hide reaches the agent's file (B12).
         let edited = Keys::from([("GITHUB_TOKEN".to_owned(), Secret::new("ghp_new".to_owned()))]);
         assert_eq!(
-            mcp::put(&file, &server, &edited).unwrap(),
-            Put::Written,
+            mcp::write(&file, &server, &edited).unwrap(),
+            Written::Written,
             "{}",
             agent.kind
         );
@@ -346,10 +343,12 @@ fn a_file_that_is_not_there_is_made_with_hides_server_alone() {
         let home = tempfile::tempdir().unwrap();
         let file = default_file(&agent, home.path());
         let path = home.path().join(agent.file);
+        assert!(mcp::entries(&file).unwrap().is_empty());
+        assert!(!mcp::remove(&file, "github").unwrap());
         let (server, keys) = github();
         assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Written,
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Written,
             "{}",
             agent.kind
         );
@@ -370,28 +369,16 @@ fn a_file_that_is_not_there_is_made_with_hides_server_alone() {
 }
 
 #[test]
-fn an_entry_of_the_same_name_hide_did_not_write_stays_the_operators_until_taken_in() {
+fn the_operators_entries_read_back_and_one_written_over_takes_hides_shape() {
     for agent in agents() {
         let home = tempfile::tempdir().unwrap();
         let file = default_file(&agent, home.path());
         let path = home.path().join(agent.file);
         write(&path, agent.original);
-        // `mine` is the operator's: Hide neither overwrites nor removes it.
-        let (mut server, keys) = github();
-        server.name = "mine".to_owned();
-        assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Theirs,
-            "{}",
-            agent.kind
-        );
-        assert!(!mcp::take(&file, "mine").unwrap(), "{}", agent.kind);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), agent.original);
-
-        let found = mcp::read(&file).unwrap();
-        let mine = found.iter().find(|found| found.name == "mine").unwrap();
-        assert!(!mine.hide, "{}", agent.kind);
-        let (read, read_keys) = mine.server.as_ref().unwrap();
+        let found = mcp::entries(&file).unwrap();
+        assert_eq!(found.len(), 1, "{}: {found:?}", agent.kind);
+        assert_eq!(found[0].name, "mine");
+        let (read, read_keys) = found[0].server.as_ref().unwrap();
         assert_eq!(
             read.reach,
             Reach::Local {
@@ -403,19 +390,14 @@ fn an_entry_of_the_same_name_hide_did_not_write_stays_the_operators_until_taken_
             agent.kind
         );
         assert!(read_keys.is_empty());
+        assert!(mcp::entry(&file, "absent").unwrap().is_none());
 
-        // Taken in (B20): Hide's record names it, its next write is Hide's,
-        // and taking it out removes it.
-        assert!(mcp::adopt(&file, "mine").unwrap(), "{}", agent.kind);
-        assert!(
-            mcp::read(&file)
-                .unwrap()
-                .iter()
-                .any(|found| found.name == "mine" && found.hide)
-        );
+        // Once the store has taken `mine` in, its write is in Hide's shape.
+        let (mut server, keys) = github();
+        server.name = "mine".to_owned();
         assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Written,
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Written,
             "{}",
             agent.kind
         );
@@ -425,13 +407,16 @@ fn an_entry_of_the_same_name_hide_did_not_write_stays_the_operators_until_taken_
             "{}",
             agent.kind
         );
-        assert!(mcp::take(&file, "mine").unwrap(), "{}", agent.kind);
+        let (read, read_keys) = mcp::entry(&file, "mine").unwrap().unwrap().server.unwrap();
+        assert_eq!(read, server, "{}", agent.kind);
+        assert_eq!(read_keys["GITHUB_TOKEN"].expose(), KEY);
+        assert!(mcp::remove(&file, "mine").unwrap(), "{}", agent.kind);
+        assert!(!mcp::remove(&file, "mine").unwrap(), "{}", agent.kind);
         assert!(
             !servers(&agent, &path).contains_key("mine"),
             "{}",
             agent.kind
         );
-        assert!(!mcp::adopt(&file, "absent").unwrap(), "{}", agent.kind);
     }
 }
 
@@ -473,20 +458,21 @@ fn a_profile_account_gets_its_own_file_and_the_default_stays_untouched() {
         )
         .unwrap();
         assert_eq!(file.path(), expected, "{kind}");
+        assert_eq!(
+            McpFile::at(the(kind), expected.clone()).unwrap(),
+            file,
+            "{kind}"
+        );
         let (server, keys) = github();
         assert_eq!(
-            mcp::put(&file, &server, &keys).unwrap(),
-            Put::Written,
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Written,
             "{kind}"
         );
         assert!(expected.exists(), "{kind}");
         let default = McpFile::of(the(kind), AccountAt::Home(home.path())).unwrap();
         assert!(!default.path().exists(), "{kind}");
-        assert_eq!(
-            mcp::take_all(&file).unwrap(),
-            vec!["github".to_owned()],
-            "{kind}"
-        );
+        assert!(mcp::remove(&file, "github").unwrap(), "{kind}");
     }
 }
 
@@ -503,7 +489,21 @@ fn a_broken_file_is_left_as_it_is_and_the_failure_quotes_no_key() {
         };
         write(&path, &broken);
         let (server, keys) = github();
-        let failure = mcp::put(&file, &server, &keys).unwrap_err();
+        let failure = mcp::write(&file, &server, &keys).unwrap_err();
+        assert!(
+            !failure.message().contains(KEY),
+            "{}: {}",
+            agent.kind,
+            failure.message()
+        );
+        let failure = mcp::remove(&file, "x").unwrap_err();
+        assert!(
+            !failure.message().contains(KEY),
+            "{}: {}",
+            agent.kind,
+            failure.message()
+        );
+        let failure = mcp::entries(&file).unwrap_err();
         assert!(
             !failure.message().contains(KEY),
             "{}: {}",
@@ -513,11 +513,6 @@ fn a_broken_file_is_left_as_it_is_and_the_failure_quotes_no_key() {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             broken,
-            "{}",
-            agent.kind
-        );
-        assert!(
-            mcp::recorded(home.path()).unwrap().is_empty(),
             "{}",
             agent.kind
         );
@@ -532,7 +527,7 @@ fn a_key_that_is_missing_or_runs_a_command_writes_nothing() {
         let path = home.path().join(agent.file);
         write(&path, agent.original);
         let (server, _) = github();
-        let missing = mcp::put(&file, &server, &Keys::new()).unwrap_err();
+        let missing = mcp::write(&file, &server, &Keys::new()).unwrap_err();
         assert!(
             missing.message().contains("GITHUB_TOKEN"),
             "{}",
@@ -542,7 +537,7 @@ fn a_key_that_is_missing_or_runs_a_command_writes_nothing() {
             "GITHUB_TOKEN".to_owned(),
             Secret::new("!cat ~/.ssh/id_rsa".to_owned()),
         )]);
-        let refused = mcp::put(&file, &server, &runs).unwrap_err();
+        let refused = mcp::write(&file, &server, &runs).unwrap_err();
         assert!(
             !refused.message().contains("id_rsa"),
             "{}",
@@ -554,16 +549,11 @@ fn a_key_that_is_missing_or_runs_a_command_writes_nothing() {
             "{}",
             agent.kind
         );
-        assert!(
-            mcp::recorded(home.path()).unwrap().is_empty(),
-            "{}",
-            agent.kind
-        );
     }
 }
 
 #[test]
-fn opencodes_second_shape_counts_and_a_server_taken_in_from_it_moves_to_the_first() {
+fn opencodes_second_shape_is_read_and_a_server_written_from_it_moves_to_the_first() {
     let agent = agents()
         .into_iter()
         .find(|agent| agent.kind == "opencode")
@@ -574,48 +564,66 @@ fn opencodes_second_shape_counts_and_a_server_taken_in_from_it_moves_to_the_firs
     let original =
         "{\"mcp\": {\"servers\": {\"github\": {\"type\": \"local\", \"command\": [\"gh-mcp\"]}}}}";
     write(&path, original);
-    let (server, keys) = github();
-    assert_eq!(mcp::put(&file, &server, &keys).unwrap(), Put::Theirs);
+    let found = mcp::entries(&file).unwrap();
+    assert_eq!(
+        found
+            .iter()
+            .map(|found| found.name.as_str())
+            .collect::<Vec<_>>(),
+        ["github"],
+        "the second shape's table is no server of the first"
+    );
     // A server named like OpenCode 2's table cannot be written beside it.
+    let (server, keys) = github();
     let mut named_servers = server.clone();
     named_servers.name = "servers".to_owned();
+    assert!(!mcp::takes_name(file.format(), "servers"));
     assert_eq!(
-        mcp::put(&file, &named_servers, &keys).unwrap(),
-        Put::Unsupported
+        mcp::write(&file, &named_servers, &keys).unwrap(),
+        Written::Unsupported
     );
-    assert!(mcp::adopt(&file, "github").unwrap());
-    assert_eq!(mcp::put(&file, &server, &keys).unwrap(), Put::Written);
+    assert_eq!(mcp::write(&file, &server, &keys).unwrap(), Written::Written);
     let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(written["mcp"]["github"], agent.local);
     assert_eq!(written["mcp"]["servers"], json!({}));
+    assert!(mcp::remove(&file, "github").unwrap());
+    assert!(mcp::entries(&file).unwrap().is_empty());
 }
 
 #[test]
-fn taking_every_entry_out_of_a_file_leaves_the_operators_alone() {
+fn a_servers_digest_is_what_its_entry_reads_back_and_holds_no_key() {
     for agent in agents() {
         let home = tempfile::tempdir().unwrap();
         let file = default_file(&agent, home.path());
-        let path = home.path().join(agent.file);
-        write(&path, agent.original);
-        let (local, local_keys) = github();
-        let (remote, remote_keys) = linear();
-        mcp::put(&file, &local, &local_keys).unwrap();
-        mcp::put(&file, &remote, &remote_keys).unwrap();
-        let recorded = mcp::recorded(home.path()).unwrap();
-        assert_eq!(recorded.len(), 1, "{}", agent.kind);
-        assert_eq!(recorded[0].0, file);
-        assert_eq!(recorded[0].1, ["github", "linear"]);
-        let mut gone = mcp::take_all(&file).unwrap();
-        gone.sort();
-        assert_eq!(gone, ["github", "linear"], "{}", agent.kind);
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            agent.original,
-            "{}",
-            agent.kind
-        );
-        assert!(mcp::recorded(home.path()).unwrap().is_empty());
+        for (server, keys) in [github(), linear()] {
+            mcp::write(&file, &server, &keys).unwrap();
+            let (read, _) = mcp::entry(&file, &server.name)
+                .unwrap()
+                .unwrap()
+                .server
+                .unwrap();
+            assert_eq!(
+                read.digest(),
+                server.digest(),
+                "{} {}",
+                agent.kind,
+                server.name
+            );
+        }
     }
+    // The digest follows the spec and the names of its keys, in any order,
+    // and never a key's value.
+    let (server, _) = github();
+    let mut renamed = server.clone();
+    if let Reach::Local { env, .. } = &mut renamed.reach {
+        env.insert(0, "OTHER".to_owned());
+    }
+    assert_ne!(renamed.digest(), server.digest());
+    let mut reordered = renamed.clone();
+    if let Reach::Local { env, .. } = &mut reordered.reach {
+        env.reverse();
+    }
+    assert_eq!(reordered.digest(), renamed.digest());
 }
 
 #[test]
@@ -624,9 +632,9 @@ fn what_hide_reads_back_prints_no_key() {
     let home = tempfile::tempdir().unwrap();
     let file = default_file(&agent, home.path());
     let (server, keys) = github();
-    mcp::put(&file, &server, &keys).unwrap();
-    let found = mcp::read(&file).unwrap();
-    let printed = format!("{found:?} {keys:?} {file:?}");
+    mcp::write(&file, &server, &keys).unwrap();
+    let found = mcp::entries(&file).unwrap();
+    let printed = format!("{found:?} {keys:?} {file:?} {}", server.digest());
     assert!(!printed.contains(KEY), "{printed}");
     let (_, read_keys) = found[0].server.as_ref().unwrap();
     assert_eq!(read_keys["GITHUB_TOKEN"].expose(), KEY);

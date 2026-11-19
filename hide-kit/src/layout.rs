@@ -327,13 +327,13 @@ pub fn access_keys(home: &Path) -> PathBuf {
 }
 
 /// The operator's MCP keys, the values of the variables and headers of the
-/// MCP servers Hide keeps (PRD skill-mcp-manager D-11): one owner-only file
-/// (`crate::mcp_keys`), the only place Hide keeps a key. It stays with the
-/// state folder, as each machine keeps its own.
+/// MCP servers in the store (PRD skill-mcp-manager D-11): one owner-only
+/// file in the store's folder (`crate::mcp_keys`), the only place Hide keeps
+/// a key, so a device keeps its own with its store.
 pub const MCP_KEYS: &str = "mcp-keys.json";
 
-pub fn mcp_keys(state_dir: &Path) -> PathBuf {
-    state_dir.join(MCP_KEYS)
+pub fn mcp_keys(store_dir: &Path) -> PathBuf {
+    store_dir.join(MCP_KEYS)
 }
 
 /// Usage events and retained daily totals, owned by the core's usage worker.

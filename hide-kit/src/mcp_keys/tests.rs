@@ -15,14 +15,14 @@ fn keys(pairs: &[(&str, &str)]) -> Keys {
 
 #[test]
 fn an_items_keys_live_in_one_private_file_until_a_permanent_delete_wipes_them() {
-    let state = tempfile::tempdir().unwrap();
-    let path = crate::layout::mcp_keys(state.path());
-    assert!(super::keys(state.path(), "mcp:github").unwrap().is_empty());
+    let store = tempfile::tempdir().unwrap();
+    let path = crate::layout::mcp_keys(store.path());
+    assert!(super::keys(store.path(), "mcp:github").unwrap().is_empty());
     assert!(!path.exists());
 
-    set(state.path(), "mcp:github", &keys(&[("GITHUB_TOKEN", KEY)])).unwrap();
+    set(store.path(), "mcp:github", &keys(&[("GITHUB_TOKEN", KEY)])).unwrap();
     set(
-        state.path(),
+        store.path(),
         "mcp:linear",
         &keys(&[("Authorization", "Bearer lin")]),
     )
@@ -36,41 +36,41 @@ fn an_items_keys_live_in_one_private_file_until_a_permanent_delete_wipes_them() 
             0o600
         );
     }
-    let read = super::keys(state.path(), "mcp:github").unwrap();
+    let read = super::keys(store.path(), "mcp:github").unwrap();
     assert_eq!(read["GITHUB_TOKEN"].expose(), KEY);
     assert!(!format!("{read:?}").contains(KEY));
-    assert_eq!(items(state.path()).unwrap(), ["mcp:github", "mcp:linear"]);
+    assert_eq!(items(store.path()).unwrap(), ["mcp:github", "mcp:linear"]);
 
     // An edit replaces the item's keys whole.
     set(
-        state.path(),
+        store.path(),
         "mcp:github",
         &keys(&[("GITHUB_TOKEN", "ghp_new")]),
     )
     .unwrap();
     assert_eq!(
-        super::keys(state.path(), "mcp:github").unwrap()["GITHUB_TOKEN"].expose(),
+        super::keys(store.path(), "mcp:github").unwrap()["GITHUB_TOKEN"].expose(),
         "ghp_new"
     );
 
     // A permanent delete wipes the item's keys, and the last one the file.
-    wipe(state.path(), "mcp:github").unwrap();
-    assert!(super::keys(state.path(), "mcp:github").unwrap().is_empty());
+    wipe(store.path(), "mcp:github").unwrap();
+    assert!(super::keys(store.path(), "mcp:github").unwrap().is_empty());
     assert!(!std::fs::read_to_string(&path).unwrap().contains("ghp_new"));
-    set(state.path(), "mcp:linear", &Keys::new()).unwrap();
+    set(store.path(), "mcp:linear", &Keys::new()).unwrap();
     assert!(!path.exists());
-    wipe(state.path(), "mcp:absent").unwrap();
+    wipe(store.path(), "mcp:absent").unwrap();
 }
 
 #[cfg(unix)]
 #[test]
 fn a_file_others_can_read_is_refused_and_no_failure_quotes_a_key() {
     use std::os::unix::fs::PermissionsExt;
-    let state = tempfile::tempdir().unwrap();
-    let path = crate::layout::mcp_keys(state.path());
-    set(state.path(), "mcp:github", &keys(&[("GITHUB_TOKEN", KEY)])).unwrap();
+    let store = tempfile::tempdir().unwrap();
+    let path = crate::layout::mcp_keys(store.path());
+    set(store.path(), "mcp:github", &keys(&[("GITHUB_TOKEN", KEY)])).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let refused = super::keys(state.path(), "mcp:github").unwrap_err();
+    let refused = super::keys(store.path(), "mcp:github").unwrap_err();
     assert!(
         matches!(refused, KeyFileError::NotPrivate { .. }),
         "{refused:?}"
@@ -86,13 +86,13 @@ fn a_file_others_can_read_is_refused_and_no_failure_quotes_a_key() {
         hide_platform::fs::Access::Private,
     )
     .unwrap();
-    let unreadable = super::keys(state.path(), "mcp:x").unwrap_err();
+    let unreadable = super::keys(store.path(), "mcp:x").unwrap_err();
     assert!(
         matches!(unreadable, KeyFileError::Unreadable { .. }),
         "{unreadable:?}"
     );
     assert!(!format!("{unreadable} {unreadable:?}").contains(KEY));
-    let refused = set(state.path(), "mcp:y", &keys(&[("A", "b")])).unwrap_err();
+    let refused = set(store.path(), "mcp:y", &keys(&[("A", "b")])).unwrap_err();
     assert!(matches!(refused, KeyFileError::Unreadable { .. }));
     assert!(
         std::fs::read_to_string(&path).unwrap().contains(KEY),
@@ -102,13 +102,13 @@ fn a_file_others_can_read_is_refused_and_no_failure_quotes_a_key() {
 
 #[test]
 fn a_key_past_the_limits_is_refused_before_the_file_changes() {
-    let state = tempfile::tempdir().unwrap();
+    let store = tempfile::tempdir().unwrap();
     let long = "k".repeat(MAX_VALUE_BYTES + 1);
-    let refused = set(state.path(), "mcp:x", &keys(&[("A", &long)])).unwrap_err();
+    let refused = set(store.path(), "mcp:x", &keys(&[("A", &long)])).unwrap_err();
     assert_eq!(refused, KeyFileError::TooLarge { what: "a key" });
     let many: Keys = (0..=MAX_KEYS_PER_ITEM)
         .map(|index| (format!("K{index}"), Secret::new("v".to_owned())))
         .collect();
-    assert!(set(state.path(), "mcp:x", &many).is_err());
-    assert!(!crate::layout::mcp_keys(state.path()).exists());
+    assert!(set(store.path(), "mcp:x", &many).is_err());
+    assert!(!crate::layout::mcp_keys(store.path()).exists());
 }

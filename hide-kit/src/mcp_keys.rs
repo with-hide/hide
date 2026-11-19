@@ -1,7 +1,7 @@
 //! The operator's MCP keys (PRD skill-mcp-manager B10, B12, B13, B18, D-11,
 //! D-39): the values of a server's variables and headers, kept in one
-//! owner-only file of the state folder ([`crate::layout::mcp_keys`]) by the
-//! store item they belong to, and handed to `hide_agent_hooks::mcp` only when
+//! owner-only file of the store's folder ([`crate::layout::mcp_keys`]) by
+//! the store item they belong to, and handed to `hide_agent_hooks::mcp` only when
 //! an agent's file is written.
 //!
 //! The file is the only place Hide keeps a key. Nothing here formats a
@@ -75,8 +75,8 @@ struct File {
 }
 
 /// The keys of the item `item`; none when it has none.
-pub fn keys(state_dir: &Path, item: &str) -> Result<Keys, KeyFileError> {
-    let path = crate::layout::mcp_keys(state_dir);
+pub fn keys(store_dir: &Path, item: &str) -> Result<Keys, KeyFileError> {
+    let path = crate::layout::mcp_keys(store_dir);
     Ok(read(&path)?
         .items
         .remove(item)
@@ -85,14 +85,14 @@ pub fn keys(state_dir: &Path, item: &str) -> Result<Keys, KeyFileError> {
 }
 
 /// The items that hold keys.
-pub fn items(state_dir: &Path) -> Result<Vec<String>, KeyFileError> {
-    let path = crate::layout::mcp_keys(state_dir);
+pub fn items(store_dir: &Path) -> Result<Vec<String>, KeyFileError> {
+    let path = crate::layout::mcp_keys(store_dir);
     Ok(read(&path)?.items.into_keys().collect())
 }
 
 /// Replaces the keys of `item` with `keys`; an empty `keys` takes the item
 /// out. The file is written only when it changes.
-pub fn set(state_dir: &Path, item: &str, keys: &Keys) -> Result<(), KeyFileError> {
+pub fn set(store_dir: &Path, item: &str, keys: &Keys) -> Result<(), KeyFileError> {
     if keys.len() > MAX_KEYS_PER_ITEM {
         return Err(KeyFileError::TooLarge {
             what: "the number of keys",
@@ -112,7 +112,7 @@ pub fn set(state_dir: &Path, item: &str, keys: &Keys) -> Result<(), KeyFileError
     {
         return Err(KeyFileError::TooLarge { what: "a key" });
     }
-    change(state_dir, |file| {
+    change(store_dir, |file| {
         let plain: BTreeMap<String, String> = keys
             .iter()
             .map(|(name, value)| (name.clone(), value.expose().to_owned()))
@@ -129,8 +129,8 @@ pub fn set(state_dir: &Path, item: &str, keys: &Keys) -> Result<(), KeyFileError
 }
 
 /// Wipes every key of `item`: a permanent delete (D-39).
-pub fn wipe(state_dir: &Path, item: &str) -> Result<(), KeyFileError> {
-    change(state_dir, |file| file.items.remove(item).is_some())
+pub fn wipe(store_dir: &Path, item: &str) -> Result<(), KeyFileError> {
+    change(store_dir, |file| file.items.remove(item).is_some())
 }
 
 fn secrets(plain: BTreeMap<String, String>) -> Keys {
@@ -142,13 +142,13 @@ fn secrets(plain: BTreeMap<String, String>) -> Keys {
 
 /// Runs `edit` on the file under its lock and writes it when `edit` says it
 /// changed it. The file goes when it holds no item.
-fn change(state_dir: &Path, edit: impl FnOnce(&mut File) -> bool) -> Result<(), KeyFileError> {
-    let path = crate::layout::mcp_keys(state_dir);
+fn change(store_dir: &Path, edit: impl FnOnce(&mut File) -> bool) -> Result<(), KeyFileError> {
+    let path = crate::layout::mcp_keys(store_dir);
     let io = |kind: ErrorKind| KeyFileError::Io {
         path: path.clone(),
         kind,
     };
-    hide_platform::fs::private::create_dir_all(state_dir).map_err(|error| io(error.kind()))?;
+    hide_platform::fs::private::create_dir_all(store_dir).map_err(|error| io(error.kind()))?;
     let _lock = lock(&path)?;
     let mut file = read(&path)?;
     if !edit(&mut file) {
