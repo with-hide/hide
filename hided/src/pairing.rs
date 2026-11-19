@@ -11,14 +11,15 @@
 //!   asking to be let in are the operator's alone: an agent in a pane, an
 //!   external tool and a window of another machine are refused (B52).
 //! - the pairings under way (the link, the words, who waits) go to this
-//!   machine's own windows as a `pairing` frame, and nowhere else: neither
-//!   into the core's snapshot, which a paired machine may read, nor into a
-//!   log.
+//!   machine's own windows as a `pairing` frame and to the operator's
+//!   terminal as its `status`, and nowhere else: neither to an agent in a
+//!   pane, which reads the machines only, nor into the core's snapshot,
+//!   which a paired machine may read, nor into a log.
 //! - who opens this machine, whom it opens and whether the two are
 //!   connected go to the core as one list in one event (D-72).
 //!
-//! The endpoint is `peer_host`'s. Asking for a status opens nothing; sharing
-//! and adding do (D-83).
+//! The endpoint is `peer_host`'s. Asking for a status opens nothing; sharing,
+//! adding and acting on a machine the records name do (D-83).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -31,7 +32,7 @@ use hide_core::peer_machines::{
 use hide_peer::pairing::{AcceptError, JoinError, Me, Pairings, RequestError, View};
 use hide_peer::protocol::hello::{Behind, GrantState};
 use hide_peer::protocol::{Candidate, PathKind, PeerKey, StreamKind};
-use hide_peer::store::{GrantStatus, KnownState, StoreError, Via};
+use hide_peer::store::{Grant, GrantStatus, Host, KnownState, StoreError, Via};
 use hide_peer::words::WordList;
 use hide_peer::{PeerEvent, PeerTransport, RelayState};
 use hide_peer_iroh::IrohTransport;
@@ -43,7 +44,7 @@ use tokio::time::Instant;
 use crate::core::CoreHandle;
 use crate::ending::Ending;
 use crate::pairing_ssh;
-use crate::peer_host::{HostPeers, Incoming, PeerHost};
+use crate::peer_host::{HostPeers, Incoming, Link, PeerHost};
 
 type Service = Pairings<IrohTransport>;
 
@@ -210,7 +211,7 @@ pub fn next_action(code: &str) -> &'static str {
         "link_own" => "This link is this machine's own; paste it on the other machine",
         "device_already_connected" => "Run hide device list: the machine is already connected",
         "device_unknown" => "Run hide device list for the connected machines",
-        "device_ambiguous" => "Name the machine by its id from hide device list",
+        "device_ambiguous" => "Name the machine by its connection_id from hide device list --json",
         "device_direction_needed" => {
             "Both machines open each other: add --outgoing, --incoming or --both"
         }
@@ -287,6 +288,13 @@ struct RelayAnswer {
     at: Instant,
 }
 
+/// What the relay last said of itself, and whether it is being asked now.
+#[derive(Default)]
+struct Relay {
+    answer: Option<RelayAnswer>,
+    asking: bool,
+}
+
 pub struct Pairing {
     host: Arc<PeerHost>,
     core: Arc<CoreHandle>,
@@ -297,7 +305,9 @@ pub struct Pairing {
     look: watch::Sender<u64>,
     /// Which machines cannot connect until one side updates.
     updates: Mutex<HashMap<PeerKey, PeerUpdate>>,
-    relay: Mutex<Option<RelayAnswer>>,
+    relay: Mutex<Relay>,
+    /// The machines the core was last told, and the turn to tell it.
+    told: tokio::sync::Mutex<Option<Vec<PeerMachine>>>,
     /// When the terminal that holds the open share last asked.
     held: Mutex<Option<Instant>>,
     /// How a target's `hide` is reached over SSH.
@@ -345,7 +355,8 @@ impl Pairing {
             frame: watch::channel(Arc::new(json!(View::default()))).0,
             look: watch::channel(0).0,
             updates: Mutex::new(HashMap::new()),
-            relay: Mutex::new(None),
+            relay: Mutex::new(Relay::default()),
+            told: tokio::sync::Mutex::new(None),
             held: Mutex::new(None),
             ssh,
             ssh_dials: Arc::new(Semaphore::new(SSH_DIALS)),
@@ -384,6 +395,40 @@ impl Pairing {
         }
     }
 
+    /// The daemon's start opened no endpoint: the core hears the machines
+    /// the records still name, unless the service started meanwhile and
+    /// told it.
+    pub async fn rested(&self) {
+        let machines: Vec<PeerMachine> = self
+            .recorded()
+            .await
+            .into_iter()
+            .map(|paired| paired.machine)
+            .collect();
+        let mut told = self.told.lock().await;
+        if told.is_none() && !machines.is_empty() {
+            self.paired_changed(&machines).await;
+            *told = Some(machines);
+        }
+    }
+
+    /// The machines the records name while the endpoint is not open: a
+    /// machine whose every host dropped the pairing opens none at its start
+    /// and still lists them, to be removed or paired again.
+    async fn recorded(&self) -> Vec<Paired> {
+        match self.host.recorded().await {
+            Ok((guests, hosts)) => rows(&hosts, &guests, |_| None, &HashMap::new()).0,
+            Err(error) => {
+                hide_core::diagnostic!(json!({
+                    "component": "pairing",
+                    "kind": "pairing.records_unread",
+                    "reason": error.to_string(),
+                }));
+                Vec::new()
+            }
+        }
+    }
+
     /// The service, which opens the endpoint when it is not open yet.
     async fn service(self: &Arc<Self>) -> Result<Service, &'static str> {
         self.service
@@ -418,7 +463,6 @@ impl Pairing {
         let mut saved = service.saved();
         let mut look = self.look.subscribe();
         let mut events = peers.events();
-        let mut told: Option<Vec<PeerMachine>> = None;
         loop {
             let frame = json!(*view.borrow_and_update());
             self.frame.send_if_modified(|shown| {
@@ -432,13 +476,15 @@ impl Pairing {
             look.borrow_and_update();
             let machines: Vec<PeerMachine> = self
                 .paired(&peers)
-                .await
                 .into_iter()
                 .map(|paired| paired.machine)
                 .collect();
-            if told.as_ref() != Some(&machines) {
-                self.paired_changed(&machines).await;
-                told = Some(machines);
+            {
+                let mut told = self.told.lock().await;
+                if told.as_ref() != Some(&machines) {
+                    self.paired_changed(&machines).await;
+                    *told = Some(machines);
+                }
             }
             tokio::select! {
                 () = self.shutdown.ended() => {
@@ -492,93 +538,54 @@ impl Pairing {
         }
     }
 
-    /// What the relay says of itself, asked only to explain a host that is
-    /// not connected, and at most once in [`RELAY_ANSWER_FOR`].
-    async fn relay_state(&self, peers: &HostPeers) -> RelayState {
-        if let Some(answer) = lock(&self.relay).as_ref()
-            && answer.at.elapsed() < RELAY_ANSWER_FOR
-        {
-            return answer.state;
+    /// What the relay last said of itself, to explain a host that is not
+    /// connected. The relay is never asked here: an answer older than
+    /// [`RELAY_ANSWER_FOR`], or none yet, starts the one task that asks and
+    /// has the machines read again, so neither the follow loop nor an ask
+    /// waits on the relay.
+    fn relay_state(self: &Arc<Self>, peers: &HostPeers) -> RelayState {
+        let mut relay = lock(&self.relay);
+        let fresh = relay
+            .answer
+            .as_ref()
+            .is_some_and(|answer| answer.at.elapsed() < RELAY_ANSWER_FOR);
+        if !fresh && !relay.asking {
+            relay.asking = true;
+            let (pairing, peers) = (Arc::clone(self), peers.clone());
+            tokio::spawn(async move {
+                let state = tokio::select! {
+                    () = pairing.shutdown.ended() => None,
+                    state = peers.transport().relay() => Some(state),
+                };
+                {
+                    let mut relay = lock(&pairing.relay);
+                    relay.asking = false;
+                    let Some(state) = state else { return };
+                    relay.answer = Some(RelayAnswer {
+                        state,
+                        at: Instant::now(),
+                    });
+                }
+                pairing.look.send_modify(|count| *count += 1);
+            });
         }
-        let state = peers.transport().relay().await;
-        *lock(&self.relay) = Some(RelayAnswer {
-            state,
-            at: Instant::now(),
-        });
-        state
+        relay
+            .answer
+            .as_ref()
+            .map_or(RelayState::None, |answer| answer.state)
     }
 
     /// Every machine this one is paired with, in either direction, by name.
-    async fn paired(&self, peers: &HostPeers) -> Vec<Paired> {
+    fn paired(self: &Arc<Self>, peers: &HostPeers) -> Vec<Paired> {
         let hosts = peers.hosts();
-        let guests = peers.grants(|grants, now| {
-            grants
-                .list(now)
-                .filter(|grant| grant.state != GrantStatus::Pending)
-                .cloned()
-                .collect::<Vec<_>>()
-        });
+        let guests = peers.grants(|grants, now| grants.list(now).cloned().collect::<Vec<_>>());
         let updates = lock(&self.updates).clone();
-        let mut paired: Vec<Paired> = Vec::new();
-        let mut away = false;
-        for host in &hosts {
-            let link = peers.link(&host.key);
-            let opens = match host.state {
-                KnownState::Confirming => PeerOpens::Confirming,
-                KnownState::PausedByMe => PeerOpens::Paused,
-                KnownState::RevokePending => PeerOpens::Removing,
-                KnownState::Unpaired => PeerOpens::Unpaired,
-                KnownState::Active => match link.as_ref().map(|link| link.granted()) {
-                    Some(GrantState::Paused) => PeerOpens::PausedThere,
-                    _ => PeerOpens::Active,
-                },
-            };
-            away |= link.is_none() && host.state.dialed();
-            paired.push(Paired {
-                key: host.key,
-                machine: PeerMachine {
-                    key: host.key.to_hex(),
-                    device_id: host.device.clone(),
-                    name: host.name.clone(),
-                    opens: Some(opens),
-                    opened_by: None,
-                    connected: link.is_some(),
-                    path: link.map(|link| path_of(link.path())),
-                    reason: None,
-                    update: updates.get(&host.key).copied(),
-                },
-            });
-        }
-        for guest in &guests {
-            let opened_by = Some(match guest.state {
-                GrantStatus::Paused => PeerOpenedBy::Paused,
-                _ => PeerOpenedBy::Active,
-            });
-            if let Some(known) = paired.iter_mut().find(|paired| paired.key == guest.key) {
-                known.machine.opened_by = opened_by;
-                continue;
-            }
-            let link = peers.link(&guest.key);
-            paired.push(Paired {
-                key: guest.key,
-                machine: PeerMachine {
-                    key: guest.key.to_hex(),
-                    device_id: guest.device.clone(),
-                    name: guest.name.clone(),
-                    opens: None,
-                    opened_by,
-                    connected: link.is_some(),
-                    path: link.map(|link| path_of(link.path())),
-                    reason: None,
-                    update: updates.get(&guest.key).copied(),
-                },
-            });
-        }
+        let (mut paired, away) = rows(&hosts, &guests, |key| peers.link(key), &updates);
         // Why a host this machine dials is not connected: the relay's own
         // answer when it has one (B34), else nothing more than "not
         // connected".
         if away {
-            let reason = match self.relay_state(peers).await {
+            let reason = match self.relay_state(peers) {
                 RelayState::MonthlyLimit => Some(PeerReason::RelayMonthlyLimit),
                 RelayState::Unreachable => Some(PeerReason::RelayUnreachable),
                 RelayState::Attached | RelayState::None => None,
@@ -589,38 +596,12 @@ impl Pairing {
                 }
             }
         }
-        paired.sort_by(|a, b| {
-            (a.machine.name.to_lowercase(), &a.machine.key)
-                .cmp(&(b.machine.name.to_lowercase(), &b.machine.key))
-        });
         paired
     }
 
-    /// The paired machine `text` names: its device id, its name, or the
-    /// start of its connection id.
-    async fn named(&self, peers: &HostPeers, text: &str) -> Result<Paired, &'static str> {
-        let text = text.trim();
-        let mut paired = self.paired(peers).await;
-        if let Some(at) = paired
-            .iter()
-            .position(|paired| paired.machine.device_id == text || paired.machine.key == text)
-        {
-            return Ok(paired.swap_remove(at));
-        }
-        let mut matching: Vec<usize> = paired
-            .iter()
-            .enumerate()
-            .filter(|(_, paired)| {
-                paired.machine.name.eq_ignore_ascii_case(text)
-                    || (text.len() >= 8 && paired.machine.key.starts_with(text))
-            })
-            .map(|(at, _)| at)
-            .collect();
-        match (matching.pop(), matching.is_empty()) {
-            (Some(at), true) => Ok(paired.swap_remove(at)),
-            (Some(_), false) => Err("device_ambiguous"),
-            (None, _) => Err("device_unknown"),
-        }
+    /// The paired machine `text` names.
+    fn named(self: &Arc<Self>, peers: &HostPeers, text: &str) -> Result<Paired, &'static str> {
+        name_one(self.paired(peers), text)
     }
 
     /// Answers one ask. The answer is `{"ok": true, ...}` or a refusal with
@@ -632,7 +613,7 @@ impl Pairing {
             Caller::Pane => return refused("device_from_pane"),
             Caller::OtherScreen => return refused("device_from_other_screen"),
         }
-        match self.run(ask).await {
+        match self.run(ask, caller).await {
             Ok(mut answer) => {
                 answer["ok"] = json!(true);
                 answer
@@ -641,25 +622,38 @@ impl Pairing {
         }
     }
 
-    async fn run(self: &Arc<Self>, ask: Ask) -> Result<Value, &'static str> {
+    async fn run(self: &Arc<Self>, ask: Ask, caller: Caller) -> Result<Value, &'static str> {
         // Reading opens nothing: a machine paired with nothing has nothing
         // to say and no endpoint to open for it.
         if let Ask::Status { hold } = ask {
-            let Some(service) = self.service.get() else {
-                return Ok(json!({ "pairing": View::default(), "machines": [] }));
+            // Each machine as `hide device list` answers it.
+            let answers = |paired: Vec<Paired>| -> Vec<Value> {
+                paired
+                    .iter()
+                    .map(|paired| hide_core::peer_machines::answer(&paired.machine))
+                    .collect()
             };
-            if hold && let Some(held) = lock(&self.held).as_mut() {
+            let Some(service) = self.service.get() else {
+                let machines = answers(self.recorded().await);
+                return Ok(json!({ "pairing": View::default(), "machines": machines }));
+            };
+            // The pairings under way, with their link and words, are the
+            // operator's: an agent in a pane reads the machines and holds
+            // no share.
+            let operator = caller == Caller::Operator;
+            if operator
+                && hold
+                && let Some(held) = lock(&self.held).as_mut()
+            {
                 *held = Instant::now();
             }
             let peers = self.host.peers().ok_or("peer_unavailable")?;
-            // Each machine as `hide device list` answers it.
-            let machines: Vec<Value> = self
-                .paired(&peers)
-                .await
-                .iter()
-                .map(|paired| hide_core::peer_machines::answer(&paired.machine))
-                .collect();
-            return Ok(json!({ "pairing": *service.view().borrow(), "machines": machines }));
+            let machines = answers(self.paired(&peers));
+            let pairing = match operator {
+                true => json!(*service.view().borrow()),
+                false => json!(View::default()),
+            };
+            return Ok(json!({ "pairing": pairing, "machines": machines }));
         }
         // Looking at a machine over SSH opens nothing here and changes
         // nothing there.
@@ -684,7 +678,13 @@ impl Pairing {
             Ask::Compare { .. } | Ask::Answer { .. } => {
                 self.service.get().cloned().ok_or("ask_gone")?
             }
-            _ => self.service.get().cloned().ok_or("device_unknown")?,
+            _ => match self.service.get() {
+                Some(service) => service.clone(),
+                // The endpoint is shut and the records still name a machine
+                // (every host dropped the pairing): acting on one opens it.
+                None if !self.recorded().await.is_empty() => self.service().await?,
+                None => return Err("device_unknown"),
+            },
         };
         let peers = self.host.peers().ok_or("peer_unavailable")?;
         let store = |error: StoreError| match error {
@@ -738,7 +738,18 @@ impl Pairing {
                 })?;
                 *lock(&self.held) = held.then(Instant::now);
                 if held {
-                    tokio::spawn(Arc::clone(self).hold(service.clone()));
+                    let (pairing, service) = (Arc::clone(self), service.clone());
+                    tokio::spawn(async move {
+                        let waiting = || {
+                            let view = service.view();
+                            let view = view.borrow();
+                            view.offer.is_some() || !view.asks.is_empty()
+                        };
+                        hold(&pairing.shutdown, &pairing.held, waiting, || {
+                            service.end_offer()
+                        })
+                        .await;
+                    });
                 }
                 Ok(json!({ "link": offer.link, "expires_unix_ms": offer.expires_unix_ms }))
             }
@@ -766,7 +777,7 @@ impl Pairing {
                 .then(|| json!({}))
                 .ok_or("ask_gone"),
             Ask::Pause { device, direction } => {
-                let paired = self.named(&peers, &device).await?;
+                let paired = self.named(&peers, &device)?;
                 let (outgoing, incoming) = directions(&paired.machine, direction)?;
                 if outgoing {
                     service.pause_host(&paired.key).map_err(store)?;
@@ -777,7 +788,7 @@ impl Pairing {
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::Resume { device, direction } => {
-                let paired = self.named(&peers, &device).await?;
+                let paired = self.named(&peers, &device)?;
                 let (outgoing, incoming) = directions(&paired.machine, direction)?;
                 if outgoing {
                     service.resume_host(&paired.key).map_err(store)?;
@@ -788,7 +799,7 @@ impl Pairing {
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::Remove { device, direction } => {
-                let paired = self.named(&peers, &device).await?;
+                let paired = self.named(&peers, &device)?;
                 let (outgoing, incoming) = directions(&paired.machine, direction)?;
                 if outgoing {
                     service.remove_host(&paired.key).map_err(store)?;
@@ -799,7 +810,7 @@ impl Pairing {
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::Request { device } => {
-                let paired = self.named(&peers, &device).await?;
+                let paired = self.named(&peers, &device)?;
                 service.request(paired.key).map_err(|error| match error {
                     RequestError::NotAGuest => "device_not_a_guest",
                     RequestError::Already => "device_already_connected",
@@ -808,19 +819,19 @@ impl Pairing {
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::DismissRequest { device } => {
-                let paired = self.named(&peers, &device).await?;
+                let paired = self.named(&peers, &device)?;
                 service.dismiss_request(&paired.key);
                 Ok(json!({}))
             }
             Ask::Retry { device } => {
-                let paired = self.named(&peers, &device).await?;
-                *lock(&self.relay) = None;
+                let paired = self.named(&peers, &device)?;
+                lock(&self.relay).answer = None;
                 peers.network_changed();
                 self.look.send_modify(|count| *count += 1);
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
             Ask::Address { device, address } => {
-                let paired = self.named(&peers, &device).await?;
+                let paired = self.named(&peers, &device)?;
                 let address: SocketAddr = address.trim().parse().map_err(|_| "address_invalid")?;
                 let saved = peers.known(|known| {
                     let mut host = known.of(&paired.key).cloned().ok_or(StoreError::Unknown)?;
@@ -918,34 +929,6 @@ impl Pairing {
         }
     }
 
-    /// Ends a share whose terminal stopped asking for its status.
-    async fn hold(self: Arc<Self>, service: Service) {
-        loop {
-            tokio::select! {
-                () = self.shutdown.ended() => return,
-                () = tokio::time::sleep(HELD_FOR / 4) => {}
-            }
-            let last = *lock(&self.held);
-            let Some(last) = last else {
-                return;
-            };
-            let waiting = {
-                let view = service.view();
-                let view = view.borrow();
-                view.offer.is_some() || !view.asks.is_empty()
-            };
-            if !waiting {
-                *lock(&self.held) = None;
-                return;
-            }
-            if last.elapsed() >= HELD_FOR {
-                *lock(&self.held) = None;
-                service.end_offer();
-                return;
-            }
-        }
-    }
-
     /// A `pairing_*` event of a window. `own` is whether the window is one
     /// of this machine's, not another machine's view of it.
     pub async fn window_event(self: &Arc<Self>, event: &Value, own: bool) -> Value {
@@ -978,6 +961,145 @@ impl Pairing {
         answer["request_id"] = request_id.unwrap_or(Value::Null);
         answer["verb"] = json!(verb);
         json!({ "type": "pairing_result", "payload": answer })
+    }
+}
+
+/// Ends a share whose terminal stopped asking for its status. `held` is when
+/// the terminal last asked, `waiting` whether the share still has a link or
+/// a question, and `end` ends it. A terminal that keeps asking, as it does
+/// while its own question waits for the operator, keeps the share for as
+/// long as it asks.
+async fn hold(
+    shutdown: &Ending,
+    held: &Mutex<Option<Instant>>,
+    waiting: impl Fn() -> bool,
+    end: impl FnOnce(),
+) {
+    loop {
+        tokio::select! {
+            () = shutdown.ended() => return,
+            () = tokio::time::sleep(HELD_FOR / 4) => {}
+        }
+        let Some(last) = *lock(held) else {
+            return;
+        };
+        if !waiting() {
+            *lock(held) = None;
+            return;
+        }
+        if last.elapsed() >= HELD_FOR {
+            *lock(held) = None;
+            end();
+            return;
+        }
+    }
+}
+
+/// One row per machine `hosts` and `guests` name, by name, and whether a
+/// host this machine dials has no connection. `link` is the machine's
+/// connection, when it has one.
+fn rows(
+    hosts: &[Host],
+    guests: &[Grant],
+    link: impl Fn(&PeerKey) -> Option<Link>,
+    updates: &HashMap<PeerKey, PeerUpdate>,
+) -> (Vec<Paired>, bool) {
+    let mut paired: Vec<Paired> = Vec::new();
+    let mut away = false;
+    for host in hosts {
+        let link = link(&host.key);
+        let opens = match host.state {
+            KnownState::Confirming => PeerOpens::Confirming,
+            KnownState::PausedByMe => PeerOpens::Paused,
+            KnownState::RevokePending => PeerOpens::Removing,
+            KnownState::Unpaired => PeerOpens::Unpaired,
+            KnownState::Active => match link.as_ref().map(|link| link.granted()) {
+                Some(GrantState::Paused) => PeerOpens::PausedThere,
+                _ => PeerOpens::Active,
+            },
+        };
+        away |= link.is_none() && host.state.dialed();
+        paired.push(Paired {
+            key: host.key,
+            machine: PeerMachine {
+                key: host.key.to_hex(),
+                device_id: host.device.clone(),
+                name: host.name.clone(),
+                opens: Some(opens),
+                opened_by: None,
+                connected: link.is_some(),
+                path: link.map(|link| path_of(link.path())),
+                reason: None,
+                update: updates.get(&host.key).copied(),
+            },
+        });
+    }
+    // A pending grant is a pairing under way, not a paired machine.
+    for guest in guests
+        .iter()
+        .filter(|guest| guest.state != GrantStatus::Pending)
+    {
+        let opened_by = Some(match guest.state {
+            GrantStatus::Paused => PeerOpenedBy::Paused,
+            _ => PeerOpenedBy::Active,
+        });
+        if let Some(known) = paired.iter_mut().find(|paired| paired.key == guest.key) {
+            known.machine.opened_by = opened_by;
+            continue;
+        }
+        let link = link(&guest.key);
+        paired.push(Paired {
+            key: guest.key,
+            machine: PeerMachine {
+                key: guest.key.to_hex(),
+                device_id: guest.device.clone(),
+                name: guest.name.clone(),
+                opens: None,
+                opened_by,
+                connected: link.is_some(),
+                path: link.map(|link| path_of(link.path())),
+                reason: None,
+                update: updates.get(&guest.key).copied(),
+            },
+        });
+    }
+    paired.sort_by(|a, b| {
+        (a.machine.name.to_lowercase(), &a.machine.key)
+            .cmp(&(b.machine.name.to_lowercase(), &b.machine.key))
+    });
+    (paired, away)
+}
+
+/// The one of `paired` that `text` names: by its connection id, its device
+/// id, its name, or the start of its connection id. A device id is what a
+/// machine says of itself, so two machines can say the same one; then only
+/// the connection id, which each proved, names one of them.
+fn name_one(mut paired: Vec<Paired>, text: &str) -> Result<Paired, &'static str> {
+    let text = text.trim();
+    let matching = |paired: &[Paired], named: &dyn Fn(&PeerMachine) -> bool| -> Vec<usize> {
+        paired
+            .iter()
+            .enumerate()
+            .filter(|(_, paired)| named(&paired.machine))
+            .map(|(at, _)| at)
+            .collect()
+    };
+    let found = [
+        matching(&paired, &|machine| machine.key == text),
+        matching(&paired, &|machine| machine.device_id == text),
+        matching(&paired, &|machine| {
+            machine.name.eq_ignore_ascii_case(text)
+                || (text.len() >= 8 && machine.key.starts_with(text))
+        }),
+    ];
+    match found
+        .iter()
+        .find(|found| !found.is_empty())
+        .map(Vec::as_slice)
+    {
+        Some([at]) => Ok(paired.swap_remove(*at)),
+        Some(_) => Err("device_ambiguous"),
+        None => Err("device_unknown"),
     }
 }
 
@@ -1022,6 +1144,108 @@ mod tests {
             reason: None,
             update: None,
         }
+    }
+
+    fn paired(key: u8, device: &str, name: &str) -> Paired {
+        let key = PeerKey::from_bytes([key; 32]);
+        Paired {
+            key,
+            machine: PeerMachine {
+                key: key.to_hex(),
+                device_id: device.into(),
+                name: name.into(),
+                ..machine(true, false)
+            },
+        }
+    }
+
+    #[test]
+    fn two_machines_that_say_one_device_id_are_named_only_by_their_connection_ids() {
+        let both = || {
+            vec![
+                paired(1, "windows-pc", "Office"),
+                paired(2, "windows-pc", "Imposter"),
+                paired(3, "macbook", "MacBook"),
+            ]
+        };
+        let named = |text: &str| name_one(both(), text).map(|paired| paired.key);
+        // The shared device id names neither, whichever was paired first.
+        assert_eq!(named("windows-pc"), Err("device_ambiguous"));
+        // Each connection id, which the machine proved, names its own row.
+        for key in [1, 2] {
+            let key = PeerKey::from_bytes([key; 32]);
+            assert_eq!(named(&key.to_hex()), Ok(key));
+            assert_eq!(named(&key.to_hex()[..8]), Ok(key));
+        }
+        // A device id only one machine says still names it, and so does a
+        // name.
+        assert_eq!(named("macbook"), Ok(PeerKey::from_bytes([3; 32])));
+        assert_eq!(named(" imposter "), Ok(PeerKey::from_bytes([2; 32])));
+        assert_eq!(named("nobody"), Err("device_unknown"));
+    }
+
+    #[test]
+    fn a_machine_the_records_name_has_its_row_without_a_connection() {
+        let host = |key: u8, state| Host {
+            key: PeerKey::from_bytes([key; 32]),
+            device: format!("device-{key}"),
+            name: format!("Machine {key}"),
+            grant: "grant".into(),
+            state,
+            candidates: Vec::new(),
+        };
+        // A host that dropped the pairing is listed and is nothing to dial.
+        let (dropped, away) = rows(
+            &[host(1, KnownState::Unpaired)],
+            &[],
+            |_| None,
+            &HashMap::new(),
+        );
+        assert_eq!(dropped[0].machine.opens, Some(PeerOpens::Unpaired));
+        assert!(!dropped[0].machine.connected);
+        assert!(!away);
+        // A host this machine still dials, and has no connection to, is.
+        let (_, away) = rows(
+            &[host(2, KnownState::Active)],
+            &[],
+            |_| None,
+            &HashMap::new(),
+        );
+        assert!(away);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_share_lives_while_its_terminal_asks_and_ends_when_it_stops() {
+        let shutdown = Ending::new();
+        let held = Arc::new(Mutex::new(Some(Instant::now())));
+        let ended = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let holder = tokio::spawn({
+            let (shutdown, held, ended) = (shutdown.clone(), Arc::clone(&held), Arc::clone(&ended));
+            async move {
+                let end = || ended.store(true, std::sync::atomic::Ordering::SeqCst);
+                hold(&shutdown, &held, || true, end).await;
+            }
+        });
+        // The terminal asks twice a second, as `hide device share` does
+        // while its allow question waits: three times what an unheld share
+        // lives, and the share is still there.
+        let asked = Instant::now();
+        while asked.elapsed() < HELD_FOR * 3 {
+            tokio::time::advance(Duration::from_millis(500)).await;
+            *lock(&held) = Some(Instant::now());
+        }
+        assert!(!ended.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!holder.is_finished());
+        // The terminal goes away: the share ends by the next look past
+        // HELD_FOR.
+        let last = Instant::now();
+        tokio::time::timeout(HELD_FOR * 2, holder)
+            .await
+            .expect("the share ended")
+            .unwrap();
+        assert!(ended.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(last.elapsed() <= HELD_FOR + HELD_FOR / 4);
+        assert_eq!(*lock(&held), None);
     }
 
     #[test]

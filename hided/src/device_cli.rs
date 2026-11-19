@@ -519,6 +519,29 @@ fn yes(question: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// Runs `question`, which waits for the operator at this terminal, and
+/// calls `hold` every `every` until it is answered. The share a command
+/// holds would otherwise end while its own question waits; when the
+/// terminal goes away both stop, and the share ends as the daemon rules.
+fn held_while<T>(
+    every: Duration,
+    mut hold: impl FnMut() + Send,
+    question: impl FnOnce() -> T,
+) -> T {
+    let (answered, waits) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            while waits.recv_timeout(every) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                hold();
+            }
+        });
+        let answer = question();
+        // Dropped on a panic too, which ends the holder.
+        drop(answered);
+        answer
+    })
+}
+
 /// The language this terminal reads, for the words two people compare.
 fn language() -> String {
     ["LC_ALL", "LC_MESSAGES", "LANG"]
@@ -588,7 +611,11 @@ fn share(env: &Env, json_line: bool) -> Result<Printed, Refused> {
                 continue;
             }
             answered.push(ask["id"].clone());
-            if allowed(env, ask)? {
+            // The question may wait longer than the share lives unheld.
+            let hold = || {
+                let _ = pairing(env, json!({"verb":"status","hold":true}));
+            };
+            if held_while(WAIT_POLL, hold, || allowed(env, ask))? {
                 let key = ask["key"].as_str().unwrap_or_default().to_owned();
                 let_in = Some((key, Instant::now()));
                 eprintln!("Waiting for the other machine to confirm...");
@@ -906,6 +933,31 @@ mod tests {
     fn parse_words(words: &[&str]) -> Result<DeviceCli, String> {
         let args: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
         parse(args.iter())
+    }
+
+    #[test]
+    fn a_share_is_held_for_as_long_as_its_question_waits() {
+        use std::sync::mpsc::{TryRecvError, channel};
+        let (held, holds) = channel();
+        let mut count = 0;
+        let hold = move || {
+            count += 1;
+            let _ = held.send(count);
+        };
+        // The operator answers only after the share was held three times,
+        // however long that takes: holding never waits for the answer.
+        let answer = held_while(Duration::from_millis(1), hold, || {
+            for _ in 0..3 {
+                holds
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("held while the question waits");
+            }
+            "y"
+        });
+        assert_eq!(answer, "y");
+        // Answered: the holder ended with the question and holds no more.
+        while holds.try_recv().is_ok() {}
+        assert_eq!(holds.try_recv(), Err(TryRecvError::Disconnected));
     }
 
     #[test]
