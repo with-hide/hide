@@ -361,6 +361,7 @@ pub fn shape() -> Value {
         rows: 0,
         cols: 0,
         since_unix_ms: 0,
+        folder: Some(String::new()),
     };
     let streams: Vec<Value> = StreamKind::ALL
         .into_iter()
@@ -507,6 +508,7 @@ pub fn shape() -> Value {
             "versions": [tap::OLDEST_TAP, tap::NEWEST_TAP],
             "cap_bytes": tap::CAP_BYTES,
             "max_frame_bytes": tap::MAX_FRAME,
+            "max_folder_bytes": tap::MAX_FOLDER,
             "to_node": {
                 "hello": hex_byte(tap::kind::HELLO),
                 "input": hex_byte(tap::kind::INPUT),
@@ -519,6 +521,7 @@ pub fn shape() -> Value {
                 "output": hex_byte(tap::kind::OUTPUT),
                 "pane": hex_byte(tap::kind::PANE),
                 "gone": hex_byte(tap::kind::GONE),
+                "folder": hex_byte(tap::kind::FOLDER),
             },
         },
         "panes": {

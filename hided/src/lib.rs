@@ -652,6 +652,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     {
         let peers = Arc::clone(&peers);
         let pairing = Arc::clone(&pairing);
+        let guests = Arc::clone(&guests);
         tokio::spawn(async move {
             match peers.start().await {
                 // Paired with something: dial every known host and go on
@@ -732,6 +733,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         mobile: Arc::clone(&mobile),
         peers: Arc::clone(&peers),
         pairing: Arc::clone(&pairing),
+        guests: Arc::clone(&guests),
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),

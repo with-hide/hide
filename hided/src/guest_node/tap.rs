@@ -30,6 +30,9 @@ struct TapState {
     /// The panes whose output passed here, each with the grid it is drawn
     /// at; `(0, 0)` until the service says.
     panes: BTreeMap<String, (u16, u16)>,
+    /// The folder each live pane was started in, read once from its
+    /// holder's record; `None` for a pane whose record names none.
+    folders: BTreeMap<String, Option<String>>,
     /// The connected host's number; 0 is none.
     client: u64,
     clients: u64,
@@ -90,12 +93,18 @@ impl TapState {
     }
 }
 
+/// Reads the folder a pane was started in, in the spelling paths cross
+/// machines in.
+type FolderOf = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 #[derive(Default)]
 pub(super) struct TapHub {
     state: Mutex<TapState>,
     ready: Condvar,
     node: OnceLock<Weak<NodeTerminals>>,
     terminate: OnceLock<Terminate>,
+    /// The node's holders' records, read for a pane's folder (D-55).
+    folder_of: OnceLock<FolderOf>,
 }
 
 impl TapHub {
@@ -104,6 +113,10 @@ impl TapHub {
     pub(super) fn serve(&self, node: &Arc<NodeTerminals>, terminate: Terminate) {
         let _ = self.node.set(Arc::downgrade(node));
         let _ = self.terminate.set(terminate);
+        let records = Arc::downgrade(node);
+        let _ = self.folder_of.set(Box::new(move |pane| {
+            records.upgrade().and_then(|node| node.start_folder(pane))
+        }));
     }
 
     fn node(&self) -> Option<Arc<NodeTerminals>> {
@@ -137,6 +150,7 @@ impl TapHub {
                 .collect();
             for pane in ended {
                 state.panes.remove(&pane);
+                state.folders.remove(&pane);
                 state.unstart(&pane);
                 state.fact(ToHost::Gone { pane });
             }
@@ -155,6 +169,7 @@ impl TapHub {
             }
             started
         };
+        self.tell_folders(live);
         self.ready.notify_all();
         if let Some(node) = self.node() {
             for pane in started {
@@ -164,6 +179,43 @@ impl TapHub {
                     manual: false,
                 });
             }
+        }
+    }
+
+    /// Reads the folder of each live pane whose folder is not read yet and
+    /// tells the host (D-55). The records are read under no lock of the
+    /// hub's.
+    fn tell_folders(&self, live: &[String]) {
+        let Some(folder_of) = self.folder_of.get() else {
+            return;
+        };
+        let unread: Vec<String> = {
+            let state = lock(&self.state);
+            live.iter()
+                .filter(|pane| !state.folders.contains_key(*pane))
+                .cloned()
+                .collect()
+        };
+        let read: Vec<(String, Option<String>)> = unread
+            .into_iter()
+            .map(|pane| {
+                let folder = folder_of(&pane).filter(|folder| folder.len() <= tap::MAX_FOLDER);
+                (pane, folder)
+            })
+            .collect();
+        let mut state = lock(&self.state);
+        for (pane, folder) in read {
+            // A pane that ended while its record was read has no entry.
+            if !state.panes.contains_key(&pane) {
+                continue;
+            }
+            if let Some(folder) = &folder {
+                state.fact(ToHost::Folder {
+                    pane: pane.clone(),
+                    folder: folder.clone(),
+                });
+            }
+            state.folders.insert(pane, folder);
         }
     }
 
@@ -210,6 +262,19 @@ impl TapHub {
                 })
                 .collect();
             state.fact(ToHost::Welcome { version, panes });
+            let folders: Vec<ToHost> = state
+                .folders
+                .iter()
+                .filter_map(|(pane, folder)| {
+                    Some(ToHost::Folder {
+                        pane: pane.clone(),
+                        folder: folder.clone()?,
+                    })
+                })
+                .collect();
+            for folder in folders {
+                state.fact(folder);
+            }
             (client, state.panes.keys().cloned().collect::<Vec<_>>())
         };
         record("guest_node.tap_attached", json!({"client": client}));
@@ -485,6 +550,40 @@ mod tests {
             rows: 0,
             cols: 0,
         }
+    }
+
+    /// D-55: the host is told the folder each pane was started in, once
+    /// when the pane joins the list and again to a host that attaches
+    /// later; a pane whose record names none is told without one.
+    #[test]
+    fn the_host_is_told_the_folder_each_pane_was_started_in() {
+        let root = short_root();
+        let endpoint = root.path().join("tap.sock");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        let hub = Arc::new(TapHub::default());
+        let _ = hub.folder_of.set(Box::new(|pane| {
+            (pane == "w1:p1").then(|| "/work/shop-api".to_owned())
+        }));
+        {
+            let hub = Arc::clone(&hub);
+            std::thread::spawn(move || hub.accept(&listener));
+        }
+        let mut first = host(&endpoint);
+        assert!(matches!(told(&mut first), ToHost::Welcome { .. }));
+        hub.live(&["w1:p1".to_owned(), "w1:p2".to_owned()]);
+        assert_eq!(told(&mut first), ToHost::Pane(pane("w1:p1")));
+        assert_eq!(told(&mut first), ToHost::Pane(pane("w1:p2")));
+        let folder = || ToHost::Folder {
+            pane: "w1:p1".to_owned(),
+            folder: "/work/shop-api".to_owned(),
+        };
+        assert_eq!(told(&mut first), folder());
+        // The same panes again say nothing more; a later host hears the
+        // folder after its welcome.
+        hub.live(&["w1:p1".to_owned(), "w1:p2".to_owned()]);
+        let mut second = host(&endpoint);
+        assert!(matches!(told(&mut second), ToHost::Welcome { panes, .. } if panes.len() == 2));
+        assert_eq!(told(&mut second), folder());
     }
 
     /// D-77 (5): which panes the host lists is the holders' records' to

@@ -252,6 +252,24 @@ impl Guests {
         })
     }
 
+    /// Ends a guest's pane for this machine's operator, by its address
+    /// here (B10): the guest's node closes it and tells its own core,
+    /// whether or not the guest is connected. Refused for an address that
+    /// is no listed pane of a guest on this machine.
+    pub fn close_pane(&self, id: &str) -> Result<(), &'static str> {
+        let (device, pane) = hide_node_link::address::guest_pane(id).ok_or("pane_unavailable")?;
+        let tap = lock(&self.hosted)
+            .values()
+            .find(|hosted| hosted.tap.device() == device)
+            .map(|hosted| Arc::clone(&hosted.tap))
+            .ok_or("pane_unavailable")?;
+        if !tap.panes().iter().any(|listed| listed.pane == pane) {
+            return Err("pane_unavailable");
+        }
+        tap.terminate(pane);
+        Ok(())
+    }
+
     /// Every guest's panes on this machine, as each guest's node last
     /// said; a guest with none is not in the list.
     pub fn panes(&self) -> Vec<hide_core::guest_panes::GuestPanes> {
@@ -270,6 +288,7 @@ impl Guests {
                             id: guest_pane_id(device, &pane.pane),
                             pane: pane.pane,
                             since_unix_ms: pane.since_unix_ms,
+                            folder: pane.folder,
                         })
                         .collect(),
                 }
@@ -2052,6 +2071,7 @@ mod tests {
                     rows: 24,
                     cols: 80,
                     since_unix_ms: 5,
+                    folder: Some("/work/shop-api".to_owned()),
                 }],
             })
             .unwrap(),
@@ -2272,6 +2292,7 @@ mod tests {
                     id: "guest:macbook:pane:w1:p1".to_owned(),
                     pane: "w1:p1".to_owned(),
                     since_unix_ms: 5,
+                    folder: Some("/work/shop-api".to_owned()),
                 }],
             }],
             "the panes show before the node is back"

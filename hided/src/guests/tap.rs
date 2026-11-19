@@ -49,6 +49,15 @@ fn now_unix_ms() -> u64 {
         .map_or(0, |since| since.as_millis() as u64)
 }
 
+/// `folder` as a caller's own folder is spelled (`pane_proof::
+/// caller_directory`): through its links, in the spelling paths cross
+/// machines in. `None` for a folder that is gone or cannot be spelled so.
+fn same_spelling(folder: &str) -> Option<String> {
+    let path = hide_platform::path::from_wire(folder).ok()?;
+    let canonical = hide_platform::fs::identity::canonical(&path).ok()?;
+    hide_platform::path::to_wire(&canonical).ok()
+}
+
 #[derive(Default)]
 struct State {
     /// The guest's panes as the node last said, by the node's own ids.
@@ -81,6 +90,7 @@ impl State {
                 rows: pane.rows,
                 cols: pane.cols,
                 since_unix_ms: now,
+                folder: None,
             },
         );
         true
@@ -248,8 +258,17 @@ impl GuestTap {
                     let since = earlier
                         .get(&pane.pane)
                         .map_or(now, |known| known.since_unix_ms);
+                    let name = pane.pane.clone();
                     if !state.list(pane, since) {
                         unlisted += 1;
+                        continue;
+                    }
+                    // The folder a pane was started in does not change: it
+                    // is kept until the node says it again.
+                    if let (Some(known), Some(earlier)) =
+                        (state.panes.get_mut(&name), earlier.get(&name))
+                    {
+                        known.folder.clone_from(&earlier.folder);
                     }
                 }
                 let gone: Vec<String> = earlier
@@ -292,6 +311,23 @@ impl GuestTap {
                 self.save(&state);
                 drop(state);
                 self.hub.forget(&guest_pane_id(&self.device, &pane));
+                (self.changed)();
+            }
+            ToHost::Folder { pane, folder } => {
+                // The node says the folder as the pane was started in it;
+                // a caller's folder is read through its links, so this one
+                // is too, on this machine, before anything compares them.
+                let folder = same_spelling(&folder).unwrap_or(folder);
+                let mut state = lock(&self.state);
+                let Some(known) = state.panes.get_mut(&pane) else {
+                    return;
+                };
+                if known.folder.as_deref() == Some(folder.as_str()) {
+                    return;
+                }
+                known.folder = Some(folder);
+                self.save(&state);
+                drop(state);
                 (self.changed)();
             }
             ToHost::Output {
@@ -652,6 +688,32 @@ pub(crate) mod tests {
 
         say(&mut node, &ToHost::Pane(size("w1:p2", 0, 0)));
         changed.recv_timeout(WITHIN).expect("a pane joined");
+        // D-55: the folder a pane was started in joins the list, spelled as
+        // a caller's own folder is on this machine; one for a pane the
+        // list does not hold is dropped.
+        let started_in = hide_platform::path::to_wire(root.path()).unwrap();
+        for pane in ["w9:p9", "w1:p2"] {
+            say(
+                &mut node,
+                &ToHost::Folder {
+                    pane: pane.to_owned(),
+                    folder: started_in.clone(),
+                },
+            );
+        }
+        changed.recv_timeout(WITHIN).expect("a folder was told");
+        let folder = hide_platform::path::to_wire(
+            &hide_platform::fs::identity::canonical(root.path()).unwrap(),
+        )
+        .unwrap();
+        let folder_of = |tap: &GuestTap, pane: &str| {
+            tap.panes()
+                .into_iter()
+                .find(|listed| listed.pane == pane)
+                .and_then(|listed| listed.folder)
+        };
+        assert_eq!(folder_of(&tap, "w1:p2"), Some(folder.clone()));
+        assert_eq!(folder_of(&tap, "w1:p1"), None);
         say(
             &mut node,
             &ToHost::Gone {
@@ -677,6 +739,11 @@ pub(crate) mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].pane, "w1:p2");
         assert!(listed[0].since_unix_ms >= first_seen);
+        assert_eq!(
+            listed[0].folder,
+            Some(folder),
+            "the folder is the file's too"
+        );
     }
 
     #[test]

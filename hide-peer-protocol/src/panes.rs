@@ -1,8 +1,8 @@
 //! `panes.json`: the least a host keeps of a guest's panes, so they show
 //! after the host restarts with the guest away (PRD D-31).
 //!
-//! The host build alone writes it, whole, from the tap's `welcome`, `pane`
-//! and `gone` frames.
+//! The host build alone writes it, whole, from the tap's `welcome`, `pane`,
+//! `gone` and `folder` frames.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,4 +22,8 @@ pub struct Pane {
     pub rows: u16,
     pub cols: u16,
     pub since_unix_ms: u64,
+    /// The folder the pane was started in, once the node said it (the
+    /// tap's `folder` frame, D-55).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }

@@ -22,6 +22,9 @@ pub const CAP_BYTES: usize = 4 * 1024 * 1024;
 /// protocol's limit, since an `output` is a holder fragment re-addressed.
 pub const MAX_FRAME: usize = 4 * 1024 * 1024 + 1024;
 
+/// The most bytes of a pane's folder a `folder` frame carries.
+pub const MAX_FOLDER: usize = 4096;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct TapError(&'static str);
 
@@ -64,6 +67,15 @@ pub enum ToHost {
     Gone {
         pane: String,
     },
+    /// The folder a pane was started in, as the node's machine spells it
+    /// (D-55): the host reads from it whose a call proved only by its
+    /// folder is. Sent after the pane's `Welcome` entry or `Pane`; a host
+    /// that predates it skips the kind, and a pane with none told is in no
+    /// folder the host knows.
+    Folder {
+        pane: String,
+        folder: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +95,7 @@ pub mod kind {
     pub const OUTPUT: u8 = 0x90;
     pub const PANE: u8 = 0x91;
     pub const GONE: u8 = 0x92;
+    pub const FOLDER: u8 = 0x93;
 }
 
 fn frame(kind: u8, payload: Vec<u8>) -> Vec<u8> {
@@ -257,6 +270,14 @@ impl ToHost {
                 put_pane(&mut out, pane)?;
                 kind::GONE
             }
+            Self::Folder { pane, folder } => {
+                if folder.len() > MAX_FOLDER {
+                    return Err(TapError("a folder over the limit"));
+                }
+                put_pane(&mut out, pane)?;
+                out.extend_from_slice(folder.as_bytes());
+                kind::FOLDER
+            }
         };
         if out.len() + 1 > MAX_FRAME {
             return Err(TapError("a frame over the limit"));
@@ -287,6 +308,18 @@ impl ToHost {
             kind::GONE => Self::Gone {
                 pane: reader.pane()?,
             },
+            kind::FOLDER => {
+                let pane = reader.pane()?;
+                let folder = reader.rest();
+                if folder.len() > MAX_FOLDER {
+                    return Err(TapError("a folder over the limit"));
+                }
+                Self::Folder {
+                    pane,
+                    folder: String::from_utf8(folder)
+                        .map_err(|_| TapError("a folder is not UTF-8"))?,
+                }
+            }
             _ => return Ok(None),
         }))
     }
@@ -345,6 +378,10 @@ mod tests {
             },
             ToHost::Pane(size()),
             ToHost::Gone { pane: pane() },
+            ToHost::Folder {
+                pane: pane(),
+                folder: "C:/work/shop-api".to_owned(),
+            },
         ] {
             let frame = message.encode().unwrap();
             let (kind, payload) = split(&frame);
@@ -357,6 +394,14 @@ mod tests {
         assert_eq!(ToHost::decode(0xf0, b"anything"), Ok(None));
         assert_eq!(ToNode::decode(0x7f, b""), Ok(None));
         assert!(ToHost::decode(kind::PANE, &[5, b'w']).is_err());
+        let long = ToHost::Folder {
+            pane: "w1_p2".to_owned(),
+            folder: "x".repeat(MAX_FOLDER + 1),
+        };
+        assert!(long.encode().is_err());
+        let mut payload = vec![1, b'p'];
+        payload.extend(std::iter::repeat_n(b'x', MAX_FOLDER + 1));
+        assert!(ToHost::decode(kind::FOLDER, &payload).is_err());
         assert!(ToNode::decode(kind::HELLO, b"NOTATAP!\x01\0\x01\0").is_err());
         assert!(frame_length([0; 4]).is_err());
     }

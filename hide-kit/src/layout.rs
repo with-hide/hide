@@ -688,6 +688,13 @@ pub fn guest_dir(state_dir: &Path, guest: &PeerKey) -> PathBuf {
         .join(guest.short())
 }
 
+/// The folder of the guest whose installation a host named
+/// (`hide_peer_protocol::launch::install_name`, D-55); `None` for a name
+/// that is not a guest's, so no other text becomes a path component.
+pub fn guest_dir_of_install(state_dir: &Path, install: &str) -> Option<PathBuf> {
+    hide_peer_protocol::launch::guest_of_install(install).map(|guest| guests(state_dir).join(guest))
+}
+
 /// The folder every guest's folder is in.
 pub fn guests(state_dir: &Path) -> PathBuf {
     state_dir.join(hide_peer_protocol::launch::GUESTS_DIR)

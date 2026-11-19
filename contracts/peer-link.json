@@ -413,6 +413,7 @@
     ],
     "pane_fields": [
       "cols",
+      "folder",
       "pane",
       "rows",
       "since_unix_ms"
@@ -540,8 +541,10 @@
   "tap": {
     "cap_bytes": 4194304,
     "magic": "HIDETAP1",
+    "max_folder_bytes": 4096,
     "max_frame_bytes": 4195328,
     "to_host": {
+      "folder": "0x93",
       "gone": "0x92",
       "output": "0x90",
       "pane": "0x91",
