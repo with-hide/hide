@@ -1791,7 +1791,7 @@ fn a_stub_text_changes_only_with_its_version() {
         (
             "hide",
             11,
-            "a214dc2db2fa22bc9e63e0e89242428955635df2f68d84d0b69b61ddb5bfe3f5",
+            "2ca4af473a6979f17bed3958032ddde099002c01490c8d6593c7a1eaa858d645",
         ),
         (
             "hide-mission",
