@@ -19,9 +19,57 @@ import type { Device } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
+import { isPairLink, refusalKey } from "../pairing";
 import { useRefusalSince } from "../errorSince";
 
 const HOST_EXAMPLE = "Host studio\n  HostName studio.local\n  User you";
+
+/**
+ * Add a device by the link another Hide shared (PRD device-connect-iroh
+ * B2): the field takes the whole link, and Connect starts the pairing, whose
+ * words and outcome the pairing window shows wherever the operator is.
+ */
+export function AddByLink({ actions, onStarted }: { actions: Actions; onStarted: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const [link, setLink] = useState("");
+  const [sentAt, setSentAt] = useState<string | null>(null);
+  const result = useShellStore((s) => (s.pairingResult?.verb === "join" && s.pairingResult.request_id === sentAt ? s.pairingResult : null));
+  const refused = result && !result.ok ? (refusalKey(result.reason) ?? "pairing.failed.ended") : null;
+  // The pairing window takes over once the daemon took the link.
+  useEffect(() => {
+    if (result?.ok) onStarted();
+  }, [result, onStarted]);
+  const id = useId();
+  const submit = () => {
+    if (!isPairLink(link)) return;
+    const request = `join-${Date.now()}`;
+    setSentAt(request);
+    actions.pairing("join", { link: link.trim(), request_id: request });
+  };
+  return (
+    <section className="space-y-sm" data-add-by-link="true">
+      <h3 id={id} className="text-body font-semibold text-subtle-foreground">{t("pairing.add.linkTitle")}</h3>
+      <p className="break-keep text-body text-muted-foreground">{t("pairing.add.linkDescription")}</p>
+      <div className="flex items-center gap-sm">
+        <Input
+          aria-labelledby={id}
+          value={link}
+          placeholder={t("pairing.add.linkPlaceholder")}
+          spellCheck={false}
+          autoComplete="off"
+          className="font-mono"
+          data-add-link-input="true"
+          onChange={(event) => setLink(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submit();
+          }}
+        />
+        <Button variant="secondary" disabled={!isPairLink(link)} data-add-link-go="true" onClick={submit}>{t("pairing.add.connect")}</Button>
+      </div>
+      {refused ? <Note tone="warn" data-add-link-refused={result?.reason ?? ""}>{t(refused)}</Note> : null}
+    </section>
+  );
+}
 
 export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: Actions; devices: Device[]; helperRoot: string | null; cliDir: string | null }) {
   const { t } = useInterfaceTranslation();

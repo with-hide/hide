@@ -93,6 +93,7 @@ import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane }
 import { focusedPaneOf, useShellStore } from "./store";
 import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
+import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
@@ -1430,6 +1431,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
     revokePhone(phoneId: string) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
+    },
+    /**
+     * One thing the operator does about pairing this machine with another
+     * Hide (PRD device-connect-iroh B1-B3, B24-B26, B50): hided's pairing
+     * answers it for this window alone, and what changed comes back in the
+     * `pairing` frame and the snapshot's paired machines.
+     */
+    pairing(verb: PairingVerb, payload: Record<string, unknown> = {}) {
+      dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
     },
     /**
      * Settings › External tools (PRD hide-external-control B3, B4, B12,
