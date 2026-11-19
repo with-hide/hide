@@ -20,9 +20,10 @@ pub const FORMAT: u32 = 1;
 
 /// The `hide device` verbs that only pair two Hides. The table keeps them,
 /// so a build that offers connections between two Hides takes them
-/// (`env::Env::device_connect`), and the document leaves them out until
-/// that feature ships: a build without it refuses each with
-/// `device_connect_unavailable` (`device_cli`).
+/// (`env::Env::device_connect`), and the document marks them `hidden` until
+/// that feature ships: `hide --help` lists them only with the switch on,
+/// and a build without it refuses each with `device_connect_unavailable`
+/// (`device_cli`).
 pub const PAIRING_ONLY: &[&str] = &[
     "share",
     "allow",
@@ -34,9 +35,9 @@ pub const PAIRING_ONLY: &[&str] = &[
     "accept-ssh",
 ];
 
-/// Whether the document lists `spec`: every command but [`PAIRING_ONLY`].
-fn documented(spec: &Spec) -> bool {
-    !matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
+/// Whether the document marks `spec` hidden: [`PAIRING_ONLY`].
+fn hidden(spec: &Spec) -> bool {
+    matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
 }
 
 /// The topics whose every command is in the table.
@@ -1997,8 +1998,13 @@ fn body() -> Value {
         "format": FORMAT,
         "commands": COMMANDS
             .iter()
-            .filter(|spec| documented(spec))
-            .map(command_json)
+            .map(|spec| {
+                let mut command = command_json(spec);
+                if hidden(spec) {
+                    command["hidden"] = json!(true);
+                }
+                command
+            })
             .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
@@ -2708,31 +2714,40 @@ mod tests {
         assert!(admit(&args(&["inbox", "--prompt-digest", "d"])).is_err());
     }
 
-    /// The verbs that only pair two Hides stay out of the document until
-    /// that feature ships, and the CLI still admits them, so a build that
-    /// offers it takes them and one that does not refuses them with their
-    /// reason rather than as unknown words.
+    /// The verbs that only pair two Hides are marked hidden in the document
+    /// until that feature ships, and the CLI still admits them, so a build
+    /// that offers it takes them and one that does not refuses them with
+    /// their reason rather than as unknown words.
     #[test]
-    fn the_document_leaves_out_the_verbs_that_only_pair() {
+    fn the_document_marks_the_verbs_that_only_pair_hidden() {
         let args = |line: &[&str]| {
             line.iter()
                 .map(|word| (*word).to_owned())
                 .collect::<Vec<_>>()
         };
         let document = document();
-        let listed: Vec<&str> = document["commands"]
+        let device: Vec<(&str, bool)> = document["commands"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|command| command["command"].as_str().unwrap())
+            .filter_map(|command| {
+                let name = command["command"].as_str().unwrap();
+                let verb = name.strip_prefix("device ")?;
+                Some((verb, command["hidden"] == true))
+            })
             .collect();
         for verb in PAIRING_ONLY {
-            let command = format!("device {verb}");
-            assert!(!listed.contains(&command.as_str()), "{command} is listed");
-            assert!(admit(&args(&["device", verb])).is_ok(), "{command}");
+            assert!(
+                device.contains(&(*verb, true)),
+                "device {verb} is not marked hidden"
+            );
+            assert!(admit(&args(&["device", verb])).is_ok(), "device {verb}");
         }
-        for kept in ["device list", "device add", "device remove", "device retry"] {
-            assert!(listed.contains(&kept), "{kept} is not listed");
+        for kept in ["list", "add", "remove", "retry"] {
+            assert!(
+                device.contains(&(kept, false)),
+                "device {kept} is not listed"
+            );
         }
     }
 

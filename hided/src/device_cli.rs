@@ -27,12 +27,27 @@ use serde_json::{Value, json};
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-/// The verbs every build offers. The verbs that pair with another Hide
-/// (`share`, `allow`, `pause`, `resume`, `request`, `address`, `add <link>`
-/// and a direction of `remove`) are left out until connections between two
-/// Hides ship (`env::Env::device_connect`), and so is their contract
-/// (`cli_contract::PAIRING_ONLY`).
+/// The verbs every build offers, which the agent guide lists. The verbs
+/// that pair with another Hide (`share`, `allow`, `pause`, `resume`,
+/// `request`, `address`, `add <link>` and a direction of `remove`) are
+/// listed only where the build offers connections between two Hides
+/// ([`usage`]), and their contract marks them hidden
+/// (`cli_contract::PAIRING_ONLY`), until that feature ships.
 pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--json]\nhide device remove <device id or ssh alias> [--json]\nhide device retry <device id or ssh alias> [--wait] [--json]";
+
+/// Every verb, for a build that offers connections between two Hides.
+const PAIRING_USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]";
+
+/// What `hide --help` and a wrong `hide device` print: the pairing verbs
+/// only where `device_connect` (`env::Env::device_connect`) is on.
+pub fn usage(device_connect: bool) -> &'static str {
+    if device_connect { PAIRING_USAGE } else { USAGE }
+}
+
+/// [`usage`] for this process's environment (`env::device_connect_here`).
+pub fn usage_here() -> &'static str {
+    usage(crate::env::device_connect_here())
+}
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -978,6 +993,18 @@ mod tests {
     fn parse_words(words: &[&str]) -> Result<DeviceCli, String> {
         let args: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
         parse(args.iter())
+    }
+
+    /// The pairing verbs are listed only where the build offers them.
+    #[test]
+    fn the_usage_lists_the_pairing_verbs_only_with_the_switch() {
+        for verb in ["share", "allow", "pause", "resume", "request", "address"] {
+            let line = format!("hide device {verb} ");
+            assert!(usage(true).contains(&line), "{verb}");
+            assert!(!usage(false).contains(&line), "{verb}");
+        }
+        assert!(usage(true).contains("hide device list"));
+        assert_eq!(usage(false), USAGE);
     }
 
     /// A build that does not offer connections between two Hides refuses

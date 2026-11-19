@@ -388,6 +388,14 @@ pub fn load_for_from(
     }
 }
 
+/// [`Env::device_connect`] of this process's environment, for what a
+/// command prints before it loads its environment (`hide --help`). An
+/// invalid value counts as off here; a command that loads its environment
+/// refuses it.
+pub fn device_connect_here() -> bool {
+    load_for(&[HIDE_DEVICE_CONNECT]).is_ok_and(|env| env.device_connect)
+}
+
 pub fn load_from(read: impl FnMut(&str) -> Option<String>) -> Result<Env, Vec<EnvError>> {
     let (env, errors) = resolve(read);
     if errors.is_empty() {

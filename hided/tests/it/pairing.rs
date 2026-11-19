@@ -697,7 +697,8 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
 /// A build that does not offer connections between two Hides (no
 /// `HIDE_DEVICE_CONNECT`, every build until that feature ships) says so in
 /// its hello, so its window shows no pairing, and refuses every pairing ask
-/// from a window and from a terminal, opening nothing.
+/// from a window and from a terminal, opening nothing, and its help leaves
+/// the pairing verbs out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_to_its_window() {
     let root = tempfile::tempdir().unwrap();
@@ -735,6 +736,18 @@ async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_t
     Ran::of(off.output().unwrap()).refused("device_connect_unavailable");
     host.run(&["device", "pause", "studio", "--json"])
         .refused("device_connect_unavailable");
+
+    // Its help leaves the pairing verbs out; a build that offers them
+    // lists them.
+    let help = |command: &mut std::process::Command| {
+        let out = command.output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let mut off = host.command(&["--help"]);
+    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    assert!(!help(&mut off).contains("hide device share"));
+    assert!(help(&mut host.command(&["--help"])).contains("hide device share"));
 
     // Nothing was opened for it.
     assert!(!hided::peer_host::endpoint_wanted(&host.state, false).unwrap());
