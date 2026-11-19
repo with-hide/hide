@@ -17,7 +17,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary, useInterfaceTranslation } from "../i18n/client";
 import { AddDevice } from "../settings/AddDevice";
 import { DevicesTab } from "../settings/DevicesTab";
-import type { SshLook } from "../pairing";
+import { NOTHING_UNDER_WAY, type SshLook } from "../pairing";
 import type { Device, DeviceHost, DeviceProblem, DeviceSignIn, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
@@ -99,10 +99,11 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
   const actions = useMemo(
     () =>
       createActions((event) => {
-        // The chosen Host's own Hide answers the dialog's one question.
-        if (event.kind === "pairing_look_ssh" && look !== null) {
+        // The chosen Host answers the dialog's one question: its own Hide, or none there.
+        if (event.kind === "pairing_look_ssh") {
           const { alias, request_id } = event.payload as { alias: string; request_id: string };
-          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: "look_ssh", ok: true, request_id, alias, looked: LOOKS[look] } }));
+          const looked: SshLook = (look === null ? undefined : LOOKS[look]) ?? { state: "absent" };
+          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: "look_ssh", ok: true, request_id, alias, looked } }));
         }
         return true;
       }),
@@ -115,7 +116,7 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
       ? { remote: ssh.map((row) => ({ target_id: row.id, state: row.sign_in ? "connecting" : "unavailable", message: null })) }
       : view === "devices" ? { remote: [WSL_ID, "studio"].map((id) => ({ target_id: id, state: "connected", message: null })) } : { ssh_hosts: HOSTS };
     const navigator = ssh ? { devices: [local, ...ssh], focused_device_id: local.id, workspaces: [] } : view === "devices" ? { devices: DEVICES, focused_device_id: WSL_ID, workspaces: [] } : undefined;
-    useShellStore.setState({ connection: "live", rest: { navigator, status, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } } } as never);
+    useShellStore.setState({ connection: "live", pairing: NOTHING_UNDER_WAY, rest: { navigator, status, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } } } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [theme, lang, view, windows]);
