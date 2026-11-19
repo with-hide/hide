@@ -563,6 +563,9 @@ struct Harness {
     runtime: Arc<Mutex<Runtime>>,
     starts: Arc<Mutex<Starts>>,
     machine: Arc<Mutex<Machine>>,
+    /// The agent programs this machine's node says it does not find; every
+    /// other one it finds, whatever the machine running the test has.
+    missing: Arc<Mutex<Vec<String>>>,
     clock: u64,
     _engine: Arc<FakeEngine<'static>>,
     _worker: crate::delivery::worker::Worker,
@@ -616,8 +619,14 @@ impl Harness {
         )
         .unwrap();
         let starts = Arc::new(Mutex::new(Starts::default()));
+        let missing = Arc::new(Mutex::new(Vec::new()));
         {
             let mut guard = runtime.lock().unwrap();
+            let node = guard.own_node();
+            guard.use_own_node(Arc::new(Programs {
+                node,
+                missing: Arc::clone(&missing),
+            }));
             guard.install_delivery_client(client);
             crate::runtime::delivery::tests::set_live(&mut guard, Some(&engine));
             guard.worker_context = Some(RuntimeWorkerContext {
@@ -647,6 +656,7 @@ impl Harness {
             runtime,
             starts,
             machine,
+            missing,
             clock: unix_milliseconds(),
             _engine: engine,
             _worker: worker,
@@ -1289,15 +1299,7 @@ fn a_start_refused_for_an_agent_not_set_up_stops_the_automation() {
 fn an_agent_program_the_machine_does_not_find_stops_the_automation_before_its_start() {
     let state = tempfile::tempdir().unwrap();
     let mut harness = Harness::new(&state);
-    let programs = Arc::new(Mutex::new(vec!["claude".to_owned()]));
-    {
-        let mut runtime = harness.runtime.lock().unwrap();
-        let node = runtime.own_node();
-        runtime.use_own_node(Arc::new(Programs {
-            node,
-            missing: Arc::clone(&programs),
-        }));
-    }
+    harness.missing.lock().unwrap().push("claude".to_owned());
     let id = harness.run_now();
     harness.tick(1);
     harness.tick(1);
@@ -1312,7 +1314,7 @@ fn an_agent_program_the_machine_does_not_find_stops_the_automation_before_its_st
         assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
     }
 
-    programs.lock().unwrap().clear();
+    harness.missing.lock().unwrap().clear();
     let next = harness.run_now_named("Triage");
     let first = intent(&next, 1, 1);
     harness.answer(
