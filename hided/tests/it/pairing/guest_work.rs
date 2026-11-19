@@ -322,7 +322,7 @@ fn process_naming(words: &[&str]) -> Option<u32> {
 async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_core() {
     // A node's endpoints and its panes' sockets sit below the host's state
     // folder, and a Unix socket address holds about a hundred bytes.
-    let root = crate::support::fixture_root("hg");
+    let root = crate::fixtures::fixture_root("hg");
     let at = |name: &str| root.path().join(name);
     let environment = Environment::new(&at("e"), None).unwrap();
     let built = Path::new(env!("CARGO_BIN_EXE_hided")).parent().unwrap();

@@ -398,6 +398,8 @@ impl Runtime {
         if matches!(why, Retiring::Removed) {
             self.device_switches.remove(device_id);
             self.device_needs.remove(device_id);
+            self.device_not_carried.remove(device_id);
+            self.snapshot.ui_state.device_switch_opens.remove(device_id);
         }
         match why {
             Retiring::Removed => self
@@ -502,9 +504,12 @@ impl Runtime {
             );
             return true;
         }
-        // A renamed device waits for the save that holds its new id; the
+        // A renamed device waits for the save that holds its new id, and a
+        // switched one for the save that holds its new connection; the
         // retry asks for that save again, and the save connects it.
-        if self.device_names_saving.contains_key(device_id) {
+        if self.device_names_saving.contains_key(device_id)
+            || self.device_switch_saving.contains_key(device_id)
+        {
             self.persist_current_ui_state();
             return true;
         }
@@ -742,6 +747,13 @@ impl Runtime {
             let test = tests.get(&device.id).cloned();
             let switch = switches.get(&device.id).cloned();
             let needs = self.device_needs.get(&device.id).cloned();
+            let not_carried = self.device_not_carried.get(&device.id).copied();
+            let switch_first = device
+                .ssh_alias
+                .clone()
+                .map(crate::model::DialedBy::Ssh)
+                .or_else(|| device.wsl_distro.clone().map(crate::model::DialedBy::Wsl))
+                .is_some_and(|by| self.device_fresh_adds.contains(&by));
             if device.state != state
                 || device.message != message
                 || device.problem != problem
@@ -749,6 +761,8 @@ impl Runtime {
                 || device.test != test
                 || device.switch != switch
                 || device.needs != needs
+                || device.not_carried != not_carried
+                || device.switch_first != switch_first
             {
                 device.state = state.to_owned();
                 device.message = message;
@@ -757,6 +771,8 @@ impl Runtime {
                 device.test = test;
                 device.switch = switch;
                 device.needs = needs;
+                device.not_carried = not_carried;
+                device.switch_first = switch_first;
                 changed = true;
             }
         }
@@ -868,7 +884,7 @@ impl Runtime {
                 ));
             }
             return self
-                .register_wsl_device(distro.trim(), payload.host_consent)
+                .register_wsl_device(distro.trim(), payload.host_consent, payload.switch_first)
                 .map(|registration| registration.id);
         }
         let label = payload.label.trim().to_owned();
@@ -909,6 +925,12 @@ impl Runtime {
             .ui_state
             .device_registrations
             .push(registration.clone());
+        // One line at most says what the last Add did not add.
+        self.snapshot.navigator.device_not_added = None;
+        if payload.switch_first {
+            self.device_fresh_adds
+                .insert(crate::model::DialedBy::Ssh(ssh_alias.clone()));
+        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         self.push_diagnostic(
@@ -928,6 +950,7 @@ impl Runtime {
         &mut self,
         distro: &str,
         consent: bool,
+        switch_first: bool,
     ) -> Result<crate::model::DeviceRegistration, DeviceRefusal> {
         if !hide_platform::wsl::valid_distribution_name(distro) {
             return Err(DeviceRefusal::new(
@@ -957,6 +980,12 @@ impl Runtime {
             .ui_state
             .device_registrations
             .push(registration.clone());
+        // One line at most says what the last Add did not add.
+        self.snapshot.navigator.device_not_added = None;
+        if switch_first {
+            self.device_fresh_adds
+                .insert(crate::model::DialedBy::Wsl(distro.to_owned()));
+        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         self.push_diagnostic(
@@ -996,6 +1025,10 @@ impl Runtime {
         self.delivery_panes.remove(device_id);
         self.forget_device_connect_outcome(device_id);
         self.device_names_saving.remove(device_id);
+        self.device_switch_saving.remove(device_id);
+        if let Some(by) = registration.origin.dialed_by() {
+            self.device_fresh_adds.remove(&by);
+        }
         self.device_machine_bound.remove(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.
@@ -1107,6 +1140,8 @@ impl Runtime {
                     ssh_alias,
                     host_consent: false,
                     wsl_distro: None,
+                    // A terminal registers only; its own `switch` follows.
+                    switch_first: false,
                 };
                 let id = self.register_device(payload).map_err(refused)?;
                 let device = self

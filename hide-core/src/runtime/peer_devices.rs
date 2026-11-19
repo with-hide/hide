@@ -48,11 +48,14 @@ impl Runtime {
             .device_registrations
             .iter()
             .filter(|registration| {
-                registration.origin.peer_key().is_some_and(|key| {
-                    !peers
-                        .iter()
-                        .any(|machine| machine.key == key && held(machine))
-                })
+                // A switch whose save is not acknowledged is still the
+                // helper's device: its save settles it either way.
+                !self.device_switch_saving.contains_key(&registration.id)
+                    && registration.origin.peer_key().is_some_and(|key| {
+                        !peers
+                            .iter()
+                            .any(|machine| machine.key == key && held(machine))
+                    })
             })
             .map(|registration| registration.id.clone())
             .collect();

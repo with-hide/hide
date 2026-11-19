@@ -48,11 +48,11 @@ struct Machine {
 
 impl Machine {
     fn new() -> Self {
-        let dir = crate::support::fixture_root("hu");
+        let dir = crate::fixtures::fixture_root("hu");
         let root = hide_platform::fs::identity::canonical(dir.path()).unwrap();
         let home = root.join("home");
         let state = root.join("state");
-        crate::support::fixture_home(&home);
+        crate::fixtures::fixture_home(&home);
         let core_root = hide_kit::layout::core_root(&home);
         let resources = package(&root.join("app"));
         let built = Path::new(env!("CARGO_BIN_EXE_hided"));

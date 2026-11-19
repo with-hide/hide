@@ -5,7 +5,9 @@
 //! it. The checks are asked through the system's programs and login agents,
 //! or a fixture's stand-ins (`env::HIDE_PREFLIGHT_PROGRAMS`), and belong to
 //! no one flow: a core move's dialog reads them (`core_move::preflight`),
-//! and so does an install over SSH.
+//! and a machine that is about to start a Hide here over SSH reads the
+//! session one in this machine's `hide device look-ssh` answer
+//! ([`desktop_session`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -131,6 +133,19 @@ pub(crate) fn gui_session(
             Err("this system has no login session for the core to run in".to_owned())
         }
         Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Whether someone is logged in to the desktop the core's login item runs
+/// in, as [`gui_session`] reads it, for a machine that asks before it puts
+/// a core here over SSH (PRD device-connect-iroh D-45, B7): `Some(false)`
+/// only when this system said nobody is, `Some(true)` when someone is or
+/// the core needs no such session, and `None` when it did not say.
+pub(crate) fn desktop_session(home: &Path, programs: &Programs, stop: &AtomicBool) -> Option<bool> {
+    match programs.agents.login(home, stop) {
+        Ok(Login::NotNeeded | Login::LoggedIn) => Some(true),
+        Ok(Login::LoggedOut) => Some(false),
+        Err(_) => None,
     }
 }
 

@@ -1633,17 +1633,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Adds an SSH device; the core gives it its id, its machine's own once it first connects. */
-    registerDevice(label: string, alias: string, options: { hostConsent: boolean }) {
+    registerDevice(label: string, alias: string, options: { hostConsent: boolean; switchFirst?: boolean }) {
       dispatch({
         schema_version: 2,
         kind: "register_device",
-        payload: { label, ssh_alias: alias, host_consent: options.hostConsent },
+        payload: { label, ssh_alias: alias, host_consent: options.hostConsent, ...(options.switchFirst ? { switch_first: true } : {}) },
       });
     },
 
     /** Adds this PC's WSL distribution as a device with the same install consent (PRD wsl-device B4); the core names it `WSL <distro>`. */
-    registerWslDevice(distro: string) {
-      dispatch({ schema_version: 2, kind: "register_device", payload: { wsl_distro: distro, host_consent: true } });
+    registerWslDevice(distro: string, options: { switchFirst?: boolean } = {}) {
+      dispatch({ schema_version: 2, kind: "register_device", payload: { wsl_distro: distro, host_consent: true, ...(options.switchFirst ? { switch_first: true } : {}) } });
     },
 
     /** Gives or withdraws the one consent for Hide's helper on a device (PRD S5.5 B50-B52). */

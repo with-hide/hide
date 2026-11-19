@@ -436,7 +436,41 @@ fn foreign(pane: Option<&str>, arguments: impl Iterator<Item = String>) -> bool 
     };
     match pane.filter(|value| !value.is_empty()) {
         Some(pane) => entry != pane,
-        None => entry.starts_with(GUEST_INSTALL_PREFIX),
+        None => is_guest_install(&entry),
+    }
+}
+
+/// Whether `install` names a guest's installation
+/// ([`install_of_guest_root`]): another machine's work on this account,
+/// which has its own entries here and nothing of the account's.
+pub fn is_guest_install(install: &str) -> bool {
+    install.starts_with(GUEST_INSTALL_PREFIX)
+}
+
+/// Whether a Hide entry is the installation `install`'s to judge, replace
+/// and take out, the one rule a hook entry and a guidance entry are owned
+/// by. `named` is the installation the entry names, none for one an earlier
+/// build wrote without a name, and `helper_gone` says whether the helper it
+/// runs is no longer there.
+///
+/// An entry that names `install` is its own. For the account's own Hide, so
+/// is one that names no installation, and one another installation left
+/// whose helper is gone, which nothing runs any more. A guest's
+/// installation ([`is_guest_install`]) owns only what carries its own name:
+/// a nameless entry is the account's own Hide's from an earlier build, and
+/// another installation's is that installation's whether or not its helper
+/// is still there, the same line [`foreign_pane`] draws for where a guest's
+/// entry acts.
+pub(crate) fn owns_entry(
+    install: &str,
+    named: Option<&str>,
+    helper_gone: impl FnOnce() -> bool,
+) -> bool {
+    match named {
+        Some(named) if named == install => true,
+        _ if is_guest_install(install) => false,
+        None => true,
+        Some(_) => helper_gone(),
     }
 }
 
@@ -574,6 +608,34 @@ mod tests {
         assert!(foreign(Some(APP_INSTALL), guest.clone().into_iter()));
         assert!(foreign(Some(""), guest.clone().into_iter()));
         assert!(foreign(None, guest.into_iter()));
+    }
+
+    /// The one rule of whose entry a Hide entry is. The account's own Hide
+    /// owns what names it, what names no installation, and what another
+    /// installation left with its helper gone; a guest's installation owns
+    /// only what names it.
+    #[test]
+    fn a_guests_installation_owns_only_the_entries_that_name_it() {
+        let guest = install_of_guest_root(Path::new("/state/g/0123456789abcdef/i"));
+        let other_guest = install_of_guest_root(Path::new("/state/g/fedcba9876543210/i"));
+        assert!(is_guest_install(&guest));
+        assert!(!is_guest_install(APP_INSTALL));
+        assert!(!is_guest_install("root:/helper"));
+        for gone in [false, true] {
+            // Its own, whoever asks.
+            assert!(owns_entry(APP_INSTALL, Some(APP_INSTALL), || gone));
+            assert!(owns_entry(&guest, Some(&guest), || gone));
+            // An earlier build's entry, which names no installation.
+            assert!(owns_entry(APP_INSTALL, None, || gone));
+            assert!(owns_entry("root:/helper", None, || gone));
+            assert!(!owns_entry(&guest, None, || gone));
+            // Another installation's: the account's own takes over one
+            // nothing runs any more, a guest's never does.
+            assert_eq!(owns_entry(APP_INSTALL, Some("root:/helper"), || gone), gone);
+            assert_eq!(owns_entry(APP_INSTALL, Some(&guest), || gone), gone);
+            assert!(!owns_entry(&guest, Some(APP_INSTALL), || gone));
+            assert!(!owns_entry(&guest, Some(&other_guest), || gone));
+        }
     }
 
     #[test]

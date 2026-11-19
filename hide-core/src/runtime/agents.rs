@@ -3173,6 +3173,7 @@ impl Runtime {
             self.ingest_archive_saved(&state.session_archive, result.is_ok());
             self.acknowledge_project_settings_save(&state, result.is_ok());
             self.acknowledge_device_naming(&state, naming_round, result.is_ok());
+            self.acknowledge_device_switch(&state, result.is_ok());
             self.acknowledge_home_rename(&state, result.is_ok());
             return result;
         };
@@ -3229,7 +3230,8 @@ impl Runtime {
                         let settings_changed =
                             guard.acknowledge_project_settings_save(&state, result.is_ok());
                         let naming_changed =
-                            guard.acknowledge_device_naming(&state, naming_round, result.is_ok());
+                            guard.acknowledge_device_naming(&state, naming_round, result.is_ok())
+                                | guard.acknowledge_device_switch(&state, result.is_ok());
                         guard.acknowledge_home_rename(&state, result.is_ok());
                         if let Err(message) = &result {
                             if settings_changed {

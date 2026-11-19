@@ -26,7 +26,6 @@ import { cn } from "../lib/utils";
 import type { Device } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
-import { useUiStore } from "../ui";
 import { coreErrorText } from "../coreError";
 import { isPairLink, refusalKey, sshLookLine, type SshLook } from "../pairing";
 import { useRefusalSince } from "../errorSince";
@@ -151,17 +150,17 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       else actions.pairing("pair_ssh", { alias: chosen, request_id: request });
       return;
     }
+    // A device added over SSH or wsl.exe goes on to the new connection once
+    // it connects (B41): the core keeps that it was added for its switch,
+    // which is asked then and says what would be installed there before
+    // anything is.
     if (distro !== null) {
       setSubmitted({ alias: null, distro, at: Date.now() });
-      actions.registerWslDevice(distro);
+      actions.registerWslDevice(distro, { switchFirst: true });
     } else {
       setSubmitted({ alias: chosen, distro: null, at: Date.now() });
-      actions.registerDevice(name.trim(), chosen, { hostConsent: true });
+      actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: true });
     }
-    // A device added over SSH or wsl.exe goes on to the new connection once
-    // it connects (B41): its switch is asked then, which says what would
-    // be installed there before anything is.
-    useUiStore.getState().setSwitchAfterAdd(chosen);
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
   const reading = hosts === undefined || ((hosts.state === "idle" || hosts.state === "loading") && hosts.hosts.length === 0 && distributions.length === 0);

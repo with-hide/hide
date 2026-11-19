@@ -429,16 +429,17 @@ esac
 
     /// A helper distribution is switched through `wsl.exe` as an SSH device
     /// is over its login (B36): its Hide is asked for the grant with the
-    /// helper's folder and projects, and one with no systemd says the
-    /// operator opens it again after Windows restarts (B43), whoever
-    /// started its Hide.
+    /// helper's folder, and handed the device's projects once the pairing
+    /// is admitted (D-48); one with no systemd says the operator opens it
+    /// again after Windows restarts (B43), whoever started its Hide.
     #[test]
     fn a_distribution_is_switched_through_wsl_and_says_what_no_systemd_means() {
         const SWITCHED: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/hide.log"
 case "$2" in
     look-ssh) echo '{"ok":true,"value":{"look":{"system":"linux","core":true}}}' ;;
-    accept-ssh) printf '{"ok":true,"value":{"helper":"taken","projects":1,"accepted":{"key":"%s","device":"distro-device","name":"Ubuntu","grant":"g1","candidates":[]}}}\n' "$(cat "$HOME/key")" ;;
+    accept-ssh) printf '{"ok":true,"value":{"helper":"taken","accepted":{"key":"%s","device":"distro-device","name":"Ubuntu","grant":"g1","candidates":[]}}}\n' "$(cat "$HOME/key")" ;;
+    projects-ssh) echo '{"ok":true,"value":{"projects":1}}' ;;
     *) exit 2 ;;
 esac
 "#;
@@ -458,6 +459,7 @@ esac
                     key: &mine,
                     helper_root: Some("~/.hide/device"),
                     projects: &projects,
+                    admitted: &|_| true,
                     install: false,
                     installing: &|| panic!("a Hide that runs is not started"),
                 },
@@ -478,12 +480,19 @@ esac
         assert!(matches!(folder, pairing_ssh::Folder::Taken));
         assert_eq!(needs, Some(pairing_ssh::Needs::OpenDistribution));
         let log = std::fs::read_to_string(pc.dir.path().join("home/hide.log")).unwrap();
+        let said: Vec<&str> = log.lines().collect();
         assert_eq!(
-            log.lines().last().unwrap(),
+            said[said.len() - 2],
             format!(
-                "device accept-ssh --request req-1 --key {} --device pc-device --name Windows PC --helper ~/.hide/device --project /home/me/app --wsl",
+                "device accept-ssh --request req-1 --key {} --device pc-device --name Windows PC --helper ~/.hide/device --wsl",
                 mine.to_hex()
             )
+        );
+        // The projects go on the same login, after the PC admitted the
+        // pairing.
+        assert_eq!(
+            said[said.len() - 1],
+            "device projects-ssh --project /home/me/app"
         );
 
         // A distribution systemd started has a Hide that ran before this

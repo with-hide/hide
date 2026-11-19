@@ -9,12 +9,14 @@ import type { MessageKey } from "./i18n/catalogs";
 import { catalogWorkspaces, type Device, type DeviceSwitch, type SnapshotRest } from "./snapshot";
 
 /**
- * A helper device this core dials, over SSH or into a WSL distribution of
- * this PC: the one the switch is offered on. A paired machine's device is
- * switched already, and a node that dials in was never a helper.
+ * Whether the switch is offered on a device: the core's one rule
+ * (`Device.switchable`), a helper device it dials over SSH that has
+ * connected, or a WSL distribution of this PC (B35, D-27). A paired
+ * machine's device is switched already, a node that dials in was never a
+ * helper, and an SSH device that never connected is switched once it has.
  */
 export function switchOffered(device: Device): boolean {
-  return device.kind === "remote" && device.dials_in !== true && device.peer_key == null && (device.ssh_alias != null || device.wsl_distro != null);
+  return device.switchable === true;
 }
 
 /** What is put on a machine that runs no Hide of its own. */
@@ -59,6 +61,12 @@ export function switchFailureKey(reason: string | null | undefined): MessageKey 
       return "pairing.ssh.notRunning";
     case "ssh_core_not_started":
       return "devices.switch.failed.notStarted";
+    case "ssh_mac_signed_out":
+      return "pairing.ssh.signInMac";
+    case "ssh_mac_from_mac_only":
+      return "devices.switch.failed.macOnly";
+    case "switch_not_saved":
+      return "devices.switch.failed.notSaved";
     case "switch_not_connected":
       return "devices.switch.failed.notConnected";
     case "device_already_connected":

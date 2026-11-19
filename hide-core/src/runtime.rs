@@ -1317,9 +1317,23 @@ pub struct Runtime {
     /// one is under way or stopped (`device_switch`). Never saved: a switch
     /// is one press of the operator, asked again after a restart.
     device_switches: HashMap<String, device_switch::DeviceSwitch>,
+    /// Devices whose registration was rewritten to their machine's
+    /// connection and is not saved yet; each takes that connection once a
+    /// save holds it (`device_switch`).
+    device_switch_saving: HashMap<String, device_switch::SwitchSaving>,
     /// What the Hide a switch started on a device's machine still needs
     /// (`DeviceSnapshot::needs`), by device; an entry goes with its device.
     device_needs: HashMap<String, crate::model::DeviceNeedsSnapshot>,
+    /// How many terminals each device's switch could not take up again
+    /// (`DeviceSnapshot::not_carried`), by device; an entry goes with its
+    /// device.
+    device_not_carried: HashMap<String, u32>,
+    /// The devices added to be switched at once whose switch has not
+    /// landed (`RegisterDevicePayload::switch_first`), by the alias or the
+    /// distribution each is dialed by, since an SSH device's id changes at
+    /// its first connection. Never saved: after a restart it is a helper
+    /// device like any other.
+    device_fresh_adds: HashSet<crate::model::DialedBy>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -2470,7 +2484,10 @@ impl Runtime {
             retired_remote_syncs: Vec::new(),
             remote_device_tests: HashMap::new(),
             device_switches: HashMap::new(),
+            device_switch_saving: HashMap::new(),
             device_needs: HashMap::new(),
+            device_not_carried: HashMap::new(),
+            device_fresh_adds: HashSet::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),

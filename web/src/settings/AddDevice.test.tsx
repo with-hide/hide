@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
 import type { Device, SshHost, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
-import { useUiStore } from "../ui";
 import type { DispatchFn } from "../ws";
 import { AddDevice } from "./AddDevice";
 
@@ -73,7 +72,8 @@ it("lists each Host with its address, and fills the name and adds only the alias
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
   // The core gives the device its id: the shell sends none.
-  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true });
+  // Every Add over SSH is added to be switched at once (B41).
+  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true, switch_first: true });
   await unmount();
 });
 
@@ -275,10 +275,8 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
-  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true });
-  // It goes on to the new connection once its helper is connected (B41).
-  expect(useUiStore.getState().switchAfterAdd).toBe("wsl:Ubuntu");
-  useUiStore.getState().setSwitchAfterAdd(null);
+  // It goes on to the new connection once its helper is connected: the core keeps that it was added for its switch (B41).
+  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true, switch_first: true });
   await unmount();
 });
 

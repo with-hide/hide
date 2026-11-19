@@ -44,6 +44,17 @@ const ANSWER_CAP: usize = 64 * 1024;
 /// own ask of its daemon waits at most thirty seconds.
 const ANSWER_WITHIN: Duration = Duration::from_secs(40);
 
+/// How long the target's `projects-ssh` may take to answer: its own work
+/// ends before that (`device_cli::PROJECTS_BOUND`).
+const PROJECTS_WITHIN: Duration = Duration::from_secs(60);
+
+/// The most a switch's commands on the target wait for in all, apart from
+/// the login's own questions and the wait for the new connection: two
+/// looks, the start, the pairing, what the started Hide needs, and the
+/// projects.
+pub const SWITCH_SSH_WITHIN: Duration =
+    Duration::from_secs(5 * ANSWER_WITHIN.as_secs() + PROJECTS_WITHIN.as_secs());
+
 /// The addresses of the SSH login tried before the target's own (D-22).
 const LOGIN_ADDRESSES: usize = 2;
 
@@ -257,9 +268,47 @@ pub(crate) fn hide_argv(reach: &Reach, system: &str, words: &[&str]) -> Vec<Stri
 
 /// Runs `hide <words>` on the target, on `login`.
 fn run_hide(login: &dyn Login, reach: &Reach, words: &[&str]) -> Result<Said, String> {
+    run_hide_within(login, reach, words, ANSWER_WITHIN)
+}
+
+/// Runs `hide <words>` on the target, on `login`, waiting `within` for its
+/// answer.
+fn run_hide_within(
+    login: &dyn Login,
+    reach: &Reach,
+    words: &[&str],
+    within: Duration,
+) -> Result<Said, String> {
     let argv = hide_argv(reach, &login.system()?, words);
-    let ran = login.run(&argv, ANSWER_CAP, ANSWER_WITHIN)?;
+    let ran = login.run(&argv, ANSWER_CAP, within)?;
     Ok(said(ran.status, &ran.stdout))
+}
+
+/// Whether the target said nobody is logged in to its desktop
+/// (`core_install::checks::desktop_session`, in its look): `None` when its
+/// answer does not say, as an older Hide's or an older helper's does not.
+fn desktop_of(said: &Said) -> Option<bool> {
+    match said {
+        Said::Answer(answer) => answer
+            .get("look")
+            .or_else(|| answer.get("value").and_then(|value| value.get("look")))
+            .and_then(|look| look["desktop"].as_bool()),
+        Said::NoProgram | Said::Unread => None,
+    }
+}
+
+/// Why this machine starts no Hide on a target that runs `target` (PRD
+/// device-connect-iroh D-45, B7): a Mac takes one only from a Mac, and only
+/// while someone is logged in to its desktop, where its login item runs.
+/// A target that did not say (`desktop` is `None`) is not refused.
+fn install_refusal(target: &str, from: &str, desktop: Option<bool>) -> Option<&'static str> {
+    if target != "macos" {
+        return None;
+    }
+    if from != "macos" {
+        return Some("ssh_mac_from_mac_only");
+    }
+    (desktop == Some(false)).then_some("ssh_mac_signed_out")
 }
 
 /// Starts a Hide of the target account's own from the `hide` this
@@ -318,6 +367,7 @@ pub(crate) fn look_on(login: &dyn Login, reach: &Reach) -> Looked {
 
 /// What the target answered to a pairing, and the addresses of the SSH
 /// login to try before its own.
+#[derive(Clone)]
 pub struct Paired {
     pub accepted: Accepted,
     pub first: Vec<Candidate>,
@@ -352,7 +402,6 @@ pub(crate) fn pair_on(
         me,
         key,
         helper: None,
-        projects: &[],
     };
     let answer = accept_on(login, reach, &asked)?;
     paired(login, &answer["accepted"]).ok_or("ssh_update_there")
@@ -366,9 +415,6 @@ struct Accept<'a> {
     /// The root this machine's device helper is installed under there,
     /// when it also asks for that helper's folder (D-49).
     helper: Option<&'a str>,
-    /// The folders this machine had registered as projects on its device
-    /// there, which the target's own Hide then lists too (D-48).
-    projects: &'a [String],
 }
 
 /// Runs the target's `accept-ssh` on `login` and answers the value it
@@ -389,9 +435,6 @@ fn accept_on(login: &dyn Login, reach: &Reach, asked: &Accept<'_>) -> Result<Val
     ];
     if let Some(root) = asked.helper {
         words.extend(["--helper", root]);
-    }
-    for project in asked.projects {
-        words.extend(["--project", project.as_str()]);
     }
     // The target records which channel its grant was asked over.
     if login.channel() == Channel::Wsl {
@@ -553,6 +596,11 @@ pub struct Switch<'a> {
     /// The folders this machine registered as projects on the device,
     /// which the machine's own Hide lists from then on (D-48).
     pub projects: &'a [String],
+    /// Called once with the pairing the target answered, on the same
+    /// login: whether the target's grant for this machine became active.
+    /// Only then are the projects handed over, so a switch that never
+    /// lands registers nothing there.
+    pub admitted: &'a (dyn Fn(&Switched) -> bool + Sync),
     /// The operator allowed a Hide to be started on a target that runs
     /// none of its own (D-45); without it such a target is only named.
     pub install: bool,
@@ -578,8 +626,26 @@ pub fn switch(
 /// [`switch`], on a login.
 pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switched, &'static str> {
     let unreached = login.channel().not_reached();
+    let (looked, desktop) = match run(login, switch.reach, &["look-ssh"]) {
+        Ok(said) => {
+            let desktop = desktop_of(&said);
+            (look_of(said), desktop)
+        }
+        Err(error) => return Err(not_reached(login, "look", &error)),
+    };
     let mut started = false;
-    match look_on(login, switch.reach) {
+    // A target with no Hide of its own is asked nothing more when this
+    // machine may not start one there: said before the operator is asked
+    // to allow it, and before anything is started.
+    if looked == Looked::Absent {
+        let system = login
+            .system()
+            .map_err(|error| not_reached(login, "system", &error))?;
+        if let Some(refusal) = install_refusal(&system, std::env::consts::OS, desktop) {
+            return Err(refusal);
+        }
+    }
+    match looked {
         Looked::Ready => {}
         Looked::Absent if switch.install => {
             (switch.installing)();
@@ -609,18 +675,21 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
             me: switch.me,
             key: switch.key,
             helper: switch.helper_root,
-            projects: switch.projects,
         },
     );
     let answer = match accepted {
         // Paired already, and going on without the helper's folder: there
         // is nothing to save on the target.
         Err("device_already_connected") if switch.helper_root.is_none() => {
-            return Ok(Switched::Paired {
-                paired: None,
-                folder: Folder::Kept,
-                needs: None,
-            });
+            return Ok(admit(
+                login,
+                switch,
+                Switched::Paired {
+                    paired: None,
+                    folder: Folder::Kept,
+                    needs: None,
+                },
+            ));
         }
         answer => answer?,
     };
@@ -636,9 +705,52 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
         None if switch.helper_root.is_none() => Folder::Kept,
         _ => return Err("ssh_update_there"),
     };
-    // A project the target left out stays the device's here and is none of
-    // its own Hide's: the pairing stands either way, so it is only logged.
-    let listed = answer["projects"].as_u64().unwrap_or(0);
+    let paired = match &answer["accepted"] {
+        Value::Null if switch.helper_root.is_some() => None,
+        accepted => Some(paired(login, accepted).ok_or("ssh_update_there")?),
+    };
+    let needs = needs_of(login, switch.reach, started);
+    Ok(admit(
+        login,
+        switch,
+        Switched::Paired {
+            paired,
+            folder,
+            needs,
+        },
+    ))
+}
+
+/// The target answered the pairing `done`: the caller confirms it over the
+/// connection, and the device's projects go to the machine's own Hide once
+/// it admitted this machine (D-48), on this login and with a bound of
+/// their own.
+fn admit(login: &dyn Login, switch: &Switch<'_>, done: Switched) -> Switched {
+    if (switch.admitted)(&done) && !switch.projects.is_empty() {
+        hand_projects(login, switch);
+    }
+    done
+}
+
+/// Has the target's own Hide list the folders this machine had registered
+/// as projects on its device there (D-48). A project the target left out,
+/// or an answer that never came, stays the device's here and is none of its
+/// own Hide's: the switch stands either way, so it is only logged.
+fn hand_projects(login: &dyn Login, switch: &Switch<'_>) {
+    let mut words = vec!["device", "projects-ssh"];
+    for project in switch.projects {
+        words.extend(["--project", project.as_str()]);
+    }
+    let listed = match run_hide_within(login, switch.reach, &words, PROJECTS_WITHIN) {
+        Ok(Said::Answer(answer)) if answer["ok"] == true => {
+            answer["value"]["projects"].as_u64().unwrap_or(0)
+        }
+        Ok(_) => 0,
+        Err(error) => {
+            not_reached(login, "projects", &error);
+            0
+        }
+    };
     if listed < switch.projects.len() as u64 {
         hide_core::diagnostic!(serde_json::json!({
             "component": "pairing",
@@ -648,16 +760,6 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
             "listed": listed,
         }));
     }
-    let paired = match &answer["accepted"] {
-        Value::Null if switch.helper_root.is_some() => None,
-        accepted => Some(paired(login, accepted).ok_or("ssh_update_there")?),
-    };
-    let needs = needs_of(login, switch.reach, started);
-    Ok(Switched::Paired {
-        paired,
-        folder,
-        needs,
-    })
 }
 
 /// The addresses the SSH login reached, at the port the target's endpoint
@@ -748,6 +850,48 @@ mod tests {
             look_of(said(1, &line(json!({"ok":false,"error":{"code":"usage"}})))),
             Looked::UpdateThere
         );
+    }
+
+    /// A Mac takes a Hide over SSH only from a Mac, and only while someone
+    /// is logged in to its desktop (PRD device-connect-iroh D-45, B7); a
+    /// target that does not say who is logged in, as an older helper's
+    /// `hide` does not, is not refused for it, and no other system is asked.
+    #[test]
+    fn a_mac_target_takes_a_hide_only_from_a_mac_with_someone_logged_in() {
+        let absent = |desktop: Value| {
+            let mut look = json!({"system":"macos","core":false});
+            if !desktop.is_null() {
+                look["desktop"] = desktop;
+            }
+            said(
+                1,
+                &line(json!({"ok":false,"error":{"code":"hide_unavailable"},"look":look})),
+            )
+        };
+        assert_eq!(desktop_of(&absent(json!(false))), Some(false));
+        assert_eq!(desktop_of(&absent(json!(true))), Some(true));
+        assert_eq!(desktop_of(&absent(Value::Null)), None);
+        assert_eq!(desktop_of(&said(127, b"")), None);
+
+        assert_eq!(
+            install_refusal("macos", "linux", Some(true)),
+            Some("ssh_mac_from_mac_only")
+        );
+        assert_eq!(
+            install_refusal("macos", "windows", None),
+            Some("ssh_mac_from_mac_only")
+        );
+        assert_eq!(
+            install_refusal("macos", "macos", Some(false)),
+            Some("ssh_mac_signed_out")
+        );
+        assert_eq!(install_refusal("macos", "macos", Some(true)), None);
+        assert_eq!(install_refusal("macos", "macos", None), None);
+        for target in ["linux", "windows"] {
+            for from in ["macos", "linux", "windows"] {
+                assert_eq!(install_refusal(target, from, Some(false)), None);
+            }
+        }
     }
 
     /// Only an answer that names the command an administrator runs is a

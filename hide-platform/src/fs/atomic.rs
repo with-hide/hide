@@ -209,6 +209,41 @@ pub fn write_file_durable(
     write(path, contents, access.into(), WriteMode::Durable)
 }
 
+/// Writes a file whose bytes arrive in pieces, to the contract of
+/// [`write_file_durable`]: `fill` writes them into the handle it is handed,
+/// and the file takes `path`'s name only once `fill` said they are all
+/// there and right. An error from `fill` leaves `path` as it was.
+///
+/// The bytes go to `<name>.part` beside `path`, one fixed name: a writer
+/// killed part way leaves at most that one file, and the next call replaces
+/// it. Two writers of one `path` at a time are the caller's to keep apart.
+pub fn write_file_durable_from(
+    path: &Path,
+    access: DurableAccess,
+    fill: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> Result<FileId, DurableWriteError> {
+    let mut fill = Some(fill);
+    write_from(
+        path,
+        access.into(),
+        WriteMode::Durable,
+        Temporary::Part,
+        &mut |file| match fill.take() {
+            Some(fill) => fill(file),
+            None => Err(io::ErrorKind::AlreadyExists.into()),
+        },
+    )
+}
+
+/// How a write names the file it fills before the replacement.
+#[derive(Clone, Copy)]
+enum Temporary {
+    /// A name no other writer has, asked for again on a clash.
+    Fresh,
+    /// `<name>.part`, replacing what an earlier writer left under it.
+    Part,
+}
+
 #[derive(Clone, Copy)]
 enum WriteMode {
     Visibility,
@@ -221,6 +256,20 @@ fn write(
     contents: &[u8],
     access: Access,
     mode: WriteMode,
+) -> Result<FileId, DurableWriteError> {
+    write_from(path, access, mode, Temporary::Fresh, &mut |file| {
+        file.write_all(contents)
+    })
+}
+
+/// Fills a file beside `path` with `fill`, called once, and replaces `path`
+/// with it.
+fn write_from(
+    path: &Path,
+    access: Access,
+    mode: WriteMode,
+    temporary: Temporary,
+    fill: &mut dyn FnMut(&mut fs::File) -> io::Result<()>,
 ) -> Result<FileId, DurableWriteError> {
     let name = path
         .file_name()
@@ -240,8 +289,27 @@ fn write(
         Access::Private | Access::PrivateExecutable => None,
     };
     let mut last = io::Error::from(io::ErrorKind::AlreadyExists);
-    for _ in 0..8 {
-        let temporary_path = folder.join(super::temporary_name(name, "hide"));
+    let tries = match temporary {
+        Temporary::Fresh => 8,
+        Temporary::Part => 1,
+    };
+    for _ in 0..tries {
+        let temporary_path = match temporary {
+            Temporary::Fresh => folder.join(super::temporary_name(name, "hide")),
+            Temporary::Part => {
+                let mut part = name.to_os_string();
+                part.push(".part");
+                let part = folder.join(part);
+                // What a writer that was killed left.
+                match fs::remove_file(&part) {
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                        return Err(DurableWriteError::before_replace(error));
+                    }
+                    _ => {}
+                }
+                part
+            }
+        };
         let mut file = match sys::create_temporary(&temporary_path, access, kept.is_some()) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -256,7 +324,7 @@ fn write(
             if matches!(mode, WriteMode::Durable) {
                 os_faults::fail(os_faults::Point::FileWrite)?;
             }
-            file.write_all(contents)?;
+            fill(&mut file)?;
             if let Some(kept) = &kept {
                 kept.apply(&file)?;
             }

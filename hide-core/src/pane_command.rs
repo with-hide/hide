@@ -233,7 +233,7 @@ pub fn next_action(code: &str) -> Option<&'static str> {
             "This pane is another machine's work running here: this machine draws it in the Hide window but keeps no text of it. Read it on the machine it belongs to"
         }
         "guest_pane_keys" => {
-            "A guest's pane takes text and --enter from here; a named key is encoded by the pane's own machine, so press it there or in the Hide window"
+            "This pane is another machine's work running here: it takes text and --enter from this machine; a named key is encoded by the pane's own machine, so press it there or in the Hide window"
         }
         "agent_unavailable" => {
             "Run hide ps for the agents there are, their names and panes; an agent of another machine is named by its registration id from hide agent list, a pane that is no registered agent by remote:<device id>:pane:<id>"
