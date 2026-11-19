@@ -165,8 +165,9 @@ fn antigravity_reads_its_mode_hint_as_empty_and_a_list_under_its_composer_as_non
         ("0-empty", Ok(())),
         ("accept-edits-hint", Ok(())),
         ("plan-hint", Ok(())),
-        // At 40 columns agy cuts its hint with `...` and drops the model from
-        // its status line, which stays one row.
+        // At 50 and 40 columns agy cuts its hint with `...`, and at 40 drops
+        // the model from its status line, which stays one row.
+        ("50-columns-plan-hint", Ok(())),
         ("40-columns-plan-hint", Ok(())),
         ("interrupted", Ok(())),
         ("typed", Err(Miss::PlaceholderStyle)),
