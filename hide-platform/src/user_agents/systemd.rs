@@ -56,6 +56,16 @@ impl Systemd {
         }
     }
 
+    /// Whether the account's user manager runs: it serves its own socket
+    /// in the runtime folder while it does. A system without one, such as
+    /// a container with no session, runs no unit of the account, so there
+    /// is nothing to ask it. A fixture's stand-in always answers.
+    fn manager_runs(&self) -> bool {
+        self.runtime_dir
+            .as_ref()
+            .is_none_or(|runtime| runtime.join("systemd").join("private").exists())
+    }
+
     fn units(home: &Path) -> PathBuf {
         home.join(".config/systemd/user")
     }
@@ -180,6 +190,9 @@ impl Systemd {
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<bool> {
+        if !self.manager_runs() {
+            return Ok(false);
+        }
         let shown = self.show(label, home, stop)?;
         Ok(shown.lines().any(|line| {
             matches!(
@@ -225,7 +238,7 @@ impl Systemd {
                 Err(error) => return Err(error),
             }
         }
-        if removed {
+        if removed && self.manager_runs() {
             self.check(&["daemon-reload"], home, stop)?;
         }
         Ok(())
@@ -380,6 +393,37 @@ fn escape_specifiers(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A system with no user manager, a container with no session among
+    /// them, runs no unit of the account: asking whether one runs, or
+    /// removing one, never reaches a `systemctl` that has no bus to ask.
+    #[test]
+    fn without_a_user_manager_no_unit_runs_and_removal_asks_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let systemd = Systemd {
+            systemctl: home.path().join("no-systemctl"),
+            loginctl: home.path().join("no-loginctl"),
+            runtime_dir: Some(runtime.path().to_path_buf()),
+            user: "test".to_owned(),
+        };
+        let stop = AtomicBool::new(false);
+        assert!(
+            !systemd
+                .is_loaded("dev.withhide.core", home.path(), &stop)
+                .unwrap()
+        );
+        let unit = Systemd::unit_file(home.path(), "dev.withhide.core");
+        std::fs::create_dir_all(unit.parent().unwrap()).unwrap();
+        std::fs::write(&unit, "").unwrap();
+        systemd
+            .unload("dev.withhide.core", home.path(), &stop)
+            .unwrap();
+        systemd
+            .forget("dev.withhide.core", home.path(), &stop)
+            .unwrap();
+        assert!(!unit.exists());
+    }
 
     #[test]
     fn a_unit_keeps_every_word_as_written() {
