@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hide_kit::layout;
+use hide_peer::link::PairLink;
 use hide_peer::loopback::{Loopback, Net};
 use hide_peer::pairing::{
     AcceptError, AskKind, JoinError, JoinFailure, JoinPhase, Me, Pairings, RequestError,
@@ -18,11 +19,11 @@ use hide_peer::pairing::{
 use hide_peer::peers::{OpenError, PeerEvent, Peers};
 use hide_peer::protocol::frame::MAX_MESSAGE;
 use hide_peer::protocol::hello::GrantState;
-use hide_peer::protocol::pairing::{ConfirmState, Pairing, Revoke};
+use hide_peer::protocol::pairing::{ConfirmState, PairRefusal, Pairing, Revoke};
 use hide_peer::protocol::{PeerKey, StreamKind};
 use hide_peer::store::{KnownState, StoreError, Via};
 use hide_peer::wire::{read_message, write_message};
-use hide_peer::words::WordList;
+use hide_peer::words::{self, Nonce, WordList};
 use hide_peer::{Clock, limits};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
@@ -215,6 +216,92 @@ async fn a_link_pairs_two_machines_once_both_operators_agreed() {
     let again = pc.pairings.share(WordList::English).unwrap();
     assert_eq!(mac.pairings.join(&again.link), Err(JoinError::Already));
     assert_eq!(pc.pairings.join(&again.link), Err(JoinError::Own));
+}
+
+/// The words come from one value of each side, and a guest is bound to its
+/// own before it sees the host's (PRD D-17): the host's operator is shown
+/// the words of the value the guest committed to, and a guest that opens
+/// another value, chosen with the host's in hand, is refused before anyone
+/// is asked.
+#[tokio::test]
+async fn a_guest_cannot_choose_its_value_after_it_saw_the_hosts() {
+    let net = Net::new();
+    let mut pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let guest = Machine::new(&net, "macbook");
+    let conn = guest.peers.dial(&pc.machine.addr()).await.unwrap();
+    let committed = Nonce::from_bytes([1; 32]);
+    // What a guest sends with a link: the secret and its commitment.
+    let pair = |link: &str| Pairing::Pair {
+        secret: PairLink::parse(link).unwrap().secret.to_hex().to_string(),
+        device: "macbook".into(),
+        name: "MacBook".into(),
+        commit: words::commitment(&committed),
+    };
+
+    // A guest that opens what it committed to: the operator is asked, with
+    // the words of both values.
+    let offer = pc.pairings.share(WordList::English).unwrap();
+    let mut pairing = conn.open(StreamKind::Pairing).await.unwrap();
+    write_message(&mut pairing.send, &pair(&offer.link))
+        .await
+        .unwrap();
+    let Pairing::Asking { nonce, .. } = read(&mut pairing).await else {
+        panic!("the host's value");
+    };
+    let hosts = Nonce::from_hex(&nonce).expect("the host's value");
+    assert!(pc.view.borrow().asks.is_empty(), "nobody is asked yet");
+    let reveal = Pairing::Reveal {
+        nonce: committed.to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &reveal).await.unwrap();
+    let ask = pc
+        .shows("the guest's request", |view| view.asks.first().cloned())
+        .await;
+    assert_eq!(
+        ask.words,
+        Some(words::of(
+            WordList::English,
+            &pc.key(),
+            &guest.key(),
+            &committed,
+            &hosts
+        ))
+    );
+    assert!(pc.pairings.answer(ask.id, false));
+    assert_eq!(
+        read(&mut pairing).await,
+        Pairing::Refused {
+            reason: PairRefusal::Declined
+        }
+    );
+
+    // The same guest on a new link, now choosing its value once it holds
+    // the host's: the value it opens is not the committed one.
+    let offer = pc.pairings.share(WordList::English).unwrap();
+    write_message(&mut pairing.send, &pair(&offer.link))
+        .await
+        .unwrap();
+    let Pairing::Asking { nonce, .. } = read(&mut pairing).await else {
+        panic!("the host's value");
+    };
+    assert_ne!(
+        nonce,
+        hosts.to_hex().as_str(),
+        "the host draws its value anew for each pairing"
+    );
+    let chosen = Pairing::Reveal {
+        nonce: Nonce::from_bytes([2; 32]).to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &chosen).await.unwrap();
+    assert_eq!(
+        read(&mut pairing).await,
+        Pairing::Refused {
+            reason: PairRefusal::NoOffer
+        }
+    );
+    let view = pc.view.borrow();
+    assert!(view.asks.is_empty(), "nobody was asked");
+    assert!(view.offer.is_none(), "the link is spent");
 }
 
 #[tokio::test]

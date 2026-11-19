@@ -9,7 +9,17 @@
 //! Who asks first decides which pairing it is. A guest with a link sends
 //! [`Pairing::Pair`], and the host answers [`Pairing::Asking`] once the
 //! secret is the offer's, so both operators compare the same words while
-//! the host's decides. A machine that already hosts the other sends
+//! the host's decides.
+//!
+//! The words come from one random value of each side, and neither side can
+//! choose its own after seeing the other's: the guest's `pair` carries only
+//! a commitment to its value, the host's `asking` carries the host's value,
+//! and the guest's [`Pairing::Reveal`] then opens the commitment. A machine
+//! in the middle has to send its value to one side before it learns the
+//! other's, so it cannot make the two screens agree. The link's secret says
+//! only that the guest holds the link; the words are not made from it.
+//!
+//! A machine that already hosts the other sends
 //! [`Pairing::Request`] over the connection they share to be let in the
 //! other way; no words are compared, because that connection is already
 //! each side's proof of the other (D-51).
@@ -21,20 +31,30 @@ use crate::frame::{self, FrameError};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Pairing {
-    /// Guest to host: the offer's secret (64 hex characters) and who asks.
+    /// Guest to host: the offer's secret (64 hex characters), who asks, and
+    /// the guest's commitment to its value for the words (64 hex characters:
+    /// BLAKE3 of `hide-pair/v1/commit` and the value).
     /// The guest's key comes from the connection, never from this message.
     Pair {
         secret: String,
         device: String,
         name: String,
+        commit: String,
     },
-    /// Host to guest: the secret is the offer's and the host's operator is
-    /// being asked. It names the host and the word list both screens show
-    /// the confirmation words from.
+    /// Host to guest: the secret is the offer's. It names the host, the
+    /// word list both screens show the confirmation words from, and the
+    /// host's value for the words (64 hex characters), drawn after `pair`
+    /// arrived.
     Asking {
         device: String,
         name: String,
         words: String,
+        nonce: String,
+    },
+    /// Guest to host: the value its `pair` committed to. The host's
+    /// operator is asked only once it opens that commitment.
+    Reveal {
+        nonce: String,
     },
     /// A machine that hosts this one asks to be let in the other way.
     Request {
@@ -61,9 +81,10 @@ pub enum Pairing {
 }
 
 impl Pairing {
-    pub const TYPES: [&'static str; 7] = [
+    pub const TYPES: [&'static str; 8] = [
         "pair",
         "asking",
+        "reveal",
         "request",
         "granted",
         "refused",
