@@ -427,7 +427,7 @@ impl DialedTransport for SshDevice {
             let home = match &self.device_home {
                 Some(configured) => Some(
                     resolve_device_home(configured, &facts.home, &facts.os)
-                        .map_err(EstablishError::Install)?,
+                        .map_err(|reason| EstablishError::install(hide_node_link::device::InstallStop::Local, reason))?,
                 ),
                 None => None,
             };

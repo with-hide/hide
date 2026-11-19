@@ -26,6 +26,7 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { AddDeviceScene } from "./AddDeviceScene";
+import { PairingScene } from "./PairingScene";
 import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
@@ -82,6 +83,11 @@ export function mountGallery(root: Root) {
     if (scene === "add-device") {
       document.title = "hide · Add device scene";
       root.render(<StrictMode><AddDeviceScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "pairing") {
+      document.title = "hide · Pairing scene";
+      root.render(<StrictMode><PairingScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "add-project") {

@@ -734,8 +734,8 @@ describe("a node's warnings", () => {
 
   it("names the first on the card and each in full", () => {
     expect(warningWords(mission("m"), warned, t)).toEqual({
-      short: "Review FAIL ×3 +1",
-      full: ["Warned the Conductor: review failed 3 times in a row", "Warned the Conductor: no push for 95 minutes"],
+      short: "Review/verify FAIL ×3 +1",
+      full: ["Warned the Conductor: review or verify failed 3 times in a row", "Warned the Conductor: no push for 95 minutes"],
     });
     expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
   });

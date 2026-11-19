@@ -1716,7 +1716,7 @@ export type MissionNode = {
   attention: MissionAttention | null;
   /** What Hide itself did to the node last (D-07, D-15). */
   hide: MissionHideMark | null;
-  /** Its review's failures in a row (hide-private issue 552); absent from an older core. */
+  /** Its review's or verification's failures in a row (hide-private issue 552); absent from an older core. */
   review_fails?: number;
   /** When Hide last read a new head on one of its pull requests. */
   pushed_at_unix_ms?: number | null;
@@ -1759,7 +1759,7 @@ export type MissionWaitingOn =
   | { kind: "nodes"; keys: string[] }
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
-/** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
+/** What a node's warning is about (`WarningKind`): its review or verification failing in a row, a long quiet with no push, or its worker stopped. */
 export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
@@ -3661,6 +3661,8 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
+    /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
+    peers?: import("./pairing").Peer[];
     focused_device_id?: string | null;
     /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
     tools?: ToolCell[];

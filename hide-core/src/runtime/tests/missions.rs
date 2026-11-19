@@ -4886,6 +4886,69 @@ fn record_of(node: &str, line: &str, extra: Value) -> Value {
     command
 }
 
+/// A checker whose registration ended (the app restarted mid-review and its
+/// pane's session changed, so its record is refused) never answers again:
+/// the Conductor binds a fresh checker of the same agent in its place with
+/// the ordinary `reviewer` patch, and the line waits for that one's answer.
+/// While the first checker lives the slot is not free, so a second
+/// registration is refused as before.
+#[test]
+fn a_fresh_reviewer_takes_the_place_of_one_whose_registration_ended() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let mut fresh = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == "agent-3")
+        .unwrap()
+        .clone();
+    fresh.id = "agent-4".into();
+    fresh.session = "reviewer-session-2".into();
+    ledger.agents.push(fresh);
+    runtime.delivery_ledger = Ok(Arc::new(ledger.clone()));
+    let bind = json!({"op": "node", "node": "fix", "patch": {"reviewer": "agent-4"}});
+    let reviewers = |runtime: &Runtime| -> Vec<Option<String>> {
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .criteria
+            .iter()
+            .find(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
+            .unwrap()
+            .checkers
+            .iter()
+            .map(|checker| checker.agent_id.clone())
+            .collect()
+    };
+    assert_eq!(
+        command(&mut runtime, "sender", bind.clone()).unwrap_err(),
+        "mission_checker_unknown"
+    );
+    assert_eq!(reviewers(&runtime), [Some("agent-3".to_owned())]);
+    for record in &mut ledger.agents {
+        if record.id == "agent-3" {
+            record.ended = true;
+        }
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    command(&mut runtime, "sender", bind).unwrap();
+    assert_eq!(reviewers(&runtime), [Some("agent-4".to_owned())]);
+}
+
 /// with-hide/hide#2433: a refused record says which check failed, a
 /// registration that is not the line's, no registration of the pane's
 /// session, or a ledger Hide could not read, and leaves exactly one

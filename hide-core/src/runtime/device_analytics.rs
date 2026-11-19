@@ -78,7 +78,7 @@ impl Runtime {
             EstablishError::Stopped(_) => DeviceFailure::MachineStopped,
             EstablishError::IdentityChanged { .. } => DeviceFailure::IdentityChanged,
             EstablishError::Unsupported(_) => DeviceFailure::Unsupported,
-            EstablishError::Install(_) => DeviceFailure::Install,
+            EstablishError::Install { stop, .. } => DeviceFailure::Install(*stop),
             EstablishError::Helper(_) => DeviceFailure::Helper,
             EstablishError::MachineName(_) => DeviceFailure::MachineName,
         };

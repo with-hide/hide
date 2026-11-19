@@ -205,7 +205,7 @@ fn use_credential(
 /// names proves it, or it descends from the program of a pane the core's
 /// engine keeps a record of, which a pane agent that cleared its
 /// environment still does.
-fn in_a_pane(
+pub(crate) fn in_a_pane(
     peer: i32,
     request: &PaneRequest,
     engine: Option<&EngineHandle>,

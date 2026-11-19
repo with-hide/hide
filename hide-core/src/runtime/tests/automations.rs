@@ -528,6 +528,9 @@ struct Harness {
     runtime: Arc<Mutex<Runtime>>,
     starts: Arc<Mutex<Starts>>,
     machine: Arc<Mutex<Machine>>,
+    /// The agent programs this machine's node says it does not find; every
+    /// other one it finds, whatever the machine running the test has.
+    missing: Arc<Mutex<Vec<String>>>,
     clock: u64,
     _engine: Arc<FakeEngine<'static>>,
     _worker: crate::delivery::worker::Worker,
@@ -581,8 +584,14 @@ impl Harness {
         )
         .unwrap();
         let starts = Arc::new(Mutex::new(Starts::default()));
+        let missing = Arc::new(Mutex::new(Vec::new()));
         {
             let mut guard = runtime.lock().unwrap();
+            let node = guard.own_node();
+            guard.use_own_node(Arc::new(Programs {
+                node,
+                missing: Arc::clone(&missing),
+            }));
             guard.install_delivery_client(client);
             crate::runtime::delivery::tests::set_live(&mut guard, Some(&engine));
             guard.worker_context = Some(RuntimeWorkerContext {
@@ -612,6 +621,7 @@ impl Harness {
             runtime,
             starts,
             machine,
+            missing,
             clock: unix_milliseconds(),
             _engine: engine,
             _worker: worker,
@@ -752,6 +762,39 @@ fn answered(row: &mut SidebarAgentSnapshot) {
     row.activity = "stopped".into();
     row.completed = true;
     row.group = "done".into();
+}
+
+/// This machine's node, answering that the programs in `missing` are not
+/// on its `PATH` and every other program is (`Call::AgentInstalled`).
+struct Programs {
+    node: Arc<dyn crate::node_access::NodeLink>,
+    missing: Arc<Mutex<Vec<String>>>,
+}
+
+impl crate::node_access::NodeLink for Programs {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: std::time::Duration,
+    ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
+        match call {
+            hide_node_link::protocol::Call::AgentInstalled { name } => {
+                let found = !self.missing.lock().unwrap().contains(&name);
+                Ok(hide_node_link::LinkAnswer::Parsed(json!(
+                    found.then_some(hide_node_link::protocol::StartForm::Program)
+                )))
+            }
+            other => self.node.call(other, timeout),
+        }
+    }
+
+    fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
+        self.node.reader_features()
+    }
+
+    fn in_process(&self) -> bool {
+        self.node.in_process()
+    }
 }
 
 /// The pane a start makes for its intent.
@@ -1113,6 +1156,53 @@ fn a_start_refused_for_an_agent_not_set_up_stops_the_automation() {
     assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
 }
 
+/// B23: an agent whose program this machine does not find stops the
+/// automation for a person before anything is typed, rather than leaving a
+/// shell that never starts an agent and reads as a start that stopped
+/// partway; a Codex start the machine's kit has not read yet waits and is
+/// asked again, never a failed attempt.
+#[test]
+fn an_agent_program_the_machine_does_not_find_stops_the_automation_before_its_start() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    harness.missing.lock().unwrap().push("claude".to_owned());
+    let id = harness.run_now();
+    harness.tick(1);
+    harness.tick(1);
+    assert!(harness.asked().is_empty(), "{:?}", harness.asked());
+    assert_eq!(
+        harness.run(&id),
+        (json!("failed"), json!(1), json!("automation_agent_missing"))
+    );
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        assert_eq!(show(&mut runtime, &id)["paused"]["reason"], "agent_missing");
+        assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
+    }
+
+    harness.missing.lock().unwrap().clear();
+    let next = harness.run_now_named("Triage");
+    let first = intent(&next, 1, 1);
+    harness.answer(
+        &first,
+        &[
+            Answer::Refused(crate::codex_launch::CAPABILITY_UNKNOWN),
+            Answer::Agent,
+        ],
+    );
+    harness.tick(1);
+    assert_eq!(
+        harness.run(&next),
+        (json!("starting"), json!(1), Value::Null)
+    );
+    harness.tick(11);
+    assert_eq!(
+        harness.run(&next),
+        (json!("running"), json!(1), Value::Null)
+    );
+    assert_eq!(harness.asked(), [first.clone(), first]);
+}
+
 /// B36: a run still starting when the core went is continued by the next
 /// core under the same intent: one agent, in the pane the first start made.
 #[test]
@@ -1142,6 +1232,48 @@ fn a_starting_run_converges_on_its_intent_after_a_restart() {
     assert_eq!(after.starts.lock().unwrap().asked, asked_before);
     assert_eq!(after.run(&id), (json!("running"), json!(1), Value::Null));
     assert_eq!(after.open(), HashSet::from([pane_of(&first)]));
+}
+
+/// Engineering 4, 11: a start the book holds in a shape this build cannot
+/// read (a build whose spawn command differs wrote it) ends that start
+/// alone: the rest of the book reads, the start's pane goes to the close,
+/// and the run is tried again as its next attempt.
+#[test]
+fn a_start_stored_in_a_shape_this_build_cannot_read_fails_only_that_attempt() {
+    let state = tempfile::tempdir().unwrap();
+    let machine: Arc<Mutex<Machine>> = Arc::default();
+    let mut before = Harness::on(&state, Arc::clone(&machine));
+    let id = before.run_now();
+    let first = intent(&id, 1, 1);
+    before.answer(&first, &[Answer::Refused("native_identity_unavailable")]);
+    before.tick(1);
+    assert_eq!(before.run(&id).0, "starting");
+    drop(before);
+    {
+        let path = state.path().join("automations.json");
+        let mut book: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let run = &mut book["automations"][0]["records"][0];
+        assert!(run["ask"]["command"].is_object(), "{run}");
+        run["ask"]["command"]["spawn_v2"] = json!(true);
+        std::fs::write(&path, serde_json::to_vec(&book).unwrap()).unwrap();
+    }
+
+    let mut after = Harness::on(&state, Arc::clone(&machine));
+    assert!(state.path().read_dir().unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("unreadable")
+    }));
+    after.tick(1);
+    assert_eq!(
+        after.run(&id),
+        (json!("starting"), json!(2), json!("start_unreadable"))
+    );
+    assert_eq!(after.closed(), [pane_of(&first)]);
+    after.tick(1);
+    assert_eq!(after.asked().last(), Some(&intent(&id, 1, 2)));
 }
 
 /// B17, B18: a finished run's conversation opened again starts under the
