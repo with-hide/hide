@@ -195,7 +195,7 @@ impl GuestTap {
     }
 
     fn read(&self, endpoint: &Path) {
-        let mut stream = match LocalStream::connect_until(endpoint, Instant::now() + TAP_WITHIN) {
+        let mut stream = match super::connect_to_node(endpoint, TAP_WITHIN) {
             Ok(stream) => stream,
             Err(error) => {
                 self.record(
