@@ -65,19 +65,33 @@ async function connect(automations: PhoneAutomation[] | null) {
   const root = createRoot(container);
   store.patch({ screen: "pair", pair: { v: 1, endpoint: "https://mac.example.ts.net", code: "code" } });
   connection.pairNow();
-  const socket = FakeSocket.instances[0]!;
+  let socket = FakeSocket.instances[0]!;
   const serve = (frame: ServerFrame) => act(async () => socket.onmessage?.({ data: JSON.stringify(frame) }));
-  await act(async () => socket.onopen?.());
-  await serve({ type: "hello", mac_name: "Mac", phone_id: "phone-a", name: null, vapid_public_key: "key", notifications: "off" });
-  await serve({ type: "agents", groups: [], devices: [], interface_language: "en", color_theme: null });
-  const list = (items: PhoneAutomation[]) => serve({ type: "automations", items, zone: ZONE });
+  const open = async () => {
+    await act(async () => socket.onopen?.());
+    await serve({ type: "hello", mac_name: "Mac", phone_id: "phone-a", name: null, vapid_public_key: "key", notifications: "off" });
+    await serve({ type: "agents", groups: [], devices: [], interface_language: "en", color_theme: null });
+  };
+  await open();
+  const list = (items: PhoneAutomation[], asks?: string[]) => serve({ type: "automations", items, zone: ZONE, asks });
   if (automations) await list(automations);
   await act(async () => root.render(<App />));
   const q = (selector: string) => container.querySelector<HTMLElement>(selector);
   const click = (selector: string) => act(async () => q(selector)!.click());
-  const sent = () => socket.sent.filter((message) => message.type === "automation");
-  const lose = () => act(async () => socket.onclose?.());
-  return { container, serve, list, q, click, sent, lose, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
+  // Every press this phone sent, on any of its connections.
+  const sent = () => FakeSocket.instances.flatMap((one) => one.sent).filter((message) => message.type === "automation");
+  const lose = () => act(async () => {
+    socket.readyState = 3;
+    socket.onclose?.();
+  });
+  /** The connection comes back, and hided sends the list as it is now. */
+  const reconnect = async (items: PhoneAutomation[]) => {
+    await act(async () => connection.pairNow());
+    socket = FakeSocket.instances.at(-1)!;
+    await open();
+    await list(items);
+  };
+  return { container, serve, list, q, click, sent, lose, reconnect, unmount: () => act(async () => root.unmount()).then(() => container.remove()) };
 }
 
 // The first import of the app transforms its whole module graph; that cost is paid here, with the hook's own budget.
@@ -123,6 +137,8 @@ it("lists each automation's schedule and next run in the computer's zone, its un
     expect(row("going").querySelector("[data-phone-automation-next]")!.getAttribute("data-phone-automation-next")).toBe("running");
     expect(presses("going")).toEqual([["run", true], ["pause", false]]);
     expect(presses("off")).toEqual([["resume", false]]);
+    // [다시 켜기] says itself in words, so it is not read as [지금 실행]'s ▶ (B25).
+    expect(row("off").querySelector('[data-phone-automation-press="resume"]')!.textContent).toBe("Turn on again");
     expect(row("signed-out").querySelector("[data-phone-automation-paused]")!.textContent).toBe("⏸ Signed out");
     // Nothing on the tab makes, edits or removes one (D-20).
     expect(container.querySelectorAll("[data-phone-automation-press]").length).toBe(6);
@@ -198,6 +214,57 @@ it("keeps the last list dimmed under the unreachable line with its buttons off, 
     expect([...container.querySelectorAll<HTMLButtonElement>("[data-phone-automation-press]")].every((button) => button.disabled)).toBe(true);
     await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
     expect(container.querySelector("[data-phone-automation-notice]")!.textContent).toBe("The computer can't be reached right now. Try again once connected.");
+  } finally {
+    await unmount();
+  }
+});
+
+it("sends a press whose answer the lost connection took again under its id, and a press after the computer did it under a new one", async () => {
+  const ran = (number: number): PhoneAutomation["records"][number] => ({ kind: "run", number, trigger: "manual", started_at_unix_ms: NOW - HOUR, ended_at_unix_ms: NOW - HOUR + 60_000, state: "succeeded", attempt: 1, seen: true });
+  const before = [automation("a", { records: [ran(3)] })];
+  const { click, sent, lose, reconnect, serve, unmount } = await connect(before);
+  try {
+    await click('[data-phone-tab="automations"]');
+    const run = '[data-phone-automation="a"] [data-phone-automation-press="run"]';
+    await click(run);
+    await lose();
+    // The computer had not taken it: the list comes back as it was, and the press again is the same press.
+    await reconnect(before);
+    await click(run);
+    const [first, again] = sent();
+    expect(again!.request_id).toBe(first!.request_id);
+    await lose();
+    // This time it ran: the list comes back with run 4, so the next press is a new one.
+    await reconnect([automation("a", { records: [ran(4), ran(3)] })]);
+    await click(run);
+    const next = sent()[2]!;
+    expect(next.request_id).not.toBe(first!.request_id);
+    await serve({ type: "automation_result", request_id: next.request_id as string, action: "run", id: "a", ok: true, reason: null });
+  } finally {
+    await unmount();
+  }
+});
+
+it("draws an automation that stopped for a person as one line of 내 차례 with [다시 켜기], the tab's own press, counted in the agents tab", async () => {
+  const signedOut = automation("signed-out", { name: "Sort issues", paused: { reason: "login_expired", at_unix_ms: NOW }, next_run_at_unix_ms: null });
+  const { container, list, click, sent, unmount } = await connect(null);
+  try {
+    await list([automation("on"), signedOut], ["signed-out"]);
+    const line = container.querySelector('[data-phone-group="needs_you"] [data-phone-automation-ask="signed-out"]')!;
+    expect(line.textContent).toBe("Sort issues · Signed out · fix it, thenTurn on again");
+    expect(container.querySelector('[data-phone-group="needs_you"] [data-phone-group-count]')!.textContent).toBe("1");
+    expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBe("1");
+    await click('[data-phone-automation-ask="signed-out"] [data-phone-automation-press="resume"]');
+    expect(sent()).toEqual([expect.objectContaining({ action: "resume", id: "signed-out" })]);
+    // The line opens the automation's page.
+    await click('[data-phone-automation-ask="signed-out"] [data-slot="row-overlay-button"]');
+    expect(container.querySelector('[data-phone-automation-page="signed-out"]')).not.toBeNull();
+    // Turned on again, the core takes the ask away and the line goes.
+    await list([automation("on"), { ...signedOut, paused: undefined }], []);
+    await click('[data-phone-back="automations"]');
+    await click('[data-phone-tab="agents"]');
+    expect(container.querySelector("[data-phone-automation-ask]")).toBeNull();
+    expect(container.querySelector('[data-phone-group="needs_you"]')).toBeNull();
   } finally {
     await unmount();
   }

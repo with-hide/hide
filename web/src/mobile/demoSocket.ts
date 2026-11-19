@@ -210,7 +210,7 @@ export class DemoSocket implements PhoneSocket {
           this.emit(automationsFrame(translate, this.state));
         });
       } else {
-        this.state = { ...this.state, pausedAutomations: action === "pause" ? [...paused, id] : paused };
+        this.state = { ...this.state, pausedAutomations: action === "pause" ? [...paused, id] : paused, docsSignedIn: this.state.docsSignedIn || action === "resume" };
       }
       this.emit({ type: "automation_result", request_id: requestId, action, id, ok: true, reason: null });
       this.emit(automationsFrame(translate, this.state));

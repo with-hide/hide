@@ -166,6 +166,8 @@ type PhoneState = {
   automationsOmitted: number;
   /** The zone the computer reads schedules in, so a time reads as the schedule does; undefined reads in the phone's own. */
   automationsZone: string | undefined;
+  /** The automations paused for a person to fix, oldest pause first: each is a line of 내 차례 on the agents tab (PRD automations D-12, B23). */
+  automationAsks: string[];
   /** The automation whose page is open on the automations tab. */
   automationOpen: string | null;
   /** A press sent from the tab that hided has not answered yet; its buttons wait. */
@@ -236,6 +238,7 @@ const initial: PhoneState = {
   automations: null,
   automationsOmitted: 0,
   automationsZone: undefined,
+  automationAsks: [],
   automationOpen: null,
   automationPending: null,
   automationNotice: null,
@@ -313,6 +316,7 @@ export function applyFrame(frame: ServerFrame): void {
         automations: frame.items,
         automationsOmitted: frame.omitted ?? 0,
         automationsZone: frame.zone ?? undefined,
+        automationAsks: frame.asks ?? [],
         // An automation that left the list takes its page and its line with it.
         automationOpen: state.automationOpen && listed.has(state.automationOpen) ? state.automationOpen : null,
         automationNotice: state.automationNotice && listed.has(state.automationNotice.id) ? state.automationNotice : null,

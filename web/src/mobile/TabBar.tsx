@@ -21,11 +21,11 @@ export const PHONE_TABS: readonly { id: PhoneTab; icon: LucideIcon; label: Messa
 ];
 
 /**
- * What waits on the operator in each place: the agent list's 내 차례 rows, and the missions with anything in theirs; the automations, PR and
- * Settings tabs have no count (B28): an automation that stopped for a person comes as its own 내 차례 line (PRD automations D-12).
+ * What waits on the operator in each place: the agent list's 내 차례, its rows and the automations that stopped for a person (each its own
+ * line there, PRD automations D-12, B23), and the missions with anything in theirs; the automations, PR and Settings tabs have no count (B28).
  */
 function useBadges(): Record<PhoneTab, number> {
-  const agents = usePhone((s) => s.groups?.find((group) => group.group === "needs_you")?.count ?? 0);
+  const agents = usePhone((s) => (s.groups?.find((group) => group.group === "needs_you")?.count ?? 0) + s.automationAsks.length);
   const missions = useMissionBadge();
   return { agents, missions, automations: 0, prs: 0, settings: 0 };
 }

@@ -9,7 +9,7 @@ import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
 import { closeDetail, openStartSheet, pairNow } from "./connection";
 import { AutomationDetail } from "./AutomationDetail";
-import { AutomationsScreen } from "./AutomationsScreen";
+import { AutomationAskRows, AutomationsScreen } from "./AutomationsScreen";
 import { Detail } from "./Detail";
 import { GroupRows } from "./ListRows";
 import { MissionDetail } from "./MissionDetail";
@@ -21,6 +21,7 @@ import { StartSheet } from "./StartSheet";
 import { TabBar } from "./TabBar";
 import {
   GROUP_TITLE,
+  type GroupId,
   REFUSAL_NOTICE,
   headerLine,
   machinesName,
@@ -141,6 +142,7 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
   const devices = usePhone((s) => s.devices);
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
+  const asks = usePhone((s) => s.automationAsks.length);
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);
@@ -183,18 +185,22 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
             {t("mobile.noAgents")}
           </p>
         ) : null}
+        {groups && asks > 0 && !groups.some((group) => group.group === "needs_you") ? (
+          <section className="px-xl pt-lg" data-phone-group="needs_you">
+            <GroupHead id="needs_you" count={asks} />
+            <AutomationAskRows />
+          </section>
+        ) : null}
         {groups?.map((group) => {
           const id = group.group;
-          if (group.count === 0) return null;
+          // An automation that stopped for a person is one more line of 내 차례 (PRD automations D-12, B23).
+          const count = group.count + (id === "needs_you" ? asks : 0);
+          if (count === 0) return null;
           return (
             <section key={id} className="px-xl pt-lg" data-phone-group={id}>
-              <h2 className="flex gap-sm pb-xs text-body text-muted-foreground">
-                <span>{t(GROUP_TITLE[id])}</span>
-                <span className="font-mono" data-phone-group-count={group.count}>
-                  {group.count}
-                </span>
-              </h2>
-              <GroupRows group={group} />
+              <GroupHead id={id} count={count} />
+              {id === "needs_you" ? <AutomationAskRows /> : null}
+              {group.count > 0 ? <GroupRows group={group} /> : null}
             </section>
           );
         })}
@@ -205,6 +211,18 @@ export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolea
       <TabBar active="agents" />
       <StartSheet />
     </main>
+  );
+}
+
+function GroupHead({ id, count }: { id: GroupId; count: number }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <h2 className="flex gap-sm pb-xs text-body text-muted-foreground">
+      <span>{t(GROUP_TITLE[id])}</span>
+      <span className="font-mono" data-phone-group-count={count}>
+        {count}
+      </span>
+    </h2>
   );
 }
 

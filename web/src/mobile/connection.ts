@@ -29,6 +29,7 @@ import {
   type DetailView,
   type LookRow,
   type PhoneAgent,
+  type PhoneAutomation,
   type PhoneDecisionView,
   type PhoneMessage,
   type PhoneMission,
@@ -37,7 +38,7 @@ import {
 } from "./protocol";
 import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
 import { confirmOf, holds, prOf } from "./prModel";
-import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, openPr, patch, usePhone, type StartSheet } from "./store";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openPr, patch, usePhone, type StartSheet } from "./store";
 import type { LookContent } from "./lookContent";
 import { dropTransfer, onLookTransfer } from "./lookTransfer";
 import { appHost } from "./appHost";
@@ -913,6 +914,11 @@ export function confirmMerge(): boolean {
 
 let lastAutomation: { intent: string; requestId: string } | null = null;
 
+function newestRun(automation: PhoneAutomation | null): number | null {
+  const run = automation?.records.find((record) => record.kind === "run");
+  return run?.kind === "run" ? run.number : null;
+}
+
 /**
  * [지금 실행], [멈춤] or [다시 켜기] from the automations tab (PRD automations B34): one press at a time, sent again under the same
  * request id while hided has not taken it, so a repeat reaches the core once (B36). What the core did comes back on the automation.
@@ -920,7 +926,12 @@ let lastAutomation: { intent: string; requestId: string } | null = null;
 export function pressAutomation(id: string, action: AutomationAction): boolean {
   const state = usePhone.getState();
   if (state.automationPending) return false;
-  const intent = JSON.stringify([id, action]);
+  // The intent carries what the press saw: the newest run for [지금 실행], the pause for [멈춤] and [다시 켜기]. A press that
+  // took effect moved that, so the next press is a new one under a new id; only a press that never landed is sent again
+  // under its id.
+  const automation = automationOf(state.automations, id);
+  const seen = action === "run" ? newestRun(automation) : (automation?.paused?.at_unix_ms ?? null);
+  const intent = JSON.stringify([id, action, seen]);
   const requestId = lastAutomation?.intent === intent ? lastAutomation.requestId : newRequestId();
   lastAutomation = { intent, requestId };
   const sent = send({ type: "automation", request_id: requestId, action, id });

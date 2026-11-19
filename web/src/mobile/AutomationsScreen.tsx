@@ -1,12 +1,13 @@
 // The phone's automations tab (PRD automations B34, B35, D-20): every
 // automation this computer's core runs, each row with its unseen dot, name,
-// schedule and next run, and [▶ 지금 실행] [⏸ 멈춤], or [다시 켜기] on a
+// schedule and next run, and [▶ 지금 실행] [⏸ 멈춤], or [▶ 다시 켜기] on a
 // paused one; a row opens its page with the runs. Making, editing and
-// removing stay with an agent, so the tab has no button for them. How a
-// schedule and a next run read is `automationWords.ts`, shared with the
-// desktop.
+// removing stay with an agent, so the tab has no button for them. An
+// automation that stopped for a person is also its own line of the agent
+// list's 내 차례 (D-12, B23), drawn here too. How a schedule and a next run
+// read is `automationWords.ts`, shared with the desktop.
 
-import { Loader2Icon, PauseIcon, PlayIcon } from "lucide-react";
+import { Loader2Icon, PauseIcon, PlayIcon, RepeatIcon } from "lucide-react";
 import { nextRun, nextRunText, pauseReasonText, scheduleText } from "../automationWords";
 import { Button } from "../components/ui/button";
 import { RowOverlayButton } from "../components/ui/row-button";
@@ -17,7 +18,7 @@ import { pressAutomation } from "./connection";
 import { OfflineText } from "./OfflineText";
 import { noticeText, type AutomationAction, type PhoneAutomation } from "./protocol";
 import { TabBar } from "./TabBar";
-import { openAutomation, usePhone } from "./store";
+import { automationOf, openAutomation, usePhone } from "./store";
 
 export function AutomationsScreen() {
   const { t } = useInterfaceTranslation();
@@ -114,7 +115,57 @@ function RowNotice({ id }: { id: string }) {
   return <p role="alert" className="relative pb-md text-body text-warning" data-phone-automation-notice="true">{noticeText(t, notice)}</p>;
 }
 
-/** A row's own presses (mockup `phone`): [▶] [⏸] while it is on, [다시 켜기] while it is paused. */
+/** The automations the core counts as the operator's turn, oldest pause first, each one line of 내 차례: its name, `<why> · 고치고` and [다시 켜기], the press the tab's row sends (D-12, B23); the line opens its page. */
+export function AutomationAskRows() {
+  const { t } = useInterfaceTranslation();
+  const automations = usePhone((s) => s.automations);
+  const asks = usePhone((s) => s.automationAsks);
+  const connected = usePhone((s) => s.connected);
+  const asking = asks.flatMap((id) => {
+    const automation = automationOf(automations, id);
+    return automation?.paused ? [{ automation, paused: automation.paused }] : [];
+  });
+  if (asking.length === 0) return null;
+  return (
+    <ul className="divide-y divide-border border-b border-border" data-phone-automation-asks={asking.length}>
+      {asking.map(({ automation, paused }) => (
+        <li key={automation.id} className="relative" data-phone-automation-ask={automation.id}>
+          <RowOverlayButton aria-label={t("mobile.automations.open", { name: automation.name })} hover={false} className="active:bg-accent" onClick={() => openAutomation(automation.id)} />
+          <div className="pointer-events-none relative flex min-h-(--size-touch-target) items-center gap-sm py-md">
+            <RepeatIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" />
+            <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">
+              <span className="font-medium text-foreground">{automation.name}</span>
+              <span className="text-warning" data-phone-automation-ask-line={paused.reason}>{" · "}{t("mobile.automations.ask", { reason: pauseReasonText(paused.reason, t) })}</span>
+            </span>
+            <ResumeButton automation={automation} connected={connected} />
+          </div>
+          <RowNotice id={automation.id} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** [▶ 다시 켜기] in words, as the desktop's screen draws it, so it is not read as [지금 실행] (B25). */
+function ResumeButton({ automation, connected }: { automation: PhoneAutomation; connected: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const pending = usePhone((s) => s.automationPending);
+  const waiting = pending?.id === automation.id && pending.action === "resume";
+  return (
+    <Button
+      variant="secondary"
+      className="pointer-events-auto min-h-(--size-touch-target) shrink-0 text-body"
+      disabled={!connected || pending !== null}
+      data-phone-automation-press="resume"
+      onClick={() => pressAutomation(automation.id, "resume")}
+    >
+      {waiting ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : <PlayIcon aria-hidden="true" className="size-(--size-icon)" />}
+      {t("mobile.automations.resume")}
+    </Button>
+  );
+}
+
+/** A row's own presses (mockup `phone`): [▶] [⏸] while it is on, [▶ 다시 켜기] in words while it is paused. */
 function RowButtons({ automation, connected }: { automation: PhoneAutomation; connected: boolean }) {
   const { t } = useInterfaceTranslation();
   const pending = usePhone((s) => s.automationPending);
@@ -124,13 +175,7 @@ function RowButtons({ automation, connected }: { automation: PhoneAutomation; co
   const icon = (action: AutomationAction, Icon: typeof PlayIcon) =>
     waiting(action) ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) animate-spin" /> : <Icon aria-hidden="true" className="size-(--size-icon)" />;
   const round = "pointer-events-auto size-(--size-touch-target) rounded-full";
-  if (automation.paused) {
-    return (
-      <Button variant="secondary" size="icon" className={round} aria-label={t("mobile.automations.resume")} disabled={busy} data-phone-automation-press="resume" onClick={() => press("resume")}>
-        {icon("resume", PlayIcon)}
-      </Button>
-    );
-  }
+  if (automation.paused) return <ResumeButton automation={automation} connected={connected} />;
   return (
     <span className="flex shrink-0 gap-sm">
       <Button variant="secondary" size="icon" className={round} aria-label={t("mobile.automations.run")} disabled={busy || automation.running} data-phone-automation-press="run" onClick={() => press("run")}>

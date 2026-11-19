@@ -1049,7 +1049,7 @@ test("the phone's automations tab lists, runs, pauses and turns on again, keeps 
 
     // B35: the computer goes away; the list stays dimmed under the other tabs' line with its buttons off, and fills again on reconnect.
     daemon = await live.restart(async () => {
-      await expect(phone.locator('[data-phone-unreachable="true"]')).toBeVisible({ timeout: 20_000 });
+      await expect(phone.locator('[data-phone-unreachable="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone notices the stopped hided by its lost socket
       await expect(phone.locator('[data-phone-automations="true"] [aria-busy="true"] [data-phone-automation]')).toHaveCount(1);
       for (const button of await phone.locator("[data-phone-automation-press]").all()) await expect(button).toBeDisabled();
       await screenshot(phone, "mobile-phone-automations-unreachable");

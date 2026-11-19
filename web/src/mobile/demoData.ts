@@ -38,6 +38,8 @@ export type DemoState = {
   /** The sample automations paused this visit, and the manual runs it started, each with when it started and whether it finished. */
   pausedAutomations: readonly string[];
   manualRuns: readonly DemoRun[];
+  /** The sample automation that stopped for a signed-out login was turned on again this visit; until then it is a line of 내 차례. */
+  docsSignedIn?: boolean;
 };
 
 export type DemoRun = { automation: string; at: number; done: boolean };
@@ -290,7 +292,10 @@ function work(over: Partial<NonNullable<PhonePr["work"]>>): NonNullable<PhonePr[
 /** The pull request that fails a check, which the hand-over sheet opens on. */
 export const FAILED_PR_NUMBER = 2088;
 
-/** The sample automations: one each morning with a run history, one weekly that is paused; a press this visit adds a manual run or pauses it. */
+/** The sample automation whose login expired, a line of 내 차례 until it is turned on again. */
+const SIGNED_OUT = "auto-docs";
+
+/** The sample automations: one each morning with a run history, one weekly that is paused, one daily whose login expired; a press this visit adds a manual run, pauses it or turns it on again. */
 export function automationsFrame(t: T, state: DemoState): ServerFrame {
   const day = new Date(state.t0);
   const at = (daysAgo: number, hour: number) => new Date(day.getFullYear(), day.getMonth(), day.getDate() - daysAgo, hour).getTime();
@@ -304,7 +309,10 @@ export function automationsFrame(t: T, state: DemoState): ServerFrame {
       ...(entry.done ? { ended_at_unix_ms: entry.at + 2 * MINUTE, state: "succeeded" as const } : { state: "running" as const }),
       attempt: 1, seen: !entry.done,
     }));
-    const paused = state.pausedAutomations.includes(id) ? { paused: { reason: "operator" as const, at_unix_ms: state.t0 - 2 * HOUR }, next_run_at_unix_ms: null } : {};
+    const signedOut = id === SIGNED_OUT && !state.docsSignedIn;
+    const paused = signedOut
+      ? { paused: { reason: "login_expired" as const, at_unix_ms: state.t0 - 3 * HOUR }, next_run_at_unix_ms: null }
+      : state.pausedAutomations.includes(id) ? { paused: { reason: "operator" as const, at_unix_ms: state.t0 - 2 * HOUR }, next_run_at_unix_ms: null } : {};
     return { id, name, ...base, ...paused, running: manual.some((entry) => !entry.done), records: [...runs.reverse(), ...history] };
   };
   const items = [
@@ -318,8 +326,14 @@ export function automationsFrame(t: T, state: DemoState): ServerFrame {
     sample("auto-deps", t("mobile.demo.auto2.name"), { schedule: { kind: "weekly", days: ["mon"], time: "08:00" }, next_run_at_unix_ms: at(-3, 8), unseen: 0 }, [
       run(1, at(7, 8), 6),
     ]),
+    sample(SIGNED_OUT, t("mobile.demo.auto3.name"), { schedule: { kind: "daily", time: "18:00" }, next_run_at_unix_ms: at(-1, 18), unseen: 1 }, [
+      { kind: "run", number: 2, trigger: "scheduled", started_at_unix_ms: at(1, 18), ended_at_unix_ms: at(1, 18) + 2 * MINUTE, state: "failed", attempt: 3, reason: "login_expired", seen: false },
+      run(1, at(2, 18), 7),
+    ]),
   ];
-  return { type: "automations", items, omitted: 0 };
+  // The automation that stopped for a person to fix is a line of 내 차례 until it is turned on again (PRD automations D-12).
+  const asks = items.filter((item) => item.paused && item.paused.reason !== "operator").map((item) => item.id);
+  return { type: "automations", items, omitted: 0, asks };
 }
 
 /** The `prs` frame; titles, branches and files are the repository's own text, so they are not translated. */

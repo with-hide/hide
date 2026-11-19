@@ -4,7 +4,7 @@ import type { Catalog, Catalogs } from "../schema";
 // next run and a record read is `automationWords.ts`, shared with the desktop;
 // names are the operator's own data.
 export const mobileAutomationsEnglish = {
-  "mobile.tab.automations": "Routines",
+  "mobile.tab.automations": "Automations",
   "mobile.automations.title": "Automations",
   "mobile.automations.empty": "No automations yet",
   "mobile.automations.byAgent": "You can create one by asking an agent",
@@ -14,6 +14,7 @@ export const mobileAutomationsEnglish = {
   "mobile.automations.run": "Run now",
   "mobile.automations.pause": "Pause",
   "mobile.automations.resume": "Turn on again",
+  "mobile.automations.ask": "{{reason}} · fix it, then",
   "mobile.automations.runs": "Runs",
   "mobile.automations.manual": "Manual",
   "mobile.automations.missedRun": "Missed run",
@@ -38,6 +39,7 @@ const ko = {
   "mobile.automations.run": "지금 실행",
   "mobile.automations.pause": "멈춤",
   "mobile.automations.resume": "다시 켜기",
+  "mobile.automations.ask": "{{reason}} · 고치고",
   "mobile.automations.runs": "회차",
   "mobile.automations.manual": "수동",
   "mobile.automations.missedRun": "놓친 회차",
@@ -62,6 +64,7 @@ const zhCN = {
   "mobile.automations.run": "立即运行",
   "mobile.automations.pause": "暂停",
   "mobile.automations.resume": "重新开启",
+  "mobile.automations.ask": "{{reason}} · 修好后",
   "mobile.automations.runs": "运行记录",
   "mobile.automations.manual": "手动",
   "mobile.automations.missedRun": "错过的运行",
@@ -86,6 +89,7 @@ const ja = {
   "mobile.automations.run": "今すぐ実行",
   "mobile.automations.pause": "停止",
   "mobile.automations.resume": "再開",
+  "mobile.automations.ask": "{{reason}} · 直してから",
   "mobile.automations.runs": "実行履歴",
   "mobile.automations.manual": "手動",
   "mobile.automations.missedRun": "逃した回",
