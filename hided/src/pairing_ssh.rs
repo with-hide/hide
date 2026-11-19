@@ -413,7 +413,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
 fn login_addresses(host: &str, own: &[Candidate]) -> Vec<Candidate> {
     let Some(port) = own.iter().find_map(|candidate| match candidate {
         Candidate::Ip(address) => Some(address.port()),
-        Candidate::Relay(_) => None,
+        Candidate::Relay(_) | Candidate::Wsl(_) => None,
     }) else {
         return Vec::new();
     };

@@ -150,6 +150,13 @@ impl Carrier {
     }
 }
 
+impl Carrier {
+    /// Ends a carrier no connection was started on.
+    pub fn end(self) {
+        (self.end)();
+    }
+}
+
 impl From<LocalStream> for Carrier {
     fn from(stream: LocalStream) -> Self {
         let end = stream.shutdown_handle();

@@ -551,13 +551,13 @@ impl<T: PeerTransport> Pairings<T> {
             device: inner.me.device.clone(),
             relay: candidates.iter().find_map(|candidate| match candidate {
                 Candidate::Relay(url) => Some(url.clone()),
-                Candidate::Ip(_) => None,
+                Candidate::Ip(_) | Candidate::Wsl(_) => None,
             }),
             addrs: candidates
                 .iter()
                 .filter_map(|candidate| match candidate {
                     Candidate::Ip(addr) => Some(*addr),
-                    Candidate::Relay(_) => None,
+                    Candidate::Relay(_) | Candidate::Wsl(_) => None,
                 })
                 .collect(),
             secret: secret.clone(),
@@ -834,6 +834,11 @@ impl<T: PeerTransport> Pairings<T> {
         if !again {
             let mut candidates = first;
             for candidate in accepted.candidates {
+                // Which distribution a machine is, only this machine says
+                // (`first`): a host's answer never picks a program to run.
+                if matches!(candidate, Candidate::Wsl(_)) {
+                    continue;
+                }
                 if !candidates.contains(&candidate) {
                     candidates.push(candidate);
                 }

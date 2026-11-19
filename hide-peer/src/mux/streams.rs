@@ -233,7 +233,9 @@ pub(super) fn frame_in(
                 return Err("an open with no priority".to_owned());
             };
             if !opened_by(stream, !dialed) {
-                return Err(format!("an open of stream {stream}, which is not its end's"));
+                return Err(format!(
+                    "an open of stream {stream}, which is not its end's"
+                ));
             }
             let mut streams = lock(&state.streams);
             if streams.contains_key(&stream) {
@@ -711,8 +713,9 @@ mod tests {
     async fn a_slow_reader_holds_its_own_writer_and_no_other_stream() {
         let (dialer, _dialer_accepts, _acceptor, mut acceptor_accepts) = joined();
         let (mut slow, _slow_recv) = dialer.open(0).unwrap();
-        let (_held_send, mut held_recv) =
-            within("the slow stream", acceptor_accepts.recv()).await.unwrap();
+        let (_held_send, mut held_recv) = within("the slow stream", acceptor_accepts.recv())
+            .await
+            .unwrap();
         let chunk = vec![7_u8; MAX_CHUNK];
         let total = 4 * WINDOW * MAX_CHUNK;
         let writing = tokio::spawn(async move {
@@ -725,12 +728,16 @@ mod tests {
         // writer waits for its reader.
         let (mut other, _other_recv) = dialer.open(0).unwrap();
         other.write_all(b"through").await.unwrap();
-        let (_other_send, mut other_recv) =
-            within("the other stream", acceptor_accepts.recv()).await.unwrap();
-        let mut through = [0_u8; 7];
-        within("the other stream's bytes", other_recv.read_exact(&mut through))
+        let (_other_send, mut other_recv) = within("the other stream", acceptor_accepts.recv())
             .await
             .unwrap();
+        let mut through = [0_u8; 7];
+        within(
+            "the other stream's bytes",
+            other_recv.read_exact(&mut through),
+        )
+        .await
+        .unwrap();
         assert_eq!(&through, b"through");
         assert!(!writing.is_finished(), "the writer never waited for credit");
         let mut read = Vec::new();
@@ -749,8 +756,7 @@ mod tests {
         let (dialer, _dialer_accepts, acceptor, mut acceptor_accepts) = joined();
         let (mut send, recv) = dialer.open(0).unwrap();
         send.write_all(b"x").await.unwrap();
-        let (their_send, their_recv) =
-            within("the stream", acceptor_accepts.recv()).await.unwrap();
+        let (their_send, their_recv) = within("the stream", acceptor_accepts.recv()).await.unwrap();
         drop(their_recv);
         within("the writer's failure", async {
             let chunk = vec![0_u8; MAX_CHUNK];
@@ -765,8 +771,9 @@ mod tests {
         assert!(dialer.ended().is_none());
         let (mut send, _recv) = dialer.open(0).unwrap();
         send.write_all(b"on").await.unwrap();
-        let (_their_send, mut their_recv) =
-            within("the next stream", acceptor_accepts.recv()).await.unwrap();
+        let (_their_send, mut their_recv) = within("the next stream", acceptor_accepts.recv())
+            .await
+            .unwrap();
         let mut on = [0_u8; 2];
         within("its bytes", their_recv.read_exact(&mut on))
             .await
@@ -795,9 +802,11 @@ mod tests {
         assert_eq!(read.unwrap_err().kind(), io::ErrorKind::ConnectionReset);
         assert!(their_send.write_all(b"y").await.is_err());
         assert!(acceptor.open(0).is_err());
-        assert!(within("no more streams", acceptor_accepts.recv())
-            .await
-            .is_none());
+        assert!(
+            within("no more streams", acceptor_accepts.recv())
+                .await
+                .is_none()
+        );
     }
 
     /// A carrier that ends with no word reads as lost on the end that is
@@ -820,7 +829,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_end_that_speaks_other_frames_is_refused_at_its_first() {
         use std::io::Write;
-        for first in [frame(HELLO, 0, &[VERSION + 1]), frame(PEER_OPEN, 1, &[0; 4])] {
+        for first in [
+            frame(HELLO, 0, &[VERSION + 1]),
+            frame(PEER_OPEN, 1, &[0; 4]),
+        ] {
             let (near, mut far) = LocalStream::pair().unwrap();
             let (acceptor, _accepts) = Pipe::start(near.into(), false).unwrap();
             let mut closed = acceptor.closed();
@@ -854,8 +866,9 @@ mod tests {
         held.pop();
         let (mut send, _recv) = dialer.open(0).unwrap();
         send.write_all(b"x").await.unwrap();
-        let (_their_send, mut their_recv) =
-            within("the next stream", acceptor_accepts.recv()).await.unwrap();
+        let (_their_send, mut their_recv) = within("the next stream", acceptor_accepts.recv())
+            .await
+            .unwrap();
         let mut taken = [0_u8; 1];
         within("its byte", their_recv.read_exact(&mut taken))
             .await
