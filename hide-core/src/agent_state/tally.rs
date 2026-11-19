@@ -296,10 +296,14 @@ pub fn any_agent_active(agents: &[SidebarAgentSnapshot], connected: bool) -> boo
 
 /// The phone-safe projection, built only from accepted core snapshot values.
 pub mod phone {
+    mod automations;
     mod missions;
     mod prs;
     mod tree;
 
+    pub use automations::{
+        MAX_AUTOMATIONS, MAX_RECORDS, PhoneAutomation, PhoneAutomations, PhoneRecord, PhoneRun,
+    };
     pub use missions::{
         MAX_CLOSED, MAX_OPEN, PhoneAnswer, PhoneAttention, PhoneConductor, PhoneEscalation,
         PhoneMission, PhoneMissions, PhoneNode,
@@ -317,6 +321,13 @@ pub mod phone {
 
     pub use crate::agent_sleep::{DormantPhase, SleepId};
     use crate::model::AskSubject;
+
+    /// Whether a project of a snapshot's `workspaces` is one the phone lists:
+    /// the core keeps an automation's own folder off every list (PRD
+    /// automations D-08, B30), the phone's start sheet and PR tab included.
+    pub fn listed_project(workspace: &Value) -> bool {
+        workspace.get("unlisted").and_then(Value::as_bool) != Some(true)
+    }
 
     /// The groups in the order the phone draws them.
     pub const GROUP_ORDER: [&str; 5] = ["needs_you", "done", "revisit", "working", "seen"];

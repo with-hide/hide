@@ -42,7 +42,7 @@ use hide_core::delivery::worker::{HumanNotice, HumanNoticeKind};
 use hide_core::engine::EngineHandle;
 use hide_relay_protocol::admission::PushOutcome;
 use phones::{PairRefusal, Phones};
-use projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
+use projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use store::{
     ApnsRegistration, FcmRegistration, Method, MobileSettings, Notifications, PhoneOrigin,
     PhoneRecord, PushMode, PushSubscription, ServeRecord,
@@ -364,6 +364,8 @@ pub struct Mobile {
     missions: watch::Sender<Arc<PhoneMissions>>,
     /// The pull requests a phone lists, built from the same inputs as `projection`.
     prs: watch::Sender<Arc<PhonePrs>>,
+    /// The automations a phone lists, built from the core's own section.
+    automations: watch::Sender<Arc<PhoneAutomations>>,
     /// What the start sheet lists, republished when it changes.
     catalog: watch::Sender<Arc<start::Catalog>>,
     /// The core's answers to start requests, for the requests waiting on them.
@@ -469,6 +471,7 @@ impl Mobile {
             projection: watch::channel(Arc::new(Projection::default())).0,
             missions: watch::channel(Arc::new(PhoneMissions::default())).0,
             prs: watch::channel(Arc::new(PhonePrs::default())).0,
+            automations: watch::channel(Arc::new(PhoneAutomations::default())).0,
             catalog: watch::channel(Arc::new(start::Catalog::default())).0,
             answers: watch::channel(Arc::new(Vec::new())).0,
             starts,
@@ -639,6 +642,27 @@ impl Mobile {
         self.keep_alive() || self.config.desktop.wanted()
     }
 
+    /// Republishes the phone's automations when they changed, and records
+    /// when the list first goes over its caps, not on every change while it
+    /// stays over (the count is in the frame).
+    fn publish_automations(&self, automations: PhoneAutomations) {
+        self.automations.send_if_modified(|current| {
+            if **current == automations {
+                return false;
+            }
+            if automations.omitted > 0 && current.omitted == 0 {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_phone", "kind": "automations.capped",
+                    "omitted": automations.omitted,
+                    "cap": hide_core::agent_state::phone::MAX_AUTOMATIONS,
+                    "budget": hide_core::agent_state::phone::LIST_BUDGET,
+                }));
+            }
+            *current = Arc::new(automations);
+            true
+        });
+    }
+
     /// A desktop window turned its notifications on: the follower starts if
     /// it was resting, or seeds the windows' transitions on its next pass.
     pub fn wake_follower(&self) {
@@ -669,6 +693,15 @@ impl Mobile {
     /// The pull requests a phone may name in a request now.
     pub fn prs(&self) -> Arc<PhonePrs> {
         Arc::clone(&self.prs.borrow())
+    }
+
+    pub fn subscribe_automations(&self) -> watch::Receiver<Arc<PhoneAutomations>> {
+        self.automations.subscribe()
+    }
+
+    /// The automations a phone may name in a request now.
+    pub fn automations(&self) -> Arc<PhoneAutomations> {
+        Arc::clone(&self.automations.borrow())
     }
 
     pub fn subscribe_catalog(&self) -> watch::Receiver<Arc<start::Catalog>> {
@@ -2514,6 +2547,14 @@ impl Mobile {
                         true
                     }
                 });
+                self.automations.send_if_modified(|current| {
+                    if **current == PhoneAutomations::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhoneAutomations::default());
+                        true
+                    }
+                });
                 tokio::select! {
                     _ = self.wake.notified() => continue,
                     _ = stopping.changed() => return,
@@ -2532,6 +2573,10 @@ impl Mobile {
                 }
             };
             cursor = payload.revision;
+            // The core's own section, sent only when it moved past the cursor.
+            if let Some(section) = payload.automations.as_deref() {
+                self.publish_automations(PhoneAutomations::project(Some(section)));
+            }
             match projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision)
             {
                 Err(error) => {
