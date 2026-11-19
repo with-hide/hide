@@ -1573,8 +1573,8 @@ export type MissionQuestion = {
   material_asked?: boolean;
 };
 
-/** A View linked to a mission's open decision that is still open (`DecisionView`): the Conductor's, named with `--show` or opened since the question before, or the stopped node's worker's in its current attempt. */
-export type DecisionView = {
+/** A View linked to a mission's open decision or to a done node's `결과`, open or closed (`LinkedView`): on a decision the Conductor's, named with `--show` or opened since the question before, or the stopped node's worker's in its current attempt; on a node what its worker opened in its current attempt. */
+export type LinkedView = {
   device_id: string;
   checkout_path: string;
   display_id: string;
@@ -1591,11 +1591,11 @@ export type DecisionView = {
   /** The pane of the agent that opened it, while that agent is open. */
   pane_id?: string;
   /** Each kept press that asked it to open again, by request id: refused when nothing will open; open again is `closed` gone. */
-  reopens?: DecisionReopen[];
+  reopens?: ViewReopen[];
 };
 
-/** What became of a press that asked a decision's View to open again (`DecisionReopen`). */
-export type DecisionReopen = { request_id: string; refused?: boolean };
+/** What became of a press that asked a linked View to open again (`ViewReopen`). */
+export type ViewReopen = { request_id: string; refused?: boolean };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
 export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";
@@ -1678,6 +1678,10 @@ export type MissionNode = {
   stage: number | null;
   attempts: number;
   line: string | null;
+  /** The first line of its worker's last report to the Conductor (`MissionNode::reported`): a done node's `결과` shows it as the conclusion while `line` is none. */
+  reported?: string;
+  /** A done node's documents (issue 2637): the Views its worker and the agents under it opened in its current attempt, open or closed; absent on any other node. */
+  views?: LinkedView[];
   change: string | null;
   review: string | null;
   /** The node's finish lines as they stand now (PRD mission-map-git-criteria B32). */
@@ -1798,7 +1802,7 @@ export type Mission = {
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
   /** The Views linked to that decision that are still open; absent when none. */
-  decision_views?: DecisionView[];
+  decision_views?: LinkedView[];
   answer: MissionAnswer | null;
   /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
   end_asked?: boolean;

@@ -1,17 +1,15 @@
-import { CheckIcon, CircleAlertIcon, FileDiffIcon, FilePlusIcon, GlobeIcon, PencilIcon, ThumbsUpIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon, FilePlusIcon, PencilIcon, ThumbsUpIcon } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed, useMinuteClock } from "./components/elapsed";
-import { FileMark } from "./components/file-mark";
+import { LinkedViewRow } from "./components/linked-view";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { RadioGroup, RadioGroupItem } from "./components/ui/radio-group";
-import { RowButton } from "./components/ui/row-button";
-import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import type { DecisionView, Mission } from "./snapshot";
+import type { LinkedView, Mission } from "./snapshot";
 import { composingKey } from "./keys";
 import { ANSWER_LIMIT, answerView, reasonKey, usePressedAnswer, writtenAnswer, type PressedAnswer } from "./missionAnswer";
 import { DECISION_VIEWS_SHOWN, gateAsked, gateWaitedLong } from "./missions";
@@ -127,7 +125,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           ))}
         </div>
       ) : null}
-      {views.length > 0 ? <DecisionViews views={views} onOpen={(linked) => actions.openDecisionView(mission.id, key, linked)} /> : null}
+      {views.length > 0 ? <DecisionViews views={views} onOpen={(linked) => actions.openLinkedView(mission.id, { key }, linked)} /> : null}
       {sent?.line === "unconfirmed" ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent="unconfirmed">
           <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />
@@ -222,7 +220,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
  * `닫힘` once it closed, and who linked it. Pressing an open one brings it
  * forward; pressing a closed one opens it again from what its link kept.
  */
-function DecisionViews({ views, onOpen }: { views: DecisionView[]; onOpen: (view: DecisionView) => void }) {
+function DecisionViews({ views, onOpen }: { views: LinkedView[]; onOpen: (view: LinkedView) => void }) {
   const { t } = useInterfaceTranslation();
   const [all, setAll] = useState(false);
   const shown = all ? views : views.slice(0, DECISION_VIEWS_SHOWN);
@@ -233,19 +231,7 @@ function DecisionViews({ views, onOpen }: { views: DecisionView[]; onOpen: (view
       <ul className="flex min-w-0 flex-col">
         {shown.map((view) => (
           <li key={`${view.device_id}:${view.checkout_path}:${view.display_id}`} className="min-w-0">
-            <RowButton className="gap-xs px-xxs py-xxs text-body" title={view.label} onClick={() => onOpen(view)} data-mission-banner-view={view.display_id} data-mission-banner-view-by={view.by} data-mission-banner-view-state={view.closed ? "closed" : view.unseen ? "unseen" : "seen"}>
-              <ViewMark view={view} />
-              <span className={cn("min-w-0 flex-1 truncate", view.closed && "text-muted-foreground")}>{view.label}</span>
-              {view.closed ? (
-                <span className="shrink-0 text-caption text-muted-foreground">{t("mission.banner.closed")}</span>
-              ) : view.unseen ? (
-                <StatusMark mark="look" label={t("agents.mark.look")} />
-              ) : (
-                <CheckIcon role="img" aria-label={t("mission.banner.seen")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
-              )}
-              <span className="shrink-0 text-caption text-muted-foreground">{t(`mission.banner.by.${view.by}`)}</span>
-              <span className="ml-xs shrink-0 text-caption font-semibold text-subtle-foreground">{t(view.closed ? "mission.banner.reopen" : "mission.banner.open")}</span>
-            </RowButton>
+            <LinkedViewRow view={view} onOpen={onOpen} data={{ "data-mission-banner-view": view.display_id, "data-mission-banner-view-by": view.by }} />
           </li>
         ))}
         {more > 0 ? (
@@ -258,11 +244,4 @@ function DecisionViews({ views, onOpen }: { views: DecisionView[]; onOpen: (view
       </ul>
     </div>
   );
-}
-
-/** A View's kind as its tab draws it: a page's globe, a diff's mark, a file's type. */
-function ViewMark({ view }: { view: DecisionView }) {
-  if (view.kind === "browser") return <GlobeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
-  if (view.kind === "diff") return <FileDiffIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
-  return <FileMark icon={fileIcon(view.label)} className="size-(--size-icon-sm)" />;
 }

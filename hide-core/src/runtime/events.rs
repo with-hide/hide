@@ -1067,17 +1067,22 @@ pub(super) struct MissionMaterialPayload {
 }
 
 /// `mission_view_reopen`: the operator pressed a View on the question with
-/// `key`, named by its link's token: an open one takes its area, a closed
-/// one opens again from what the link kept (PRD mission-human-gate D-20).
+/// `key`, or in the `결과` of done `node` (with-hide/hide#2637), named by
+/// its link's token: an open one takes its area, a closed one opens again
+/// from what the link kept (PRD mission-human-gate D-20). Exactly one of
+/// `key` and `node` names the row's owner; any other press opens nothing.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct MissionViewReopenPayload {
     pub(super) mission: String,
-    pub(super) key: u64,
-    /// The row's link (`DecisionView::view`).
+    #[serde(default)]
+    pub(super) key: Option<u64>,
+    #[serde(default)]
+    pub(super) node: Option<String>,
+    /// The row's link (`LinkedView::view`).
     pub(super) view: String,
     /// Names the press, whose outcome the row then carries
-    /// (`DecisionView::reopen`); the phone's names one, the desktop's none.
+    /// (`LinkedView::reopen`); the phone's names one, the desktop's none.
     #[serde(default)]
     pub(super) request_id: Option<String>,
 }
