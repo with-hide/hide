@@ -798,7 +798,6 @@ mod tests {
         assert!(!runtime_root(home).starts_with(holders_root(home)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_guest_s_folder_and_a_host_s_inbox_are_named_by_the_short_form_of_the_whole_key() {
         let state = Path::new("state");
@@ -821,6 +820,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_a_marked_home_under_tmp_is_a_fixture_home() {
         let marked = tempfile::tempdir_in("/tmp").unwrap();
