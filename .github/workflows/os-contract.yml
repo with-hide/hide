@@ -61,13 +61,12 @@ jobs:
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform
       - name: A login agent on the runner's real launchd
         # hide-platform/tests/it/user_agents.rs (PRD core-host-node-move
-        # D-16, B3): the core machine's login item, installed, killed, exited
-        # and removed, and the one-shot job a move's checks run in, on this
-        # disposable runner's own GUI session, which no other machine's test
-        # may reach.
+        # D-16): the core machine's login item, installed, killed, exited and
+        # removed, on this disposable runner's own GUI session, which no
+        # other machine's test may reach.
         if: matrix.system == 'macos'
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform --test it -E 'test(/^user_agents::(a_login_agent_restarts|a_one_shot_job_runs_once)/)' --run-ignored only --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-platform --test it -E 'test(/^user_agents::a_login_agent_restarts/)' --run-ignored only --no-capture
       - name: Lint the platform crate
         run: bash scripts/verify-cargo.sh clippy -p hide-platform --all-targets -- -D warnings
       - name: Mint the development issues token

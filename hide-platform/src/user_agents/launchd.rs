@@ -5,7 +5,6 @@
 //! ten seconds, while its marker file exists (`KeepAlive` `PathState`, which
 //! launchd also watches, so a marker that appears starts a job not
 //! running); with the marker gone it stays stopped.
-//! `pmset` answers the machine's power settings.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,7 +15,7 @@ use std::time::{Duration, Instant};
 use super::{Login, LoginAgent};
 
 /// How long one `launchctl` command may take that waits on nothing but
-/// launchd: `print`, `bootstrap`; and how long `pmset` may take.
+/// launchd: `print`, `bootstrap`.
 const COMMAND_WITHIN: Duration = Duration::from_secs(5);
 /// How long a `kickstart` may take: launchd holds a job's start back until
 /// its `ThrottleInterval` (10 s by default) has passed since its last start,
@@ -42,7 +41,6 @@ const BOOTOUT_ALREADY_IN_PROGRESS: i32 = 37;
 pub(super) struct Launchd {
     launchctl: PathBuf,
     domain: String,
-    pmset: PathBuf,
 }
 
 impl Launchd {
@@ -53,7 +51,6 @@ impl Launchd {
         Self {
             launchctl: "/bin/launchctl".into(),
             domain: format!("gui/{uid}"),
-            pmset: "/usr/bin/pmset".into(),
         }
     }
 
@@ -61,7 +58,6 @@ impl Launchd {
         Self {
             launchctl: stand_ins.join("launchctl"),
             domain: "fixture".to_owned(),
-            pmset: stand_ins.join("pmset"),
         }
     }
 
@@ -81,39 +77,6 @@ impl Launchd {
         } else {
             Login::LoggedOut
         })
-    }
-
-    /// The `sleep` of `pmset -g custom`'s `AC Power:` section, in minutes,
-    /// 0 for never.
-    #[allow(clippy::disallowed_methods)] // env_clear: pmset is a macOS system tool this module alone runs, and needs nothing but the home
-    pub(super) fn sleeps_on_power(
-        &self,
-        home: &Path,
-        stop: &AtomicBool,
-    ) -> io::Result<Option<Duration>> {
-        let mut command = Command::new(&self.pmset);
-        command
-            .args(["-g", "custom"])
-            .env_clear()
-            .env(crate::host::HOME_VARIABLE, home);
-        let finished =
-            crate::process::run_to_end(&mut command, COMMAND_WITHIN, stop).map_err(|failure| {
-                io::Error::other(format!(
-                    "{} did not answer: {failure:?}",
-                    self.pmset.to_string_lossy()
-                ))
-            })?;
-        if finished.code != Some(0) {
-            return Err(io::Error::other(format!(
-                "pmset exited {:?}",
-                finished.code
-            )));
-        }
-        match ac_sleep_minutes(&finished.stdout) {
-            Some(0) => Ok(None),
-            Some(minutes) => Ok(Some(Duration::from_secs(u64::from(minutes) * 60))),
-            None => Err(io::Error::other("pmset reports no sleep setting on power")),
-        }
     }
 
     /// Writes `agent`'s property list under `home` and loads it into the
@@ -157,23 +120,6 @@ impl Launchd {
             return Ok(());
         }
         self.bootstrap(&Self::plist(home, label), home, stop)
-    }
-
-    /// Loads `agent` into the GUI session from a property list written in
-    /// `folder`, outside the login agents folder, so no later login loads it
-    /// again: launchd starts it once and never restarts it, and an unload
-    /// ends it. One loaded already under its label is replaced.
-    pub(super) fn start_once(
-        &self,
-        agent: &LoginAgent<'_>,
-        folder: &Path,
-        home: &Path,
-        stop: &AtomicBool,
-    ) -> io::Result<()> {
-        self.unload(agent.label, home, stop)?;
-        let list = folder.join(format!("{}.plist", agent.label));
-        crate::fs::atomic::write_file(&list, once(agent).as_bytes(), crate::fs::Access::Private)?;
-        self.bootstrap(&list, home, stop)
     }
 
     fn bootstrap(&self, list: &Path, home: &Path, stop: &AtomicBool) -> io::Result<()> {
@@ -336,12 +282,6 @@ fn plist(agent: &LoginAgent<'_>, marker: &Path) -> String {
     )
 }
 
-/// `agent`'s property list as a job launchd runs once at load and never
-/// restarts ([`Launchd::start_once`]).
-fn once(agent: &LoginAgent<'_>) -> String {
-    property_list(agent, "<key>KeepAlive</key><false/>")
-}
-
 fn property_list(agent: &LoginAgent<'_>, restarts: &str) -> String {
     let string = |value: &str| format!("<string>{}</string>", escape(value));
     let mut arguments = string(&agent.program.to_string_lossy());
@@ -392,22 +332,6 @@ fn last_exit_of(printed: &str) -> Option<String> {
         return None;
     }
     field("last exit code").filter(|code| !code.starts_with('('))
-}
-
-/// The `sleep` value of `pmset -g custom`'s `AC Power:` section.
-fn ac_sleep_minutes(text: &str) -> Option<u32> {
-    let mut on_power = false;
-    for line in text.lines() {
-        if !line.starts_with(char::is_whitespace) {
-            on_power = line.trim() == "AC Power:";
-            continue;
-        }
-        let mut words = line.split_whitespace();
-        if on_power && words.next() == Some("sleep") {
-            return words.next()?.parse().ok();
-        }
-    }
-    None
 }
 
 fn escape(value: &str) -> String {
