@@ -614,6 +614,80 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
 /// confirms over the connection. Nothing is installed on the target, and
 /// adding the same machine again says it is already connected (B51).
 #[cfg(unix)]
+/// The moved core's side of a split (PRD device-connect-iroh D-46, B45): a
+/// core that a machine dials as its node takes that machine's grant in the
+/// ask that gives its own, both settled at once with no question and no
+/// confirm over a connection, and answers the same when asked again. The
+/// same ask from a machine it runs nothing for is refused and saves
+/// nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machine() {
+    let root = crate::support::fixture_root("hs");
+    let env = host_env(root.path());
+    // What a move before 1.2.0 left in the core's state: the machine the
+    // core was moved off, registered as a node that dials in.
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "device_registrations": [{"id": "moved-off", "label": "MacBook", "inbound": true}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let _running = hided::start_daemon(env).await.unwrap();
+    let core = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let key = hide_peer::MachineKey::generate()
+        .unwrap()
+        .public()
+        .to_hex();
+    let ask = |device: &str| {
+        core.run(&[
+            "device",
+            "accept-ssh",
+            "--request",
+            "split-1",
+            "--key",
+            &key,
+            "--device",
+            device,
+            "--name",
+            "MacBook",
+            "--grant",
+            "0123456789abcdef0123456789abcdef",
+        ])
+    };
+
+    ask("stranger").refused("device_unknown");
+    assert!(!hided::peer_host::endpoint_wanted(&core.state).unwrap());
+
+    let taken = ask("moved-off");
+    assert!(taken.ok, "{}", taken.text());
+    let value = taken.json()["value"].clone();
+    assert_eq!(value["adopted"], true, "{value}");
+    let grant = value["accepted"]["grant"].clone();
+    assert!(grant.is_string(), "{value}");
+    let peer = core
+        .peer_becomes("the node's machine is paired both ways", |peer| {
+            peer["opened_by"] == "active" && !peer["opens"].is_null()
+        })
+        .await;
+    assert_eq!(peer["id"], "moved-off", "{peer}");
+    assert!(hided::peer_host::pairing_confirmed(&core.state).unwrap());
+
+    let again = ask("moved-off");
+    assert!(again.ok, "{}", again.text());
+    assert_eq!(again.json()["value"]["accepted"]["grant"], grant);
+    assert_eq!(core.peers().len(), 1);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {

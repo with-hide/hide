@@ -11,6 +11,11 @@
 //! paired with ([`Follower`]); a paired core also never ends for idle
 //! ([`paired`], `server::watch_idle`). Paired means a finished pairing,
 //! never one still waiting (`peer_host::pairing_confirmed`).
+//!
+//! A core moved here before 1.2.0 is kept the same way while the machine it
+//! was moved off still dials it as a node (D-46): that machine can only
+//! split from it by reaching it, so its login item is not taken out before
+//! the two are paired.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -20,11 +25,18 @@ use hide_platform::user_agents::{Linger, UserAgents};
 use serde::Serialize;
 use serde_json::json;
 
-/// Whether the folder has finished a pairing, the one answer the item
-/// follows (`peer_host::pairing_confirmed`).
+/// Whether the folder's core is kept on, the one answer the item follows:
+/// it has finished a pairing (`peer_host::pairing_confirmed`), or it is a
+/// core moved here before 1.2.0 that a node still dials
+/// (`hide_core::dialing_nodes`).
 pub fn paired(state_dir: &Path) -> Result<bool, String> {
-    crate::peer_host::pairing_confirmed(state_dir)
-        .map_err(|error| format!("the peer records: {error}"))
+    if crate::peer_host::pairing_confirmed(state_dir)
+        .map_err(|error| format!("the peer records: {error}"))?
+    {
+        return Ok(true);
+    }
+    hide_core::dialing_nodes(&state_dir.join(hide_core::node_migration::CORE_STATE))
+        .map(|nodes| !nodes.is_empty())
 }
 
 /// What [`reconcile`] found or did.

@@ -49,6 +49,11 @@ pub struct Reach {
     /// The folder the target's account links `hide` in
     /// (`HIDE_HOST_CLI_DIR`); none is `~/.local/bin`.
     pub command_folder: Option<String>,
+    /// The words that start the target's `hide`, for a caller that knows
+    /// where it is: the node of a core moved before 1.2.0 runs the `hide`
+    /// beside that core's program (`moved_core`). None reads the command
+    /// folder.
+    pub hide: Option<Vec<String>>,
 }
 
 /// What a target said about pairing over SSH, before anything is asked of
@@ -85,6 +90,9 @@ pub fn valid_alias(alias: &str) -> bool {
 /// system; a Windows session starts in the profile folder, which a path
 /// under the home is relative to.
 fn program(reach: &Reach, system: &str) -> Vec<String> {
+    if let Some(hide) = &reach.hide {
+        return hide.clone();
+    }
     let folder = reach.command_folder.as_deref().unwrap_or(COMMAND_FOLDER);
     let under_home = folder.strip_prefix("~/");
     if system == "windows" {
@@ -212,7 +220,7 @@ pub fn accept(
     key: &PeerKey,
 ) -> Result<Paired, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let answer = accept_on(&upstream, reach, alias, request, me, key, None);
+    let answer = accept_on(&upstream, reach, alias, request, me, key, None, None);
     let login = upstream.direct_host();
     upstream.close();
     paired(&answer?["accepted"], login).ok_or("ssh_update_there")
@@ -221,7 +229,11 @@ pub fn accept(
 /// Runs the target's `accept-ssh` on `upstream`'s session and answers the
 /// value it printed. With `helper`, the root this machine's device helper
 /// is installed under there, it also asks for that helper's folder (D-49).
-fn accept_on(
+/// With `grant`, the grant this machine gives the target, the target also
+/// becomes this machine's guest, which only the core this machine dialed
+/// as a node does (D-46).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn accept_on(
     upstream: &Upstream,
     reach: &Reach,
     alias: &str,
@@ -229,6 +241,7 @@ fn accept_on(
     me: &Me,
     key: &PeerKey,
     helper: Option<&str>,
+    grant: Option<&str>,
 ) -> Result<Value, &'static str> {
     let key = key.to_hex();
     let mut words = vec![
@@ -245,6 +258,9 @@ fn accept_on(
     if let Some(root) = helper {
         words.extend(["--helper", root]);
     }
+    if let Some(grant) = grant {
+        words.extend(["--grant", grant]);
+    }
     let mut answer = match run(upstream, reach, &words) {
         Ok(Said::Answer(answer)) => answer,
         Ok(Said::NoProgram) => return Err("ssh_hide_absent"),
@@ -260,6 +276,7 @@ fn accept_on(
             Some("device_limit") => "device_limit",
             Some("hide_unavailable" | "request_timeout") => "ssh_hide_not_running",
             Some("invalid_request") => "invalid_request",
+            Some("device_unknown") => "device_unknown",
             _ => "ssh_update_there",
         });
     }
@@ -435,6 +452,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
         switch.me,
         switch.key,
         switch.helper_root,
+        None,
     );
     let answer = match accepted {
         // Paired already, and going on without the helper's folder: there
@@ -565,6 +583,7 @@ mod tests {
         let default = Reach {
             home: PathBuf::from("/Users/example"),
             command_folder: None,
+            hide: None,
         };
         assert_eq!(
             program(&default, "macos"),
@@ -574,6 +593,7 @@ mod tests {
         let named = Reach {
             home: PathBuf::from("/Users/example"),
             command_folder: Some("/opt/hide/bin".to_owned()),
+            hide: None,
         };
         assert_eq!(program(&named, "linux"), ["/opt/hide/bin/hide"]);
     }

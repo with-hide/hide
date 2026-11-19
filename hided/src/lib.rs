@@ -247,6 +247,12 @@ impl RunningNode {
     pub fn stop(&self) {
         self.shutdown.end();
     }
+
+    /// Turns true once this machine was split from its core: the process
+    /// runs a core of its own next (`node_role::NodeRole::became_core`).
+    pub fn became_core(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.node.became_core()
+    }
 }
 
 impl Drop for RunningNode {
@@ -621,6 +627,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         pairing_ssh::Reach {
             home: env.home.clone(),
             command_folder: env.host_cli_dir.clone(),
+            hide: None,
         },
         shutdown.clone(),
     );

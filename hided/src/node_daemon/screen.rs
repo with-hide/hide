@@ -269,6 +269,21 @@ async fn attached(
             return ScreenEnd::LinkLost;
         }
     };
+    // The core draws this screen from here on; what only this machine's
+    // node knows of its link, why it was not split from its core on this
+    // connection, is told once, since a retry ends the link and the screen
+    // with it (PRD device-connect-iroh B45).
+    let frame = json!({
+        "type": "core_link",
+        "payload": {"phase": "live", "split_failed": (state.split_failed)()},
+    });
+    if socket
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .is_err()
+    {
+        return ScreenEnd::Left;
+    }
     let mut live = state.live.clone();
     let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
     let mut terminals: Option<HubClient> = None;

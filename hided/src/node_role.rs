@@ -169,6 +169,17 @@ pub enum LinkFailure {
     Ended(String),
     /// A link the core had taken ended: its reason.
     Lost(String),
+    /// The core runs this build and this connection has not tried to
+    /// split the two machines yet: the split runs before any link is
+    /// served (PRD device-connect-iroh B45).
+    SplitDue,
+    /// The two machines were split: this role is over and the process
+    /// runs a core of its own next.
+    Split,
+    /// This connection's split did not happen, for this code
+    /// (`moved_core::SplitFailure`): the node links as before, and the
+    /// operator's Retry tries again.
+    SplitFailed(&'static str),
     /// The role is stopping.
     Stopping,
 }
@@ -268,6 +279,9 @@ impl std::fmt::Display for LinkFailure {
             Self::CoreOlder { .. } => formatter.write_str("core_older"),
             Self::CoreUpdated { .. } => formatter.write_str("core_updated"),
             Self::UpdateFailed { .. } => formatter.write_str("update_failed"),
+            Self::SplitDue => formatter.write_str("split_due"),
+            Self::Split => formatter.write_str("split"),
+            Self::SplitFailed(code) => formatter.write_str(code),
             Self::Stopping => formatter.write_str("stopping"),
         }
     }
@@ -297,6 +311,11 @@ struct State {
     /// signs in for the update first and attaches on that same session, so
     /// one press is one sign-in.
     update_owed: Option<OwedUpdate>,
+    /// Why this connection's try at splitting from the core did not
+    /// happen; none while it has not tried (B45). One try per connection,
+    /// as the core's update has: a failed one leaves the node linked as
+    /// before until the operator's Retry or the next start.
+    split_failed: Option<&'static str>,
 }
 
 /// What the next attempt owes: the update a sign-in stopped, run first
@@ -404,6 +423,8 @@ struct Shared {
     /// that pressed it (`core_link` frame's `sign_in`).
     sign_in: Arc<ScreenSignIn>,
     sign_ins: watch::Receiver<Option<Shown>>,
+    /// Set once this machine was split from its core: the role is over.
+    became_core: watch::Sender<bool>,
 }
 
 /// What a node needs to update its core to this build (PRD
@@ -476,6 +497,7 @@ impl NodeRole {
                 update: Update::Untried,
                 disconnected: placement.disconnected,
                 update_owed: None,
+                split_failed: None,
             }),
             changed: Condvar::new(),
             upstream: Mutex::new(None),
@@ -487,6 +509,7 @@ impl NodeRole {
             updates,
             sign_in,
             sign_ins,
+            became_core: watch::Sender::new(false),
         });
         let home = home.to_owned();
         let thread = {
@@ -510,6 +533,19 @@ impl NodeRole {
                 .map_err(|error| format!("the node watch thread could not start: {error}"))?,
         );
         Ok(role)
+    }
+
+    /// Turns true once this machine was split from its core (B45): the
+    /// link thread has ended, and the process runs a core of its own next.
+    pub fn became_core(&self) -> watch::Receiver<bool> {
+        self.shared.became_core.subscribe()
+    }
+
+    /// Why this connection's split from the core did not happen, as the
+    /// code the window's device tile says; none when none was tried or
+    /// none failed.
+    pub fn split_failed(&self) -> Option<&'static str> {
+        lock(&self.shared.state).split_failed
     }
 
     pub fn phase(&self) -> Phase {
@@ -575,8 +611,10 @@ impl NodeRole {
         if !std::mem::take(&mut state.disconnected) {
             return;
         }
-        // A new connection: a core update that failed gets its attempt.
+        // A new connection: a core update that failed gets its attempt,
+        // and so does a split.
         state.update = Update::Untried;
+        state.split_failed = None;
         state.woken = true;
         drop(state);
         self.shared.changed.notify_all();
@@ -624,7 +662,10 @@ impl NodeRole {
         }
         let owed = matches!(&state.phase, Phase::Waiting { reason } if reason.waits_for_operator());
         let update_failed = matches!(state.update, Update::Failed(_));
-        if !owed && !update_failed {
+        // Only a window's own Retry ends a live link to try the split
+        // again; a connect no screen made leaves the link as it is.
+        let split_failed = screen.is_some() && state.split_failed.take().is_some();
+        if !owed && !update_failed && !split_failed {
             return;
         }
         state.asked = owed;
@@ -698,6 +739,18 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
         // The core now runs this build: the next dial reaches it at once.
         if let LinkFailure::CoreUpdated { program } = reason {
             placement.program = program;
+            backoff.reset();
+            continue;
+        }
+        // Split from its core: the process runs a core next, and nothing
+        // here dials again.
+        if matches!(reason, LinkFailure::Split) {
+            shared.live.send_replace(None);
+            shared.became_core.send_replace(true);
+            return;
+        }
+        // Not split this time: the node links as it did before.
+        if matches!(reason, LinkFailure::SplitFailed(_)) {
             backoff.reset();
             continue;
         }
@@ -1071,7 +1124,110 @@ fn try_link(
         Err(LinkFailure::CoreOlder { machine, release }) => Err(update_core(
             shared, &upstream, placement, identity, machine, release,
         )),
+        Err(LinkFailure::SplitDue) => Err(split_from_core(
+            shared, &upstream, home, placement, identity,
+        )),
         ended => ended,
+    }
+}
+
+/// Whether this connection still owes its one try at the split: a node
+/// that knows its state folder, which every node a window starts does.
+fn split_due(shared: &Shared) -> bool {
+    shared.updates.is_some() && lock(&shared.state).split_failed.is_none()
+}
+
+/// The words that run the `hide` beside the core's program on its machine,
+/// with the core's state folder when it is not that account's own. A core
+/// was only ever moved between Macs, so the words are a POSIX shell's.
+fn core_hide(placement: &Placement) -> Vec<String> {
+    let folder = placement
+        .program
+        .rsplit_once('/')
+        .map_or("", |(folder, _)| folder);
+    let hide = format!("{folder}/hide");
+    match &placement.state_dir {
+        Some(state_dir) => vec![
+            "env".to_owned(),
+            format!("HIDE_STATE_DIR={state_dir}"),
+            hide,
+        ],
+        None => vec![hide],
+    }
+}
+
+/// Splits this machine from its core, which runs this build (PRD
+/// device-connect-iroh D-46, B45): the two pair over the SSH login the
+/// move used, without a question, and this machine's placement record is
+/// set aside (`moved_core::split`). Its asks run on the connection the
+/// attach that read the core's build was made on, and ask nobody. A
+/// failure changes nothing: the node links as before.
+fn split_from_core(
+    shared: &Shared,
+    upstream: &Upstream,
+    home: &Path,
+    placement: &Placement,
+    identity: &NodeIdentity,
+) -> LinkFailure {
+    let failed = |code: &'static str, detail: String| {
+        lock(&shared.state).split_failed = Some(code);
+        hide_core::diagnostic!(json!({
+            "component": "node_role",
+            "kind": "split.failed",
+            "core": placement.node,
+            "code": code,
+            "detail": detail,
+        }));
+        LinkFailure::SplitFailed(code)
+    };
+    let Some(updates) = shared.updates.as_ref() else {
+        return failed("split_not_saved", "the node knows no state folder".to_owned());
+    };
+    let machine = match hide_platform::host::machine_id() {
+        Ok(machine) => machine,
+        Err(error) => return failed("split_not_saved", format!("the machine id: {error}")),
+    };
+    let me = hide_peer::pairing::Me {
+        name: hide_peer::link::clean_name(&identity.label).unwrap_or_else(|| identity.node.clone()),
+        device: identity.node.clone(),
+    };
+    let reach = crate::pairing_ssh::Reach {
+        home: home.to_owned(),
+        command_folder: None,
+        hide: Some(core_hide(placement)),
+    };
+    let ask = |request: &str, key: &hide_peer::protocol::PeerKey, grant: Option<&str>| {
+        crate::pairing_ssh::accept_on(
+            upstream,
+            &reach,
+            &placement.alias,
+            request,
+            &me,
+            key,
+            None,
+            grant,
+        )
+    };
+    let install = hide_host::kit::running_install();
+    let splitting = crate::moved_core::Splitting {
+        home,
+        state_dir: &updates.state_dir,
+        machine: &machine,
+        me: &me,
+        core: &placement.node,
+        panes: hide_kit::layout::PanesInstall {
+            id: install.as_ref().map(|install| install.id.clone()),
+            cli: install.map(|install| install.cli),
+        },
+    };
+    hide_core::diagnostic!(json!({
+        "component": "node_role",
+        "kind": "split.started",
+        "core": placement.node,
+    }));
+    match crate::moved_core::split(&splitting, &ask) {
+        Ok(()) => LinkFailure::Split,
+        Err(failure) => failed(failure.code, failure.detail),
     }
 }
 
@@ -1304,6 +1460,11 @@ fn serve_link(
                     "core_release": core.release,
                 }));
                 return Err(refused);
+            }
+            // The core runs this build: the two machines are split before
+            // any link is served (B45).
+            if split_due(shared) {
+                return Err(LinkFailure::SplitDue);
             }
         }
         _ => {
@@ -1604,6 +1765,7 @@ mod tests {
             update: Update::Untried,
             disconnected: false,
             update_owed: Some(("mini".to_owned(), core.clone())),
+            split_failed: None,
         };
         let stopped = LinkFailure::Operator(SshFailure {
             problem: SshProblem::SignInNeeded,

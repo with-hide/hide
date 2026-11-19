@@ -187,6 +187,43 @@ fn the_core_the_item_runs_forgets_its_item_and_keeps_running() {
     assert!(machine.loaded(), "the asking core's job was unloaded");
 }
 
+/// A core moved here before 1.2.0 keeps the item its move put in while the
+/// machine it was moved off still dials it as a node, though it is paired
+/// with nothing (PRD device-connect-iroh D-46): that machine can only split
+/// from it by reaching it. Once no node dials it, the item goes as any
+/// unpaired machine's does.
+#[cfg(unix)]
+#[test]
+fn a_moved_core_keeps_its_item_while_its_node_still_dials_it() {
+    let machine = Machine::new();
+    let installs = std::cell::Cell::new(0);
+    machine.pair();
+    machine.reconcile(false, &installs);
+    machine.unpair();
+    let state = machine.state.join(hide_core::node_migration::CORE_STATE);
+    let registers = |devices: serde_json::Value| {
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "schema_version": 1,
+                "expanded_paths": [],
+                "selected_path": null,
+                "selected_pane_id": null,
+                "device_registrations": devices,
+            })
+            .to_string(),
+        )
+        .unwrap();
+    };
+    registers(serde_json::json!([{"id": "macbook", "label": "MacBook", "inbound": true}]));
+    assert_eq!(machine.reconcile(true, &installs), Outcome::Kept);
+    assert!(machine.installed() && machine.kept());
+
+    registers(serde_json::json!([]));
+    assert_eq!(machine.reconcile(true, &installs), Outcome::Removed);
+    assert!(!machine.installed() && !machine.kept());
+}
+
 /// The first pairing's item is put in by the core running on the folder,
 /// which nothing stops: the item's core only waits on the folder's lock
 /// (S1). On Windows the item's start once ended the running core by its

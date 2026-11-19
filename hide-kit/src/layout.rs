@@ -637,8 +637,29 @@ pub fn device_node_guest_in(node_dir: &Path) -> PathBuf {
 pub struct HelperGuest {
     /// The paired machine's connection key, 64 lower hex characters.
     pub key: String,
-    /// The helper root, an absolute path.
+    /// The root the node's builds are placed under, an absolute path: the
+    /// device helper's root, or the guest's own install root for a folder
+    /// a split handed over (`panes`).
     pub root: PathBuf,
+    /// The installation the folder's panes name, when no build under
+    /// `root` started them: this machine's own Hide ran its node here for
+    /// a core on another machine, until the two were split (PRD
+    /// device-connect-iroh D-46). The guest's node answers as that
+    /// installation, so those panes' `hide` and hooks go on reaching the
+    /// node that holds them. Absent for a device helper's folder, whose
+    /// panes name the helper root's installation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panes: Option<PanesInstall>,
+}
+
+/// The installation a folder's panes name ([`HelperGuest::panes`]).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct PanesInstall {
+    /// Its name, as the panes carry it; none for panes that name none (a
+    /// build run from outside any installation started them).
+    pub id: Option<String>,
+    /// Its `hide` command.
+    pub cli: Option<PathBuf>,
 }
 
 impl HelperGuest {

@@ -115,6 +115,10 @@ pub enum Verb {
         /// The root of the device helper the caller dialed on this account,
         /// whose folder and terminals it asks for with the grant (D-49).
         helper: Option<String>,
+        /// The grant the caller gives this machine, which then becomes its
+        /// guest: taken only from the machine this core was moved off
+        /// before 1.2.0 (D-46).
+        grant: Option<String>,
     },
 }
 
@@ -136,6 +140,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut own_folder = false;
     let mut install = false;
     let mut helper = None;
+    let mut grant = None;
     let mut direction = None;
     let (mut name, mut request, mut key, mut device) = (None, None, None, None);
     let mut words = Vec::new();
@@ -162,6 +167,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 continue;
             }
             "--helper" if accept && helper.is_none() => &mut helper,
+            "--grant" if accept && grant.is_none() => &mut grant,
             "--outgoing" | "--incoming" | "--both" if directed && direction.is_none() => {
                 direction = Some(match arg.as_str() {
                     "--outgoing" => Direction::Outgoing,
@@ -248,6 +254,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 name,
                 wsl,
                 helper,
+                grant,
             },
             _ => return Err(USAGE.to_owned()),
         },
@@ -468,12 +475,14 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             name,
             wsl,
             helper,
+            grant,
         } => {
             let value = pairing(
                 env,
                 json!({
                     "verb":"accept_ssh","request":request,"key":key,
                     "device":device,"name":name,"wsl":wsl,"helper":helper,
+                    "grant":grant,
                 }),
             )?;
             // Read by the machine that ran it, never by a person.

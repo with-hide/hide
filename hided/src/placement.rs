@@ -4,8 +4,10 @@
 //! the core's machine and this daemon runs in the node role: it starts no
 //! core and dials that machine instead.
 //!
-//! Only the move (layer 5), the node's disconnect and reconnect (B16) and
-//! test fixtures write the record. It is the
+//! No build writes a new record: only a core moved to another machine
+//! before 1.2.0 left one, and this build changes it for the node's
+//! disconnect and reconnect (B16) and its core's update, and sets it aside
+//! once the two machines are split (`moved_core::split`). It is the
 //! account's own private file; one that is anything else is refused rather
 //! than read, and so is one that names this machine as its own core.
 
@@ -81,10 +83,14 @@ pub fn write(state_dir: &Path, placement: &Placement) -> Result<(), String> {
     .map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// Removes the record: this machine is its own core again.
-pub fn remove(state_dir: &Path) -> Result<(), String> {
+/// Sets the record aside, beside what this machine held before its core
+/// moved away (`moved-out/`): this machine is its own core again, and
+/// nothing the move left is deleted. A record already set aside is done.
+pub fn set_aside(state_dir: &Path) -> Result<(), String> {
     let path = record_path(state_dir);
-    match std::fs::remove_file(&path) {
+    let kept = hide_kit::layout::moved_out(state_dir);
+    private::create_dir_all(&kept).map_err(|error| format!("{}: {error}", kept.display()))?;
+    match std::fs::rename(&path, kept.join("core-placement.json")) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("{}: {error}", path.display())),

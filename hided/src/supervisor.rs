@@ -4,7 +4,8 @@
 //! where a placement record says this machine's core runs on another one,
 //! which only a core moved there before 1.2.0 left, and the core role
 //! everywhere else. A folder that such a move left unfinished starts no role
-//! (`moved_core::unfinished`).
+//! (`moved_core::unfinished`). A node that splits from its core is followed
+//! by the core role in the same process (`moved_core::split`).
 
 use std::path::Path;
 use std::time::Duration;
@@ -53,7 +54,7 @@ pub async fn run(env: Env) -> Result<(), String> {
         while let Some(current) = role.take() {
             role = match current {
                 Role::Core(running) => core_turn(&env, &seat, running).await?,
-                Role::Node(running) => node_turn(&seat, running).await,
+                Role::Node(running) => node_turn(&env, &seat, running).await?,
             };
         }
         Ok::<(), String>(())
@@ -109,14 +110,33 @@ async fn core_turn(
     )))
 }
 
-/// Runs the node until it stops.
-async fn node_turn(seat: &seat::Seat, running: RunningNode) -> Option<Role> {
-    tokio::select! {
-        () = running.shutdown.ended() => {}
-        () = seat.stop.ended() => running.stop(),
-    }
+/// Runs the node until it stops, or until its machine was split from the
+/// core it dialed (PRD device-connect-iroh B45): its placement record is
+/// set aside by then, so the next role, in this process or at any later
+/// start, is this machine's own core. The windows keep their address and
+/// reconnect to it.
+async fn node_turn(
+    env: &Env,
+    seat: &seat::Seat,
+    running: RunningNode,
+) -> Result<Option<Role>, String> {
+    let mut became_core = running.became_core();
+    let split = tokio::select! {
+        () = running.shutdown.ended() => false,
+        () = seat.stop.ended() => {
+            running.stop();
+            false
+        }
+        split = became_core.wait_for(|split| *split) => split.is_ok(),
+    };
     stop_node(running).await;
-    None
+    if !split {
+        return Ok(None);
+    }
+    log("node.became_core", json!({}));
+    Ok(Some(Role::Core(
+        crate::start_core_role(env.clone(), seat.parts()).await?,
+    )))
 }
 
 async fn stop_node(running: RunningNode) {
