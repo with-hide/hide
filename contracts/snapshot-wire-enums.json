@@ -159,5 +159,10 @@
   "session_thread_older": ["idle", "loading", "capacity", "failed"],
   "session_thread_input_state": ["sending", "sent", "refused"],
   "session_thread_part_kind": ["plan", "spawn", "letter", "view", "mission"],
-  "session_thread_view_kind": ["browser", "file", "diff"]
+  "session_thread_view_kind": ["browser", "file", "diff"],
+  "automation_trigger": ["scheduled", "manual", "missed"],
+  "automation_run_state": ["starting", "running", "succeeded", "failed", "stopped"],
+  "automation_pause_reason": ["operator", "login_expired", "folder_missing", "agent_missing"],
+  "automation_missed_reason": ["core_off", "asleep"],
+  "automation_weekday": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
 }

@@ -11468,6 +11468,84 @@ mod wire_enum_tests {
         assert_wire(&contract, "session_thread_view_kind", &views);
         checked.insert("session_thread_view_kind");
 
+        use crate::automations::{MissedReason, PauseReason, RunState, Trigger, Weekday};
+        let triggers = [Trigger::Scheduled, Trigger::Manual, Trigger::Missed];
+        for variant in triggers {
+            match variant {
+                Trigger::Scheduled | Trigger::Manual | Trigger::Missed => {}
+            }
+        }
+        assert_wire(&contract, "automation_trigger", &triggers);
+        checked.insert("automation_trigger");
+
+        let states = [
+            RunState::Starting,
+            RunState::Running,
+            RunState::Succeeded,
+            RunState::Failed,
+            RunState::Stopped,
+        ];
+        for variant in states {
+            match variant {
+                RunState::Starting
+                | RunState::Running
+                | RunState::Succeeded
+                | RunState::Failed
+                | RunState::Stopped => {}
+            }
+        }
+        assert_wire(&contract, "automation_run_state", &states);
+        checked.insert("automation_run_state");
+
+        let pauses = [
+            PauseReason::Operator,
+            PauseReason::LoginExpired,
+            PauseReason::FolderMissing,
+            PauseReason::AgentMissing,
+        ];
+        for variant in pauses {
+            match variant {
+                PauseReason::Operator
+                | PauseReason::LoginExpired
+                | PauseReason::FolderMissing
+                | PauseReason::AgentMissing => {}
+            }
+        }
+        assert_wire(&contract, "automation_pause_reason", &pauses);
+        checked.insert("automation_pause_reason");
+
+        let missed = [MissedReason::CoreOff, MissedReason::Asleep];
+        for variant in missed {
+            match variant {
+                MissedReason::CoreOff | MissedReason::Asleep => {}
+            }
+        }
+        assert_wire(&contract, "automation_missed_reason", &missed);
+        checked.insert("automation_missed_reason");
+
+        let days = [
+            Weekday::Sun,
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+        ];
+        for variant in days {
+            match variant {
+                Weekday::Sun
+                | Weekday::Mon
+                | Weekday::Tue
+                | Weekday::Wed
+                | Weekday::Thu
+                | Weekday::Fri
+                | Weekday::Sat => {}
+            }
+        }
+        assert_wire(&contract, "automation_weekday", &days);
+        checked.insert("automation_weekday");
+
         let unchecked = contract
             .keys()
             .filter(|key| !checked.contains(key.as_str()))
