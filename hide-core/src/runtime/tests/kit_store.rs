@@ -281,3 +281,36 @@ fn a_github_item_is_checked_daily_and_a_followed_folder_every_few_seconds_withou
     assert_eq!(store_calls(&helper)[1..], [KitAction::FollowStore]);
     assert_eq!(kit(&shared), before);
 }
+
+#[test]
+fn a_cell_changed_while_its_agent_ran_waits_for_a_new_session_until_that_session_ends() {
+    use super::agent_connection::{diagnosis, feed, installed, kit_rows};
+    let mut runtime = runtime();
+    kit_rows(&mut runtime, None);
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    feed(&mut runtime, &[("w1:p1", "claude", true)]);
+    let claude = hide_agent_adapter::adapter("claude").unwrap().id;
+    let mut changed = store_report(Vec::new(), None);
+    changed.columns.get_mut(&ItemKind::Skill).unwrap()[0].agents = vec![claude.to_owned()];
+    changed.items[0].cells[0].changed_at_unix_ms = Some(1_700_000_000_000);
+    let marked = |runtime: &Runtime| {
+        runtime.snapshot.navigator.devices[0]
+            .kit
+            .store_new_session
+            .clone()
+    };
+
+    runtime.ingest_store_answer(crate::node::TEST_NODE, Ok(Some(changed)));
+    assert_eq!(
+        marked(&runtime),
+        vec![crate::model::StoreCellRef {
+            item: "skill:style".to_owned(),
+            column: "claude".to_owned(),
+        }],
+        "only the column whose agent ran when the change landed waits"
+    );
+
+    // That session ends and a new one starts: the new one read the change.
+    feed(&mut runtime, &[("w1:p2", "claude", true)]);
+    assert_eq!(marked(&runtime), Vec::new());
+}
