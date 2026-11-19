@@ -425,7 +425,7 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
       </span>
     </>
   );
-  const data = { "data-automation-record": record.kind, "data-automation-record-number": record.kind === "run" ? record.number : undefined };
+  const data = { "data-automation-record": record.kind, "data-automation-record-number": record.kind === "run" ? record.number : undefined, "data-automation-run-state": record.kind === "run" ? record.state : undefined, "data-automation-run-reason": record.kind === "run" ? record.reason : undefined };
   if (record.kind !== "run") return <div className="flex min-w-0 items-center gap-sm px-xs py-xs" {...data}>{body}</div>;
   const open = () => {
     const finished = record.state !== "running" && record.state !== "starting";
