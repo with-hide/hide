@@ -56,6 +56,13 @@ pub fn is_executable(path: &Path) -> io::Result<bool> {
     sys::is_executable(path)
 }
 
+/// Lets the system run the file at `path` the way [`is_executable`] reads
+/// it: on Unix whoever may read it may run it; on Windows, where the
+/// extension decides, nothing changes.
+pub fn mark_executable(path: &Path) -> io::Result<()> {
+    sys::mark_executable(path)
+}
+
 #[cfg(unix)]
 mod sys {
     use std::fs;
@@ -87,6 +94,11 @@ mod sys {
 
     pub(super) fn is_executable(path: &Path) -> io::Result<bool> {
         Ok(fs::metadata(path)?.permissions().mode() & 0o111 != 0)
+    }
+
+    pub(super) fn mark_executable(path: &Path) -> io::Result<()> {
+        let mode = fs::metadata(path)?.permissions().mode();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode | (mode & 0o444) >> 2))
     }
 
     pub(super) fn account_can_add_to(dir: &Path) -> io::Result<bool> {
@@ -178,6 +190,10 @@ mod sys {
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    pub(super) fn mark_executable(path: &Path) -> io::Result<()> {
+        fs::metadata(path).map(drop)
     }
 
     pub(super) fn is_executable(path: &Path) -> io::Result<bool> {
