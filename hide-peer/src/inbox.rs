@@ -81,6 +81,10 @@ pub struct Inbox {
     /// Recorded and not yet applied, oldest first.
     waiting: VecDeque<Event>,
     events: File,
+    /// The bytes of whole, synced lines in `events`.
+    len: u64,
+    /// An append failed partway and what it wrote could not be cut then.
+    torn: bool,
 }
 
 impl Inbox {
@@ -131,7 +135,39 @@ impl Inbox {
             recorded,
             waiting,
             events,
+            len: kept as u64,
+            torn: false,
         })
+    }
+
+    /// Cuts the file back to its last whole line.
+    fn cut_to_whole_lines(&mut self) -> io::Result<()> {
+        self.events.set_len(self.len)?;
+        self.events.seek(SeekFrom::Start(self.len))?;
+        self.torn = false;
+        Ok(())
+    }
+
+    /// Appends one line and syncs it. A write that fails partway leaves
+    /// part of a line; it is cut off again, now or before the next append,
+    /// so it never joins the line after it: a joined line reads as damage,
+    /// and everything recorded behind it would be dropped at the next open.
+    fn append(&mut self, line: &[u8]) -> io::Result<()> {
+        if self.torn {
+            self.cut_to_whole_lines()?;
+        }
+        let written = self
+            .events
+            .write_all(line)
+            .and_then(|()| self.events.sync_all());
+        if let Err(error) = written {
+            self.torn = true;
+            // Best effort here: the next append cuts again when this fails.
+            let _ = self.cut_to_whole_lines();
+            return Err(error);
+        }
+        self.len += line.len() as u64;
+        Ok(())
     }
 
     /// The box and the last event durably recorded: what the guest tells
@@ -172,8 +208,7 @@ impl Inbox {
         }
         let mut line = serde_json::to_vec(&event).map_err(io::Error::other)?;
         line.push(b'\n');
-        self.events.write_all(&line)?;
-        self.events.sync_all()?;
+        self.append(&line)?;
         self.recorded = event.seq;
         self.waiting.push_back(event);
         Ok(Recorded::New { seq: self.recorded })
@@ -207,8 +242,8 @@ impl Inbox {
         if count > 0 {
             // Everything in the file is applied; a stop before this leaves
             // lines the cursor already covers, and `open` skips them.
-            self.events.set_len(0)?;
-            self.events.seek(SeekFrom::Start(0))?;
+            self.len = 0;
+            self.cut_to_whole_lines()?;
             self.events.sync_all()?;
         }
         Ok(count)
@@ -285,6 +320,30 @@ mod tests {
         assert_eq!(product.applied, ["intent-1"]);
         assert_eq!(product.calls, 1);
         assert_eq!(inbox.position(), ("box", 1));
+    }
+
+    #[test]
+    fn what_a_failed_append_left_is_cut_before_the_next_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut product = ByKey::default();
+        {
+            let mut inbox = Inbox::open(dir.path()).unwrap();
+            inbox.record(event("box", 1)).unwrap();
+            // An append that failed partway and could not be cut then: part
+            // of a line is in the file.
+            inbox.events.write_all(b"{\"v\":1,\"outbox\":\"bo").unwrap();
+            inbox.torn = true;
+            assert_eq!(
+                inbox.record(event("box", 2)).unwrap(),
+                Recorded::New { seq: 2 }
+            );
+        }
+        // Both are whole lines: a restart reads the two, not one line and
+        // damage behind it.
+        let mut inbox = Inbox::open(dir.path()).unwrap();
+        assert_eq!(inbox.position(), ("box", 2));
+        assert_eq!(inbox.apply_recorded(&mut product).unwrap(), 2);
+        assert_eq!(product.applied, ["intent-1", "intent-2"]);
     }
 
     #[test]

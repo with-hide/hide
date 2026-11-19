@@ -3155,6 +3155,7 @@ The security and ownership specification this connection is built to (the threat
 
 **The seam.**
 `PeerTransport` (this machine's key, its address candidates, `dial`, `accept`, `close`) and `PeerConn` (the peer's key, which side dialed, the path's kind, `open` at a priority, `accept`, `close` with a code, how it ended) are all `hide-peer` asks of a transport, as generic parameters and never a trait object.
+`accept` never waits on one peer's proof of its key: each proof runs in a task of its own, so a peer that starts one and never finishes it holds up no other connection.
 `hide_peer::loopback` is the second transport: in-process streams between the `Peers` of one test, each end proving its key by signing the other's challenge, so pairing, grants and delivery are tested with no socket.
 `scripts/check-iroh-stays-behind-the-seam.py` fails when a member other than `hide-peer-iroh` names an iroh or noq crate, when `hide-core`, `hide-node`, `hide-host`, `hide-holder` or `hide-agent-hooks` reaches `hide-peer-iroh` through any chain of members, when `workspace-hack` lists a crate only the transport reaches, or when iroh or noq is asked for by anything but an exact version without default features.
 
@@ -3162,11 +3163,13 @@ The security and ownership specification this connection is built to (the threat
 A pair of machines keeps one connection whichever side dialed, and each direction has its own grant: A may be B's guest, B may be A's, or both.
 `peers::decide` is the whole dial rule: with no connection held the new one is installed; a second connection dialed by the same side replaces the first, which closes as `replaced`; and when both sides dialed at once the one the smaller key dialed stays and the other closes as `duplicate`.
 A dial waits its key's turn and for a closing connection to finish, never starts while a live connection exists, and ends early when the peer's own dial is admitted first.
-`Peers::keep` dials again after a drop, 1 s later and doubling to 60 s, and `network_changed` starts that wait over.
+`Peers::keep` dials again after a drop, 1 s later and doubling to 60 s; `network_changed` starts that wait over, and so does a connection that stayed 60 s, while one that was admitted and closed sooner is dialed as rarely as one that never answered.
+A transport that cannot accept, as an endpoint that ended and cannot bind its port again, is asked again on the same wait, with one diagnostic when it starts failing and one when it recovers.
 
 **The first exchange.**
 Each side sends a hello first: the magic `HIDEPEER`, a length, and at most 16 KiB of JSON carrying the framing number, the oldest and newest link version it speaks, its capabilities, its build and its device id.
-The two run the newest link version both speak and the capabilities both name; when they share none, the connection closes as `update_needed` and `PeerEvent::UpdateNeeded` says which side is behind.
+The two run the newest link version both speak and the capabilities both name; when they share none, the connection closes as `update_needed`, and `PeerEvent::UpdateNeeded` says which side is behind when the peer holds or is given a grant, while a stranger's leaves a diagnostic only.
+A machine runs at most 16 first exchanges at once, each bounded by 10 s, and a connection that arrives past that closes as `busy`.
 A build that is not a release also sends the contract file's hash, and two such builds with different hashes refuse each other, so a contract change is never tested against a stale peer by accident.
 The hello stream stays open for the connection's life and carries each side's grant state and generation as they change, and the request to update and its answer.
 
@@ -3181,27 +3184,32 @@ The transport sends by priority: keys typed into a pane first (100), then hello,
 The host keeps who may be its guest in `peers/grants.json` and the guest keeps the hosts it paired with in `peers/known.json`, private files of at most 64 KiB replaced atomically.
 A change is saved under the store's lock, then the direction's gate moves (one atomic generation, where 0 is closed), then the peer is told on the hello stream: a crash between two of those steps leaves the saved state, which is what the next start enforces.
 Pairing settles in two steps: the host saves a `pending` grant that opens nothing and answers `granted`, and the guest saves its side and sends `confirm`, which makes the grant `active`.
-A confirm answers the same however often it is sent and never revives a paused or removed grant; a pending grant its guest never confirms is dropped after 10 minutes.
+A confirm answers the same however often it is sent and never revives a paused or removed grant; a pause of a paused grant or a resume of an active one saves nothing and moves no generation, so a repeat ends no stream.
+A pending grant its guest never confirms counts for nothing once 10 minutes have passed, on every read and not only when a later write drops it.
 A removed grant leaves a tombstone for 30 days, 256 at most with the oldest dropped first, so its guest's next connection is told `revoked` rather than `none`; a host grants 32 machines at most and a guest remembers 64 hosts.
-When no grant is left in either direction the connection closes as `no_grant`, and a connection with none may stay 10 minutes, the life of a pending grant.
+When no grant is left in either direction the connection closes as `no_grant`; a connection with none may stay 10 minutes, a pending grant keeps it only while that grant still waits, and the limit is read again each time a grant or a known host changes.
+A machine holds 16 such connections at most and closes the next as `busy`; what it keeps for a connection, the inbound gate included, lives in that connection and goes with it.
 
 **The machine key.**
 `peers/machine.key` holds the Ed25519 secret a machine connects as, with the id of the machine it was made on.
-A file that names another machine, as a copied or restored home folder would carry, is replaced by a new key; a damaged file is an error, never a silent new identity.
+A file that names another machine, as a copied or restored home folder would carry, is replaced by a new key; a damaged file is an error, never a silent new identity, and so is one that another account can read or that is not this account's own file.
 
 **Events.**
 An event another core hands this one is appended and synced to `peers/inbox/<host>/events.jsonl` before it is acknowledged, in the sender's own sequence: a repeat answers its old number, a gap is refused with what the inbox holds, and a full inbox refuses instead of dropping.
 Events are applied one at a time with `cursor.json` saved after each, and one that cannot be applied is acknowledged and logged rather than blocking the ones behind it.
+An append that fails partway is cut back to the last whole line, so the next event never joins a torn one.
 
 **The iroh transport.**
 `hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
-A path counts as idle after 3 s with a keep-alive every 1 s, and a connection that has had no relay path for 5 s while a relay is configured closes as `no_relay_path`, so the keeper dials it again.
+A path counts as idle after 3 s with a keep-alive every 1 s, and a connection that had a relay path and has been without one for 5 s while this machine is still attached to its relay closes as `no_relay_path`, so the keeper dials it again; one that never had a relay path, or whose relay is down, is left alone, because a new connection would get none either.
+An incoming connection's handshake runs in a task of its own, 16 at once and 10 s each, and one past that is refused before it starts.
 Among the addresses a machine finds for itself, one in 100.64.0.0/10 is ranked last (`addr::rank_self_discovered`); mDNS lookup is an option the caller turns on.
 `PeerTransport::relay` answers what the transport knows of its relay when a caller has a machine it could not reach to explain: none, attached, unreachable, or stopped for the month, which the relay's host says with a 503 and the words "monthly limit reached" to one HTTPS request made then, never on a timer; iroh keeps its own relay failure as text to print, not to decide by.
 An endpoint that ends without being asked is built again, and iroh's own spelling of a key never leaves the crate: a key is 64 lower hex characters everywhere Hide stores or sends it.
 
 **The link multiplexer.**
-`hide_peer::mux` is the multiplexer the SSH and WSL links run ([A core on another machine](#a-core-on-another-machine)), moved from `hided` with no change to what it does, so the peer link's node stream can run it too.
+`hide_peer::mux` is the multiplexer the SSH and WSL links run ([A core on another machine](#a-core-on-another-machine)), moved from `hided` with no change to what it does.
+It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it never runs over iroh, whose connection already carries streams of its own.
 
 **Diagnostics.**
 `hide-peer` writes its diagnostics through `hide_peer::log`, which `hided` points at the core's diagnostic log at start; a program that sets no sink gets them on stderr.

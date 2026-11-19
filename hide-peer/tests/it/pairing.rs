@@ -11,7 +11,7 @@ use hide_peer::wire::{read_message, write_message};
 
 use crate::{Machine, granted, within};
 
-async fn read(stream: &mut hide_peer::PeerStream<hide_peer::loopback::LoopConn>) -> Pairing {
+pub async fn read(stream: &mut hide_peer::PeerStream<hide_peer::loopback::LoopConn>) -> Pairing {
     let body = within(
         "a pairing message",
         read_message(&mut stream.recv, MAX_MESSAGE),
@@ -78,11 +78,7 @@ async fn a_guest_runs_nothing_until_both_sides_settled() {
         link.open(StreamKind::Management).await,
         Err(OpenError::NoGrant(_))
     ));
-    assert_eq!(
-        host.peers
-            .grants(|grants| grants.state_of(&guest.key()).state),
-        GrantState::Pending
-    );
+    assert_eq!(host.peers.granting(&guest.key()).state, GrantState::Pending);
 
     // The guest's operator says the words match: its side is saved, then
     // the confirm goes out.

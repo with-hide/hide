@@ -32,6 +32,10 @@
     {
       "name": "lost",
       "number": 7
+    },
+    {
+      "name": "busy",
+      "number": 8
     }
   ],
   "event": {
@@ -297,6 +301,14 @@
       "unknown"
     ],
     "messages": {
+      "asking": {
+        "fields": [
+          "device",
+          "name",
+          "words"
+        ],
+        "since": 1
+      },
       "confirm": {
         "fields": [
           "grant"
@@ -331,12 +343,20 @@
           "reason"
         ],
         "since": 1
+      },
+      "request": {
+        "fields": [
+          "device",
+          "name"
+        ],
+        "since": 1
       }
     },
     "refusals": [
       "no_offer",
       "declined",
       "full",
+      "unanswered",
       "other"
     ]
   },

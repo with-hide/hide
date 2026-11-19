@@ -26,7 +26,7 @@ use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
 use hide_peer::protocol::{Candidate, StreamKind};
 use hide_peer::store::{Grants, Known};
-use hide_peer::{MachineKey, PeerTransport};
+use hide_peer::{Clock, MachineKey, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
 use tokio::sync::{OnceCell, mpsc};
@@ -102,7 +102,7 @@ pub fn paired(state_dir: &Path) -> io::Result<bool> {
     let mut grants = Grants::open(layout::peer_grants(state_dir))?;
     grants.expire(now_unix_ms()).map_err(io::Error::other)?;
     let known = Known::open(layout::peer_known(state_dir))?;
-    Ok(!grants.list().is_empty() || !known.list().is_empty())
+    Ok(grants.list(now_unix_ms()).next().is_some() || !known.list().is_empty())
 }
 
 impl PeerHost {
@@ -195,6 +195,7 @@ impl PeerHost {
                 build: &self.settings.build,
                 device: &self.settings.device,
                 release: self.settings.release,
+                clock: Clock::system(),
             },
         )?;
         hide_core::diagnostic!(json!({
