@@ -3004,16 +3004,27 @@ mod tests {
         (phones, frames.try_recv().is_ok())
     }
 
-    /// B38, B33: each side judges the shared projection only while it is on,
-    /// a side turned on later is seeded by what was already waiting, and the
-    /// other side's switch never changes what a side announces.
+    /// B38, B33, PRD device-connect-iroh B59: each side judges the shared
+    /// projection only while it is on, a new wait is announced in one place,
+    /// the computer while someone uses it and its window shows notices and
+    /// the phones otherwise, and a side turned on later is seeded by what
+    /// was already waiting.
     #[test]
     fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
-        for (phone_on, desktop_on) in [(true, true), (true, false), (false, true), (false, false)] {
-            let label = format!("phone {phone_on}, desktop {desktop_on}");
+        for (phone_on, desktop_on, in_use) in [
+            (true, true, true),
+            (true, true, false),
+            (true, false, true),
+            (false, true, true),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            let label = format!("phone {phone_on}, desktop {desktop_on}, in use {in_use}");
             let mut phone = push::PhoneNotices::default();
             let desktop = DesktopNotices::default();
             desktop.set(1, desktop_on);
+            desktop.set_waiting(1, desktop_on);
+            desktop.activity(1, in_use);
             assert_eq!(
                 pass(
                     &mut phone,
@@ -3031,8 +3042,12 @@ mod tests {
                     &desktop,
                     &projected("needs_you", "approval")
                 ),
-                (usize::from(phone_on), desktop_on),
-                "{label}: a new wait is announced by each side that is on"
+                if desktop_on && in_use {
+                    (0, true)
+                } else {
+                    (usize::from(phone_on), false)
+                },
+                "{label}: a new wait is announced in one place"
             );
         }
 
@@ -3072,6 +3087,7 @@ mod tests {
         let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         desktop.set(1, true);
+        desktop.activity(1, true);
         assert_eq!(
             pass(&mut phone, false, &desktop, &projected("working", "none")),
             (0, false)
@@ -3094,6 +3110,9 @@ mod tests {
             pass(&mut phone, true, &desktop, &projected("working", "none")),
             (0, false)
         );
+        // Only Done notices are on in the window: the phones do not rest
+        // for a wait the computer does not show, and the window itself
+        // leaves the frame's wait out.
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, true));
     }
     fn tagged(tag: &str) -> Value {

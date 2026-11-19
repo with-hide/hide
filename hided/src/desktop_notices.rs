@@ -12,6 +12,13 @@
 //! that announces or clears something is one `agent_notice` frame for the
 //! desktop windows; whether a notification shows, and in what words, is the
 //! desktop host's and the window's to decide (D-10, B39).
+//!
+//! Where a notice goes is the core's rule (`hide_core::notice_place`, PRD
+//! device-connect-iroh D-60, D-78): this module only says what it observed
+//! of this machine's seat and takes the answer. A new notice reaches the
+//! windows only while this computer is the place, which is while someone
+//! uses it; a computer that is on and not in use gets none (B59), and the
+//! phones rest exactly while a computer is the place.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -21,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use hide_core::agent_state::phone::{AgentKey, Projection};
 use hide_core::agent_state::push::{Notice, Transitions};
+use hide_core::notice_place::{self, Place, Seat};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
@@ -53,15 +61,27 @@ struct ComputerUse {
 }
 
 impl ComputerUse {
-    fn rests(&self, wanted: bool) -> bool {
-        wanted
-            && !self.hosts.is_empty()
-            && match (self.computer, self.phone) {
-                (Some(computer), Some(phone)) => {
-                    phone.saturating_duration_since(computer) <= Duration::from_secs(1)
-                }
-                _ => true,
-            }
+    /// This machine's seat as the place rule reads it: lengths of time
+    /// measured back from `now`, or from the latest receipt when that is
+    /// later, so two receipts are never compared through a clamped zero.
+    fn seat(&self, shows: bool, now: Instant) -> Seat {
+        let now = [Some(now), self.computer, self.phone]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(now);
+        let ago = |at: Instant| now.saturating_duration_since(at);
+        Seat {
+            input: (!self.hosts.is_empty()).then(|| self.computer.map_or(Duration::ZERO, ago)),
+            shows,
+            phone: self.phone.map(ago),
+        }
+    }
+
+    /// The places a notification made at `now` is tried at, with a phone
+    /// counted as paired: whether one is, is the phone side's to know.
+    fn places(&self, shows: bool, now: Instant) -> Vec<Place> {
+        notice_place::places(self.seat(shows, now), &[], true)
     }
 }
 
@@ -107,18 +127,21 @@ impl DesktopNotices {
         } else {
             use_state.hosts.remove(&connection);
         }
-        self.update_rest(&use_state);
+        self.update_rest(&use_state, at);
     }
 
     /// Called only for a newly accepted phone action, including a device pane.
     pub fn phone_input(&self, at: Instant) {
         let mut use_state = self.computer_use.lock().expect("computer use");
         use_state.phone = Some(use_state.phone.map_or(at, |old| old.max(at)));
-        self.update_rest(&use_state);
+        self.update_rest(&use_state, at);
     }
 
-    fn update_rest(&self, use_state: &ComputerUse) {
-        let resting = use_state.rests(self.waiting_wanted.load(Ordering::SeqCst));
+    /// The phones rest while a computer whose window shows the operator's
+    /// turn is the place (`notice_place::phone_rests`).
+    fn update_rest(&self, use_state: &ComputerUse, now: Instant) {
+        let shows = self.waiting_wanted.load(Ordering::SeqCst);
+        let resting = notice_place::phone_rests(&use_state.places(shows, now));
         if self.resting.swap(resting, Ordering::SeqCst) != resting {
             hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "phone.rest_changed", "resting": resting,
@@ -130,8 +153,15 @@ impl DesktopNotices {
         self.waiting.set(connection, wanted, |on| {
             let use_state = self.computer_use.lock().expect("computer use");
             self.waiting_wanted.store(on, Ordering::SeqCst);
-            self.update_rest(&use_state);
+            self.update_rest(&use_state, Instant::now());
         });
+    }
+
+    /// Whether a notification made now goes to this machine's windows: a
+    /// window has notifications on and this computer is the place.
+    fn takes_here(&self) -> bool {
+        let use_state = self.computer_use.lock().expect("computer use");
+        use_state.places(self.wanted(), Instant::now()).first() == Some(&Place::Here)
     }
 
     /// Resting must leave at least one desktop able to announce a person's turn.
@@ -170,7 +200,17 @@ impl DesktopNotices {
     /// Judges one projection; a change worth a notification, or one that
     /// clears a notification shown before (B35), goes out as one frame.
     pub fn observe(&self, projection: &Projection) {
-        let (notices, seen) = self.lock().observe(projection);
+        let (mut notices, seen) = self.lock().observe(projection);
+        // The transition is spent either way: a notice this computer did
+        // not take is another place's, never shown here late. A notice
+        // shown before is still cleared.
+        if !notices.is_empty() && !self.takes_here() {
+            hide_core::diagnostic!(json!({
+                "component": "desktop_notices", "kind": "desktop_notice.not_here",
+                "agents": notices.iter().map(|notice| notice.key.tag()).collect::<Vec<_>>(),
+            }));
+            notices.clear();
+        }
         if notices.is_empty() && seen.is_empty() {
             return;
         }
@@ -314,6 +354,7 @@ mod tests {
     #[test]
     fn the_first_projection_seeds_and_a_new_wait_is_one_notice_cleared_when_seen() {
         let notices = DesktopNotices::default();
+        notices.activity(7, true);
         assert!(notices.set(7, true));
         assert!(notices.wanted() && notices.seed_pending());
         assert_eq!(judged(&notices, &rest("needs_you", "approval")), None);
@@ -340,6 +381,7 @@ mod tests {
     #[test]
     fn the_switch_follows_its_windows_and_reseeds_when_it_turns_on_again() {
         let notices = DesktopNotices::default();
+        notices.activity(2, true);
         assert!(notices.set(1, true));
         assert!(!notices.set(2, true), "a second window adds no transition");
         judged(&notices, &rest("working", "none"));
@@ -370,6 +412,7 @@ mod tests {
             ("needs_you", "approval", "approval", None),
         ] {
             let notices = DesktopNotices::default();
+            notices.activity(7, true);
             notices.set(7, true);
             judged(&notices, &rest("working", "none"));
             let mut asking = rest(group, demand);
@@ -382,5 +425,45 @@ mod tests {
             asking["navigator"]["agents"][0]["detail"] = json!("새 문장");
             assert_eq!(judged(&notices, &asking), None);
         }
+    }
+
+    /// PRD device-connect-iroh B59: a computer that is on and not in use
+    /// gets no notice, the one it missed is not shown when someone returns,
+    /// a later one is, and a phone that acted after the computer's last
+    /// input is where the operator is until the next computer input.
+    #[test]
+    fn a_new_notice_reaches_the_windows_only_while_this_computer_is_in_use() {
+        let notices = DesktopNotices::default();
+        notices.set(7, true);
+        judged(&notices, &rest("working", "none"));
+        assert_eq!(
+            judged(&notices, &rest("needs_you", "approval")),
+            None,
+            "no one is at this computer"
+        );
+        notices.activity(7, true);
+        assert_eq!(
+            judged(&notices, &rest("needs_you", "approval")),
+            None,
+            "the wait that began while away is not announced late"
+        );
+        judged(&notices, &rest("working", "none"));
+        let frame = judged(&notices, &rest("needs_you", "question")).expect("a notice");
+        let tag = frame["payload"]["notices"][0]["tag"].clone();
+
+        // Away again: the notice shown before is still cleared.
+        notices.activity(7, false);
+        let cleared = judged(&notices, &rest("seen", "none")).expect("a clear");
+        assert_eq!(cleared["payload"]["clear"], json!([tag]));
+
+        let at = Instant::now();
+        notices.activity_at(7, true, at);
+        notices.phone_input(at + Duration::from_secs(3));
+        judged(&notices, &rest("working", "none"));
+        assert_eq!(
+            judged(&notices, &rest("needs_you", "approval")),
+            None,
+            "the operator answered from a phone last"
+        );
     }
 }

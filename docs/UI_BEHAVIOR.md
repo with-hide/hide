@@ -2906,6 +2906,8 @@ An existing install whose old shared switch was on migrates to both on; an old o
 Each toggle sends one event and persists through the core's existing UI-state writer; a repeated choice publishes nothing and a stale generic UI save cannot replace either choice.
 While either switch is on, the group shows what macOS allows with `Open System Settings` when it blocks Hide or `Send a test` when it allows, or a `Test notification` row on Windows and Linux.
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
+A notice goes to one place (PRD device-connect-iroh D-60, B59): this computer's windows get a new one only while the computer is in use, by the rule the Phone group states below, and a computer that is on and not in use gets none, so the same question never rings here and on a phone.
+A wait that began while no one was at the computer is not announced when someone returns; its row stands in Needs You.
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
 Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
 On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, at least one attached desktop window has Needs You notifications enabled (`app_closed`), and no later admitted phone action has taken over.
@@ -2914,7 +2916,7 @@ A new authenticated, well-formed answer, approval or wake counts as phone use ev
 Reading or opening the app, authentication or format refusals and duplicate request IDs do not count.
 Computer input reported after a pause of at least five seconds, or a return to in use, rests phone pushes again; continuous typing adds no reports to the existing one-second poll.
 Within one second the computer wins; when typing continuously while also using the phone, the phone stays in charge until the next pause and resumed input.
-This memory is lost on daemon restart and does not change desktop notifications or the switch's wording.
+This memory is lost on daemon restart and does not change the switch's wording; while the phone is in charge, this computer's windows get no new notice.
 Ten minutes without input, locking or suspending the computer, closing the last desktop window, or disabling Needs You notifications in every attached window permits phone pushes.
 A root with no eligible pending notice sends no phone notification for a wait that begins while phone pushes rest, even when resting ends before its settle window closes.
 It remains in the phone app's list and badge count; only a new wait or declaration after resting ends can notify, after the existing settle window.
@@ -3072,6 +3074,7 @@ In Korean a fixed noun follows the machine's name (`Mac mini 기기로`), so no 
 Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.
 This Mac comes first, as in Devices, and each machine is listed once.
+A paired machine is not one of them: it runs its own Hide, so its agents, profiles and models are set in its own Settings, and Hide AI here offers none of its agents (PRD device-connect-iroh, Settings per machine).
 `Checking this machine's agents…` shows only while a read runs or before the machine's first answer; a machine whose kit answered without listing an agent (another Hide held its account, a retirement it refused) says `Hide couldn't read this machine's agents.` with Check again.
 A device that cannot be reached shows one line and Try again above its last installed-agent and profile list, dimmed and read-only; no permission, switch, add or edit control is offered until it reconnects.
 A device connecting or switched off keeps the same read-only list below its connection state.
