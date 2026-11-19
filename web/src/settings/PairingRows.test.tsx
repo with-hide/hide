@@ -88,6 +88,20 @@ it("lists a paired machine with its state, its direction and the one action its 
   await unmount();
 });
 
+it("offers to update a machine too old to connect only from the computer that opens it (B22)", async () => {
+  const older = peer({ connected: false, path: null, update: "there" });
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active", connected: false, path: null, update: "there" });
+  const { q, press, events, unmount } = await mount({ ...idle, requests: [] }, [older, guest]);
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("Update needed on that computer");
+  expect(q('[data-peer-update="windows-pc"]')?.textContent).toBe("Update Windows PC");
+  // The computer that only opens this one is told, and asks for nothing.
+  expect(q('[data-peer-row="macbook"]')?.textContent).toContain("Update needed on that computer");
+  expect(q('[data-peer-update="macbook"]')).toBeNull();
+  await press('[data-peer-update="windows-pc"]');
+  expect(last(events)).toMatchObject({ kind: "pairing_update", payload: { device: older.key } });
+  await unmount();
+});
+
 it("acts on the row that was pressed when two machines say one device id", async () => {
   const first = peer({ key: "11".repeat(32), name: "Office", connected: false, path: null });
   const second = peer({ key: "22".repeat(32), name: "Imposter", connected: false, path: null });

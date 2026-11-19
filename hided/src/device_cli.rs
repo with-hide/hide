@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device update <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -81,6 +81,10 @@ pub enum Verb {
         direction: Option<Direction>,
     },
     Request {
+        device: String,
+    },
+    /// Asks a paired machine whose Hide is too old to connect to update.
+    Update {
         device: String,
     },
     Address {
@@ -237,6 +241,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             direction,
         },
         (Some("request"), [device]) => Verb::Request {
+            device: named(device)?,
+        },
+        (Some("update"), [device]) => Verb::Update {
             device: named(device)?,
         },
         (Some("address"), [device, address]) => {
@@ -403,6 +410,16 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 value,
                 format!(
                     "Asked {device} to let this machine open it. Its operator answers there; hide device list shows what came of it.\n"
+                ),
+            ))
+        }
+        Verb::Update { device } => {
+            operators(env)?;
+            let value = pairing(env, json!({"verb":"update","device":device}))?;
+            Ok(Printed::Value(
+                value,
+                format!(
+                    "Asked {device} to update its Hide. It installs the official release and connects again; hide device list shows when it has.\n"
                 ),
             ))
         }
@@ -1102,7 +1119,15 @@ fn peer_line(peer: &Value) -> String {
     }
     match peer["update"].as_str() {
         Some("here") => line.push_str("  update needed: this machine\n"),
-        Some("there") => line.push_str("  update needed: that machine\n"),
+        Some("here_asked") => line.push_str(
+            "  update needed: this machine, and that machine asked for it; open Hide here to update\n",
+        ),
+        Some("there") => line.push_str(
+            "  update needed: that machine; hide device update asks it to update when this machine opens it\n",
+        ),
+        Some("there_asked") => {
+            line.push_str("  update needed: that machine, which this machine asked to update\n")
+        }
         // The Hide this machine started there, kept at this machine's
         // build (B23).
         Some("updating") => line.push_str("  its Hide is being updated to this machine's build\n"),

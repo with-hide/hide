@@ -135,6 +135,11 @@ pub enum Ask {
     Retry {
         device: String,
     },
+    /// Asks a machine this one opens, whose Hide is too old to connect,
+    /// to update itself (B22).
+    Update {
+        device: String,
+    },
     /// Names an address to reach a host at first.
     Address {
         device: String,
@@ -213,6 +218,7 @@ impl Ask {
             | Self::Answer { .. }
             | Self::Resume { .. }
             | Self::Request { .. }
+            | Self::Update { .. }
             | Self::Address { .. }
             | Self::LookSsh { .. }
             | Self::PairSsh { .. }
@@ -324,6 +330,9 @@ pub fn next_action(code: &str) -> &'static str {
             "Only a device this Hide dials over SSH and has connected to once, or a WSL distribution of this PC, can be switched"
         }
         "device_own" => "That is this machine itself",
+        "update_not_asked" => {
+            "Only a machine this one opens, with that direction on, can be asked to update: update Hide on that machine itself"
+        }
         _ => "Retry; the reason is in Hide's diagnostic log",
     }
 }
@@ -367,7 +376,8 @@ pub struct Pairing {
     frame: watch::Sender<Arc<Value>>,
     /// Counts the asks that want the paired machines read again.
     look: watch::Sender<u64>,
-    /// Which machines cannot connect until one side updates.
+    /// Which machines cannot connect until one side updates, and whether
+    /// that side was asked to (B22), until the two connect.
     updates: Mutex<HashMap<PeerKey, PeerUpdate>>,
     /// Where bringing the Hides this machine started to its build stands.
     raises: Mutex<Raises>,
@@ -427,6 +437,20 @@ struct SshRequest {
     /// A switch under this request began starting a Hide on the target:
     /// the machine it pairs with is one this machine started (B23).
     started: bool,
+}
+
+/// What a machine's row says after another refused first exchange, given
+/// what it said: which side is behind, and that the side was asked to
+/// update when it was asked before and is still the one behind.
+fn still_needed(said: Option<PeerUpdate>, behind: Behind) -> PeerUpdate {
+    match behind {
+        Behind::Theirs if said == Some(PeerUpdate::ThereAsked) => PeerUpdate::ThereAsked,
+        Behind::Theirs => PeerUpdate::There,
+        Behind::Ours | Behind::Either if said == Some(PeerUpdate::HereAsked) => {
+            PeerUpdate::HereAsked
+        }
+        Behind::Ours | Behind::Either => PeerUpdate::Here,
+    }
 }
 
 /// The Hides this machine started on other machines, each brought to this
@@ -623,15 +647,33 @@ impl Pairing {
                 changed = look.changed() => if changed.is_err() { return },
                 event = events.recv() => match event {
                     Ok(PeerEvent::UpdateNeeded { key, behind, build, .. }) => {
-                        let update = match behind {
-                            Behind::Ours | Behind::Either => PeerUpdate::Here,
-                            Behind::Theirs => PeerUpdate::There,
+                        let asked = {
+                            let mut updates = lock(&self.updates);
+                            let update = still_needed(updates.get(&key).copied(), behind);
+                            updates.insert(key, update);
+                            update == PeerUpdate::ThereAsked
                         };
-                        lock(&self.updates).insert(key, update);
+                        // An ask is said once per exchange: until the two
+                        // connect, each dial of the machine says it again,
+                        // so a Hide restarted there still hears it. A
+                        // machine this one no longer opens is asked nothing.
+                        if asked && peers.ask_update(&key).is_err() {
+                            lock(&self.updates).insert(key, PeerUpdate::There);
+                        }
                         // A Hide this machine started is brought to its
                         // build instead of waiting for someone there.
                         if behind != Behind::Ours {
                             self.raise_started(&peers, key, &build, false);
+                        }
+                    }
+                    // The app here is told through the machine's row: its
+                    // own window updates and restarts (B22).
+                    // Only where this machine is the one behind: an ask on
+                    // a connection that lives has nothing to update for.
+                    Ok(PeerEvent::UpdateRequested { key }) => {
+                        let mut updates = lock(&self.updates);
+                        if updates.get(&key) == Some(&PeerUpdate::Here) {
+                            updates.insert(key, PeerUpdate::HereAsked);
                         }
                     }
                     Ok(PeerEvent::Connected { key, .. }) => {
@@ -1166,6 +1208,24 @@ impl Pairing {
                 if let Some(theirs) = failed {
                     self.raise_started(&peers, paired.key, &theirs, true);
                 }
+                self.look.send_modify(|count| *count += 1);
+                Ok(json!({ "device_id": paired.machine.device_id }))
+            }
+            Ask::Update { device } => {
+                let paired = self.named(&peers, &device)?;
+                // Asked only of a machine whose Hide is the older one and
+                // that this machine opens: the ask rides the first
+                // exchange of the dial made now, the one thing the two
+                // builds share.
+                let older = matches!(
+                    lock(&self.updates).get(&paired.key),
+                    Some(PeerUpdate::There | PeerUpdate::ThereAsked)
+                );
+                if !older || peers.ask_update(&paired.key).is_err() {
+                    return Err("update_not_asked");
+                }
+                lock(&self.updates).insert(paired.key, PeerUpdate::ThereAsked);
+                peers.network_changed();
                 self.look.send_modify(|count| *count += 1);
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
@@ -1906,6 +1966,24 @@ mod tests {
     }
 
     #[test]
+    fn an_update_that_was_asked_for_stays_asked_while_the_same_side_is_behind() {
+        use PeerUpdate::{Here, HereAsked, There, ThereAsked};
+        for (said, behind, says) in [
+            (None, Behind::Theirs, There),
+            (None, Behind::Ours, Here),
+            (None, Behind::Either, Here),
+            (Some(ThereAsked), Behind::Theirs, ThereAsked),
+            (Some(HereAsked), Behind::Ours, HereAsked),
+            (Some(HereAsked), Behind::Either, HereAsked),
+            // The other side became the older one: nothing was asked of it.
+            (Some(ThereAsked), Behind::Ours, Here),
+            (Some(HereAsked), Behind::Theirs, There),
+        ] {
+            assert_eq!(still_needed(said, behind), says, "{said:?} {behind:?}");
+        }
+    }
+
+    #[test]
     fn what_only_the_operator_may_ask_is_refused_to_every_other_caller() {
         let operators = [
             json!({"verb": "share"}),
@@ -1915,6 +1993,8 @@ mod tests {
             json!({"verb": "answer", "ask": 1, "allow": true}),
             json!({"verb": "resume", "device": "pc"}),
             json!({"verb": "request", "device": "pc"}),
+            // Another machine's app restarts on it (B22).
+            json!({"verb": "update", "device": "pc"}),
             json!({"verb": "address", "device": "pc", "address": "10.0.0.2:7842"}),
             json!({"verb": "accept_ssh", "request": "r", "key": "k", "device": "d", "name": "n"}),
         ];
@@ -1962,6 +2042,7 @@ mod tests {
             "pairing_unanswered",
             "pairing_unreachable",
             "pairing_update_needed",
+            "update_not_asked",
         ] {
             assert!(!next_action(code).starts_with("Retry;"), "{code}");
         }

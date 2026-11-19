@@ -24,6 +24,7 @@ import { FirstRunWizard } from "./FirstRunWizard";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
 import { PairingDialogs } from "./PairingDialogs";
+import { PeerUpdateNotice } from "./PeerUpdateNotice";
 import { DeviceSwitchDialogs, DeviceSwitchStrip } from "./settings/DeviceSwitch";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
@@ -273,6 +274,7 @@ export function App() {
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
     ["workspace_notices", <WorkspaceNotices actions={actions} />],
     ["notice", <NoticeToasts actions={actions} />],
+    ["peer_update", <PeerUpdateNotice />],
   ];
   const overlays: [string, ReactNode][] = [
     ["overview", <OverviewModal actions={actions} />],

@@ -11,22 +11,28 @@
 // stopped, with the strip of the one in front (`front=`) over the list, and
 // `view=held` the question a later computer is asked first (B69), and
 // `view=install` what a machine with no Hide of its own would get (B36,
-// D-45). It proves the rendered parts; the pairing is the daemon's.
+// D-45); `view=update` is two Hides too far apart to connect (B22): the
+// computer this one asked to update, the one that asked this computer, and
+// this computer's own notice in the corner. It proves the rendered parts;
+// the pairing is the daemon's.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
+import { ToastStack } from "../components/ui/toast";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { PairingDialogs } from "../PairingDialogs";
+import { PeerUpdateNotice } from "../PeerUpdateNotice";
 import type { PairingView, Peer } from "../pairing";
 import { DeviceSwitchDialogs, DeviceSwitchStrip } from "../settings/DeviceSwitch";
 import { DevicesTab } from "../settings/DevicesTab";
+import type { UpdateStatus } from "../host";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { standInHost } from "../practice/mount";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
-const VIEWS = ["devices", "other", "allow", "request", "join", "failed", "switch", "held", "install", "landed"] as const;
+const VIEWS = ["devices", "other", "allow", "request", "join", "failed", "switch", "held", "install", "landed", "update"] as const;
 type View = (typeof VIEWS)[number];
 
 const WORDS: Record<string, string[]> = { ko: ["바다", "연필", "구름", "사과"], en: ["engine", "bicycle", "muscle", "into"] };
@@ -47,6 +53,13 @@ const PEERS: Peer[] = [
   // keeps at its own version (B23).
   peer("0", "render-box", { opens: "active", update: "updating" }),
   peer("1", "WSL Debian", { opens: "active", path: "local", update: "update_rolled_back" }),
+];
+
+/** Hides too far apart to connect (B22): one this computer opens and may ask, one it asked, and one that opens this computer and asked it. */
+const UPDATE_PEERS: Peer[] = [
+  peer("k", "Linux box", { opens: "active", connected: false, path: null, update: "there" }),
+  peer("l", "Windows PC", { opens: "active", connected: false, path: null, update: "there_asked" }),
+  peer("m", "MacBook", { opened_by: "active", connected: false, path: null, update: "here_asked" }),
 ];
 
 /** The MacBook runs two terminals here, so removing it offers to end them (B26). */
@@ -82,7 +95,7 @@ function pairingOf(view: View, lang: string): PairingView | null {
   const words = WORDS[lang] ?? WORDS.en!;
   const soon = Date.now() + 101_000;
   const idle: PairingView = { offer: null, asks: [], join: null, requests: [] };
-  if (view === "switch" || view === "held" || view === "install" || view === "landed") return idle;
+  if (view === "switch" || view === "held" || view === "install" || view === "landed" || view === "update") return idle;
   if (view === "devices") return { ...idle, offer: { link: "hide://pair#v=1&id=7f3a9c1e…&dev=windows-pc&relay=https%3A%2F%2Fdevice-relay.withhide.dev&s=4be2…", expires_unix_ms: Date.now() + 521_000 }, requests: [{ key: key("a"), state: "declined" }] };
   if (view === "allow") return { ...idle, asks: [{ id: 1, key: key("a"), device: "macbook", name: "MacBook", kind: "link", words, expires_unix_ms: soon }] };
   if (view === "request") return { ...idle, asks: [{ id: 2, key: key("c"), device: "windows-pc", name: "Windows PC", kind: "request", words: null, expires_unix_ms: soon }] };
@@ -100,17 +113,34 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   // `firewall=missing`: a Windows PC whose firewall rules are not in place
   // (B32), drawn through a stand-in of the desktop host's two firewall calls.
   const firewall = params.get("firewall") === "missing";
+  // `view=update`: the desktop app, whose updates the notice offers; the
+  // stand-in reports no update found yet and does nothing on a press.
+  const updating = view === "update";
   useLayoutEffect(() => {
-    if (!firewall) return;
+    if (!firewall && !updating) return;
     const before = window.hideHost;
-    window.hideHost = Object.assign(standInHost("win32"), {
-      firewallState: async () => "missing" as const,
-      allowFirewall: async () => "declined" as const,
-    });
+    window.hideHost = Object.assign(
+      standInHost(firewall ? "win32" : "darwin"),
+      firewall ? { firewallState: async () => "missing" as const, allowFirewall: async () => "declined" as const } : {},
+      updating
+        ? {
+            updates: {
+              onStatus: (listener: (status: UpdateStatus) => void) => {
+                listener({ phase: { kind: "idle", checkedAt: null }, prerelease: false, installOnQuit: true, dismissed: null, required: false });
+                return () => undefined;
+              },
+              check: () => undefined,
+              restart: () => undefined,
+              dismiss: () => undefined,
+              setPrerelease: () => undefined,
+            },
+          }
+        : {},
+    );
     return () => {
       window.hideHost = before;
     };
-  }, [firewall]);
+  }, [firewall, updating]);
   const switching = view === "switch" || view === "held" || view === "install";
   const landed = view === "landed";
   const front = params.get("front") ?? "build-box";
@@ -125,7 +155,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
             ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" }
             : null,
       rest: {
-        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
+        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : updating ? UPDATE_PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
         status: { remote: (switching ? HELPERS : landed ? LANDED : []).map((device) => ({ target_id: device.id, state: "connected", message: null })) },
         ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" },
       },
@@ -133,16 +163,17 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
     useUiStore.setState({ switchedDevices: landed ? ["build-box"] : [] });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view, switching, landed, front]);
+  }, [theme, lang, view, switching, landed, updating, front]);
   return (
     <>
       <InterfaceLanguageBoundary />
       <TooltipProvider>
         <div className="min-h-screen w-full bg-background text-foreground" data-gallery-scene="pairing" data-scene-ready="true">
           {switching || landed ? <DeviceSwitchStrip actions={actions} /> : null}
-          {view === "devices" || view === "other" || switching || landed ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
+          {view === "devices" || view === "other" || switching || landed || updating ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
           <PairingDialogs actions={actions} />
           <DeviceSwitchDialogs actions={actions} />
+          {updating ? <ToastStack><PeerUpdateNotice /></ToastStack> : null}
         </div>
       </TooltipProvider>
     </>

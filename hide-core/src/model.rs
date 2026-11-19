@@ -11709,6 +11709,8 @@ mod wire_enum_tests {
             let updates = [
                 PeerUpdate::Here,
                 PeerUpdate::There,
+                PeerUpdate::HereAsked,
+                PeerUpdate::ThereAsked,
                 PeerUpdate::Updating,
                 PeerUpdate::UpdateNotReached,
                 PeerUpdate::UpdateRolledBack,
@@ -11719,6 +11721,8 @@ mod wire_enum_tests {
                 match variant {
                     PeerUpdate::Here
                     | PeerUpdate::There
+                    | PeerUpdate::HereAsked
+                    | PeerUpdate::ThereAsked
                     | PeerUpdate::Updating
                     | PeerUpdate::UpdateNotReached
                     | PeerUpdate::UpdateRolledBack

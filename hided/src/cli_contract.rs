@@ -955,6 +955,28 @@ pub const COMMANDS: &[Spec] = &[
             "request_waiting",
         ],
     },
+    // Asks a machine this one opens, whose Hide is too old to connect, to
+    // update itself to the official release.
+    Spec {
+        words: &["device", "update"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "device_ambiguous",
+            "update_not_asked",
+        ],
+    },
     // Names an address a paired machine is tried at first.
     Spec {
         words: &["device", "address"],

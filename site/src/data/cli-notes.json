@@ -158,6 +158,10 @@
     "line": "Asks a machine that already opens this one to let this machine open it too, over the connection the two share; its operator answers there, and hide device list shows what came of it. Only the operator may run it, outside Hide's panes.",
     "example": "hide device request mini"
   },
+  "device update": {
+    "line": "Asks a paired machine whose Hide is too old to connect to update itself to the official release, after which the two connect again; it is heard only from a machine that opens that one, and hide device list shows which side must update. Only the operator may run it, outside Hide's panes.",
+    "example": "hide device update mini"
+  },
   "device address": {
     "line": "Names an address a paired machine is tried at first, before the addresses it was last reached at and the relay. Only the operator may run it, outside Hide's panes.",
     "example": "hide device address mini 192.168.0.12:7842"

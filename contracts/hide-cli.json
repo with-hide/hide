@@ -5462,6 +5462,36 @@
                     "value": {
                         "type": "key"
                     }
+                }
+            ],
+            "command": "device update",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous",
+                "update_not_asked"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
                 },
                 {
                     "name": "address",
@@ -7592,7 +7622,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6bde758949bcb2b6d5a4b505b985c1da42668471dbe34671492aec04c84875c2",
+    "digest": "sha256:26c39285f51de07d18d1019fad9c290c1c243055e6cd4dc43c9b5aec2014ac67",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -91,6 +91,13 @@ pub enum PeerUpdate {
     /// This machine's Hide is the older one.
     Here,
     There,
+    /// This machine's Hide is the older one, and that machine, which
+    /// holds an active grant here, asked it to update (PRD
+    /// device-connect-iroh B22): the app here updates itself.
+    HereAsked,
+    /// That machine's Hide is the older one, and this machine asked it to
+    /// update.
+    ThereAsked,
     /// This machine is bringing the Hide it started there to its own build
     /// (PRD device-connect-iroh B23).
     Updating,

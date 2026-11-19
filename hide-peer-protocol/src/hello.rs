@@ -3,7 +3,8 @@
 //! It is fixed and does not depend on any number: each side writes
 //! [`MAGIC`], a big-endian `u32` length and one JSON [`Hello`] on the
 //! connection's first stream, so two builds that share no device connection
-//! number can still tell each other so and ask for an update.
+//! number can still tell each other so and ask for an update
+//! ([`Hello::update`]).
 //! After it the same stream carries [`HelloFrame`]s for the connection's
 //! whole life.
 
@@ -54,6 +55,13 @@ pub struct Hello {
     /// release sends it, and two such builds connect only when it matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract: Option<String>,
+    /// "Check the official release, install it and restart": what
+    /// [`HelloFrame::Update`] says on a connection that lives, said here
+    /// for one that does not, because the two builds share no number and
+    /// the connection ends with this exchange. Only a side that holds an
+    /// active grant on the reader is heard (D-40).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub update: bool,
 }
 
 impl Hello {
@@ -70,6 +78,7 @@ impl Hello {
             build: build.to_owned(),
             device: device.to_owned(),
             contract: (!release).then(crate::contract::hash),
+            update: false,
         }
     }
 
@@ -224,6 +233,7 @@ mod tests {
             build: "1.3.0".into(),
             device: "device".into(),
             contract: contract.map(str::to_owned),
+            update: false,
         }
     }
 
@@ -277,6 +287,16 @@ mod tests {
         let later = br#"{"framing":1,"link":{"oldest":1,"newest":9,"note":"x"},"build":"9","device":"d","mood":"fine"}"#;
         let read = Hello::decode(later).expect("unknown fields are ignored");
         assert_eq!(read.link.newest, 9);
+        // An update is asked for only by a hello that says so, and a hello
+        // that asks for none is the hello an earlier reader knows.
+        assert!(!read.update);
+        assert!(!String::from_utf8_lossy(&bytes).contains("update"));
+        let asking = Hello {
+            update: true,
+            ..ours.clone()
+        };
+        let bytes = asking.encode().unwrap();
+        assert!(Hello::decode(&bytes[PREFIX_BYTES..]).unwrap().update);
         assert_eq!(HelloFrame::parse(br#"{"t":"later_thing"}"#).unwrap(), None);
         assert_eq!(body_length(*b"NOTHIDE!\0\0\0\x01"), None);
     }

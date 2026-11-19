@@ -28,6 +28,13 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
   it("puts the state the operator acts on before the connection: update, pair again, a removal still owed, a pause", () => {
     expect(peerState(peer({ update: "there", connected: false })).key).toBe("pairing.state.updateThere");
     expect(peerState(peer({ update: "here" })).key).toBe("pairing.state.updateHere");
+    // B22: only a computer that opens the older one, with that direction
+    // on, may ask it to update; this computer's own update is its notice's.
+    expect(peerState(peer({ update: "there", connected: false })).action).toBe("update_there");
+    expect(peerState(peer({ update: "there", opens: "paused" })).action).toBeNull();
+    expect(peerState(peer({ update: "there", opens: null, opened_by: "active" })).action).toBeNull();
+    expect(peerState(peer({ update: "there_asked" }))).toMatchObject({ key: "pairing.state.updateThereAsked", tone: "muted", action: null });
+    expect(peerState(peer({ update: "here_asked" }))).toMatchObject({ key: "pairing.state.updateHereAsked", action: null });
     // B23: the Hide this computer started there is being updated, or was
     // not, with why and Retry, whether or not the two are connected.
     expect(peerState(peer({ update: "updating" }))).toMatchObject({ key: "pairing.state.updating", action: null });
