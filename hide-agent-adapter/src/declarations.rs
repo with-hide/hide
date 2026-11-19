@@ -988,10 +988,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &[">"],
             trailer: 0,
-            // Its status line (`? for shortcuts` and the model); a picker,
-            // the shortcuts list or a question is drawn under the composer
-            // and takes the keys (`tests/fixtures/composer/agy-1.5.11-*`).
-            under: Some(1),
+            // Its status line, `? for shortcuts` and on its right the mode
+            // and the model; a picker, the shortcuts list, a question or any
+            // other row drawn there is not its empty prompt
+            // (`tests/fixtures/composer/agy-1.5.11-*`).
+            under: Some(&["? for shortcuts"]),
             // Its mode hint, such as `Auto mode: edits & safe commands
             // auto-approved (shift+tab to cycle)`, whose words change with
             // the mode, in palette grey; typed text and the paste mark are

@@ -165,6 +165,9 @@ fn antigravity_reads_its_mode_hint_as_empty_and_a_list_under_its_composer_as_non
         ("0-empty", Ok(())),
         ("accept-edits-hint", Ok(())),
         ("plan-hint", Ok(())),
+        // At 40 columns agy cuts its hint with `...` and drops the model from
+        // its status line, which stays one row.
+        ("40-columns-plan-hint", Ok(())),
         ("interrupted", Ok(())),
         ("typed", Err(Miss::PlaceholderStyle)),
         ("slash-popup", Err(Miss::OpenUnder)),
@@ -184,22 +187,41 @@ fn antigravity_reads_its_mode_hint_as_empty_and_a_list_under_its_composer_as_non
 }
 
 /// What an agent draws under its composer is read only where it is
-/// declared: blank rows never count, the declared rows of its own chrome
-/// are allowed, and one more is a list or a dialog open under it.
+/// declared. An empty composer reads empty only above exactly the declared
+/// rows, each beginning with its words; blank rows never count, and any
+/// other row, alone or beside them, is something open under it, such as a
+/// notice or a plan approval a capture never showed. A composer holding
+/// text may change those rows' words, so it only has no more of them.
 #[test]
-fn rows_under_the_composer_past_the_declared_ones_are_a_list_open_under_it() {
+fn an_empty_composer_reads_empty_only_above_the_rows_its_agent_declares_under_it() {
     let agy = AgentId::Antigravity.adapter().composer.supported().unwrap();
     let grey = |text: &str| format!("\x1b[38;5;8m{text}\x1b[0m");
     let rule = grey(&"─".repeat(40));
     let prompt = format!("\x1b[38;5;12m> \x1b[0m{}", grey("Plan mode: research"));
     let screen = |under: &str| format!("{rule}\n{prompt}\n{rule}\n{under}");
-    assert_eq!(agy.explain(&screen("")), Ok(()));
+    let status = "? for shortcuts            plan · Gemini 3.1 Pro · low";
+    assert_eq!(agy.explain(&screen(status)), Ok(()));
     assert_eq!(agy.explain(&screen("? for shortcuts\n\n\n")), Ok(()));
-    assert_eq!(
-        agy.explain(&screen("  Conversations\n? for shortcuts")),
-        Err(Miss::OpenUnder)
-    );
+    for under in [
+        "",
+        "                           plan · Gemini 3.1 Pro · low",
+        "esc to cancel              plan · Gemini 3.1 Pro · low",
+        "Update available: run agy update",
+        "  Conversations\n? for shortcuts",
+        "? for shortcuts\n  Approve this plan?",
+    ] {
+        assert_eq!(
+            agy.explain(&screen(under)),
+            Err(Miss::OpenUnder),
+            "{under:?}"
+        );
+    }
     assert_eq!(Miss::OpenUnder.verdict(), Verdict::NotFound);
+    // Typed text, which drops `? for shortcuts`, still reads as held.
+    let typed = |under: &str| format!("{rule}\n> hello\n{rule}\n{under}");
+    let model = "                           plan · Gemini 3.1 Pro · low";
+    assert!(agy.holds(&typed(model), "hello"));
+    assert!(!agy.holds(&typed(&format!("  Approve this plan?\n{model}")), "hello"));
     // A grey line is the hint; the same words in the default colour were typed.
     assert_eq!(
         agy.explain(&format!("{rule}\n> Plan mode: research\n{rule}\n")),

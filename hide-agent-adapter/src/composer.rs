@@ -21,13 +21,16 @@ pub struct Composer {
     /// Lines of the agent's own chrome at the end of the region, such as
     /// OpenCode's agent and model line, which are never content.
     pub trailer: usize,
-    /// How many rows that show anything the agent draws under its composer
-    /// while nothing is open there, such as Antigravity's status line. A
-    /// picker, a list or a dialog drawn under the composer takes the keys
-    /// typed while it is open, so a screen with more rows there has no
-    /// composer to type into; `None` where what lies under it was not
-    /// measured, and is not read.
-    pub under: Option<usize>,
+    /// The rows that show anything the agent draws under its composer while
+    /// nothing is open there, each by the words it begins with while the
+    /// composer is empty, such as Antigravity's status line `? for
+    /// shortcuts`. A picker, a list, a question or a notice drawn under the
+    /// composer may take the keys typed while it is open, so an empty
+    /// composer reads empty only above exactly these rows; a composer that
+    /// holds text may change their words (agy drops `? for shortcuts`), so
+    /// it only has no more rows there. `None` where what lies under it was
+    /// not measured, and is not read.
+    pub under: Option<&'static [&'static str]>,
     /// What may stand in an empty composer besides spaces. Every line that
     /// is not blank must be one of these for the composer to read empty.
     pub empty: &'static [Placeholder],
@@ -189,8 +192,8 @@ pub enum Miss {
     NoMarker,
     /// The composer has fewer lines than the agent's own chrome under it.
     NoTrailer,
-    /// More rows under the composer than the agent draws there at rest: a
-    /// picker, a list or a dialog is open under it.
+    /// The rows under the composer are not the ones the agent draws there
+    /// at rest: a picker, a list, a question or a notice is open under it.
     OpenUnder,
     /// A line shows a placeholder's text with a cell in another style.
     PlaceholderStyle,
@@ -259,7 +262,7 @@ impl Composer {
     /// Judges a screen as [`Composer::judge`] does, and says which step kept
     /// it from reading empty.
     pub fn explain(&self, screen: &str) -> Result<(), Miss> {
-        let region = self.content(screen)?;
+        let (region, under) = self.content(screen)?;
         for line in region.iter().filter(|line| !blank(line)) {
             if !self.empty.iter().any(|shown| shown.matches(line)) {
                 return Err(if self.empty.iter().any(|shown| shown.shows_text(line)) {
@@ -268,6 +271,15 @@ impl Composer {
                     Miss::NotPlaceholder
                 });
             }
+        }
+        if let Some(rows) = self.under
+            && !(under.len() == rows.len()
+                && under
+                    .iter()
+                    .zip(rows)
+                    .all(|(line, words)| visible(line).trim_start().starts_with(words)))
+        {
+            return Err(Miss::OpenUnder);
         }
         Ok(())
     }
@@ -279,7 +291,7 @@ impl Composer {
     /// that line whole. A paste the agent keeps as one mark shows as that
     /// mark alone, with `text`'s line count ([`Composer::pasted`]).
     pub fn holds(&self, screen: &str, text: &str) -> bool {
-        let Ok(region) = self.content(screen) else {
+        let Ok((region, _)) = self.content(screen) else {
             return false;
         };
         if let Some(mark) = &self.pasted {
@@ -310,13 +322,18 @@ impl Composer {
     }
 
     /// The composer's lines on `screen`, its marker and the agent's own
-    /// chrome under it taken off.
-    fn content(&self, screen: &str) -> Result<Vec<Cells>, Miss> {
+    /// chrome under it taken off, and the rows under it that show anything.
+    /// More of those than the agent draws there at rest is something open
+    /// under the composer whatever it holds.
+    fn content(&self, screen: &str) -> Result<(Vec<Cells>, Vec<Cells>), Miss> {
         let lines: Vec<Cells> = screen.split('\n').map(cells).collect();
         let (mut region, end) = self.region(&lines)?;
-        if let Some(limit) = self.under
-            && lines[end..].iter().filter(|line| !blank(line)).count() > limit
-        {
+        let under: Vec<Cells> = lines[end..]
+            .iter()
+            .filter(|line| !blank(line))
+            .cloned()
+            .collect();
+        if self.under.is_some_and(|rows| under.len() > rows.len()) {
             return Err(Miss::OpenUnder);
         }
         if !self.marker.is_empty() {
@@ -337,7 +354,7 @@ impl Composer {
                 .ok_or(Miss::NoTrailer)?;
             region.truncate(last);
         }
-        Ok(region)
+        Ok((region, under))
     }
 
     /// The composer's lines and the index of the first row under it, past

@@ -4713,6 +4713,9 @@ mod tests {
     const AGY_SESSION_PICKER: &str = include_str!(
         "../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-session-picker.ansi"
     );
+    const AGY_INTERRUPTED: &str = include_str!(
+        "../../../hide-agent-adapter/tests/fixtures/composer/agy-1.5.11-interrupted.ansi"
+    );
 
     /// with-hide/hide#2580: an Antigravity agent resting at its empty prompt,
     /// with no mode or with a mode's hint standing in its composer, is rung
@@ -4737,13 +4740,18 @@ mod tests {
     /// screen is read; read `idle`, as the engine read some of agy's
     /// questions on 1.5.6, the composer read right before the bell finds no
     /// empty prompt and holds it.
+    /// A notice drawn in place of its status line, as an update notice or a
+    /// plan approval no capture showed might be, reads the same way.
     #[test]
     fn an_antigravity_agent_showing_a_question_or_a_picker_is_never_rung() {
+        assert!(AGY_EMPTY.contains("? for shortcuts"));
+        let notice = AGY_EMPTY.replace("? for shortcuts", "Update available: agy update");
         for (name, screen) in [
             ("trust", AGY_TRUST),
             ("permission", AGY_PERMISSION),
             ("question", AGY_QUESTION),
             ("session picker", AGY_SESSION_PICKER),
+            ("notice", notice.as_str()),
         ] {
             for status in ["idle", "blocked"] {
                 let bell = Bell::of_kind("agy", screen);
@@ -4782,6 +4790,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An interrupted agy turn shows its ordinary prompt with "What should
+    /// Antigravity CLI do instead?" above it, which the composer reads as
+    /// empty; the engine still reads the turn `working` after the Esc, and
+    /// agy takes letters at its tools while it works, so no bell is typed
+    /// there and the screen is not read.
+    #[test]
+    fn an_interrupted_antigravity_turn_the_engine_reads_working_is_not_rung() {
+        let bell = Bell::of_kind("agy", AGY_INTERRUPTED);
+        crate::runtime::delivery::tests::state_moved(
+            &mut bell.runtime.lock().unwrap(),
+            "recipient",
+            "working",
+            0,
+        );
+        *bell.flags.lock().unwrap() = json!({"agent_status": "working", "state_change_seq": 4});
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        for at in [start, start + RETRY_LIMIT_MS, start + 2 * RETRY_LIMIT_MS] {
+            bell.pass(&mut doorbell, at);
+        }
+        assert!(bell.typed().is_empty());
+        assert_eq!(bell.attempts(), 0);
+        assert_eq!(bell.reads(), 0, "held before any screen read");
     }
 
     fn kinds_of(records: &[Value]) -> Vec<String> {
