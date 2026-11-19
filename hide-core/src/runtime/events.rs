@@ -1420,6 +1420,15 @@ pub(super) struct UiAttachedPayload {
     pub(super) attached: bool,
 }
 
+/// The machines this one is paired with, sent by hided whenever its peer
+/// store or a connection changed (PRD device-connect-iroh D-72). The whole
+/// list each time: the store is the owner, and the core keeps no copy that
+/// could differ from it.
+#[derive(Debug, Deserialize)]
+pub(super) struct PeerMachinesPayload {
+    pub(super) machines: Vec<crate::peer_machines::PeerMachine>,
+}
+
 /// One Hide AI settings event, carrying whatever it is about.
 ///
 /// It folds what a single screen does into one event, the way
@@ -1819,6 +1828,7 @@ pub(super) enum Event {
     MachineProfilesList(MachineProfilesListPayload),
     MachineProfileConnect(MachineProfileConnectPayload),
     UiAttached(UiAttachedPayload),
+    PeerMachines(PeerMachinesPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
@@ -2183,6 +2193,14 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "machine_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
+        "peer_machines" => {
+            decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
+                Event::PeerMachines(payload) if crate::peer_machines::valid(&payload.machines) => {
+                    Ok(event)
+                }
+                _ => Err(invalid_payload("peer_machines")),
+            })
+        }
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
         "terminal_scroll" => decode!(TerminalScrollPayload, TerminalScroll),
@@ -2579,6 +2597,13 @@ impl Runtime {
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
                 false
+            }
+            Event::PeerMachines(payload) => {
+                let changed = self.snapshot.navigator.peers != payload.machines;
+                if changed {
+                    self.snapshot.navigator.peers = payload.machines;
+                }
+                changed
             }
             Event::AiSettings(payload) => self.apply_ai_settings(payload),
             Event::RetryConnect(payload) => self.retry_remote_device(&payload.target_id),
