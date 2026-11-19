@@ -181,11 +181,16 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
  * ⌘E does and gives the keyboard to the focused pane, so a
  * tool or an open afterwards brings its own column alone (B4, B8, B15;
  * operator decision 2026-10-23); Escape in a terminal stays the program's.
+ * Escape in a document's editor stays the editor's too: it lets the next Tab
+ * leave the editor rather than indent, the keyboard's way out of a document,
+ * and an Escape from there (the tab strip, the toolbar) closes the lane
+ * (PRD lane-desk-pair-view B30, which took away the docked lane that kept it).
  */
 function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, actions: Actions): void {
   if (event.key !== "Escape" || event.defaultPrevented) return;
   if (frame.mode === "expanded") useUiStore.getState().setLaneExpanded(false);
   else if (frame.mode === "overlay") {
+    if (event.target instanceof Element && event.target.closest(".cm-editor")) return;
     actions.closeLane();
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
