@@ -907,12 +907,36 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             let peers = value["peers"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-            if devices.is_empty() && peers.is_empty() {
+            let guests = value["guest_panes"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            if devices.is_empty() && peers.is_empty() && guests.is_empty() {
                 return "No machine is connected.\n".to_owned();
             }
+            let paired = |guest: &Value| {
+                peers
+                    .iter()
+                    .any(|peer| peer["connection_id"] == guest["connection_id"])
+            };
             peers
                 .iter()
-                .map(peer_line)
+                .map(|peer| {
+                    let panes: String = guests
+                        .iter()
+                        .filter(|guest| guest["connection_id"] == peer["connection_id"])
+                        .map(guest_lines)
+                        .collect();
+                    peer_line(peer) + &panes
+                })
+                // A machine that was taken off and left panes running here.
+                .chain(guests.iter().filter(|guest| !paired(guest)).map(|guest| {
+                    format!(
+                        "{}  no longer paired\n{}",
+                        guest["id"].as_str().unwrap_or_default(),
+                        guest_lines(guest)
+                    )
+                }))
                 .chain(devices.iter().map(device_line))
                 .collect()
         }
@@ -972,6 +996,18 @@ fn peer_line(peer: &Value) -> String {
         ));
     }
     line
+}
+
+/// The panes of a machine's work on this one (PRD device-connect-iroh D-77
+/// (5)), each by the address `hide pane send` takes.
+fn guest_lines(guest: &Value) -> String {
+    guest["panes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|pane| pane["id"].as_str())
+        .map(|pane| format!("  its pane here: {pane}\n"))
+        .collect()
 }
 
 fn device_line(device: &Value) -> String {
@@ -1100,6 +1136,35 @@ mod tests {
         assert_eq!(
             line,
             "studio  Studio  ssh studio  failed\n  failed: sign in (sign_in_refused)\n  next: Run hide device retry studio --wait: it signs in again and may ask the operator on Studio's row in Settings > Devices\n"
+        );
+    }
+
+    /// A paired machine's work here is listed under it by the address the
+    /// operator types into it at, and work a machine left after it was
+    /// taken off is listed too, under its id.
+    #[test]
+    fn the_list_names_each_pane_of_another_machines_work_here_under_that_machine() {
+        let pane = |id: &str| json!({"id": id, "pane": "h1:p1", "since_unix_ms": 1});
+        let text = draw(
+            &DeviceCommand::List,
+            &json!({
+                "devices": [],
+                "peers": [
+                    {"id": "macbook", "name": "MacBook", "connection_id": "aa", "connected": true,
+                        "opened_by": "active"},
+                    {"id": "studio", "name": "Studio", "connection_id": "bb", "connected": false},
+                ],
+                "guest_panes": [
+                    {"id": "macbook", "connection_id": "aa", "panes": [
+                        pane("guest:macbook:pane:h1:p1"), pane("guest:macbook:pane:h1:p2")]},
+                    {"id": "old-pc", "connection_id": "cc",
+                        "panes": [pane("guest:old-pc:pane:h1:p1")]},
+                ],
+            }),
+        );
+        assert_eq!(
+            text,
+            "macbook  MacBook  connected\n  it opens this machine: active\n  its pane here: guest:macbook:pane:h1:p1\n  its pane here: guest:macbook:pane:h1:p2\nstudio  Studio  not connected\nold-pc  no longer paired\n  its pane here: guest:old-pc:pane:h1:p1\n"
         );
     }
 
