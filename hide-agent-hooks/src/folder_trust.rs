@@ -13,7 +13,8 @@
 //!   `~/.claude.json`, changed while Hide holds Claude's own lock on that file.
 //! - Codex: `[projects."<folder>"] trust_level = "trusted"` in
 //!   `~/.codex/config.toml`, written by Codex itself through its app-server
-//!   (`crate::codex_trust`), so Hide never writes that file.
+//!   (`crate::codex_trust`), so Hide writes no trust there; its only own
+//!   entries in that file are MCP servers (`crate::mcp`).
 //! - agy: one entry of `trustedWorkspaces` in
 //!   `~/.gemini/antigravity-cli/settings.json`.
 //! - Grok: `[folders."<folder>"] trusted = true` in

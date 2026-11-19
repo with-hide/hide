@@ -219,7 +219,16 @@ impl McpFile {
     /// `adapter`'s MCP file in the account `at`, `None` for an agent Hide
     /// writes no MCP server for.
     pub fn of(adapter: &AgentAdapter, at: AccountAt<'_>) -> Option<Self> {
-        Self::at(adapter, at.place(adapter, AccountPath::Mcp))
+        adapter.mcp_format()?;
+        // Claude Code's servers are in its global config, which it reads
+        // from the older `.config.json` while that file has content: the
+        // file its folder trust is in (`AgentRuntime::trust_path`).
+        let path = if adapter.id == crate::AgentRuntime::ClaudeCode.dialect().adapter().id {
+            crate::AgentRuntime::ClaudeCode.trust_path(at)
+        } else {
+            at.place(adapter, AccountPath::Mcp)
+        };
+        Self::at(adapter, path)
     }
 
     /// `adapter`'s MCP file at `path`, a place its definition named once:

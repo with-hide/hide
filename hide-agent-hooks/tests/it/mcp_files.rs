@@ -639,3 +639,24 @@ fn what_hide_reads_back_prints_no_key() {
     let (_, read_keys) = found[0].server.as_ref().unwrap();
     assert_eq!(read_keys["GITHUB_TOKEN"].expose(), KEY);
 }
+
+#[test]
+fn claude_codes_servers_follow_its_older_global_config_while_that_has_content() {
+    let home = tempfile::tempdir().unwrap();
+    let legacy = home.path().join(".claude").join(".config.json");
+    write(&legacy, "");
+    let file = McpFile::of(the("claude-code"), AccountAt::Home(home.path())).unwrap();
+    assert_eq!(
+        file.path(),
+        home.path().join(".claude.json"),
+        "an empty older file is not read"
+    );
+    write(&legacy, "{\"numStartups\": 1}");
+    let file = McpFile::of(the("claude-code"), AccountAt::Home(home.path())).unwrap();
+    assert_eq!(file.path(), legacy);
+    let (server, keys) = github();
+    assert_eq!(mcp::write(&file, &server, &keys).unwrap(), Written::Written);
+    let written: Value = serde_json::from_str(&std::fs::read_to_string(&legacy).unwrap()).unwrap();
+    assert_eq!(written["numStartups"], 1);
+    assert_eq!(written["mcpServers"]["github"]["command"], "npx");
+}
