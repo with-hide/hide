@@ -476,7 +476,7 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
     const pages = Reflect.get(subject, "pages") as Map<string, Record<string, unknown>>;
     let contentsId = 0;
     const page = (id: string, extra: Record<string, unknown> = {}) => {
-      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id });
+      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id, getZoomFactor: () => 1, enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn() });
       const value = {
         key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: new Set(),
         view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, contentsId: contents.id, state: { url: `https://${id}.example/`, loading: false, failure: null },
@@ -716,10 +716,11 @@ describe("pages on no desk on screen (PRD lane-desk-pair-view B32)", () => {
 
   function host() {
     let nextId = 0;
-    const views: { id: string; view: { webContents: EventEmitter & { id: number; close: ReturnType<typeof vi.fn> }; setVisible: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn> } }[] = [];
+    const views: { id: string; view: { webContents: EventEmitter & { id: number; getURL: () => string; close: ReturnType<typeof vi.fn>; enableDeviceEmulation: ReturnType<typeof vi.fn>; disableDeviceEmulation: ReturnType<typeof vi.fn> }; setVisible: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn> } }[] = [];
     nativeView.make = () => {
       const contents = Object.assign(new EventEmitter(), {
         id: ++nextId, isDestroyed: () => false, isFocused: () => false, getZoomFactor: () => 1, getURL: () => "", getTitle: () => "", close: vi.fn(),
+        enableDeviceEmulation: vi.fn(), disableDeviceEmulation: vi.fn(),
         loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined),
         navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       });
@@ -747,28 +748,40 @@ describe("pages on no desk on screen (PRD lane-desk-pair-view B32)", () => {
         placed.map((display) => ({ id: display.id, area_id: "shelf", url: `https://${display.id}.example/`, load: display.load, rect: display.rect, visible: display.rect !== null })), retained);
     };
     const live = () => [...pages.values()].map((page) => page.id).sort();
-    const viewOf = (id: string) => pages.get(`${workspace}\u0001${id}`)?.view as (typeof views)[number]["view"] | undefined;
-    return { subject, sync, resolve, release, removeChildView, views, live, viewOf, log };
+    const pageOf = (id: string) => pages.get(`${workspace}\u0001${id}`);
+    const viewOf = (id: string) => pageOf(id)?.view as (typeof views)[number]["view"] | undefined;
+    return { subject, sync, resolve, release, removeChildView, views, live, viewOf, pageOf, log };
   }
 
   it("loads a page the core asks for hidden, and the desk then shows that same page without loading it again", () => {
-    const { sync, resolve, views, viewOf } = host();
+    const { sync, resolve, views, viewOf, pageOf } = host();
     // The first sync finds a page opened before this window: nothing loads.
     sync([row("earlier", 3)]);
     expect(views).toHaveLength(0);
-    // An agent opens a page on no desk: it loads hidden, at the lane's width.
+    // An agent opens a page on no desk: it loads hidden, laid out at the
+    // lane's width by emulation, since Chromium gives a page it never showed
+    // no viewport of its own.
     sync([row("earlier", 3), row("agent", 1)]);
     expect(resolve).toHaveBeenCalledExactlyOnceWith(workspace, "agent", 1);
     const page = viewOf("agent")!;
-    expect(page.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 900, height: 820 });
+    const laidOut = { width: 900, height: 820 };
+    expect(page.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, ...laidOut });
     expect(page.setVisible).not.toHaveBeenCalledWith(true);
-    // The operator puts it on the desk: the same contents take the slot, with no load.
+    // Nothing is laid out before a document commits; each commit lays it out.
+    expect(page.webContents.enableDeviceEmulation).not.toHaveBeenCalled();
+    page.webContents.getURL = () => "https://agent.example/";
+    page.webContents.emit("did-navigate", {}, "https://agent.example/");
+    expect(page.webContents.enableDeviceEmulation).toHaveBeenLastCalledWith({ screenPosition: "desktop", screenSize: laidOut, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: laidOut, scale: 1 });
+    // The operator puts it on the desk: the same contents take the slot and
+    // its own size, with no load.
     sync([row("earlier", 3), row("agent", 1)], [{ id: "agent", load: 1, rect }]);
     expect(views).toHaveLength(1);
     expect(viewOf("agent")).toBe(page);
     expect(resolve).toHaveBeenCalledOnce();
     expect(page.setBounds).toHaveBeenLastCalledWith(rect);
+    expect(page.webContents.disableDeviceEmulation).toHaveBeenCalledOnce();
     expect(page.setVisible).toHaveBeenLastCalledWith(true);
+    expect(pageOf("agent")?.visible).toBe(true);
     // Taken off the desk again, it stays loaded and hidden; a reopen loads it again in place.
     sync([row("earlier", 3), row("agent", 1)]);
     expect(page.setVisible).toHaveBeenLastCalledWith(false);

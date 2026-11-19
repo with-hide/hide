@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenAsked, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenAsked, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
@@ -120,6 +120,13 @@ type Page = {
   readonly hostVerdicts: Map<string, boolean>;
   /** Its document navigation in flight that began while something else held the keyboard. */
   grab: NavigationGrab | null;
+  /**
+   * Laid out at `bounds` by emulation because no slot has shown it since its
+   * contents were made: Chromium gives a page it never showed no viewport, so
+   * an agent's clicks would land nowhere (PRD lane-desk-pair-view B32). Its
+   * slot ends it.
+   */
+  offScreen?: boolean;
 };
 /**
  * Chromium hands the keyboard to a page's view as each new document commits,
@@ -486,7 +493,11 @@ export class BrowserViews {
   private emulate(page: Page, force = false): void {
     const contents = page.view.webContents;
     if (contents.isDestroyed()) return;
-    const params = page.device && page.bounds ? deviceEmulation(page.device, page.bounds, contents.getZoomFactor()) : null;
+    // A page with no document yet has nothing to lay out off screen, and
+    // emulating one stalls the main process; its commit applies the layout.
+    const params = !page.bounds ? null
+      : page.device ? deviceEmulation(page.device, page.bounds, contents.getZoomFactor())
+      : page.offScreen && contents.getURL() ? offScreenEmulation(page.bounds) : null;
     const key = params ? JSON.stringify(params) : null;
     if (!force && key === page.emulated) return;
     if (params) contents.enableDeviceEmulation(params);
@@ -566,6 +577,7 @@ export class BrowserViews {
         this.load(page, this.addressOf(display));
       }
       const bounds = toBounds(display.rect, zoom);
+      page.offScreen = false;
       page.view.setBounds(bounds);
       page.placed = true;
       page.device = display.device ?? null;
@@ -623,6 +635,7 @@ export class BrowserViews {
     const created = this.create(window, row.workspace, { id: row.id, area_id: row.area_id, url: row.url, load: row.load, rect: null, visible: false });
     created.device = record?.device ?? null;
     created.bounds = record?.bounds ?? offScreenBounds(window.getContentBounds());
+    created.offScreen = true;
     created.view.setBounds(created.bounds);
     this.emulate(created);
     created.shownAt = created.idleSince = now;
@@ -1377,6 +1390,7 @@ export class BrowserViews {
         page.device = record.device;
         // A page never shown here lays out where an off-screen load would (B32).
         page.bounds = record.bounds ?? offScreenBounds(window.getContentBounds());
+        page.offScreen = true;
         page.view.setBounds(page.bounds);
         this.emulate(page);
       }

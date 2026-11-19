@@ -322,8 +322,10 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   const refOf = (line: RegExp) => shot.out.split("\n").find((row) => line.test(row))?.trim().split(" ")[0];
   const name = refOf(/textbox "Name"/), send = refOf(/button "Send"/);
   expect([name, send], shot.out).toEqual([expect.stringMatching(/^@\d+$/), expect.stringMatching(/^@\d+$/)]);
-  expect(await asAgent(["browser", "fill", f, name!, "한글 이름"])).toMatchObject({ status: 0, ok: true });
-  expect(await asAgent(["browser", "click", f, send!])).toMatchObject({ status: 0, ok: true });
+  const filled = await asAgent(["browser", "fill", f, name!, "한글 이름"]);
+  expect(filled, JSON.stringify(filled)).toMatchObject({ status: 0, ok: true });
+  const clicked = await asAgent(["browser", "click", f, send!]);
+  expect(clicked, JSON.stringify(clicked)).toMatchObject({ status: 0, ok: true });
   expect(await inPage(form, "document.getElementById('out').textContent")).toBe("sent: 한글 이름");
   await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
 

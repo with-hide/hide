@@ -424,6 +424,17 @@ export function deviceEmulation(device: BrowserDevicePlacement, bounds: BrowserR
   };
 }
 
+/**
+ * The layout of a page no slot has shown since its contents were made: a
+ * desktop viewport of `bounds`' size at scale 1. Chromium gives a page it
+ * never showed no viewport, so without this an agent's snapshot reads no
+ * layout and its clicks land outside the page (PRD lane-desk-pair-view B32).
+ */
+export function offScreenEmulation(bounds: BrowserRect): EmulationParameters {
+  const view = { width: Math.max(1, bounds.width), height: Math.max(1, bounds.height) };
+  return { screenPosition: "desktop", screenSize: view, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: view, scale: 1 };
+}
+
 /** A rect in the shell's CSS pixels as whole window points. */
 export function toBounds(placed: BrowserRect, zoom: number): BrowserRect {
   const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
