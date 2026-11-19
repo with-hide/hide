@@ -224,6 +224,9 @@ pub fn run(dir: &str) -> ! {
         std::thread::spawn(move || hub.accept(&taps));
     }
     {
+        // The first look is now: the host hears at once whether the node
+        // found a pane still running.
+        life.look();
         let life = Arc::clone(&life);
         let terminals = Arc::clone(&terminals);
         std::thread::spawn(move || watch_life(&life, &terminals));
