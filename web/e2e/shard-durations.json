@@ -327,6 +327,7 @@
   "theme.spec.ts › the color theme switches the whole page at once from the keyboard, keeps the terminal, the mode and the accent, and survives a restart": 8.0,
   "theme.spec.ts › the production build hided serves has no gallery": 5.0,
   "theme.spec.ts › the theme and accent switch at once, keep the terminal, and survive a restart": 7.3,
+  "view-bookmarks.spec.ts › a background agent's open leaves the desk in front as it was, and each Agent tab shows its own desk": 4.7,
   "view-close-focus.spec.ts › View close follows MRU, preserves background input and hands collapsed areas their keyboard": 4.3,
   "view-feedback.spec.ts › an agent's View wears its mark, and the operator's line comment reaches that agent as one letter": 13.1,
   "view-feedback.spec.ts › an area dragged on an image reaches its agent with a screenshot of that area": 6.6,
