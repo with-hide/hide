@@ -57,21 +57,36 @@ pub const JOURNEY_CLI_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// The file that declares a HOME a test fixture's ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = ".hide-e2e-device-home";
 
-/// Whether `home` is a test fixture's: under `/tmp`, carrying
-/// [`FIXTURE_HOME_MARKER`], and not the account's own. Nothing run for a
-/// fixture HOME may reach the account's real launchd domain, which
-/// `gui/<uid>` is whatever HOME says.
+/// Whether `home` is a test fixture's: in the system's temporary folder
+/// (`/tmp` on Unix, the account's own `AppData\Local\Temp` on Windows),
+/// carrying [`FIXTURE_HOME_MARKER`], and not the account's own. Nothing run
+/// for a fixture HOME may reach the account's real login items, which
+/// belong to the account whatever HOME says.
 pub fn fixture_home(home: &Path) -> bool {
     let Ok(home) = hide_platform::fs::identity::canonical(home) else {
         return false;
     };
-    let temporary = ["/tmp", "/private/tmp"]
-        .iter()
-        .any(|root| home.starts_with(root));
-    let own = hide_platform::user_agents::account_home()
+    let Ok(own) = hide_platform::user_agents::account_home()
         .and_then(|own| hide_platform::fs::identity::canonical(&own))
-        .is_ok_and(|own| own == home);
-    temporary && !own && home.join(FIXTURE_HOME_MARKER).is_file()
+    else {
+        return false;
+    };
+    let temporary = temporary_roots(&own)
+        .iter()
+        .filter_map(|root| hide_platform::fs::identity::canonical(root).ok())
+        .any(|root| home.starts_with(&root) && home != root);
+    temporary && own != home && home.join(FIXTURE_HOME_MARKER).is_file()
+}
+
+/// The folders a fixture HOME may be made in, for an account whose own home
+/// is `own`: read from the account, never from a variable a test sets.
+fn temporary_roots(own: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![own.join("AppData").join("Local").join("Temp")]
+    } else {
+        let _ = own;
+        vec![PathBuf::from("/tmp"), PathBuf::from("/private/tmp")]
+    }
 }
 
 /// The state folder builds before this layout used by default; moved once to
@@ -420,6 +435,22 @@ pub fn core_move_abandoned(state_dir: &Path) -> PathBuf {
     state_dir.join("core-move-abandoned.json")
 }
 
+/// The marker that the core on `state_dir` is to keep running: while it
+/// exists the login item starts the core again after any exit, and without
+/// it the item's start ends at once; `hide stop` removes it, and `hide
+/// connect` puts it back (`hided::login_item`, PRD device-connect-iroh D-41).
+pub fn keep_alive(state_dir: &Path) -> PathBuf {
+    state_dir.join("keep-alive")
+}
+
+/// The install root of the builds a paired machine's login item runs its
+/// core from, one version folder each (`<root>/<version>/hided`), so an app
+/// update never replaces the program under a running core
+/// (`hided::always_on`).
+pub fn core_root(home: &Path) -> PathBuf {
+    hide_home(home).join("core")
+}
+
 /// The record on a machine taking or giving the core in a move: a core
 /// waiting for its first link, active, stopped for the move, or retired;
 /// its owner is `hided core-move` (`hided::core_move::handover`).
@@ -427,9 +458,9 @@ pub fn core_handover(state_dir: &Path) -> PathBuf {
     state_dir.join("core-handover.json")
 }
 
-/// The login item that runs the core on `state_dir` after a move placed it
-/// on this machine (`hided::login_item`): one per state folder, so a folder
-/// other than the account's default never takes the default's item.
+/// The login item that runs the core on `state_dir` (`hided::login_item`),
+/// a paired machine's or one a move placed here: one per state folder, so a
+/// folder other than the account's default never takes the default's item.
 pub fn core_login_item(home: &Path, state_dir: &Path) -> String {
     const LABEL: &str = "dev.withhide.core";
     if state_dir == default_state_dir(home) {
@@ -623,6 +654,20 @@ pub fn peer_grants(state_dir: &Path) -> PathBuf {
 /// The hosts this machine is a guest of, and where to find them.
 pub fn peer_known(state_dir: &Path) -> PathBuf {
     peers(state_dir).join("known.json")
+}
+
+/// The UDP port this state folder's peer endpoint binds, chosen once, so
+/// the Windows firewall rule that lets same-network machines reach it holds
+/// across restarts and updates (D-38; `hide_peer::port`).
+pub fn peer_port(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("udp-port")
+}
+
+/// The port [`peer_port`] held before another process took it and a new one
+/// was chosen, kept until the firewall rule for it is replaced by the new
+/// port's (`hide_peer::port::replace`).
+pub fn peer_port_replaced(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("udp-port-replaced")
 }
 
 /// This machine's durable record of the events of `host` (D-66), under the
@@ -833,14 +878,17 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
-    fn only_a_marked_home_under_tmp_is_a_fixture_home() {
-        let marked = tempfile::tempdir_in("/tmp").unwrap();
+    fn only_a_marked_home_in_the_temporary_folder_is_a_fixture_home() {
+        let own = hide_platform::user_agents::account_home().unwrap();
+        let temporary = &temporary_roots(&own)[0];
+        let marked = tempfile::tempdir_in(temporary).unwrap();
         std::fs::write(marked.path().join(FIXTURE_HOME_MARKER), "").unwrap();
-        let unmarked = tempfile::tempdir_in("/tmp").unwrap();
+        let unmarked = tempfile::tempdir_in(temporary).unwrap();
         assert!(fixture_home(marked.path()));
         assert!(!fixture_home(unmarked.path()));
+        // The temporary folder itself is never one, marked or not.
+        assert!(!fixture_home(temporary));
     }
 
     /// A fixture HOME's kit has no login agents, so nothing it unloads or

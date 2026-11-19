@@ -170,8 +170,8 @@ pub fn is_build_name(name: &str) -> bool {
     name.len() == 16 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Where a build's `hided` sits: `<root>/<version>/hided`, the layout the
-/// kit installs and a core's login item runs.
+/// Where a build's `hided` sits: `<root>/<version>/hided` (`hided.exe` on
+/// Windows), the layout the kit installs and a core's login item runs.
 #[derive(Debug, Eq, PartialEq)]
 pub struct BuildPlace {
     /// The install root, in the wire spelling (`/` between names).
@@ -187,7 +187,10 @@ pub fn build_of(program: &str) -> Result<BuildPlace, String> {
     let not_a_build = || format!("{program} is not a build's hided");
     let (folder, name) = program.rsplit_once('/').ok_or_else(not_a_build)?;
     let (root, version) = folder.rsplit_once('/').ok_or_else(not_a_build)?;
-    if name != "hided" || !is_build_name(version) || !hide_platform::path::is_wire_absolute(root) {
+    if !matches!(name, "hided" | "hided.exe")
+        || !is_build_name(version)
+        || !hide_platform::path::is_wire_absolute(root)
+    {
         return Err(not_a_build());
     }
     Ok(BuildPlace {

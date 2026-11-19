@@ -298,6 +298,8 @@ struct Relay {
 pub struct Pairing {
     host: Arc<PeerHost>,
     core: Arc<CoreHandle>,
+    /// What keeps this machine's core on once it is paired.
+    always_on: crate::always_on::Follower,
     me: Me,
     service: OnceCell<Service>,
     frame: watch::Sender<Arc<Value>>,
@@ -343,6 +345,7 @@ impl Pairing {
     pub fn new(
         host: Arc<PeerHost>,
         core: Arc<CoreHandle>,
+        always_on: crate::always_on::Follower,
         me: Me,
         ssh: pairing_ssh::Reach,
         shutdown: Ending,
@@ -350,6 +353,7 @@ impl Pairing {
         let pairing = Arc::new(Self {
             host: Arc::clone(&host),
             core,
+            always_on,
             me,
             service: OnceCell::new(),
             frame: watch::channel(Arc::new(json!(View::default()))).0,
@@ -515,9 +519,11 @@ impl Pairing {
     /// Runs once when the pairing starts and then whenever the machines this
     /// one is paired with changed: a machine paired, confirmed, paused,
     /// resumed or removed in either direction, connected or lost. Whatever
-    /// follows "is this machine paired with anything" belongs here; today
-    /// that is the core's list (D-72).
+    /// follows "is this machine paired with anything" belongs here: the
+    /// core's list (D-72) and the login item that keeps a paired core on
+    /// (D-41).
     async fn paired_changed(&self, machines: &[PeerMachine]) {
+        self.always_on.peers_changed();
         let event = json!({
             "schema_version": hide_core::SCHEMA_VERSION,
             "kind": "peer_machines",
