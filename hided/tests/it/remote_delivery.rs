@@ -1064,9 +1064,10 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
                 delivered.status == 0
                     && intake.contains(&letter)
                     && intake.contains("SWITCH_PENDING_ONCE"),
-                "the agent's prompt after the switch did not take the letter: {:?}, stderr {:?}",
+                "the agent's prompt after the switch did not take the letter: {:?}, stderr {:?}, recorded {}",
                 delivered.stdout,
-                delivered.stderr
+                delivered.stderr,
+                hook_diagnostics(&fixture.remote.environment)
             );
             wait_for("the letter confirmed as delivered", || {
                 Ok(waits(fixture, State::Delivered)?.then_some(()))
