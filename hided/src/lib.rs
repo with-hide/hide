@@ -465,6 +465,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         // amendment 3).
         effects_held: !move_gate.is_open(),
         machine_name: host_name(),
+        windows_drives: hide_host::serve::windows_drives(),
         account_state_folder: env.account_state_folder,
     };
     let effects_held = options.effects_held;

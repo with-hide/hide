@@ -735,9 +735,13 @@ impl Runtime {
             .devices
             .iter_mut()
             .find(|device| device.kind != "remote")
-            && local.host.helper_root != helper_root
+            && (local.host.helper_root != helper_root
+                || local.host.windows_drives != self.windows_drives)
         {
             local.host.helper_root = helper_root;
+            // A rebuilt row starts without it: this machine's own, as a
+            // device's helper reports its own.
+            local.host.windows_drives = self.windows_drives.clone();
             changed = true;
         }
         let ids = self

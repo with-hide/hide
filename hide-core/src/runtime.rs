@@ -1245,6 +1245,9 @@ pub struct Runtime {
     /// What this machine calls itself (`CoreOptions::machine_name`), on its
     /// device row.
     machine_name: Option<String>,
+    /// Where this machine shows its Windows PC's drives
+    /// (`CoreOptions::windows_drives`), on its device row.
+    windows_drives: Option<String>,
     device_machine_ids: HashMap<String, String>,
     /// Devices renamed to their machine ids whose core state is not saved
     /// yet, each with the naming round that renamed it; each connects once a
@@ -2185,6 +2188,7 @@ impl Runtime {
         {
             local.host.helper_root = Some(host_helper_root.clone());
             local.host.cli_dir = Some(host_cli_dir.clone());
+            local.host.windows_drives = options.windows_drives.clone();
         }
         snapshot.navigator.focused_device_id = Some(
             snapshot
@@ -2438,6 +2442,7 @@ impl Runtime {
             archive_registration_waits: HashMap::new(),
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),
+            windows_drives: options.windows_drives.clone(),
             device_machine_ids: HashMap::new(),
             device_names_saving: BTreeMap::new(),
             device_naming_round: 0,
