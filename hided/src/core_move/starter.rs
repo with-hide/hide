@@ -46,7 +46,7 @@ impl CoreStarter {
         if asked == Some(std::ffi::OsStr::new("fixture")) {
             if !fixture {
                 return Err(format!(
-                    "{HIDE_CORE_STARTER}=fixture is refused: {} is not a fixture HOME ({FIXTURE_HOME_MARKER} under /tmp)",
+                    "{HIDE_CORE_STARTER}=fixture is refused: {} is not a fixture HOME ({FIXTURE_HOME_MARKER} in the temporary folder)",
                     home.display()
                 ));
             }
@@ -81,6 +81,8 @@ impl CoreStarter {
         let stale = std::fs::read(crate::attach::attach_record(state_dir)).ok();
         let mut exited: Box<dyn FnMut() -> Option<String>> = match self {
             Self::Fixture => {
+                // What the login item has, so its start runs the core.
+                crate::login_item::keep(state_dir)?;
                 let log = log_file(state_dir)?;
                 let mut command = std::process::Command::new(program);
                 // What the login item runs, so a fixture's core is a

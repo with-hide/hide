@@ -1142,10 +1142,13 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 impl HelperPackages {
-    /// A core update's install (`bootstrap::install_build`) on this
-    /// machine: this build in its version folder
+    /// A core's install on this machine: this build in its version folder
     /// under `root`, the folder a remote install of it would name, for a
-    /// core update run where the core runs (PRD core-host-node-move Q13).
+    /// core update run where the core runs (PRD core-host-node-move Q13) and
+    /// for a paired machine's login item (PRD device-connect-iroh D-41). It
+    /// carries what a device's kit carries, the pane holder and on Windows
+    /// its ConPTY runtime included, since the core runs its panes from the
+    /// holder beside it (`Holders::local_source`).
     /// A file already there is kept only when its bytes are this build's;
     /// any other is replaced whole. Answers where the build's `hided` is
     /// (`hided.exe` on Windows).
@@ -1153,7 +1156,7 @@ impl HelperPackages {
         use hide_platform::fs::atomic::{self, DurableAccess};
         use hide_platform::fs::private;
         let payload = self
-            .payload(std::env::consts::OS, std::env::consts::ARCH)
+            .payload_for(std::env::consts::OS, std::env::consts::ARCH)
             .map_err(|error| error.to_string())?;
         if !payload.missing.is_empty() {
             return Err(format!(
@@ -2974,11 +2977,12 @@ mod tests {
         );
     }
 
-    /// A core update installs this build in its version folder and answers
-    /// the `hided` it wrote there, under its system's program name, which
-    /// is what the update then starts.
+    /// A core install, for an update or a login item, puts this build with
+    /// its pane holder in its version folder and answers the `hided` it
+    /// wrote there, under its system's program name, which is what the
+    /// update or the item then starts.
     #[test]
-    fn a_core_update_answers_the_hided_it_installed_under_its_exe_name() {
+    fn a_core_install_answers_the_hided_it_installed_under_its_exe_name_with_its_holder() {
         let directory = tempfile::tempdir().unwrap();
         own_package(directory.path());
         let root = tempfile::tempdir().unwrap();
@@ -2989,6 +2993,14 @@ mod tests {
             Some(device_program(HELPER_NAME, std::env::consts::OS).as_str())
         );
         assert_eq!(std::fs::read(&installed).unwrap(), HELPER_NAME.as_bytes());
+        // The core runs its panes from the holder beside it, so the build
+        // carries it, and on Windows its ConPTY runtime.
+        let folder = installed.parent().unwrap();
+        let holder = folder.join(device_program(HOLDER_NAME, std::env::consts::OS));
+        assert_eq!(std::fs::read(holder).unwrap(), HOLDER_NAME.as_bytes());
+        if cfg!(windows) {
+            assert!(folder.join(hide_kit::holders::CONPTY_SOURCE).is_dir());
+        }
     }
 
     fn relative(payload: &Payload) -> Vec<(String, bool)> {
