@@ -1323,6 +1323,11 @@ impl ProfileAccount {
         self.own.account.path(place).map(Path::to_path_buf)
     }
 
+    /// The account's MCP file in its agent's shape (`hide_agent_hooks::mcp`).
+    pub(crate) fn mcp_file(&self, home: &Path) -> Option<hide_agent_hooks::mcp::McpFile> {
+        hide_agent_hooks::mcp::McpFile::of(self.own.adapter.declaration(), self.own.at(home))
+    }
+
     /// The real place of `path` in the account, judged as every write of
     /// the kit's in a profile account is: the account's folders its own, no
     /// link on the way (PRD agent-profiles D-28).
