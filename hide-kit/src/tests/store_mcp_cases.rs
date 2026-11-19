@@ -1,0 +1,664 @@
+//! The store's MCP servers against a private HOME (PRD skill-mcp-manager
+//! B8-B22, B25-B28, B30, D-11, D-39): a server goes into the seven agents'
+//! own files and a profile's, in each agent's shape, with its keys kept per
+//! item in an owner-only file, and the switches, the key edit, the undo
+//! list, adoption, a same-name entry of the operator's, a copy to another
+//! machine and the machine's removal do what the operator sees.
+
+use super::*;
+use crate::store::{McpPreview, PastedPick, Sealed, SentKeys};
+use hide_agent_hooks::mcp::{self as files, Keys, McpFile, Reach, Remote, Server};
+
+const KEY: &str = "ghp_s3cr3t-key-value";
+
+/// The seven agents' MCP files in a default account, by column.
+const FILES: [(&str, &str); 7] = [
+    ("claude-code", ".claude.json"),
+    ("codex", ".codex/config.toml"),
+    ("opencode", ".config/opencode/opencode.json"),
+    ("pi", ".pi/agent/mcp.json"),
+    ("omp", ".omp/agent/mcp.json"),
+    ("grok", ".grok/config.toml"),
+    ("antigravity", ".gemini/config/mcp_config.json"),
+];
+
+/// Every agent installed and on, each with its own folder made, as the
+/// agents make them when they first run.
+fn mcp_agents() -> Fixture {
+    let fixture = every_agent();
+    for folder in [
+        ".claude",
+        ".codex",
+        ".config/opencode",
+        ".pi/agent",
+        ".omp/agent",
+        ".grok",
+        ".gemini/config",
+    ] {
+        std::fs::create_dir_all(fixture.home().join(folder)).unwrap();
+    }
+    fixture
+}
+
+fn github() -> Server {
+    Server {
+        name: "github".to_owned(),
+        reach: Reach::Local {
+            command: "npx".to_owned(),
+            args: vec![
+                "-y".to_owned(),
+                "@modelcontextprotocol/server-github".to_owned(),
+            ],
+            env: vec!["GITHUB_TOKEN".to_owned()],
+        },
+    }
+}
+
+fn sent(pairs: &[(&str, &str)]) -> SentKeys {
+    pairs
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), Sealed::new(*value)))
+        .collect()
+}
+
+fn add(fixture: &Fixture, server: Server, keys: &[(&str, &str)]) -> StoreReport {
+    store(
+        fixture,
+        vec![StoreChange::AddMcp {
+            server,
+            keys: sent(keys),
+            from: None,
+        }],
+    )
+}
+
+fn file(agent: &str, path: &Path) -> McpFile {
+    McpFile::at(
+        crate::agents::adapter(agent).unwrap().declaration(),
+        path.to_path_buf(),
+    )
+    .unwrap()
+}
+
+fn path_of(fixture: &Fixture, agent: &str) -> PathBuf {
+    let (_, relative) = FILES.iter().find(|(id, _)| *id == agent).unwrap();
+    fixture.home().join(relative)
+}
+
+/// What `agent`'s default file holds under `name`, read in its shape.
+fn held(fixture: &Fixture, agent: &str, name: &str) -> Option<(Server, Keys)> {
+    held_at(agent, &path_of(fixture, agent), name)
+}
+
+fn held_at(agent: &str, path: &Path, name: &str) -> Option<(Server, Keys)> {
+    files::entry(&file(agent, path), name)
+        .unwrap()
+        .map(|found| found.server.expect("an entry Hide reads"))
+}
+
+fn key_of(held: &(Server, Keys), name: &str) -> String {
+    held.1[name].expose().to_owned()
+}
+
+fn every(state: CellState) -> BTreeMap<String, CellState> {
+    FILES
+        .iter()
+        .map(|(agent, _)| ((*agent).to_owned(), state))
+        .collect()
+}
+
+/// Every byte under the store's folder, as text.
+fn store_bytes(fixture: &Fixture) -> String {
+    let dir = crate::layout::store_dir(fixture.home());
+    if !dir.exists() {
+        return String::new();
+    }
+    tree(&dir)
+        .into_values()
+        .filter_map(|(bytes, _)| bytes)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .collect()
+}
+
+fn the_mcp_files(fixture: &Fixture) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    FILES
+        .iter()
+        .map(|(_, relative)| {
+            let path = fixture.home().join(relative);
+            let bytes = std::fs::read(&path).ok();
+            (path, bytes)
+        })
+        .collect()
+}
+
+#[test]
+fn a_server_reaches_every_agents_file_and_a_profiles_with_its_key_and_a_second_pass_changes_nothing()
+ {
+    let mut fixture = mcp_agents();
+    let profile = claude_profile(&mut fixture);
+    let profile_file = profile.parent().unwrap().join(".claude.json");
+    // The operator's own settings in two of the files stay as they are.
+    write(
+        &path_of(&fixture, "codex"),
+        "model = \"o3\"\n\n[mcp_servers.theirs]\ncommand = \"theirs\"\n",
+    );
+    write(
+        &path_of(&fixture, "claude-code"),
+        "{\n  \"theme\": \"dark\",\n  \"numStartups\": 3\n}\n",
+    );
+
+    let report = add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    for (agent, _) in FILES {
+        let entry = held(&fixture, agent, "github").unwrap_or_else(|| panic!("{agent}"));
+        assert_eq!(entry.0, github(), "{agent}");
+        assert_eq!(key_of(&entry, "GITHUB_TOKEN"), KEY, "{agent}");
+    }
+    let entry = held_at("claude-code", &profile_file, "github").unwrap();
+    assert_eq!(key_of(&entry, "GITHUB_TOKEN"), KEY);
+    let codex = std::fs::read_to_string(path_of(&fixture, "codex")).unwrap();
+    assert!(
+        codex.starts_with("model = \"o3\"\n\n[mcp_servers.theirs]\ncommand = \"theirs\"\n"),
+        "{codex}"
+    );
+    let claude: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path_of(&fixture, "claude-code")).unwrap())
+            .unwrap();
+    assert_eq!(claude["theme"], "dark");
+    assert_eq!(claude["numStartups"], 3);
+
+    // The row shows the server and the names of its keys, never a value; the
+    // key is in one owner-only file of the item's folder.
+    let row = report
+        .items
+        .iter()
+        .find(|item| item.id == "mcp:github")
+        .unwrap();
+    assert_eq!(row.server.as_ref(), Some(&github()));
+    assert_eq!(row.version, Version::NpmLatest);
+    assert!(!serde_json::to_string(&report).unwrap().contains(KEY));
+    let keys = crate::layout::store_dir(fixture.home()).join("items/mcp-github/keys.json");
+    assert!(hide_platform::fs::private::is_private(&keys).unwrap());
+    assert!(std::fs::read_to_string(&keys).unwrap().contains(KEY));
+    let record =
+        std::fs::read_to_string(crate::layout::store_dir(fixture.home()).join("store.json"))
+            .unwrap();
+    assert!(!record.contains(KEY), "the record holds no key");
+
+    // The same pass again writes no byte (B27).
+    let before = the_mcp_files(&fixture);
+    let profile_before = std::fs::read(&profile_file).unwrap();
+    store(&fixture, Vec::new());
+    assert_eq!(the_mcp_files(&fixture), before);
+    assert_eq!(std::fs::read(&profile_file).unwrap(), profile_before);
+}
+
+#[test]
+fn an_agent_that_takes_no_sse_server_reads_unsupported_and_gets_nothing() {
+    let fixture = mcp_agents();
+    let asana = Server {
+        name: "asana".to_owned(),
+        reach: Reach::Remote {
+            transport: Remote::Sse,
+            url: "https://mcp.asana.com/sse".to_owned(),
+            headers: Vec::new(),
+        },
+    };
+    let report = add(&fixture, asana, &[]);
+    let cells = cells(&report, "mcp:asana");
+    for (agent, _) in FILES {
+        let takes = matches!(agent, "claude-code" | "omp" | "grok");
+        assert_eq!(
+            cells[agent],
+            if takes {
+                CellState::On
+            } else {
+                CellState::Unsupported
+            },
+            "{agent}"
+        );
+        assert_eq!(held(&fixture, agent, "asana").is_some(), takes, "{agent}");
+    }
+    let row = report
+        .items
+        .iter()
+        .find(|item| item.id == "mcp:asana")
+        .unwrap();
+    assert_eq!(row.version, Version::Remote);
+    let reason = row
+        .cells
+        .iter()
+        .find(|cell| cell.column == "codex")
+        .and_then(|cell| cell.reason.clone())
+        .unwrap();
+    assert!(reason.contains("SSE"), "{reason}");
+}
+
+#[test]
+fn a_switch_takes_out_only_hides_entry_and_turning_it_on_puts_it_back() {
+    let fixture = mcp_agents();
+    add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+    write(
+        &path_of(&fixture, "pi"),
+        "{\"mcpServers\": {\"theirs\": {\"command\": \"theirs\"}}}",
+    );
+    store(&fixture, Vec::new());
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Set {
+            item: "mcp:github".to_owned(),
+            column: Some("codex".to_owned()),
+            on: false,
+        }],
+    );
+    let mut expected = every(CellState::On);
+    expected.insert("codex".to_owned(), CellState::Off);
+    assert_eq!(cells(&report, "mcp:github"), expected);
+    assert!(held(&fixture, "codex", "github").is_none());
+    assert!(held(&fixture, "grok", "github").is_some());
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Set {
+            item: "mcp:github".to_owned(),
+            column: None,
+            on: false,
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::Off));
+    for (agent, _) in FILES {
+        assert!(held(&fixture, agent, "github").is_none(), "{agent}");
+    }
+    assert!(
+        held(&fixture, "pi", "theirs").is_some(),
+        "the operator's own server stays"
+    );
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Set {
+            item: "mcp:github".to_owned(),
+            column: None,
+            on: true,
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    assert_eq!(
+        key_of(&held(&fixture, "codex", "github").unwrap(), "GITHUB_TOKEN"),
+        KEY
+    );
+}
+
+#[test]
+fn a_key_edit_rewrites_every_file_the_server_is_in_and_a_file_that_failed_gets_it_later() {
+    let mut fixture = mcp_agents();
+    let profile = claude_profile(&mut fixture);
+    let profile_file = profile.parent().unwrap().join(".claude.json");
+    add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+    let grok = path_of(&fixture, "grok");
+    let written = std::fs::read_to_string(&grok).unwrap();
+    // Grok's file is broken while the key changes.
+    write(&grok, "[mcp_servers.github\n");
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::SetMcp {
+            item: "mcp:github".to_owned(),
+            server: github(),
+            keys: sent(&[("GITHUB_TOKEN", "ghp_new")]),
+        }],
+    );
+    for (agent, _) in FILES.iter().filter(|(agent, _)| *agent != "grok") {
+        assert_eq!(
+            key_of(&held(&fixture, agent, "github").unwrap(), "GITHUB_TOKEN"),
+            "ghp_new",
+            "{agent}"
+        );
+    }
+    assert_eq!(
+        key_of(
+            &held_at("claude-code", &profile_file, "github").unwrap(),
+            "GITHUB_TOKEN"
+        ),
+        "ghp_new"
+    );
+    assert_eq!(cells(&report, "mcp:github")["grok"], CellState::Failed);
+    assert_eq!(
+        std::fs::read_to_string(&grok).unwrap(),
+        "[mcp_servers.github\n",
+        "a broken file is left as it is"
+    );
+
+    // Once the file reads again, the next pass gives it the new key.
+    write(&grok, &written);
+    let report = store(&fixture, Vec::new());
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    assert_eq!(
+        key_of(&held(&fixture, "grok", "github").unwrap(), "GITHUB_TOKEN"),
+        "ghp_new"
+    );
+
+    // An edit that types no value keeps the key, and a server's name stays.
+    store(
+        &fixture,
+        vec![StoreChange::SetMcp {
+            item: "mcp:github".to_owned(),
+            server: github(),
+            keys: SentKeys::new(),
+        }],
+    );
+    assert_eq!(
+        key_of(&held(&fixture, "pi", "github").unwrap(), "GITHUB_TOKEN"),
+        "ghp_new"
+    );
+    let renamed = crate::apply_store(
+        &fixture.target,
+        vec![StoreChange::SetMcp {
+            item: "mcp:github".to_owned(),
+            server: Server {
+                name: "gh".to_owned(),
+                ..github()
+            },
+            keys: SentKeys::new(),
+        }],
+    );
+    assert!(renamed.outcomes[0].refused.is_some());
+}
+
+#[test]
+fn a_delete_takes_the_server_out_at_once_and_its_key_stays_only_while_it_can_be_undone() {
+    let fixture = mcp_agents();
+    add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Delete {
+            item: "mcp:github".to_owned(),
+        }],
+    );
+    for (agent, _) in FILES {
+        assert!(held(&fixture, agent, "github").is_none(), "{agent}");
+    }
+    assert!(
+        store_bytes(&fixture).contains(KEY),
+        "the key stays in Hide while the delete can be undone"
+    );
+    let entry = report.trash[0].id.clone();
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Restore {
+            entry: entry.clone(),
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    assert_eq!(
+        key_of(&held(&fixture, "omp", "github").unwrap(), "GITHUB_TOKEN"),
+        KEY
+    );
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Delete {
+            item: "mcp:github".to_owned(),
+        }],
+    );
+    let deleted = report.trash[0].id.clone();
+
+    // A server added again under the same name keeps its own key when the
+    // older one's undo entry goes for good.
+    add(&fixture, github(), &[("GITHUB_TOKEN", "ghp_again")]);
+    store(&fixture, vec![StoreChange::Forget { entry: deleted }]);
+    let bytes = store_bytes(&fixture);
+    assert!(!bytes.contains(KEY), "a permanent delete wipes the key");
+    assert!(bytes.contains("ghp_again"));
+    assert_eq!(
+        key_of(&held(&fixture, "omp", "github").unwrap(), "GITHUB_TOKEN"),
+        "ghp_again"
+    );
+}
+
+#[test]
+fn a_change_that_carries_a_key_prints_and_echoes_none() {
+    let changes = [
+        StoreChange::ReadMcp {
+            text: Sealed::new(format!("GITHUB_TOKEN={KEY} npx some-mcp")),
+        },
+        StoreChange::AddMcp {
+            server: github(),
+            keys: sent(&[("GITHUB_TOKEN", KEY)]),
+            from: None,
+        },
+        StoreChange::SetMcp {
+            item: "mcp:github".to_owned(),
+            server: github(),
+            keys: sent(&[("GITHUB_TOKEN", KEY)]),
+        },
+    ];
+    for change in changes {
+        // The wire to a machine carries the key; a log line and an outcome
+        // do not.
+        assert!(serde_json::to_string(&change).unwrap().contains(KEY));
+        assert!(!format!("{change:?}").contains(KEY), "{change:?}");
+        let redacted = change.redacted();
+        assert!(!serde_json::to_string(&redacted).unwrap().contains(KEY));
+    }
+}
+
+#[test]
+fn a_server_of_the_same_name_the_operator_put_in_is_left_alone_until_taken_over() {
+    let fixture = mcp_agents();
+    let theirs = "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"docker\",\n      \"args\": [\"run\", \"-i\", \"ghcr.io/github/github-mcp-server\"],\n      \"env\": {\"GITHUB_TOKEN\": \"ghp_theirs\"}\n    }\n  }\n}\n";
+    write(&path_of(&fixture, "omp"), theirs);
+
+    let report = add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+    let mut expected = every(CellState::On);
+    expected.insert("omp".to_owned(), CellState::HandWritten);
+    assert_eq!(cells(&report, "mcp:github"), expected);
+    assert_eq!(
+        std::fs::read_to_string(path_of(&fixture, "omp")).unwrap(),
+        theirs
+    );
+
+    // Taking omp's copy over makes it the item for every agent, its key
+    // with it, and the store's own copy goes to the undo list.
+    let place = format!("mcp:omp:{}", path_of(&fixture, "omp").display());
+    let report = store(
+        &fixture,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "github".to_owned(),
+            from: Some(place),
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    for (agent, _) in FILES {
+        let entry = held(&fixture, agent, "github").unwrap();
+        assert_eq!(key_of(&entry, "GITHUB_TOKEN"), "ghp_theirs", "{agent}");
+        assert!(
+            matches!(&entry.0.reach, Reach::Local { command, .. } if command == "docker"),
+            "{agent}"
+        );
+    }
+    assert_eq!(report.trash.len(), 1);
+}
+
+#[test]
+fn a_server_only_one_agent_had_is_listed_and_adopted_into_every_agent_with_its_key() {
+    let fixture = mcp_agents();
+    write(
+        &path_of(&fixture, "codex"),
+        "[mcp_servers.fetch]\ncommand = \"uvx\"\nargs = [\"mcp-server-fetch\"]\nenv = { PROXY = \"http://proxy\" }\n",
+    );
+
+    let report = store(&fixture, Vec::new());
+    let found = report
+        .unmanaged
+        .iter()
+        .find(|unmanaged| unmanaged.kind == ItemKind::Mcp && unmanaged.name == "fetch")
+        .unwrap_or_else(|| panic!("{report:#?}"));
+    assert_eq!(found.copies.len(), 1);
+    assert_eq!(found.copies[0].agents, ["codex"]);
+    assert_eq!(
+        found.copies[0].path,
+        path_of(&fixture, "codex").display().to_string()
+    );
+
+    let report = store(
+        &fixture,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "fetch".to_owned(),
+            from: None,
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:fetch"), every(CellState::On));
+    for (agent, _) in FILES {
+        assert_eq!(
+            key_of(&held(&fixture, agent, "fetch").unwrap(), "PROXY"),
+            "http://proxy",
+            "{agent}"
+        );
+    }
+    assert!(report.unmanaged.iter().all(|found| found.name != "fetch"));
+    let row = report
+        .items
+        .iter()
+        .find(|item| item.id == "mcp:fetch")
+        .unwrap();
+    assert_eq!(row.version, Version::Unpinned);
+}
+
+#[test]
+fn a_paste_fills_the_fields_and_its_values_stay_in_the_store() {
+    let fixture = mcp_agents();
+    let pasted = format!("GITHUB_TOKEN={KEY} npx -y @modelcontextprotocol/server-github");
+    let report = store(
+        &fixture,
+        vec![StoreChange::ReadMcp {
+            text: Sealed::new(pasted.clone()),
+        }],
+    );
+    let McpPreview { id, servers, .. } = &report.mcp_previews[0];
+    assert_eq!(servers[0].server, github());
+    assert_eq!(servers[0].given, ["GITHUB_TOKEN"]);
+    assert_eq!(servers[0].agents.len(), FILES.len());
+    let wire = serde_json::to_string(&report).unwrap();
+    assert!(!wire.contains(KEY), "{wire}");
+    assert!(!format!("{report:?}").contains(KEY));
+
+    // Adding the pasted server without typing the key takes the paste's.
+    let report = store(
+        &fixture,
+        vec![StoreChange::AddMcp {
+            server: github(),
+            keys: SentKeys::new(),
+            from: Some(PastedPick {
+                preview: id.clone(),
+                index: 0,
+            }),
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    assert_eq!(
+        key_of(
+            &held(&fixture, "antigravity", "github").unwrap(),
+            "GITHUB_TOKEN"
+        ),
+        KEY
+    );
+
+    // A paste Hide cannot read leaves the fields empty.
+    let report = store(
+        &fixture,
+        vec![StoreChange::ReadMcp {
+            text: Sealed::new("ftp://example.com/mcp"),
+        }],
+    );
+    assert!(report.mcp_previews.last().unwrap().servers.is_empty());
+
+    // A key the server names with no value adds nothing.
+    let refused = crate::apply_store(
+        &fixture.target,
+        vec![StoreChange::AddMcp {
+            server: Server {
+                name: "linear".to_owned(),
+                ..github()
+            },
+            keys: SentKeys::new(),
+            from: None,
+        }],
+    );
+    let refusal = refused.outcomes[0].refused.as_ref().unwrap();
+    assert_eq!(refusal.reason, "GITHUB_TOKEN has no value");
+    assert!(refused.items.iter().all(|item| item.id != "mcp:linear"));
+}
+
+#[test]
+fn a_copy_carries_the_server_and_its_key_and_a_new_key_alone_reaches_the_other_machine() {
+    let here = mcp_agents();
+    add(&here, github(), &[("GITHUB_TOKEN", KEY)]);
+    let export = crate::export_store(&here.target);
+    assert_eq!(export.refused, None);
+
+    let there = mcp_agents();
+    let received = StoreChange::Receive {
+        item: Box::new(export.items[0].clone()),
+    };
+    let report = store(&there, vec![received]);
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    assert_eq!(
+        key_of(&held(&there, "codex", "github").unwrap(), "GITHUB_TOKEN"),
+        KEY
+    );
+    assert!(
+        !serde_json::to_string(&report).unwrap().contains(KEY),
+        "the outcome holds the carried change with no key"
+    );
+
+    // The key changes here, and the next copy gives the other machine's
+    // agents the new one.
+    store(
+        &here,
+        vec![StoreChange::SetMcp {
+            item: "mcp:github".to_owned(),
+            server: github(),
+            keys: sent(&[("GITHUB_TOKEN", "ghp_new")]),
+        }],
+    );
+    let export = crate::export_store(&here.target);
+    store(
+        &there,
+        vec![StoreChange::Receive {
+            item: Box::new(export.items[0].clone()),
+        }],
+    );
+    for (agent, _) in FILES {
+        assert_eq!(
+            key_of(&held(&there, agent, "github").unwrap(), "GITHUB_TOKEN"),
+            "ghp_new",
+            "{agent}"
+        );
+    }
+}
+
+#[test]
+fn removing_the_machine_takes_hides_servers_and_their_keys_out() {
+    let fixture = mcp_agents();
+    add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+    write(
+        &path_of(&fixture, "opencode"),
+        "{\"mcp\": {\"theirs\": {\"type\": \"local\", \"command\": [\"theirs\"]}}}",
+    );
+    store(&fixture, Vec::new());
+
+    remove(&fixture.target);
+
+    for (agent, _) in FILES {
+        assert!(held(&fixture, agent, "github").is_none(), "{agent}");
+    }
+    assert!(held(&fixture, "opencode", "theirs").is_some());
+    assert!(!crate::layout::store_dir(fixture.home()).exists());
+}

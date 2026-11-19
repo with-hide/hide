@@ -239,14 +239,15 @@ impl StoreItem {
     }
 
     pub fn version(&self) -> Version {
+        // An MCP's version is what its server runs, wherever it came from
+        // (B36).
+        if let ItemBody::Mcp(body) = &self.body {
+            return body.version();
+        }
         match &self.source {
             Source::Git { commit, tag, .. } => Version::of_commit(commit, tag.as_deref()),
             Source::Folder { .. } => Version::Folder,
-            Source::Copy { .. } => Version::Copy,
-            Source::Pasted => match &self.body {
-                ItemBody::Mcp(body) => body.version(),
-                ItemBody::Skill(_) => Version::Copy,
-            },
+            Source::Copy { .. } | Source::Pasted => Version::Copy,
         }
     }
 
