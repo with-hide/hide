@@ -141,6 +141,9 @@ pub struct AppState {
     pub mobile: Arc<crate::mobile::Mobile>,
     /// This machine's endpoint for other Hides (`peer_host`).
     pub peers: Arc<crate::peer_host::PeerHost>,
+    /// Pairing this machine with other Hides, for Settings > Devices
+    /// (`pairing`).
+    pub pairing: Arc<crate::pairing::Pairing>,
     /// The desktop windows' agent notifications (`desktop_notices.rs`).
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).
@@ -972,6 +975,23 @@ async fn screen_loop(
             return;
         }
     }
+    // Settings > Devices reads the pairings under way from one `pairing`
+    // frame. It carries a link that lets a machine in and the words two
+    // people compare, so only this machine's own windows get it: never a
+    // phone, and never a screen another machine shows of this one.
+    let mut pairing_frames = state.pairing.subscribe_frame();
+    if renderer && relay.is_none() {
+        let frame =
+            json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
+        if socket
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .is_err()
+        {
+            client_gone(&state, connection, renderer, desktop);
+            return;
+        }
+    }
     let Ok(first) = send_snapshot(&mut socket, &state, &mut have_revision, granular).await else {
         client_gone(&state, connection, renderer, desktop);
         return;
@@ -1142,6 +1162,15 @@ async fn screen_loop(
                     break;
                 }
             }
+            changed = pairing_frames.changed(), if renderer && relay.is_none() => {
+                if changed.is_err() {
+                    break;
+                }
+                let frame = json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
+                if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
             Some(frame) = device_bytes.recv() => {
                 if socket.send(frame).await.is_err() {
                     break;
@@ -1196,6 +1225,18 @@ async fn screen_loop(
                                 } else if send_file_bytes(&mut socket, &state.boundary, &state.roots, &event).await.is_err() {
                                     break;
                                 }
+                            }
+                            Ok(ClientAction::Pairing(event)) => {
+                                // Answered off this loop, which keeps the
+                                // terminals moving while a share waits for
+                                // the relay; the answer is this client's.
+                                let pairing = Arc::clone(&state.pairing);
+                                let answers = device_frames_tx.clone();
+                                let own = renderer && relay.is_none();
+                                tokio::spawn(async move {
+                                    let answer = pairing.window_event(&event, own).await;
+                                    let _ = answers.send(answer.to_string()).await;
+                                });
                             }
                             Ok(ClientAction::CoreMove(event)) => {
                                 // A node's window moves the core from its own
@@ -2514,6 +2555,9 @@ enum ClientAction {
     FileBytes(Value),
     /// A move of the core, which this process's supervisor takes.
     CoreMove(Value),
+    /// Something the operator does about pairing (`pairing_*`), which the
+    /// daemon's pairing answers for this client alone.
+    Pairing(Value),
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
     /// Add a project's question for a machine's node: a folder under its
@@ -2770,6 +2814,14 @@ fn handle_client_text(
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.
         Some("ui_attached") => return Err("ui_attached is sent by the daemon only".to_owned()),
+        // The paired machines are what the daemon's pairing settled; a
+        // client that named them would draw machines nobody allowed.
+        Some("peer_machines") => {
+            return Err("peer_machines is sent by the daemon only".to_owned());
+        }
+        Some(kind) if kind.starts_with("pairing_") => {
+            return Ok(ClientAction::Pairing(event));
+        }
         Some(kind) if kind.starts_with("mobile_") => {
             state.mobile.handle_event(connection, &event)?;
             return Ok(ClientAction::Replies(Vec::new()));

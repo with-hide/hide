@@ -119,7 +119,7 @@ pub fn valid(machines: &[PeerMachine]) -> bool {
 }
 
 /// One paired machine as `hide device list` answers it.
-pub(crate) fn answer(machine: &PeerMachine) -> serde_json::Value {
+pub fn answer(machine: &PeerMachine) -> serde_json::Value {
     serde_json::json!({
         "id": machine.device_id,
         "name": machine.name,
@@ -155,7 +155,8 @@ mod tests {
     fn a_list_that_is_not_a_list_of_paired_machines_is_refused() {
         assert!(valid(&[machine('a'), machine('b')]));
         assert!(valid(&[]));
-        let broken: [(&str, fn(&mut PeerMachine)); 7] = [
+        type Break = fn(&mut PeerMachine);
+        let broken: [(&str, Break); 7] = [
             ("a key that is not a key", |m| m.key = "A".repeat(64)),
             ("a short key", |m| m.key.truncate(16)),
             ("a device id that could name a pane", |m| {
