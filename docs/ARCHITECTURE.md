@@ -3323,7 +3323,7 @@ A core the item started forgets its item rather than unloading it when it is the
 A paired core never ends for idle, since the pairing counts as work (`server::watch_idle`).
 `hide connect` starts the core through the item when the item is installed, waits up to 30 s for it to answer, and updates it when it runs an older build ([Updating the core](#updating-the-core)); `hide stop` removes the marker first, so the stop holds through logins until the next `hide connect` puts it back.
 On Linux the item asks for linger, and when the account may not turn it on itself the outcome names the `sudo loginctl enable-linger <user>` command for the device's details.
-On Windows the desktop host asks once for the firewall rules (`hide always-on firewall ask-allow`, through the permission prompt) and the uninstaller removes them with the item.
+On Windows the window asks Windows once for the firewall rules when the operator shares this PC or allows a pairing (`askForFirewallOnce` in `web/src/settings/firewall.ts`, through the desktop host's `hide always-on firewall ask-allow` and the permission prompt), never at login; while they are missing and the PC is shared or paired, Settings › Devices shows that the connection goes through the relay with [Allow] under the share row, and the uninstaller removes the rules with the item.
 `hide always-on status --json` says whether the folder is paired, whether the item and marker are in place, the folder's UDP port and the firewall rules' state; `hide always-on remove` takes out the item, the marker and the install root.
 
 ### The terminal path

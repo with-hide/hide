@@ -13,6 +13,7 @@ import type { PairingView, Peer } from "../pairing";
 import { DevicesTab } from "../settings/DevicesTab";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
+import { standInHost } from "../practice/mount";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
 const VIEWS = ["devices", "allow", "request", "join", "failed"] as const;
@@ -54,6 +55,20 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   const view = (params.get("view") ?? "devices") as View;
   if (!VIEWS.includes(view)) throw new Error(`Unknown pairing view ${view}`);
   const actions = useMemo(() => createActions(() => true), []);
+  // `firewall=missing`: a Windows PC whose firewall rules are not in place
+  // (B32), drawn through a stand-in of the desktop host's two firewall calls.
+  const firewall = params.get("firewall") === "missing";
+  useLayoutEffect(() => {
+    if (!firewall) return;
+    const before = window.hideHost;
+    window.hideHost = Object.assign(standInHost("win32"), {
+      firewallState: async () => "missing" as const,
+      allowFirewall: async () => "declined" as const,
+    });
+    return () => {
+      window.hideHost = before;
+    };
+  }, [firewall]);
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",

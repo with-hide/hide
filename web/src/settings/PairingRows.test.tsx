@@ -8,6 +8,7 @@ import { PairingDialogs } from "../PairingDialogs";
 import type { PairingView, Peer } from "../pairing";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
+import { forgetFirewallAsk } from "./firewall";
 import { PairedRows } from "./PairingRows";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
@@ -133,4 +134,64 @@ it("shows the pasted link's words with They match and They differ, then how it e
   await full.press("[data-pair-join-close]");
   expect(last(full.events)).toMatchObject({ kind: "pairing_dismiss_join" });
   await full.unmount();
+});
+
+/** A desktop host on Windows whose firewall rules answer `state` until an ask returns `answer`. */
+function windowsHost(state: "allowed" | "missing", answer: "allowed" | "declined") {
+  let now: "allowed" | "missing" = state;
+  const host = {
+    kind: "electron",
+    platform: "win32",
+    firewallState: vi.fn(async () => now),
+    allowFirewall: vi.fn(async () => {
+      if (answer === "allowed") now = "allowed";
+      return answer;
+    }),
+  };
+  window.hideHost = host as never;
+  return host;
+}
+
+it("asks Windows once for the firewall rules when this PC is shared, and a no leaves the line with Allow (B32)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("missing", "declined");
+  const screen = await mount(idle);
+  expect(screen.q("[data-pair-firewall]"), "nothing is shared or paired yet").toBeNull();
+  await screen.press("[data-pair-share-make]");
+  expect(host.allowFirewall).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+
+  const shared = await mount({ ...idle, offer: { link: "hide://pair#v=1&id=ab&s=cd", expires_unix_ms: Date.now() + 60_000 } });
+  await act(async () => {});
+  expect(shared.q("[data-pair-firewall]")?.textContent).toContain("The firewall blocks direct connections");
+  await shared.press("[data-pair-share-end]");
+  await shared.unmount();
+
+  const again = await mount(idle);
+  await again.press("[data-pair-share-make]");
+  expect(host.allowFirewall, "a second share asks nothing on its own").toHaveBeenCalledTimes(1);
+  await again.unmount();
+  delete window.hideHost;
+});
+
+it("asks Windows again from the line, and the line goes once the rules are in (B32)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("missing", "allowed");
+  const screen = await mount(idle, [peer()]);
+  await act(async () => {});
+  expect(screen.q("[data-pair-firewall]")).not.toBeNull();
+  await screen.press("[data-pair-firewall-allow]");
+  await act(async () => {});
+  expect(host.allowFirewall).toHaveBeenCalledTimes(1);
+  expect(screen.q("[data-pair-firewall]"), "the rules are in").toBeNull();
+  await screen.unmount();
+  delete window.hideHost;
+});
+
+it("shows no firewall line where the host keeps no rules", async () => {
+  forgetFirewallAsk();
+  const screen = await mount(idle, [peer()]);
+  await act(async () => {});
+  expect(screen.q("[data-pair-firewall]")).toBeNull();
+  await screen.unmount();
 });

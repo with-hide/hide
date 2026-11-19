@@ -16,6 +16,7 @@ import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { directionKey, mayRequest, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
+import { askForFirewallOnce, useFirewall } from "./firewall";
 
 /** The time now, read again each second while `ticking`. */
 export function useNow(ticking: boolean): number {
@@ -88,7 +89,10 @@ export function ShareRow({ actions }: { actions: Actions }) {
       }
     >
       {offer ? null : (
-        <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => actions.pairing("share", { language: i18n.language })}>
+        <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => {
+          actions.pairing("share", { language: i18n.language });
+          void askForFirewallOnce();
+        }}>
           {t("pairing.share.make")}
         </Button>
       )}
@@ -179,15 +183,43 @@ export function PeerRow({ peer, request, actions, onRemove }: { peer: Peer; requ
   );
 }
 
+/**
+ * Windows lets same-network machines reach this PC directly only through
+ * its firewall rules; while they are missing the line says the connection
+ * goes through the relay, and [Allow] asks Windows again (B32).
+ */
+export function FirewallRow({ asking, onAllow }: { asking: boolean; onAllow: () => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <Row
+      data-pair-firewall="missing"
+      label={
+        <>
+          <Status tone="warn">{t("pairing.firewall.blocked")}</Status>
+          <Note>{t("pairing.firewall.caption")}</Note>
+        </>
+      }
+    >
+      <Button variant="secondary" size="sm" data-pair-firewall-allow="true" disabled={asking} onClick={onAllow}>
+        {t("pairing.firewall.allow")}
+      </Button>
+    </Row>
+  );
+}
+
 /** The share row and every paired machine, with the confirm a removal asks (B26). */
 export function PairedRows({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const peers = useShellStore((s) => pairedMachines(s.rest));
   const requests = useShellStore((s) => s.pairing?.requests);
+  const sharing = useShellStore((s) => s.pairing?.offer != null);
   const [removing, setRemoving] = useState<{ peer: Peer; direction: Direction } | null>(null);
+  const opened = sharing || peers.length > 0;
+  const firewall = useFirewall(opened);
   return (
     <>
       <ShareRow actions={actions} />
+      {opened && firewall.state === "missing" ? <FirewallRow asking={firewall.asking} onAllow={firewall.allow} /> : null}
       {peers.map((peer) => (
         <PeerRow
           key={peer.key}
