@@ -752,8 +752,10 @@ impl Guests {
                 &error,
             )
         })?;
-        let dir = layout::guest_dir(&self.state_dir, guest);
-        private::create_dir_all(&dir)
+        // The guest's folder and, in it, what this daemon alone keeps of the
+        // guest: the build its node runs from and its pane list are written
+        // there from the node's first start.
+        private::create_dir_all(&layout::guest_host_side(&self.state_dir, guest))
             .map_err(|error| refused("the guest's folder could not be made", &error))?;
         let key = layout::guest_key(&self.state_dir, guest);
         match std::fs::read_to_string(&key) {
@@ -2013,6 +2015,15 @@ mod tests {
                 build: "9.9.9".to_owned()
             }
         );
+        // What this daemon's next start runs the guest's node from (B16) is
+        // saved at the node's first start.
+        until("the node's build to be remembered", || {
+            std::fs::read(layout::guest_node_record(state, &guest))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<NodeRecord>(&bytes).ok())
+                .is_some_and(|record| record.build_id == build.id())
+        })
+        .await;
 
         let mut link = pair.link.open(StreamKind::NodeLink).await.unwrap();
         link.send.write_all(b"hello").await.unwrap();
