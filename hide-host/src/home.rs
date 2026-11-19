@@ -822,7 +822,8 @@ mod tests {
     /// folder keeps the project as before.
     #[test]
     fn the_automations_folder_does_not_hide_what_keeps_the_project() {
-        let cases: [(&str, fn(&Path), bool); 3] = [
+        type Case = (&'static str, fn(&Path), bool);
+        let cases: [Case; 3] = [
             (
                 "a file beside it",
                 |home| std::fs::write(home.join("notes.md"), "mine").unwrap(),

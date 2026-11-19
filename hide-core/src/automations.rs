@@ -211,6 +211,8 @@ pub enum MissedReason {
     Asleep,
 }
 
+// Nearly every record is a run, so boxing it would only add an allocation.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Entry {
@@ -336,7 +338,7 @@ impl Automation {
         }
         self.next_due_unix_ms = self.schedule.next_after(now, zone);
         let on_time = count == 1 && now.saturating_sub(first) <= LATE_MS;
-        let missed = (!on_time).then(|| Entry::Missed {
+        let missed = (!on_time).then_some(Entry::Missed {
             first_unix_ms: first,
             last_unix_ms: last,
             count,

@@ -174,10 +174,7 @@ impl Runtime {
     }
 
     fn zone(&self) -> TimeZone {
-        self.automations
-            .zone
-            .clone()
-            .unwrap_or_else(|| TimeZone::UTC)
+        self.automations.zone.clone().unwrap_or(TimeZone::UTC)
     }
 
     fn automations_changed(&mut self, save: bool) {
