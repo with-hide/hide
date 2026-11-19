@@ -143,6 +143,10 @@ pub const INCOMPLETE_SPAWN: [&str; 4] = [
 /// asked once that workspace is gone opens the folder again.
 pub const WORKSPACE_CLOSING: &str = "workspace_closing";
 
+/// The refusal of a spawn whose folder its machine reads as gone: nothing
+/// was started there, and nothing anywhere else in its place.
+pub const FOLDER_GONE: &str = "spawn_folder_unreadable";
+
 pub(crate) const AGENT_LIMIT: usize = 2048;
 pub(crate) const SPAWN_LIMIT: usize = 4096;
 

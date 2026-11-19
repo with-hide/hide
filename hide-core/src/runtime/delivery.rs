@@ -1460,7 +1460,7 @@ impl Runtime {
         match self.checkout_kind(device, &folder) {
             Some(CheckoutKind::Folder) => Ok(folder),
             Some(CheckoutKind::Unread) => Err("spawn_project_loading".into()),
-            Some(CheckoutKind::Unreadable) => Err("spawn_folder_unreadable".into()),
+            Some(CheckoutKind::Unreadable) => Err(crate::coordination::FOLDER_GONE.into()),
             Some(CheckoutKind::Git) | None => Err("spawn_repo_required".into()),
         }
     }
