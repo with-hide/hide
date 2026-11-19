@@ -260,10 +260,17 @@ impl WorkspaceViewStore {
                 repairs,
             } => {
                 if let Some(version) = migrated_from {
+                    // A schema 4 or 5 lane keeps its state; an older one
+                    // starts from the default shape (`workspace_views`).
+                    let lane = if version >= 4 {
+                        "its Views move to the desk of the Agent tab it showed last, and its lane keeps whether it was open, its tool and its widths"
+                    } else {
+                        "its lane starts closed at the default widths"
+                    };
                     diagnostics.push((
                         "workspace_views.migrated",
                         format!(
-                            "Workspace view state was migrated from schema {version} to {}; each Workspace keeps its Views, Agent layout, groups and comments, and its lane starts closed at the default widths",
+                            "Workspace view state was migrated from schema {version} to {}; each Workspace keeps its Views, Agent layout, groups and comments, and {lane}",
                             workspace_views::SCHEMA_VERSION
                         ),
                     ));
