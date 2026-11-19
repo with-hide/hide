@@ -172,20 +172,9 @@ impl Runtime {
     /// The engine listed the Agent tabs `tabs` of `key`: a tab that left
     /// takes its pending reads and its tray with it, its agents' Views
     /// staying in their panes' lists and the operator's going to the desk in
-    /// front. A pair view whose left pane left the tab ends (PRD
-    /// lane-desk-pair-view B28), without a notice. Whether anything changed.
+    /// front. Whether anything changed.
     pub(super) fn prune_view_callers(&mut self, key: &WorkspaceKey, tabs: &[&str]) -> bool {
         let reads = self.prune_gui_reads(key, tabs);
-        let panes_of = |tab: &str| -> Vec<String> {
-            self.catalog_workspaces()
-                .filter(|workspace| workspace.device_id == key.0)
-                .flat_map(|workspace| &workspace.checkouts)
-                .filter(|checkout| checkout.path == key.1)
-                .flat_map(|checkout| &checkout.tabs)
-                .filter(|held| held.id.as_deref() == Some(tab))
-                .flat_map(|held| held.panes.iter().map(|pane| pane.id.clone()))
-                .collect()
-        };
         let Some(view) = self
             .workspace_views
             .as_ref()
@@ -202,17 +191,7 @@ impl Runtime {
             })
             .map(|tray| tray.tab.clone())
             .collect();
-        let unpaired: Vec<(String, String)> = view
-            .trays
-            .iter()
-            .filter(|tray| tabs.contains(&tray.tab.as_str()))
-            .filter_map(|tray| {
-                let pair = tray.pair.as_ref()?;
-                (!panes_of(&tray.tab).contains(&pair.pane))
-                    .then(|| (tray.tab.clone(), pair.pane.clone()))
-            })
-            .collect();
-        if gone.is_empty() && unpaired.is_empty() {
+        if gone.is_empty() {
             return reads;
         }
         // The operator's Views of a tab that left go to the desk in front,
@@ -232,17 +211,52 @@ impl Runtime {
                 "dropped": retired.dropped,
             }));
         }
-        for (tab, pane) in &unpaired {
-            if let Some(tray) = view.tray_mut(tab) {
-                tray.pair = None;
-            }
-            crate::diagnostic!(serde_json::json!({
-                "component": "pair_view", "kind": "pair_view.ended",
-                "device": key.0, "tab": tab, "pane": pane, "cause": "pane_gone",
-            }));
-        }
         store.generation += 1;
         self.persist_workspace_views();
         true
+    }
+
+    /// Ends the pair view of every tab whose left pane the catalog no longer
+    /// lists in it (PRD lane-desk-pair-view B28, D-22), without a notice.
+    /// Runs once a new catalog is in place, so it reads the panes as they
+    /// are now; a tab the catalog does not list is left to the tab prune,
+    /// which an unanswered catalog does not run. Whether any ended.
+    pub(super) fn end_pairs_of_gone_panes(&mut self) -> bool {
+        let Some(store) = self.workspace_views.as_ref() else {
+            return false;
+        };
+        let paired: Vec<(WorkspaceKey, String, String)> = store
+            .views
+            .workspaces
+            .iter()
+            .flat_map(|view| {
+                view.trays.iter().filter_map(|tray| {
+                    let pair = tray.pair.as_ref()?;
+                    Some((
+                        (view.device_id.clone(), view.path.clone()),
+                        tray.tab.clone(),
+                        pair.pane.clone(),
+                    ))
+                })
+            })
+            .collect();
+        if paired.is_empty() {
+            return false;
+        }
+        let mut ended = false;
+        for (key, tab, pane) in paired {
+            let listed: Option<Vec<&str>> = self
+                .catalog_workspaces()
+                .filter(|workspace| workspace.device_id == key.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .filter(|checkout| checkout.path == key.1)
+                .flat_map(|checkout| &checkout.tabs)
+                .find(|held| held.id.as_deref() == Some(tab.as_str()))
+                .map(|held| held.panes.iter().map(|pane| pane.id.as_str()).collect());
+            if listed.is_some_and(|panes| !panes.contains(&pane.as_str())) {
+                ended |= self.end_pair_view(&key, &tab, "pane_gone");
+            }
+        }
+        ended
     }
 }

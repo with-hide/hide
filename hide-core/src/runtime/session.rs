@@ -865,6 +865,7 @@ impl Runtime {
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
         self.snapshot.navigator.workspaces = workspaces;
+        self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
@@ -6093,6 +6094,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         self.snapshot.navigator.workspaces = workspaces;
+        self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,

@@ -1647,3 +1647,156 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     assert_eq!(drawn(&runtime).1, ["b.md"]);
     assert!(shelf(&runtime, &directory).iter().all(|name| name != "b.md"));
 }
+
+// Pair view (PRD lane-desk-pair-view D-08, D-15, D-22): an Agent tab drawn as
+// one of its panes beside its desk, kept as that tab's state.
+
+fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": pane}),
+    ));
+}
+
+/// The pair view of the desk on screen, and every tab the wire marks.
+fn pairs(runtime: &Runtime) -> (Option<(String, String)>, Vec<(String, String)>) {
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    let pair = |pair: &crate::model::PairViewSnapshot| (pair.tab_id.clone(), pair.pane_id.clone());
+    (
+        view.tray.pair.as_ref().map(pair),
+        view.pairs.iter().map(pair).collect(),
+    )
+}
+
+fn paired(tab: &str, pane: &str) -> (String, String) {
+    (tab.to_owned(), pane.to_owned())
+}
+
+/// B18, B27: entering pair view puts the pane's agent's View in front of its
+/// tab's desk; the tab keeps its pair view while the operator is on another
+/// tab, which shows its own state, and after a restart.
+#[test]
+fn a_pair_view_is_its_tabs_and_survives_a_tab_switch_and_a_restart() {
+    let (mut runtime, checkout, directory) = setup("pair-keeps");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    open(&mut runtime, &checkout, &directory, "b.md");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    let on = paired(TABS[0], "w-order:t1:p");
+    assert_eq!(pairs(&runtime), (Some(on.clone()), vec![on.clone()]));
+    assert_eq!(fronts(&runtime, &directory), ["a.md"], "B18: its agent's View");
+    assert!(lane_documents(&runtime));
+
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    assert_eq!(
+        pairs(&runtime),
+        (None, vec![on.clone()]),
+        "another tab shows its own state; the strip still marks the first"
+    );
+    focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
+    assert_eq!(pairs(&runtime).0, Some(on.clone()));
+
+    let path = runtime.workspace_views.as_ref().unwrap().path.clone();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(path, (false, RightPanelSection::default())).0);
+    runtime.sync_workspace_view();
+    assert_eq!(pairs(&runtime), (Some(on.clone()), vec![on]));
+    assert_eq!(fronts(&runtime, &directory), ["a.md"]);
+
+    pair_event(&mut runtime, None);
+    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(strip(&runtime, &directory), ["a.md", "b.md"], "the desk stays");
+}
+
+/// B28: the left pane leaving its tab ends the pair view, with no notice,
+/// and the desk stays as it was.
+#[test]
+fn a_pair_view_ends_when_its_left_pane_leaves_the_tab() {
+    let (mut runtime, _checkout, directory) = setup("pair-left-gone");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "beside");
+    assert_eq!(shelf(&runtime, &directory), ["b.md"]);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(strip(&runtime, &directory), ["b.md"], "B18: off the shelf");
+
+    engine_focuses(&mut runtime, &directory, TABS[0]);
+    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
+    assert_eq!(strip(&runtime, &directory), ["b.md"]);
+}
+
+/// Inventory X02: a pane in no Agent tab has no desk to pair with, and the
+/// refusal says so.
+#[test]
+fn a_pane_in_no_agent_tab_is_refused_pair_view() {
+    let (mut runtime, _checkout, _directory) = setup("pair-no-tab");
+    pair_event(&mut runtime, Some("w-order:automation:p"));
+    let refused = runtime.snapshot.status.last_error.clone().expect("refused");
+    assert_eq!(refused.kind, "pair_view.no_agent_tab");
+    assert_eq!(pairs(&runtime), (None, vec![]));
+}
+
+/// B33, D-36: `hide view split` and `move` arrange a View on a desk; one
+/// waiting in its pane's list is refused with `view_not_in_lane`, and nothing
+/// changes.
+#[test]
+fn split_and_move_apply_to_a_desk_view_and_refuse_one_on_no_desk() {
+    let (mut runtime, checkout, directory) = setup("split-move");
+    open(&mut runtime, &checkout, &directory, "a.md");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "desk");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "c.md", "shelf");
+    let area = area_id(&runtime, &directory, 0);
+    let c = display_id(&runtime, &directory, "c.md");
+    let before = runtime.workspace_views.as_ref().unwrap().views.clone();
+    for (action, suffix) in [
+        (
+            Action::Split {
+                view_id: c.clone(),
+                area_id: area.clone(),
+                edge: crate::workspace_control::Edge::Right,
+            },
+            "split-shelf",
+        ),
+        (
+            Action::Move {
+                view_id: c.clone(),
+                area_id: area.clone(),
+                index: 0,
+            },
+            "move-shelf",
+        ),
+    ] {
+        let expected = runtime
+            .workspace_control_query(crate::node::TEST_NODE, "w-order:t2:p", Query::Info)
+            .unwrap()
+            .context;
+        let id = format!("{}-{suffix}", unix_milliseconds());
+        let refused = runtime
+            .workspace_control_action(
+                crate::node::TEST_NODE,
+                "w-order:t2:p",
+                &expected,
+                &id,
+                action,
+                Ok(None),
+            )
+            .unwrap_err();
+        assert_eq!(refused.reason, "view_not_in_lane", "{suffix}");
+        assert_eq!(runtime.workspace_views.as_ref().unwrap().views, before);
+    }
+
+    let b = display_id(&runtime, &directory, "b.md");
+    control(
+        &mut runtime,
+        "w-order:t1:p",
+        Action::Split {
+            view_id: b,
+            area_id: area,
+            edge: crate::workspace_control::Edge::Right,
+        },
+        "split-desk",
+    );
+    assert_eq!(fronts(&runtime, &directory), ["a.md", "b.md"]);
+}

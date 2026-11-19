@@ -6,7 +6,7 @@
 //! pane's agent opened: the View named, else its unseen View, else its last
 //! View, else its session record (B17, B18); a pane with none of these has
 //! nothing to pair with and nothing changes (B19). It ends on the event, when
-//! the left pane leaves the tab (B28, `prune_view_callers`) or when the
+//! the left pane leaves the tab (B28, `end_pairs_of_gone_panes`) or when the
 //! tray's last tab closes (B26, `close_emptied_lane`); the tray then stays in
 //! the lane, which entering opened.
 

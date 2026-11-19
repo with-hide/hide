@@ -366,6 +366,7 @@ impl Runtime {
             let tabs: Vec<&str> = tabs.iter().map(String::as_str).collect();
             pruned |= self.prune_view_callers(key, &tabs);
         }
+        pruned |= self.end_pairs_of_gone_panes();
         if pruned {
             self.persist_workspace_views();
         }
