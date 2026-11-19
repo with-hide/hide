@@ -54,20 +54,32 @@ pub fn allowed(port: u16) -> io::Result<bool> {
     }
 }
 
-/// Puts the rules for `port` in place, replacing one of the same name.
-/// Needs an administrator.
-pub fn allow(port: u16) -> io::Result<()> {
+/// Puts the rules for `port` in place, replacing one of the same name, and
+/// takes out the rule for `retired`, the port it replaced. Needs an
+/// administrator.
+pub fn allow(port: u16, retired: Option<u16>) -> io::Result<()> {
     #[cfg(windows)]
     {
         let name = rule_name(port);
+        let retire = retired
+            .filter(|retired| *retired != port)
+            .map(|retired| {
+                format!(
+                    "Get-NetFirewallRule -DisplayName '{}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule; ",
+                    rule_name(retired)
+                )
+            })
+            .unwrap_or_default();
         let script = format!(
             concat!(
                 "$ErrorActionPreference = 'Stop'; ",
+                "{retire}",
                 "Get-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule; ",
                 "New-NetFirewallRule -Group '{GROUP}' -DisplayName '{name}' -Direction Inbound -Protocol UDP -LocalPort {port} -Action Allow -Profile Any | Out-Null; ",
                 "if (-not (Get-NetFirewallRule -DisplayName '{mdns}' -ErrorAction SilentlyContinue)) {{ ",
                 "New-NetFirewallRule -Group '{GROUP}' -DisplayName '{mdns}' -Direction Inbound -Protocol UDP -LocalPort 5353 -Action Allow -Profile Private,Domain | Out-Null }}"
             ),
+            retire = retire,
             name = name,
             GROUP = GROUP,
             port = port,
@@ -77,7 +89,7 @@ pub fn allow(port: u16) -> io::Result<()> {
     }
     #[cfg(not(windows))]
     {
-        let _ = port;
+        let _ = (port, retired);
         Err(unsupported())
     }
 }
@@ -223,7 +235,10 @@ mod tests {
             allowed(51234).unwrap_err().kind(),
             io::ErrorKind::Unsupported
         );
-        assert_eq!(allow(51234).unwrap_err().kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            allow(51234, Some(50000)).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
         assert_eq!(remove_all().unwrap_err().kind(), io::ErrorKind::Unsupported);
     }
 }

@@ -663,6 +663,13 @@ pub fn peer_port(state_dir: &Path) -> PathBuf {
     peers(state_dir).join("udp-port")
 }
 
+/// The port [`peer_port`] held before another process took it and a new one
+/// was chosen, kept until the firewall rule for it is replaced by the new
+/// port's (`hide_peer::port::replace`).
+pub fn peer_port_replaced(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("udp-port-replaced")
+}
+
 /// This machine's durable record of the events of `host` (D-66), under the
 /// first 16 hex characters of its key.
 pub fn peer_inbox(state_dir: &Path, host: &PeerKey) -> PathBuf {

@@ -113,7 +113,7 @@ pub fn endpoint_wanted(state_dir: &Path) -> io::Result<bool> {
 /// Whether `state_dir` has finished a pairing in either direction (PRD
 /// device-connect-iroh D-41): a grant the guest confirmed, active or
 /// paused, or a host this machine is a confirmed guest of, active or paused
-/// here. Unlike [`paired`], which opens the endpoint while a pairing still
+/// here. Unlike [`endpoint_wanted`], which opens the endpoint while a pairing still
 /// waits, a pending grant, a confirm not yet answered, a removal on its way
 /// and a host that holds this machine no more count as none, so a pairing
 /// that is declined or runs out never leaves a login item behind. What
@@ -232,14 +232,24 @@ impl PeerHost {
             .ok();
         let transport = match IrohTransport::open(&key.secret(), self.settings.endpoint(port)).await
         {
+            // Another process holds the folder's port: a new one is chosen
+            // and saved as the folder's, so the firewall rule, which names
+            // the old one, reads as missing and Settings > Devices offers to
+            // allow the new one (O3, D-38).
             Err(error) if port.is_some() => {
+                let state_dir = self.settings.state_dir.clone();
+                let replaced =
+                    tokio::task::spawn_blocking(move || hide_peer::port::replace(&state_dir))
+                        .await
+                        .map_err(io::Error::other)?;
                 hide_core::diagnostic!(json!({
                     "component": "peer_host",
-                    "kind": "peer_host.port_unavailable",
+                    "kind": "peer_host.port_replaced",
                     "port": port,
+                    "replaced_by": replaced.as_ref().ok(),
                     "message": error.to_string(),
                 }));
-                IrohTransport::open(&key.secret(), self.settings.endpoint(None)).await?
+                IrohTransport::open(&key.secret(), self.settings.endpoint(replaced.ok())).await?
             }
             opened => opened?,
         };
@@ -327,7 +337,10 @@ mod tests {
             !pairing_confirmed(state.path()).unwrap(),
             "a pending grant is no finished pairing"
         );
-        assert!(paired(state.path()).unwrap(), "it opens the endpoint");
+        assert!(
+            endpoint_wanted(state.path()).unwrap(),
+            "it opens the endpoint"
+        );
         grants.confirm(&guest(), &grant.id, now_unix_ms()).unwrap();
         assert!(pairing_confirmed(state.path()).unwrap());
         grants.pause(&guest()).unwrap();

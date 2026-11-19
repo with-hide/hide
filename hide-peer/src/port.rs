@@ -40,6 +40,50 @@ pub fn of(state_dir: &Path) -> io::Result<u16> {
     }
 }
 
+/// A new free port for the state folder, saved in place of its port, which
+/// another process holds: the endpoint binds the new one, and the firewall
+/// rule, which names the old one, reads as missing until it is allowed
+/// again. The old port is kept as the one replaced, unless one replaced
+/// before is still kept: the rule in place is for that one.
+pub fn replace(state_dir: &Path) -> io::Result<u16> {
+    let path = hide_kit::layout::peer_port(state_dir);
+    let old = read(&path)?;
+    let port = choose()?;
+    if let Some(folder) = path.parent() {
+        private::create_dir_all(folder)?;
+    }
+    let replaced = hide_kit::layout::peer_port_replaced(state_dir);
+    if let Some(old) = old
+        && read(&replaced)?.is_none()
+    {
+        hide_platform::fs::atomic::write_file(
+            &replaced,
+            old.to_string().as_bytes(),
+            hide_platform::fs::Access::Private,
+        )?;
+    }
+    hide_platform::fs::atomic::write_file(
+        &path,
+        port.to_string().as_bytes(),
+        hide_platform::fs::Access::Private,
+    )?;
+    Ok(port)
+}
+
+/// The port the state folder held before [`replace`], until [`retired`].
+pub fn replaced(state_dir: &Path) -> io::Result<Option<u16>> {
+    read(&hide_kit::layout::peer_port_replaced(state_dir))
+}
+
+/// Forgets the replaced port once the firewall rule for it is gone.
+pub fn retired(state_dir: &Path) -> io::Result<()> {
+    match std::fs::remove_file(hide_kit::layout::peer_port_replaced(state_dir)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// The port saved in `path`, when one is.
 pub fn read(path: &Path) -> io::Result<Option<u16>> {
     let text = match std::fs::read_to_string(path) {
@@ -89,5 +133,23 @@ mod tests {
             of(other.path()).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    /// A taken port is replaced by a new one, saved as the folder's; the
+    /// first port replaced is kept until its rule is retired, through a
+    /// second replacement too.
+    #[test]
+    fn a_replaced_port_is_kept_until_its_rule_is_retired() {
+        let state = tempfile::tempdir().unwrap();
+        let first = of(state.path()).unwrap();
+        let second = replace(state.path()).unwrap();
+        assert_eq!(of(state.path()).unwrap(), second);
+        assert_eq!(replaced(state.path()).unwrap(), Some(first));
+        let third = replace(state.path()).unwrap();
+        assert_eq!(of(state.path()).unwrap(), third);
+        assert_eq!(replaced(state.path()).unwrap(), Some(first));
+        retired(state.path()).unwrap();
+        assert_eq!(replaced(state.path()).unwrap(), None);
+        retired(state.path()).unwrap();
     }
 }

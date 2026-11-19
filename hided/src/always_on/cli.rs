@@ -23,7 +23,7 @@ use serde_json::json;
 pub const USAGE: &str = "usage: hide always-on status [--json]
        hide always-on remove
        hide always-on firewall ask-allow
-       hide always-on firewall allow --port <n>
+       hide always-on firewall allow --port <n> [--retire <n>]
        hide always-on firewall remove
        hide always-on firewall ask-remove";
 
@@ -32,7 +32,7 @@ pub enum Command {
     Status { json: bool },
     Remove,
     FirewallAskAllow,
-    FirewallAllow { port: u16 },
+    FirewallAllow { port: u16, retired: Option<u16> },
     FirewallRemove,
     FirewallAskRemove,
 }
@@ -47,8 +47,20 @@ pub fn parse(words: &[String]) -> Result<Command, String> {
         ["firewall", "ask-allow"] => Ok(Command::FirewallAskAllow),
         ["firewall", "allow", "--port", port] => port
             .parse()
-            .map(|port| Command::FirewallAllow { port })
+            .map(|port| Command::FirewallAllow {
+                port,
+                retired: None,
+            })
             .map_err(|_| USAGE.to_owned()),
+        ["firewall", "allow", "--port", port, "--retire", retired] => {
+            match (port.parse(), retired.parse()) {
+                (Ok(port), Ok(retired)) => Ok(Command::FirewallAllow {
+                    port,
+                    retired: Some(retired),
+                }),
+                _ => Err(USAGE.to_owned()),
+            }
+        }
         ["firewall", "remove"] => Ok(Command::FirewallRemove),
         ["firewall", "ask-remove"] => Ok(Command::FirewallAskRemove),
         _ => Err(USAGE.to_owned()),
@@ -77,8 +89,8 @@ pub fn run(command: &Command, home: &Path, state_dir: &Path) -> Result<(), Strin
             println!("{}", json!({ "answer": ask_to_allow(state_dir)? }));
             Ok(())
         }
-        Command::FirewallAllow { port } => {
-            hide_platform::firewall::allow(*port).map_err(|error| error.to_string())
+        Command::FirewallAllow { port, retired } => {
+            hide_platform::firewall::allow(*port, *retired).map_err(|error| error.to_string())
         }
         Command::FirewallRemove => {
             hide_platform::firewall::remove_all().map_err(|error| error.to_string())
@@ -100,12 +112,19 @@ fn ask_to_allow(state_dir: &Path) -> Result<&'static str, String> {
         Err(error) => return Err(error.to_string()),
     }
     let program = std::env::current_exe().map_err(|error| error.to_string())?;
+    // The rule for a port the folder held before its port was taken goes
+    // with this allow (`hide_peer::port::replace`).
+    let retired = hide_peer::port::replaced(state_dir).map_err(|error| error.to_string())?;
     let port = port.to_string();
-    let answer = firewall::run_elevated(
-        &program,
-        &["always-on", "firewall", "allow", "--port", &port],
-    )
-    .map_err(|error| error.to_string())?;
+    let retired_word = retired.map(|retired| retired.to_string());
+    let mut arguments = vec!["always-on", "firewall", "allow", "--port", &port];
+    if let Some(retired) = &retired_word {
+        arguments.extend(["--retire", retired]);
+    }
+    let answer = firewall::run_elevated(&program, &arguments).map_err(|error| error.to_string())?;
+    if answer == Elevated::Done {
+        hide_peer::port::retired(state_dir).map_err(|error| error.to_string())?;
+    }
     Ok(match answer {
         Elevated::Done => "allowed",
         Elevated::Declined => "declined",
@@ -196,11 +215,24 @@ mod tests {
         );
         assert_eq!(
             parse(&words(&["firewall", "allow", "--port", "51234"])),
-            Ok(Command::FirewallAllow { port: 51234 })
+            Ok(Command::FirewallAllow {
+                port: 51234,
+                retired: None
+            })
+        );
+        assert_eq!(
+            parse(&words(&[
+                "firewall", "allow", "--port", "51234", "--retire", "50000"
+            ])),
+            Ok(Command::FirewallAllow {
+                port: 51234,
+                retired: Some(50000)
+            })
         );
         for refused in [
             &["firewall", "allow"][..],
             &["firewall", "allow", "--port", "x"],
+            &["firewall", "allow", "--port", "51234", "--retire", "x"],
             &["remove", "--all"],
             &[],
         ] {
