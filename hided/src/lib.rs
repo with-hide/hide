@@ -609,7 +609,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // Other machines' work here: each guest's node runs from that guest's
     // build, and a guest of this build runs from the programs beside this
     // one.
-    guests::Guests::new(
+    let guests = guests::Guests::new(
         env.state_dir.clone(),
         env.home.clone(),
         hide_node::ssh::host::HelperPackages::new(
@@ -621,8 +621,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         Some(guests::Screens {
             core: Arc::clone(&core),
         }),
-    )
-    .serve(&peers, shutdown.clone());
+    );
+    guests.serve(&peers, shutdown.clone());
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
         Arc::clone(&core),
@@ -639,6 +639,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         shutdown.clone(),
     );
+    pairing.follow_guests(Arc::clone(&guests));
     {
         let peers = Arc::clone(&peers);
         let pairing = Arc::clone(&pairing);
@@ -648,7 +649,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 // with what was not settled.
                 Ok(Some(_)) => pairing.started().await,
                 // Nothing to dial: a machine a host dropped is still listed.
-                Ok(None) => pairing.rested().await,
+                // No grant is saved either, so no machine is a guest here.
+                Ok(None) => {
+                    guests.granted(Vec::new());
+                    pairing.rested().await;
+                }
                 Err(error) => hide_core::diagnostic!(serde_json::json!({
                     "component": "peer_host",
                     "kind": "peer_host.open_failed",

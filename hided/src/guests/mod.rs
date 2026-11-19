@@ -165,6 +165,9 @@ pub struct Guests {
     own_build: OnceLock<Option<String>>,
     hosted: Mutex<HashMap<PeerKey, Hosted>>,
     told: Mutex<Told>,
+    /// Held while a guest is being taken off: the two ways it is said
+    /// (the grant list, the operator's "end it") come on two threads.
+    leaving: Mutex<()>,
     /// None in a test of the node's launch alone, where no screen draws a
     /// guest's panes.
     screens: Option<Screens>,
@@ -196,6 +199,7 @@ impl Guests {
             own_build: OnceLock::new(),
             hosted: Mutex::new(HashMap::new()),
             told: Mutex::default(),
+            leaving: Mutex::default(),
             screens,
             runtime: Handle::current(),
         })
@@ -488,7 +492,12 @@ impl Guests {
         let Some(hosted) = self.known(guest) else {
             return;
         };
-        hosted.removed.store(true, Ordering::SeqCst);
+        let _one = lock(&self.leaving);
+        // The grant list says "taken off" of a guest the operator already
+        // ended at once: the stronger word stands.
+        if hosted.removed.swap(true, Ordering::SeqCst) && mode == EndMode::AfterLastPane {
+            return;
+        }
         // What the next start of this daemon goes on with.
         let word = match mode {
             EndMode::Now => END_NOW,

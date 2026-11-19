@@ -113,6 +113,14 @@ export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
   return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.id === peer.device_id));
 }
 
+/**
+ * How many terminals the machine paired under `key` runs on this computer
+ * (hide-core `guest_panes`): what a removal may end (B26).
+ */
+export function guestPaneCount(rest: SnapshotRest | null | undefined, key: string): number {
+  return rest?.navigator?.guest_panes?.find((guest) => guest.key === key)?.panes.length ?? 0;
+}
+
 /** Who opens whom, in the words of the machine reading it. */
 export function directionKey(peer: Peer): MessageKey {
   // A host that dropped this machine's pairing is opened no more: beside a

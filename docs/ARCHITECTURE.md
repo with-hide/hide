@@ -3269,6 +3269,18 @@ The node keeps a session on every pane its holders' records say may run, so the 
 After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
 `hide pane send` types text and Enter into a guest's pane through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
 
+### A guest taken off the host
+
+A guest's work on this machine follows its grant.
+The pairing tells the guests' service who holds one whenever that changes and once at the daemon's start (`Guests::granted`, from `Pairing::paired_changed`), and a guest that holds none is marked as taken off in its `h/removed`, which is what the next start of the daemon goes on with.
+Its node is told to end after its last pane (`ToNode::End(AfterLastPane)`): the panes stay, on this machine's screen only, and take no new link.
+When the operator chose to end that work with the removal (`pairing_remove` with `end_work`, `Guests::end_work`), the node is told to end now instead, and a node that is not running is started from the build it last ran only to end the panes its holders still run; this needs no connection to the guest, because the node holds the panes' records.
+A node told to end now reports each pane as gone on its tap and waits up to 2 s for the tap to take that before it exits, so the host's list does not keep panes that no longer run.
+The two words come on two threads and are applied one at a time, and the grant list's word never weakens an "end now" already given.
+Once a guest that was taken off has no pane and its node has stopped, its place among the guests, the screens' way to its panes and its whole `g/<key>` folder are removed; a folder of a guest with no grant that nothing was started from since the daemon's start is removed in the same sweep.
+A guest that is paired again before that has its mark cleared and its node started again, since the one that was running takes no new link.
+Of a guest's builds the host keeps the one that runs and the one before it; the rest are removed when a node says it is ready.
+
 ### A guest node's events while its core is away
 
 A pane of a guest's node reaches the guest's core through the pane service of the node's link, which lives only as long as a link does.
