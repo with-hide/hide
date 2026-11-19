@@ -289,6 +289,61 @@ pub enum Folder {
     Kept,
 }
 
+/// What a Hide started on a machine over SSH needs from the operator to
+/// stay reachable with no one at that machine (PRD device-connect-iroh
+/// B30).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Needs {
+    /// A Mac's core starts at a login, so after a restart it is back only
+    /// with automatic login on.
+    AutoLogin,
+    /// Linux: the account may not turn linger on itself, so the core ends
+    /// with its last session until an administrator runs `command`.
+    Linger { command: String },
+}
+
+impl Needs {
+    /// As the core's `device_switch` event carries it.
+    pub fn payload(&self) -> Value {
+        match self {
+            Self::AutoLogin => serde_json::json!({ "kind": "auto_login" }),
+            Self::Linger { command } => {
+                serde_json::json!({ "kind": "linger", "command": command })
+            }
+        }
+    }
+}
+
+/// What the Hide just started on the target needs: read from the system it
+/// runs on, and on Linux from its own `hide always-on linger`, which turns
+/// linger on when the account may. A target that does not answer needs
+/// nothing this machine can name; the switch goes on either way.
+fn needs_of(upstream: &Upstream, reach: &Reach, alias: &str) -> Option<Needs> {
+    match upstream.system().ok()?.as_str() {
+        "macos" => Some(Needs::AutoLogin),
+        "linux" => match run_hide(upstream, reach, &["always-on", "linger", "--json"]) {
+            Ok(Said::Answer(answer)) => linger_needs(&answer),
+            Ok(_) => None,
+            Err(error) => {
+                log(alias, "linger", &error);
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+/// The command an administrator runs, when the target's answer names one.
+fn linger_needs(answer: &Value) -> Option<Needs> {
+    let value = &answer["value"];
+    (answer["ok"] == true && value["linger"] == "needs_administrator")
+        .then(|| value["command"].as_str())
+        .flatten()
+        .map(|command| Needs::Linger {
+            command: command.to_owned(),
+        })
+}
+
 /// How far a helper device's switch got on the SSH login alone.
 pub enum Switched {
     /// The target's Hide saved a grant for this machine, or holds one
@@ -296,6 +351,9 @@ pub enum Switched {
     Paired {
         paired: Option<Paired>,
         folder: Folder,
+        /// What the Hide this switch started there still needs from the
+        /// operator to stay reachable; none for a Hide that ran already.
+        needs: Option<Needs>,
     },
     /// Another machine took the helper's folder first, named as the target
     /// knows it: nothing was saved, and the operator is asked before this
@@ -345,6 +403,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
             return Err("ssh_not_reached");
         }
     };
+    let mut started = false;
     match looked {
         Looked::Ready => {}
         Looked::Absent if switch.install => {
@@ -352,7 +411,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
             start_core(upstream, switch.reach, switch.alias)?;
             // The core that was started answers for the account now.
             match run(upstream, switch.reach, &["look-ssh"]).map(look_of) {
-                Ok(Looked::Ready) => {}
+                Ok(Looked::Ready) => started = true,
                 Ok(_) => return Err("ssh_core_not_started"),
                 Err(error) => {
                     log(switch.alias, "look", &error);
@@ -384,6 +443,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
             return Ok(Switched::Paired {
                 paired: None,
                 folder: Folder::Kept,
+                needs: None,
             });
         }
         answer => answer?,
@@ -404,7 +464,14 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
         Value::Null if switch.helper_root.is_some() => None,
         accepted => Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?),
     };
-    Ok(Switched::Paired { paired, folder })
+    let needs = started
+        .then(|| needs_of(upstream, switch.reach, switch.alias))
+        .flatten();
+    Ok(Switched::Paired {
+        paired,
+        folder,
+        needs,
+    })
 }
 
 /// The addresses the SSH login reached, at the port the target's endpoint

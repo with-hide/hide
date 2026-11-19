@@ -6,7 +6,7 @@ import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { PairingDialogs } from "../PairingDialogs";
 import type { PairingView, Peer } from "../pairing";
-import type { GuestPanes } from "../snapshot";
+import type { Device, GuestPanes } from "../snapshot";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { forgetFirewallAsk } from "./firewall";
@@ -26,7 +26,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_panes: GuestPanes[] = []) {
+async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_panes: GuestPanes[] = [], devices: Partial<Device>[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -36,7 +36,7 @@ async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_pane
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices: [], peers, guest_panes }, ui_state: {} } } as never);
+    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices, peers, guest_panes }, ui_state: {} } } as never);
     root.render(
       <TooltipProvider>
         <PairedRows actions={actions} />
@@ -278,4 +278,21 @@ it("shows no firewall line where the host keeps no rules", async () => {
   await act(async () => {});
   expect(screen.q("[data-pair-firewall]")).toBeNull();
   await screen.unmount();
+});
+
+it("says under a machine's row what the Hide started there over SSH still needs, with its command (B30)", async () => {
+  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "cd".repeat(32), device_id: "mac-mini", name: "Mac mini" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" })];
+  const devices: Partial<Device>[] = [
+    { id: "build-box", kind: "remote", needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } },
+    { id: "mac-mini", kind: "remote", needs: { kind: "auto_login" } },
+    { id: "laptop", kind: "remote" },
+  ];
+  const { q, unmount } = await mount(idle, peers, [], devices);
+  const linger = q('[data-peer-row="build-box"] [data-device-needs="build-box:linger"]');
+  expect(linger?.textContent).toContain("Needs sudo");
+  expect(linger?.querySelector("code")?.textContent).toBe("sudo loginctl enable-linger hy");
+  expect(q('[data-peer-row="mac-mini"] [data-device-needs="mac-mini:auto_login"]')?.textContent).toBe("Turn on automatic login there to stay connected after a restart");
+  // A machine whose Hide needs nothing has no line.
+  expect(q('[data-peer-row="laptop"] [data-device-needs]')).toBeNull();
+  await unmount();
 });

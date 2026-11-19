@@ -26,6 +26,9 @@ pub(super) struct DeviceSwitch {
     /// The connection key of the machine the device is, known from the
     /// pairing on: the grant that becomes active under it takes the device.
     key: Option<String>,
+    /// What the Hide this switch started on the machine still needs, which
+    /// the device's row says once it is that machine's.
+    needs: Option<crate::model::DeviceNeedsSnapshot>,
 }
 
 /// What a helper device is switched from: how the core reaches it, and
@@ -52,6 +55,10 @@ pub(super) struct DeviceSwitchPayload {
     /// With `failed`: why, as a code.
     #[serde(default)]
     pub(super) reason: Option<String>,
+    /// With `connecting`: what the Hide this switch started there still
+    /// needs to stay reachable (B30).
+    #[serde(default)]
+    pub(super) needs: Option<crate::model::DeviceNeedsSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -79,7 +86,14 @@ impl DeviceSwitchPayload {
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
         });
-        key_spelled && reason_plain && (self.step != SwitchStep::Connecting || self.key.is_some())
+        let needs_spelled = self
+            .needs
+            .as_ref()
+            .is_none_or(crate::model::DeviceNeedsSnapshot::valid);
+        key_spelled
+            && reason_plain
+            && needs_spelled
+            && (self.step != SwitchStep::Connecting || self.key.is_some())
     }
 }
 
@@ -193,6 +207,9 @@ impl Runtime {
                     .reason
                     .filter(|_| payload.step == SwitchStep::Failed),
                 key: key.clone(),
+                needs: payload
+                    .needs
+                    .filter(|_| payload.step == SwitchStep::Connecting),
             },
         );
         // A machine that was paired before the switch was asked for is
@@ -247,7 +264,13 @@ impl Runtime {
             switched: true,
         };
         let registration = registration.clone();
-        self.device_switches.remove(device_id);
+        if let Some(needs) = self
+            .device_switches
+            .remove(device_id)
+            .and_then(|switch| switch.needs)
+        {
+            self.device_needs.insert(device_id.to_owned(), needs);
+        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         let focused_device = self.look.front().map(str::to_owned);

@@ -11,7 +11,7 @@ import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Status } from "../components/settings-rows";
+import { Note, Status } from "../components/settings-rows";
 import { deviceTerminalCount, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep } from "../deviceSwitch";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -21,6 +21,7 @@ import { machineName, windowDeviceId } from "../screenMachine";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
+import { FixCommand } from "./FixCommand";
 
 /**
  * One press: hided switches the device, and answers this window if it has to
@@ -74,6 +75,25 @@ export function DeviceSwitchLine({ device, actions, className }: { device: Devic
         </li>
       ))}
     </ol>
+  );
+}
+
+/**
+ * What the Hide that a switch started on a machine still needs to stay
+ * reachable with no one there (B30), under that machine's row: automatic
+ * login on a Mac, or on Linux the command an administrator runs, with Copy.
+ * Nothing for a machine that needs nothing.
+ */
+export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const needs = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.id === deviceId)?.needs ?? null);
+  if (needs === null) return null;
+  if (needs.kind === "auto_login") return <Note tone="warn" data-device-needs={`${deviceId}:auto_login`}>{t("devices.needs.autoLogin")}</Note>;
+  return (
+    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-needs={`${deviceId}:linger`}>
+      <Note tone="warn">{t("devices.needs.linger")}</Note>
+      {needs.command ? <FixCommand command={needs.command} what="linger command" actions={actions} /> : null}
+    </div>
   );
 }
 

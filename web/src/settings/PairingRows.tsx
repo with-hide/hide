@@ -17,6 +17,7 @@ import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { directionKey, guestPaneCount, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
+import { DeviceNeedsLine } from "./DeviceSwitch";
 import { askForFirewallOnce, useFirewall } from "./firewall";
 
 /** The time now, read again each second while `ticking`. */
@@ -130,6 +131,7 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
             <span className="text-body text-muted-foreground" data-peer-direction="true">{t(directionKey(peer))}</span>
           </div>
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
+          <DeviceNeedsLine deviceId={device} actions={actions} />
         </>
       }
     >
