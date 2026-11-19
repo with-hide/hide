@@ -135,8 +135,7 @@ impl Terminal {
     fn command_of(&self, program: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(program);
         for (key, _) in std::env::vars_os() {
-            let upper = key.to_string_lossy().to_uppercase();
-            if upper.starts_with("HIDE_") || upper.starts_with("HERDR_") {
+            if key.to_string_lossy().to_uppercase().starts_with("HIDE_") {
                 command.env_remove(key);
             }
         }
