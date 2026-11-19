@@ -359,8 +359,6 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
-  /** The SSH alias a device was just added by: once that device connects, its switch to the new connection is asked once and this is cleared (PRD device-connect-iroh B41). */
-  switchAfterAdd: string | null;
   pendingClose: PendingClose | null;
   /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
   pendingArchive: { paneId: string } | null;
