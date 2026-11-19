@@ -283,6 +283,78 @@ fn a_github_item_is_checked_daily_and_a_followed_folder_every_few_seconds_withou
     assert_eq!(kit(&shared), before);
 }
 
+/// A request queued when the daily check falls due keeps its pass to
+/// itself, since its answer is the outcomes its pass ends with; the check
+/// runs on a later tick.
+#[test]
+fn a_daily_check_waits_while_a_request_is_queued_and_the_request_is_answered() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = with_consent(Some(helper.clone()));
+    let two_days_ago = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        - 2 * 24 * 60 * 60 * 1000;
+    {
+        let mut runtime = shared.lock().unwrap();
+        let mut state = runtime.kit_state(DEVICE);
+        state.store = Some(store_report(Vec::new(), Some(two_days_ago)));
+        runtime.set_kit_state(DEVICE, state);
+    }
+    helper.answer_store(Ok(serde_json::to_value(store_report(
+        vec![ChangeOutcome {
+            change: switch_off_agy(),
+            refused: None,
+        }],
+        Some(two_days_ago),
+    ))
+    .unwrap()));
+
+    let now = Instant::now();
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.request_store_change(DEVICE, "r1".to_owned(), vec![switch_off_agy()]);
+        runtime.schedule_store(now);
+    }
+    settle(&shared);
+
+    assert_eq!(
+        store_calls(&helper),
+        vec![KitAction::Store {
+            changes: vec![switch_off_agy()]
+        }]
+    );
+    assert_eq!(answer(&shared).unwrap().state, AnswerState::Done);
+    shared.lock().unwrap().schedule_store(now);
+    settle(&shared);
+    assert_eq!(
+        store_calls(&helper)[1..],
+        [KitAction::Store {
+            changes: vec![StoreChange::CheckUpdates]
+        }]
+    );
+}
+
+#[test]
+fn a_request_whose_device_goes_before_its_pass_runs_ends_refused() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = with_consent(Some(helper.clone()));
+
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.request_store_change(DEVICE, "r1".to_owned(), vec![switch_off_agy()]);
+        runtime.forget_device_kit_work(DEVICE);
+    }
+    settle(&shared);
+
+    let answered = answer(&shared).unwrap();
+    assert_eq!(
+        (answered.request_id.as_str(), answered.state),
+        ("r1", AnswerState::Refused)
+    );
+    assert_eq!(store_calls(&helper), Vec::new());
+}
+
 #[test]
 fn a_cell_changed_while_its_agent_ran_waits_for_a_new_session_until_that_session_ends() {
     use super::agent_connection::{diagnosis, feed, installed, kit_rows};

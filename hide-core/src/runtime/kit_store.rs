@@ -106,7 +106,7 @@ pub(super) struct Stores {
 
 impl Stores {
     /// A device that went takes its queued work, schedule and marks along.
-    pub(super) fn forget(&mut self, device_id: &str) {
+    fn forget(&mut self, device_id: &str) {
         self.device_pending.remove(device_id);
         self.exports.remove(device_id);
         self.due.remove(device_id);
@@ -285,6 +285,25 @@ impl Runtime {
             "reason": reason,
         }));
         self.snapshot.status.store_answer = Some(answer.refused());
+    }
+
+    /// A device whose link or registration went takes its queued store
+    /// work along; a request still waiting on it ends refused, since no
+    /// pass will answer it.
+    pub(super) fn forget_store(&mut self, device_id: &str) {
+        self.stores.forget(device_id);
+        let waiting = self.snapshot.status.store_answer.take_if(|answer| {
+            answer.state == AnswerState::Pending && answer.device_id == device_id
+        });
+        if let Some(answer) = waiting {
+            self.refuse_store_request(
+                answer,
+                (
+                    "device_gone",
+                    "the machine's link ended before its store answered".to_owned(),
+                ),
+            );
+        }
     }
 
     /// The next device waiting for a copy of this Mac's store, once this
@@ -476,7 +495,9 @@ impl Runtime {
             };
             let due = self.stores.due.entry(machine.clone()).or_default();
             let mut job = None;
-            if checks && due.check.is_none_or(|at| now >= at) {
+            // Neither joins work already queued: the request's answer is
+            // matched by the changes its pass ends with.
+            if checks && !queued && due.check.is_none_or(|at| now >= at) {
                 due.check = Some(now + CHECK_RETRY);
                 job = Some(StoreJob::Pass(vec![StoreChange::CheckUpdates]));
             } else if follows && !queued && due.follow.is_none_or(|at| now >= at) {
