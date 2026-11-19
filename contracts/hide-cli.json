@@ -5097,28 +5097,6 @@
         },
         {
             "answers": [
-                "device_shared"
-            ],
-            "arguments": [],
-            "command": "device share",
-            "options": [
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_from_pane",
-                "peer_unavailable",
-                "pairing_ended"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
                 "device_added",
                 "device_joined",
                 "device_paired"
@@ -5173,145 +5151,6 @@
                 "device_own",
                 "device_limit",
                 "peer_unavailable"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "device_allowed"
-            ],
-            "arguments": [],
-            "command": "device allow",
-            "options": [
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_from_pane"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "device_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "device",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "device pause",
-            "options": [
-                {
-                    "conflicts": [
-                        "--incoming",
-                        "--both"
-                    ],
-                    "name": "--outgoing",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--outgoing",
-                        "--both"
-                    ],
-                    "name": "--incoming",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--outgoing",
-                        "--incoming"
-                    ],
-                    "name": "--both",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_unknown",
-                "device_ambiguous",
-                "device_direction_needed"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "device_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "device",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "device resume",
-            "options": [
-                {
-                    "conflicts": [
-                        "--incoming",
-                        "--both"
-                    ],
-                    "name": "--outgoing",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--outgoing",
-                        "--both"
-                    ],
-                    "name": "--incoming",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--outgoing",
-                        "--incoming"
-                    ],
-                    "name": "--both",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_from_pane",
-                "device_unknown",
-                "device_ambiguous",
-                "device_direction_needed"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5381,73 +5220,6 @@
         },
         {
             "answers": [
-                "device_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "device",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "device request",
-            "options": [
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_from_pane",
-                "device_unknown",
-                "device_ambiguous",
-                "device_not_a_guest",
-                "device_already_connected",
-                "request_waiting"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "device_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "device",
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "address",
-                    "value": {
-                        "type": "address"
-                    }
-                }
-            ],
-            "command": "device address",
-            "options": [
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_from_pane",
-                "device_unknown",
-                "device_ambiguous"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
                 "device_changed",
                 "device_retried"
             ],
@@ -5480,75 +5252,6 @@
                 "device_ambiguous",
                 "device_dials_in",
                 "device_wait_timeout"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "device_looked"
-            ],
-            "arguments": [],
-            "command": "device look-ssh",
-            "options": [],
-            "refusals": [
-                "hide_unavailable",
-                "request_timeout"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "device_accepted"
-            ],
-            "arguments": [],
-            "command": "device accept-ssh",
-            "options": [
-                {
-                    "name": "--request",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "--key",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "--device",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "--name",
-                    "required": true,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--wsl",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "device_from_pane",
-                "invalid_request",
-                "device_already_connected",
-                "device_limit"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7465,7 +7168,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6f3fa26a9b8a3b21bca2cbc41c3f832a5fc328bdd8c12c8e44bfdbf6f9862afd",
+    "digest": "sha256:69a438fc9c7343fdf8c22dad4560a974b1e3f6d2887bf5cb04cd09604b801b96",
     "envelopes": {
         "access": {
             "answer": "value",
