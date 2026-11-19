@@ -803,7 +803,7 @@ fn a_pull_request_pressed_where_no_agent_is_opens_at_its_makers_pane() {
 /// takes the keyboard; the maker's desk takes nothing. A row whose pane
 /// closed leaves the card on the desk in front.
 #[test]
-fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
+fn a_pull_request_pressed_on_a_parents_row_opens_on_the_parents_desk() {
     let checkout_path = "/private/tmp/hide-desk-pressed-row";
     let tabs = ["w-order:t3", "w-order:t1", "w-order:t2"];
     let mut runtime = desk_runtime(checkout_path, "desk-pressed-row", &tabs);
