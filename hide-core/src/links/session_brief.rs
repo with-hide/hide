@@ -533,7 +533,7 @@ mod tests {
             session("lead"),
             MissionMark {
                 id: "mission-75".into(),
-                title: "Herdr 이전".into(),
+                title: "엔진 이전".into(),
             },
         )]);
         fixture
@@ -550,7 +550,7 @@ mod tests {
             fixture.brief().unwrap(),
             format!(
                 "{HEAD}Open now:\n\
-                 - \"lead\" · Claude · 11-19 11:40 · \"mission-75\" \"Herdr 이전\" · PR #13 #12 · 2 delegated\n\
+                 - \"lead\" · Claude · 11-19 11:40 · \"mission-75\" \"엔진 이전\" · PR #13 #12 · 2 delegated\n\
                  \x20 11-19 10:30 \"노드 실행\" -> \"노드 4개 완료\"\n\
                  \x20 11-19 11:00 \"결과 \\u003cb\\u003e정리\\u003c/b\\u003e\" -> \"정리 문서 작성\"\n\
                  \x20 11-19 11:30 \"머지 대기\" -> \"PR 2개 머지 대기 중\"\n\
