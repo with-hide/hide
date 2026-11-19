@@ -934,9 +934,10 @@ impl Runtime {
     }
 
     /// The node with registration `id` bound to its next free `kind`
-    /// checker of the same agent (B3, B4), else in the place of one whose
-    /// registration ended or is gone (`Criterion::bind`); the node's own
-    /// worker is never its checker.
+    /// checker of the same agent (B3, B4), else in the place of one the
+    /// mission reads as ended (`missions::worker_life`: its registration
+    /// ended or its pane closed) or whose registration is gone
+    /// (`Criterion::bind`); the node's own worker is never its checker.
     pub(super) fn bind_checker(
         &self,
         node: &MissionNode,
@@ -976,7 +977,13 @@ impl Runtime {
                         .agents
                         .iter()
                         .find(|row| row.id == bound)
-                        .is_none_or(|row| row.ended)
+                        .is_none_or(|row| {
+                            let sleeping = self.sleeping_registrations(std::iter::once(row));
+                            matches!(
+                                super::missions::worker_life(row, &sleeping),
+                                crate::delivery::answer::Runtime::Ended
+                            )
+                        })
                 },
             )?;
         Ok(next)

@@ -545,7 +545,8 @@ impl Criterion {
     /// free slot asking for that kind, and judges the line again: a checker
     /// taken after the line passed is one more it waits for. With no free
     /// slot, it takes the first slot of that kind whose checker `ended`
-    /// (its registration ended or is gone), whose answer goes with it: an
+    /// (the caller's reading: gone, or ended as the mission reads its
+    /// life), whose answer goes with it: an
     /// ended checker never answers again, so its slot would otherwise hold
     /// the line open, or keep an old answer deciding, with no way to put a
     /// fresh checker in its place.
