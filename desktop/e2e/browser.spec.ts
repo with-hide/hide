@@ -16,7 +16,7 @@ import { corePaneFocus, focusPane, focusTab, newTab, openProject, runInPaneKeepi
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { testBrowserArgs } from "../../web/e2e/browser-launch.cjs";
-import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
+import { chooseExpand, countSent, enterWorkspace, enterWorkspaceWithLane, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, focusPage, hostLog, launchShell, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
@@ -272,7 +272,8 @@ async function displayIdOf(page: Page, text: string): Promise<string> {
 // The native child-view lifetime is shared; the pane CLI uses cmd on Windows
 // and a POSIX shell elsewhere, through the same portable fixture boundary.
 for (const width of [1500, 720]) {
-test(`browser: Agent tabs share one page per address through a background open and never move the operator (${width}px)`, { tag: "@platform" }, async () => {
+test.fixme(`browser: Agent tabs share one page per address through a background open and never move the operator (${width}px)`, { tag: "@platform" }, async () => {
+  // B32: 책상 밖 페이지 로드는 host 노드 (PRD lane-desk-pair-view B32, D-37; a background open lands on no desk, and a page lives on one desk, F14).
   ({ app } = await launchShell(run.env));
   await fitWindow(app, { width, height: 900 });
   const page = await shellPage(app);
@@ -343,7 +344,7 @@ test("browser: a page opens from an agent's pane, follows its area, moves withou
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
   await withProbe(page);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
 
   // `hide browser open` from an agent's pane opens the page in that pane's
@@ -536,7 +537,7 @@ test("browser: a plain browser preserves startup features and shows the native-h
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
   await withProbe(page);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ status: 0, ok: true });
   const display = await displayIdOf(page, "Page A");
   const status = JSON.parse(run.hide(["status", "--json"]).stdout) as { url: string };
@@ -571,7 +572,7 @@ test("browser: a shell layer never has a page drawn over it, and a page tab's hi
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const url = `${origin}/long.html`;
   const title = "Quarterly report draft";
   expect(await openFromCli(url, ["--wait"])).toMatchObject({ status: 0, ok: true });
@@ -696,7 +697,7 @@ test("browser: a login in one Workspace is available in another", async () => {
 
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ status: 0, ok: true });
   await viewOf(`${origin}/a.html`);
   await inPage(`${origin}/a.html`, "document.cookie = 'shared=ready; path=/'");
@@ -706,6 +707,7 @@ test("browser: a login in one Workspace is available in another", async () => {
   // page in front; an agent the operator is not with would only add it behind.
   await (await showProjectRow(page, page.locator("[data-project]", { hasText: "second-checkout" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
   await expect.poll(() => page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen")).not.toBe(firstScreen);
+  await showExplorer(page);
   const opened = await cliFromPane(["browser", "open", `${origin}/b.html`, "--wait"], otherPane);
   expect(opened).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
   expect(await inPage(`${origin}/b.html`, "document.cookie")).toContain("shared=ready");
@@ -715,7 +717,7 @@ test("browser: a sign-in popup keeps its opener, belongs to its page, and a link
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   await fitWindow(app, WINDOW);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const signin = `${origin}/signin.html`;
   const opened = await openFromCli(signin, ["--wait"]);
   expect(opened).toMatchObject({ status: 0, ok: true });
@@ -827,7 +829,7 @@ test("browser: Open in default browser hands a web page's address to the system 
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   // The system's opener is stood in for, so no browser starts.
   await app.evaluate(({ shell }) => {
     const opened: string[] = [];
@@ -866,7 +868,7 @@ test("new-tab: empty page creates no native renderer and address loads in the sa
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   expect(await openFromCli(`${origin}/a.html`, ["--wait"])).toMatchObject({ ok: true });
   await viewOf(`${origin}/a.html`);
   const count = (await views()).length;
@@ -970,7 +972,7 @@ test("area cycle native: page input previews one exact area, releases once and c
   // Within the work area: the blur and focus below order the window out and
   // in, and macOS would clamp a larger one then, dropping both View areas.
   await fitWindow(app, WINDOW);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const outside = `${origin}/a.html`;
   const previous = `${origin}/b.html`;
   const current = `${origin}/korean.html`;
@@ -1128,7 +1130,7 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
   const page = await shellPage(app);
   const sent = countSent(page);
   await page.reload();
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const pageA = `${origin}/a.html`;
   expect(await openFromCli(pageA, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => (await viewOf(pageA)).visible).toBe(true);
@@ -1182,7 +1184,7 @@ test("refresh focus: a page that loads itself again never takes the keyboard fro
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const refresh = `${origin}/refresh.html`;
   expect(await openFromCli(refresh, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => (await viewOf(refresh)).visible).toBe(true);
@@ -1215,7 +1217,7 @@ test("expand: Zoom pane in a focused page expands the lane and back while the pa
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const pageA = `${origin}/a.html`;
   expect(await openFromCli(pageA, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => (await viewOf(pageA)).visible).toBe(true);
@@ -1239,7 +1241,7 @@ test("directional terminal menu commands leave a native page holding its next in
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const address = `${origin}/a.html`;
   expect(await openFromCli(address, ["--wait"])).toMatchObject({ ok: true });
   await expect.poll(async () => (await viewOf(address)).visible).toBe(true);
@@ -1306,8 +1308,11 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
   const site = `${origin}/site.html`;
   const divider = page.locator('[data-lane-divider="lane"]');
 
-  // A file opens the lane at its 520 default.
+  // A file from the operator's pane waits on the desk with the lane closed
+  // (PRD lane-desk-pair-view B2); the desk button brings it up at the
+  // documents' 520 default.
   expect(await cliFromPane(["file", "open", notes])).toMatchObject({ ok: true });
+  await showDocuments(page);
   await expect(divider).toHaveAttribute("aria-valuenow", "520");
   await windowShot("page-width-before");
 
@@ -1357,7 +1362,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
 
 // @platform: the room left beside Agent Views comes from the body the host
 // measures, which each system's window frame and display scale change.
-test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
+test("page width: widening leaves Agent Views 480, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
@@ -1368,13 +1373,15 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   // What Agent Views keeps beside the documents and the tool column (B2).
   const room = async () => body - 8 - ((await tool.count()) ? Math.round((await tool.boundingBox())!.width) + 8 : 0) - 480;
 
-  await openLoaded(`${origin}/site.html`);
+  // The page waits on the desk with the lane closed until the desk button
+  // brings it up, and loads there (PRD lane-desk-pair-view B2).
+  const loading = openLoaded(`${origin}/site.html`);
+  await showDocuments(page);
+  await loading;
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
 
-  // Pinned and narrowed to its minimum, the next page widens it only as far again.
-  await setLanePinned(page, true);
-  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+  // Narrowed to its minimum, the next page widens it only as far again.
   const box = (await divider.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + 100);
   await page.mouse.down();
@@ -1404,7 +1411,7 @@ test("page zoom: a zoomed page shows its zoom in the address field, steps in the
   const page = await shellPage(app);
   const sent = countSent(page);
   await page.reload();
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const first = `${origin}/site.html`;
   const second = `${origin}/site-2.html`;
   expect(await openFromCli(first, ["--wait"])).toMatchObject({ ok: true });
@@ -1466,7 +1473,7 @@ test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, 
   ({ app } = await launchShell(run.env));
   await fitWindow(app, WINDOW);
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const site = `${origin}/site.html`;
   await openLoaded(site);
   const displayId = await displayIdOf(page, "Site");

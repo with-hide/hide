@@ -23,11 +23,11 @@ export default chapter<FindModel>({
     // Any word of yesterday's session finds it, not only the one the bubble suggests.
     { id: "type", quest: true, target: "[data-palette]", side: "left", command: "search", gesture: LOGIN, done: findsLogin },
     { id: "pick", target: "[data-palette]", side: "left", command: "search", gesture: LOGIN, done: (model) => { const top = shownDetail(model); return top?.kind === "record" && top.session.session_id === LOGIN_SESSION.session_id; } },
-    { id: "record", target: '[data-lane="detail"]', side: "left" },
+    { id: "record", target: '[data-card="record"]', side: "left" },
     // By number or by a word of its title, as ⌘K lists a pull request.
     { id: "pr", quest: true, target: "[data-agent-area]", side: "inside", command: "search", gesture: PR, done: findsPr },
     { id: "prPick", target: "[data-palette]", side: "left", command: "search", gesture: PR, done: (model) => { const top = shownDetail(model); return top?.kind === "pull_request" && top.number === PR_NUMBER; } },
-    { id: "card", target: '[data-lane="detail"]', side: "left" },
+    { id: "card", target: '[data-card="pull_request"]', side: "left" },
     { id: "star", quest: true, target: '[data-task-row="copy"]', side: "right", gesture: { menu: { at: '[data-task-row="copy"]', path: ['[data-menu-item="revisit"]'] } }, done: (model) => model.starred.includes("copy") },
     { id: "revisit", target: '[data-task-state="revisit"]', side: "right" },
     { id: "end", target: "[data-sidebar-search]", side: "right" },

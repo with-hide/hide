@@ -12,7 +12,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { deviceBridges, deviceHome, proveDeviceHome, resetDeviceHome, writeSshConfig } from "./device-home";
 import { endChild, HIDE_CLI, hostLog, isolate, launch, test, type Isolated } from "./fixture";
 
@@ -91,6 +91,8 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
       });
     }, { port: state.port, token: state.token });
     await expect.poll(() => page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen"), { timeout: 20_000 }).toContain("ssh-browser");
+    // An open from the operator's pane comes in front only while the lane is up (PRD lane-desk-pair-view B2).
+    await showExplorer(page);
     const opened = await deviceCli(remote, run, bridge, ["browser", "open", `http://localhost:${port}/device.html`, "--wait"], "device-open");
     expect(opened.status, opened.out).toBe(0);
     const display = (lastJson(opened.out).result as { view_id: string }).view_id;

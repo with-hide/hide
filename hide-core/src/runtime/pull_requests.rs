@@ -193,7 +193,7 @@ impl Runtime {
             number,
         };
         if payload.open_workspace && !pressed_at_pane {
-            self.open_detail(item)
+            self.open_card_in_front(item)
         } else {
             self.open_detail_at(item, payload.at)
         }

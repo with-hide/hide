@@ -102,51 +102,49 @@ Only when the window's frame itself cannot draw does the line take the whole win
 ### The right lane
 
 The Workspace body, under the top row, is Agent Views (the Agent area), one right lane, and the tool rail, 48px wide, at the window's right edge.
-The lane has two columns (PRD lane-two-columns B1): the viewing column on the agents' side, which holds the checkout's documents (the View areas) or the 보기 slot, and the tool column beside the rail, which holds one tool; both, or one alone, are drawn, and with neither the lane is closed.
-The rail's top is the viewing column's: the 보기 button, while the slot holds something, with the mark of what it holds (a pull request as its PR mark in its state's icon and colour, a record as a page, a mission as the waypoints mark, a project's worktrees as a Git folder, its cost as coins), then the documents button (a file icon) with a badge counting the open views of the whole checkout, every agent's and the operator's, shown or folded, also given as its accessible description and at the end of its hint (`Documents · <checkout> · N views open`), so it is not read as one pane's `N views`; with no document the button is off, still answering a hover or the keyboard with its hint `No open document` (B2).
+The lane has two columns (PRD lane-two-columns B1): the viewing column on the agents' side, which holds the front Agent tab's desk (its View areas, cards among their tabs), and the tool column beside the rail, which holds one tool; both, or one alone, are drawn, and with neither the lane is closed.
+The rail's top is the viewing column's: the documents button (a file icon) with a badge counting the tabs on the front Agent tab's desk, shown or folded, also given as its accessible description and at the end of its hint (`Documents · <checkout> · N views open`), so it is not read as one pane's `N views`; with no document the button is off, still answering a hover or the keyboard with its hint `No open document` (B2).
 Below a short rule the rail lists the tools, Project, Memory, Explorer and Changes from the top, the Project's tools before the checkout's, each an icon alone (a briefcase, a brain, an open folder, a file diff) whose name, scope and chord are its hint on hover (`Project · herdr-ide`, `Memory · herdr-ide`, `Explorer · settings-ui  ⇧⌘E`, `Changes · settings-ui  ⇧⌘G`) and whose name is its accessible name (B3; PRD lane-two-columns B25).
 There is no Work tool, no Files tool and no PRs tool: the Sessions list is the sidebar's 태스크 list, the pull requests are the sidebar's PR list, and what Files held is split between the documents and the Explorer (D-03).
 Memory is a tool of its own beside the Project tool, not a tab inside it, so what waits on the operator now and what Memory asks to be tidied each have their own icon and number (operator decision 2026-10-23, replacing PRD lane-two-columns D-20).
 A second short rule between Memory and Explorer marks where the Project's tools end and the checkout's begin (PRD work-tab-pr-lens D-37); it is derived from each tool's scope, so a tool of the other scope moves it.
-A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents or 보기 button while the viewing column draws it.
+A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents button while the viewing column draws the desk.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
-A closed lane that a tool icon, an open, a reveal or the 보기 slot opens shows that one column alone, the other closed, whatever the lane held when ⌘E closed it; only ⌘E brings back both columns (operator decision 2026-10-23, replacing the mockup's reopen of the other column).
-Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
+A closed lane that a tool icon, an open, a reveal or a card opens shows that one column alone, the other closed, whatever the lane held when ⌘E closed it; only ⌘E brings back both columns (operator decision 2026-10-23, replacing the mockup's reopen of the other column).
+Pressing the documents button brings the desk to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same desk back (B11).
+Its number counts the tabs on the front Agent tab's desk, and there is no 보기 button (PRD lane-desk-pair-view D-29, B14).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
 The Project icon carries a warning-coloured number counting its project's 흘린 것, no number at 0, its hint ending in it, such as `흘린 것 2` (PRD project-panel-results, the operator's choice of 2026-10-31).
 The Hide AI icon carries the same warning-coloured number, the sum of its 제안 and Memory tabs' numbers (see Hide AI: the Hide AI tool), none at 0 or while Hide AI is off, its hint ending in `제안 3 · Memory 1`.
-There is no Mission icon and no Mission tool: a mission pressed in the Workspace opens as a card in the 보기 slot, and every mission is listed on the page's mission screen (see The mission screen; PRD mission-screen D-02, B18).
-The pin sits in the head of the column at the lane's edge, just before its `✕`: the tool column's head while the tool column shows, the viewing column's (its View area's `✕`, or the 보기 slot's head) while it shows alone, and the front column's while the two stack; a closed lane draws no pin (PRD session-docs-and-assistant B33, D-73, replacing the rail's pin of B15).
-It is an empty pin while unpinned and a filled pin drawn pressed while pinned, and its hint says what a press does.
+There is no Mission icon and no Mission tool: a mission pressed in the Workspace opens as a card tab on a desk, and every mission is listed on the page's mission screen (see The mission screen; PRD mission-screen D-02, B18).
+The lane has no pin and never docks: pair view takes the docked lane's place (PRD lane-desk-pair-view D-08, B16, replacing PRD session-docs-and-assistant B33 and lane-two-columns B15).
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
 The Explorer's and Changes' header names its tool, then its scope behind one small icon, a branch for the checkout, in the scope text's colour, and ends with `✕`, which closes the tool column (B14); the icon is decoration.
 The scopes read `Explorer · <checkout>` and `Changes · <checkout>`; a new checkout in front updates them.
 The Project tool has a head of its own (see The Project tool).
-The viewing column has no header of its own: the documents draw their View areas with their tabs, and the 보기 slot its head (see The 보기 slot).
+The viewing column has no header of its own: the desk draws its View areas with their tabs, a card's tab among them.
 
-Unpinned, the lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output (B20).
-An unpinned lane stays up until the operator takes it down: a click on a terminal pane, choosing an agent or a tab, another Workspace in front and a restart all leave it as it was.
-⌘E closes the lane whole, and Escape inside an unpinned lane or on its rail closes it the same way and hands the keyboard to the focused pane, so a tool, an open or a reveal afterwards opens its own column alone and only ⌘E brings both back (operator decision 2026-10-23); Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
-Pinned (`Pin · keep it beside the agents`), the lane docks beside Agent Views, which narrow by its width once; unpinned (`Unpin · back over the agents`), Agent Views take their width back and the lane is over them again.
-The pin is the lane's, whatever its columns show, and a pinned lane closed and opened again comes back docked.
-A pinned lane docks in any window where its columns' minimums fit beside 480px of Agent Views, the viewing column giving up its width first and the tool column after, each taking its stored width back as the window widens; in a window too narrow for even that the two columns stack, the one brought to the front last drawn and the other behind it, and a body too narrow for even one column draws the lane over the agents as if unpinned, the pin still filled and saying `Pin · too narrow, drawn over` (B19).
-Expand gives the lane the whole body between the sidebar and the rail, the tool column keeping its width and the viewing column taking the rest; Expand again or Escape returns to the pin, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard (B15).
-While the keyboard is in the lane, a document, a page, the 보기 slot or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane.
-The tool column's `✕`, the pressed tool icon and the tool's chord close the tool column alone, closing no view; the documents' `✕`, drawn once at the right end of the tab bar of the area at the viewing column's top-right corner as a tool's head draws its own, closes the viewing column the same way, every view kept on the documents button (operator decision 2026-10-24); the viewing column also closes with its last document or the slot's `✕` when no documents stood under the slot; and a lane whose last column closes is closed, the keyboard going to the focused pane (B12, B13, B14).
-⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back with the columns it had, so a lane closed whole by ⌘E or the path menu's Hide right lane returns both columns, the 보기 slot included when it stood in the viewing column; a lane whose columns were closed one by one has nothing to bring back and opens on the documents when the checkout has some, else on the Explorer (B15).
+The lane opens over Agent Views at their right edge, set apart by a shadow and a left border in both themes; the terminals under it keep their grid and layout, are not dimmed, and keep their input and output (B20).
+The lane stays up until the operator takes it down: a click on a terminal pane, choosing an agent or a tab, another Workspace in front and a restart all leave it as it was.
+⌘E closes the lane whole, and Escape inside the lane or on its rail closes it the same way and hands the keyboard to the focused pane, so a tool, an open or a reveal afterwards opens its own column alone and only ⌘E brings both back (operator decision 2026-10-23); Escape first closes a menu, popover or search open in the lane, and Escape in a terminal is the program's.
+In a body too narrow for both columns at their widths the viewing column gives up its width first and the tool column after, each taking its stored width back as the window widens; in a body too narrow for even their minimums the two columns stack, the one brought to the front last drawn and the other behind it (B19).
+Expand gives the lane the whole body between the sidebar and the rail, the tool column keeping its width and the viewing column taking the rest; Expand again or Escape returns to the lane, widths and terminal layout as they were, no terminal resizes meanwhile, and Agent Views under an expanded lane take no pointer or keyboard (B15).
+While the keyboard is in the lane, a document, a page, a card or the tool, the Zoom pane chord (⇧⌘↩, Alt+Shift+Enter on Windows and Linux) is Expand and Expand again, so one key fills the window with whatever the operator works in; anywhere else it zooms the focused pane.
+The tool column's `✕`, the pressed tool icon and the tool's chord close the tool column alone, closing no view; the documents' `✕`, drawn once at the right end of the tab bar of the area at the viewing column's top-right corner as a tool's head draws its own, closes the viewing column the same way, every view kept on the documents button (operator decision 2026-10-24); the viewing column also closes with its desk's last tab; and a lane whose last column closes is closed, the keyboard going to the focused pane (B12, B13, B14).
+⌘E (`Toggle right lane`) closes the lane while it shows and otherwise brings it back with the columns it had, so a lane closed whole by ⌘E or the path menu's Hide right lane returns both columns; a lane whose columns were closed one by one has nothing to bring back and opens on the documents when the checkout has some, else on the Explorer (B15).
 The columns are kept with the Workspace, so ⌘E after an app restart brings back the same, and the path menu's Show right lane does the same as ⌘E.
-Documents coming back take the keyboard into their active View area, the editor of the document there or the page, as an open does, so typing, ⌘S and ⌘W act on what came back rather than on the terminal it was pressed from; a tool, or the 보기 slot, leaves the keyboard where it was (B16).
+Documents coming back take the keyboard into their active View area, the editor of the document there or the page, as an open does, so typing, ⌘S and ⌘W act on what came back rather than on the terminal it was pressed from; a tool leaves the keyboard where it was (B16).
 
-The documents are the checkout's View areas, with their tabs, splits, previews and browser displays, each page inside its area's bounds (see View areas).
+The documents are the front Agent tab's desk: its View areas, with their tabs, splits, previews, browser displays and cards, each page inside its area's bounds (see View areas and Views per Agent tab).
 The active document's header starts with the checkout's name, then the path in ` › ` steps, cutting a long path at its start so the file name stays; document and page toolbars keep their path or address and controls.
 The Explorer tool is the file tree as it was, its rows, menu, drags and file management (see The Explorer); it has nothing of its own to turn off, so an Explorer open with no document is the tool column alone, with no disabled button and no `tree only` notice (B4, B5).
-Opening a file, a diff or a page from the Explorer, Changes, ⌘P, a terminal link, Open in Browser or Open server shows the documents in the viewing column with the opened tab in front, over the agents or docked as the pin says, and leaves the tool column as it is (B6, B7); the preview, Keep open and Open to the side rules are unchanged.
+Opening a file, a diff or a page from the Explorer, Changes, ⌘P, a terminal link, Open in Browser or Open server shows the documents in the viewing column with the opened tab in front, over the agents, and leaves the tool column as it is (B6, B7); the preview, Keep open and Open to the side rules are unchanged.
 A diff opened from Changes, a commit or a changed file, opens in the viewing column while the Changes list stays in the tool column (B7).
 Select in File Tree, a reveal, or a terminal link that names a folder turns the tool column to the Explorer with the row unfolded and selected, and leaves the viewing column as it is (B8).
-A pull request's card, a session's record, a mission's map, or a project's worktree table or cost opens in the 보기 slot, in front of the documents in the viewing column, and leaves the tool column as it is; the documents stay on the rail's documents button, and `←` steps back through the items opened before (B9).
-A changed file pressed on a card opens its diff among the documents in the viewing column, the card staying on the rail's 보기 button, which brings it back (B10).
-Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise, and the 보기 slot never comes forward on its own (B12).
+A pull request's card, a session's record, a mission's map, or a project's worktree table or cost opens as a tab on a desk, in front of that desk's other tabs, and leaves the tool column as it is; the same card again brings its tab forward, and a card's data is read only while its tab is in front (PRD lane-desk-pair-view D-13, B9).
+A changed file pressed on a card opens its diff as another tab of the same desk, the card's tab staying beside it (B10).
+Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise (B12).
 ⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` and `Toggle Hide AI tool` do the same for the Project and Hide AI icons and have no chord until one is bound; a chord bound to the retired `Toggle Mission tool` runs `Open missions` (PRD mission-screen D-12).
 ⇧⌘L (`Open Project Memory`) opens the Hide AI tool on its Memory tab, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
 `Toggle documents` presses the documents button and has no chord until one is bound.
@@ -161,41 +159,36 @@ Choosing another Agent tab while it reads leaves the checkout's Views and select
 When several tabs request the same file during its read, they share the read and document buffer while each keeps its own display request.
 A buffer opened through another path before the read answers retains its draft and save state, and the pending GUI displays still open in their requesting tabs.
 Closing that buffer's last current display does not cancel another tab's pending GUI open.
-Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is, pinned or not; the lane keeps its columns and pin, and the documents keep showing the checkout's Views (see File Views per checkout).
+Choosing an agent or a tab from the sidebar, the palette, a tab cycle or the tab strip, or a terminal taking the keyboard, leaves the lane where it is; the lane keeps its tool column, and the viewing column shows the chosen tab's desk (see Views per Agent tab).
 A new checkout in front changes the documents and the Explorer to that checkout's.
-The 보기 slot belongs to the pane it was opened for: each pane has its own slot, which stays while that pane has the keyboard, and another pane pressed, in the same tab or another, in this checkout or another, shows its own slot or an empty one, so the lane is the checkout's documents or Explorer as it stands, the rail's 보기 button brings back only that pane's own slot, and ⌘E opens the lane with that slot when the pane has one (operator decision 2026-11-09, replacing the slot the panes of one Agent tab shared).
-A pane that runs no agent (a shell) has its own slot like any other.
-A card opens where it was pressed (operator decision 2026-11-09):
+A card opens on the desk of the Agent tab it was pressed for (operator decision 2026-11-09; PRD lane-desk-pair-view D-12):
 
-| Pressed on | Opens in |
+| Pressed on | Opens on |
 | --- | --- |
-| An agent's row (a parent's or a child's, in the 태스크 list or the 프로젝트 tree) or its pane's head: its PR mark, its record, its mission mark | The slot of that agent's pane, which takes the keyboard, whoever made the pull request |
-| A card in the slot (a session's record, a mission node's panel): a pull request, a child's record, a node's plan | The same slot, over the card, the tab and the keyboard staying; `←` comes back to the card |
-| A place with no agent (the PR list, Memory, the 제안 tab, ⌘K, the Project tool) | The slot of the pane of the agent that owns it, the pull request's maker or the session's own agent, which comes forward |
-| A mission's row (내 차례, Needs You, the Overview) or a pane's mission chip | The slot of its Conductor's pane, which comes forward |
+| An agent's row (a parent's or a child's, in the 태스크 list or the 프로젝트 tree) or its pane's head: its PR mark, its record, its mission mark | The desk of that agent pane's Agent tab, whoever made the pull request |
+| A card on a desk (a session's record, a mission node's panel): a pull request, a child's record, a node's plan | The same desk, as a tab in front of the card |
+| A place with no agent (the PR list, Memory, the 제안 tab, ⌘K, the Project tool) | The desk of the Agent tab of the agent that owns it, the pull request's maker or the session's own agent |
+| A mission's row (내 차례, Needs You, the Overview) or a pane's mission chip | The desk of its Conductor's Agent tab |
 
-With no such agent on this machine (it ended or sleeps, a person made the pull request, the mission has no Conductor, or the owner runs on a connected device) the card opens in the slot in front; an agent's row whose pane has closed (its agent sleeps) does the same.
-A row of an agent on a connected device opens the card in that pane's slot and asks the device to bring the pane forward; the card shows when the device answers.
-Back on the pane its card is there as it was, with its ← history; a closed pane takes its slot with it, so an agent that sleeps and wakes in a new pane finds an empty slot, at most 64 panes' slots are kept with the one seen longest ago going first, and a slot saved by an older build for its front tab attaches to the pane in front on the first event after the launch.
-The pane in front closing closes its slot on the screen too, a record shown there included; ⌘K finds that session again (an archived one also has its `보관됨` row), and its record opens in the slot in front with Restore session.
+With no such agent on this machine (it ended or sleeps, a person made the pull request, the mission has no Conductor, or the owner runs on a connected device) the card opens on the desk in front.
+A card whose subject is gone keeps its tab, which says so in its body; its tab closes like any other.
 With no Workspace in front the Overview's own panel opens the items as before (B22).
 
 ⌘⇧P shows and focuses the sidebar.
 `Toggle device rail` has no default chord either and is bound the same way; it shows or hides the device rail.
 
-The lane has a divider at its left edge, docked or over the agents, and one between its two columns (B17).
+The lane has a divider at its left edge and one between its two columns (B17).
 A divider shows its grip on hover, keyboard focus and while dragging; a drag moves a guide with the pointer and lands once on release, and a focused divider moves one 32px step per arrow key, each a separator that reports its width.
 Fast arrow presses retain every step before the preceding width has been confirmed, and reloading restores the final width.
-The column divider trades width between the viewing column and the tool column, so the lane and Agent Views keep theirs; the lane's divider changes the width of the column at the lane's edge, against Agent Views when docked, and over them otherwise, where it may reach the body's left edge.
-The lane keeps four widths (D-09): the documents start at 520px and are never narrower than 360px, the 보기 slot the same, the Explorer starts at 240px and is never narrower than 180px, and the Project tool, Memory and Changes share one width that starts at 400px and is never narrower than 360px; Agent Views keep 480px beside a docked lane.
-The widths are the Workspace's and the same over the agents and docked, so a width dragged over the agents is the width the pin docks at, and documents widened to read a page leave the 보기 slot and the tools as they were.
-A web page opened into the lane widens the documents, when they are narrower than 900px, to 900px, so a site lays out its desktop screen: an open from the Explorer, a terminal link, `hide browser open` from the operator's pane, History, Recent Panels or a page's own new tab that puts a page in front of its area (PRD browser-width-zoom B1-B5; lane-two-columns B18).
-It widens over the agents and docked alike only as far as Agent Views keeps 480px beside both columns, so a narrow window gives the page less than 900px, and it never narrows wider documents.
-The widened width is stored as a divider landing is, so a narrower width the operator drags afterwards stays through a file tab and back; choosing a page tab already open, a restart, an agent's open behind the page in front and an expanded lane widen nothing, and a width the core refuses leaves the page at the width it opened at, with only the log saying so.
-The pin turning on or off, a docked lane opening or closing, a column of a docked lane opening or closing, a docked divider landing, and a docked viewing column turning between the documents and the 보기 slot when their widths differ resize the agents' terminals once (B21).
-A lane over the agents opening, going away, coming back, expanding or closing, its divider landing, a drag in progress, and anything inside the lane, an open, a close, a tab change, a split or a drag of a view, resize nothing.
+The column divider trades width between the viewing column and the tool column, so the lane and Agent Views keep theirs; the lane's divider changes the width of the column at the lane's edge, over Agent Views, where it may reach the body's left edge.
+The lane keeps four widths (D-09): the desk starts at 520px and is never narrower than 360px, the Explorer starts at 240px and is never narrower than 180px, and the Project tool, Memory and Changes share one width that starts at 400px and is never narrower than 360px.
+The widths are the Workspace's, the same on every Agent tab's desk, and documents widened to read a page leave the tools as they were.
+A web page opened into the lane that is not the page this Workspace drew last in front of its desk widens the documents, when they are narrower than 900px, to 900px, so a site lays out its desktop screen: an open from the Explorer, a terminal link, `hide browser open` from the operator's pane, History, Recent Panels, a page's own new tab that puts a page in front of its area, or the desk button bringing up a page an agent opened while the lane was closed (PRD browser-width-zoom B1-B5; lane-two-columns B18; lane-desk-pair-view B2).
+It widens only as far as Agent Views keeps 480px beside both columns, so a narrow window gives the page less than 900px, and it never narrows wider documents.
+The widened width is stored as a divider landing is, so a narrower width the operator drags afterwards stays through a file tab and back, the lane closed and opened again and the desk folded and brought up again over the same page; choosing a page tab already open, a restart, an agent's open behind the page in front and an expanded lane widen nothing, and a width the core refuses leaves the page at the width it opened at, with only the log saying so.
+The lane opening, going away, coming back, expanding or closing, its divider landing, a drag in progress, and anything inside the lane, an open, a close, a tab change, a split or a drag of a view, resize nothing.
 Changing Workspace or lane geometry during a divider drag cancels its guide without saving a width, and releasing the old pointer cannot change the new Workspace.
-The lane's columns, pin and four widths are stored per Workspace and survive a restart: a pinned lane comes back docked, an unpinned one over the agents, and neither expanded (B17).
+The lane's columns and four widths are stored per Workspace and survive a restart, over the agents and not expanded (B17).
 A Workspace stored by a build with the one-tool lane comes back closed at the default widths, its open documents, splits and comments kept and counted on the documents button (B23, D-10).
 
 Agent Views is always live: clicking a pane or a tab focuses it and typing goes to it, and chords such as ⌘F, ⌘T and ⌥W act where the keyboard is, a View area, the lane's tool or a pane.
@@ -223,27 +216,23 @@ The close chord, ⌘W in the desktop app and ⌥W in a browser, closes the small
 Before that, the close chord and the close-pane chord (⇧⌘W, ⌥⇧W in a browser) close what covers the screen, as a window's close does: the innermost menu, popover, dialog or sheet (Settings, Shortcuts, the Overview over a Workspace, the Start panel), a close's confirmation, which stays unanswered as with Escape, or the Overview screen, which gives way to the Workspace in front.
 Windows and Linux press the same chords through the system rule, Ctrl+Shift+W and Alt+Shift+W in the desktop app, and plain Ctrl+W stays the terminal's.
 Nothing under a cover closes, since the operator cannot see it; a filter, a field being added, a drag and a pane's find bar answer Escape but cover nothing, so the chords pass them.
-The page records its last focused region as View area, pane, the lane's tool, the 보기 slot, or none from focus events, including native browser-page focus; the chord does not walk the active DOM element or choose a region from panel size.
+The page records its last focused region as View area, pane, the lane's tool, or none from focus events, including native browser-page focus; the chord does not walk the active DOM element or choose a region from panel size.
 When the desktop app hands the keyboard back from a native page to deliver a menu command, the focus the shell's last element regains is not a move while that command runs, so ⌘W and ⌘T pressed in a page act on that page's View area; once the command has run, the keyboard's owner is the shell element holding it, so after any other command from a page the next chord acts where the operator now types.
 Expand and Expand again from a page are the exception: the desktop app leaves the keyboard in the page and the page stays its owner, so the next key scrolls or types in the page and the next ⇧⌘↩ returns the lane (`pageKeepsKeyboard` in `web/src/shortcuts.ts`).
-While the viewing column draws the 보기 slot, the chord closes the slot as its `✕` does when the keyboard is in the slot or nowhere (the sidebar row or the rail button that opened it); a pane or a View that holds the keyboard keeps the chord, and the tool column closes nothing (PRD lane-two-columns B13, B16).
+A card's tab closes like any View's, so a pane or a View that holds the keyboard keeps the chord, and the tool column closes nothing (PRD lane-two-columns B13, B16; lane-desk-pair-view D-13).
 Otherwise, with the lane's tool or nothing focused, nothing closes and a diagnostic states why (PRD lane-two-columns B16).
 Tabs close only from their own close control or menu; closing a tab's only pane still removes its tab through the engine.
 An unavailable or retired keyboard target never falls through to closing a different pane or a whole tab.
 When a connected pane selects, splits, moves, or closes a View through `hide view`, the same View layout rules apply to that pane's Workspace even while another Workspace is in front.
 These commands do not move the keyboard target; a close that would lose the last View of an unsaved document reports the refusal and keeps the draft.
 `hide file open` and `hide diff open` put the calling pane's file or changed-file diff into its own Workspace and never select that Workspace or another tab.
-Each of them, and `hide browser open` for a page, opens its View as a tab of the active View area, or brings the same file, diff or address forward where it already is; an agent never splits the View areas, which only the operator does (PRD unseen-agent-views D-24).
+Each of them, and `hide browser open` for a page, opens one View, or finds the same file, diff or address where it already is; an agent never splits the View areas, which only the operator does (PRD unseen-agent-views D-24).
 An open with `--beside` opens nothing and is refused with the next action to run it again without `--beside`.
 What an agent opens is unseen until the operator looks at it, and waits in Needs You as `볼 것` (To look at) on its row ([status-model.md](status-model.md#a-view-to-look-at)).
-Only an agent in the pane the operator is in, the selected pane of the front Workspace, changes what the operator sees: its open or `hide view select` brings the View to the front and shows the documents as a click does, the tool column staying as it was.
-Another pane of that Workspace, of the same tab or another, adds its View to the checkout's list and leaves the selection, the active area, the keyboard, the lane and the tab on screen as they were, and the documents button's badge counts the new view (see File Views per checkout).
-A Workspace not on screen is not what the operator sees: there, an agent in its active tab brings its View to that Workspace's front, so a page it opens loads and can be driven, and an agent in another tab adds its View behind.
-A shell bound only to the checkout, which no pane vouches for (a pane Hide has not connected yet, or a command run with its pane reference removed), counts as another pane on the Workspace on screen and as the active tab on one that is not.
-The desktop window's browser gateway, creating a page for a CDP client, brings its page forward, since a page loads only in front.
-No option brings a View forward from another pane; the operator does that.
+Where it lands follows Views per Agent tab below: only the pane the operator watches puts it on a desk, and any other agent's waits in its pane's Views list (PRD lane-desk-pair-view B1, B2, D-36).
+`hide view select` follows the same rule as an open; `close`, `list` and `status` work on any View of the checkout, on a desk or not.
+`hide view split` and `move` apply to a View on a desk only; one waiting in its pane's list is refused with `view_not_in_lane` and the next action to leave its layout to the operator (B33).
 A browser page's own new target, bound to its area, does not open the lane.
-`hide view split`, `move` and `close` apply to the checkout's list, from any tab, including a tab that is not on screen.
 
 ### Agent areas
 
@@ -393,23 +382,36 @@ No area gets narrower or shorter than its minimum, a divider stops where either 
 An area whose last view leaves disappears, and its neighbour takes the space.
 When the last view closes, the viewing column closes; the lane stays while it has a tool column and closes otherwise (PRD lane-two-columns B12; see The right lane).
 
-### File Views per checkout
+### Views per Agent tab
 
-The checkout owns one Files View list, its split and its active area, and each View remembers the sessions that opened it and whether the operator did (PRD session-files D-10, D-26).
-The Files strip shows only the Views the session whose pane has the keyboard opened, and the operator's own, which show in every session; in a split Agent tab the pane with the keyboard decides (D-13).
-The operator's Views are those opened from the Explorer, ⌘K, the file tree, a new tab's address field or an address typed into a page, by a caller Hide could not bind to a pane, and every View that was open before the update without an opener mark (D-29).
-A pane with no agent session, a plain shell, shows only the operator's Views, and a path clicked or opened there is the operator's (D-28).
-A session is its terminal or its native session, so a session found again in another pane keeps its Views, and an agent that exits to its shell or sleeps keeps them too (D-27).
-The same rule holds for a file, a diff, a page, an image and a PDF (D-30); there is no folded list of other sessions' Views, which show when their session has the keyboard (D-15).
-Switching Agent tab or pane, through the strip, sidebar, search, cycling or a confirmed local or device switch, switches the strip and the shown View together: each session shows again the View it last showed, the first time its first View, and with none of its own the operator's; the previous View does not stay behind as a dimmed tab (D-12).
-Plain shells, and agents that have opened nothing in the checkout, share the operator's strip, so moving the keyboard among them leaves the View in front where it is.
-A View named from elsewhere, a pane's `N views` row, Recent Panels or a session record's gallery tile, that the strip does not show brings the session that opened it to the keyboard first, so it shows in that session's strip.
-An area that holds none of the strip's Views is not drawn, and its neighbour takes the space; a dragged tab lands among the Views the strip draws.
-The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
+Each Agent tab has its own desk: the Views it holds as tabs of its View areas, its split, each area's front and its active area (PRD lane-desk-pair-view D-06).
+The lane's viewing column draws the desk of the tab on screen; another tab shows its own desk, the viewing column closed while that desk is empty, and coming back shows the first desk as it was (B9).
+Moving the keyboard between the panes of one tab changes nothing on its desk: its tabs, the one in front, and whether it shows (B8).
+A View is on one desk at most: opened again on another tab's desk, it moves there and leaves the first (D-20, B10).
+A View on no desk is held for the panes that opened it: their Views lists (`뷰 N개`) show it, a page there still loads and takes `hide browser` commands, and the operator puts it on the desk in front from that list (D-19, D-37, B3, B32).
+Each View remembers the sessions that opened it and whether the operator did (PRD session-files D-10, D-26); a session is its terminal or its native session, so a session found again in another pane keeps its Views (D-27).
+The operator's Views are those opened from the Explorer, ⌘K, the file tree, a new tab's address field or an address typed into a page, and by a caller Hide could not bind to a pane (D-29).
+
+From the pane the operator watches, the selected pane of the Workspace on screen, an agent's file, diff or browser open or select lands on its tab's desk; in front when the lane is open, the keyboard staying in the terminal; behind and marked To look at when the lane is closed, which stays closed (B2).
+From any other agent's pane, of the same tab or another, or from a Workspace not on screen, nothing on the screen moves: the View goes on no desk, in that pane's Views list, marked To look at (B1; conductor decision 5).
+A plain shell's pane, which has no agent to list its View, and a shell bound only to the checkout, which no pane vouches for, open behind on the desk in front and never bring it forward (conductor decision 2026-11-19).
+The desktop window's browser gateway, creating a page for a CDP client, brings its page to the front of the desk in front, where it loads.
+A GUI action, such as a click on a terminal link, acts for the operator as before.
+A file read remains bound to the original tab and native session: a closed, moved or replaced caller is refused rather than falling back to the operator's tab, and a read that completes after the operator left the caller's tab lands on no desk.
+
+A desk holds at most 32 Views in its six View areas and depth three (D-23).
+An open that would add a 33rd takes off the View looked at longest ago, never the one in front of any area, nor a document with unsaved work (D-34, B12); an agent's View goes to its pane's list, and the operator's closes, the way closing its last View closes a file (Reopen Closed brings it back).
+Only when nothing can come off is the open refused, with the View notice, and existing content stays as it was.
+Closing a desk tab with its `✕` takes an agent's View off the desk into its pane's list, and closes the operator's (D-07, B11); closing the last one closes the viewing column.
+An agent's `hide view close` closes its View wherever it is, and leaves the viewing column as it was (PRD right-lane B12).
+
 A session's Views close when Hide closes its pane, its tab or its subtree, or archives it (`세션 보관`), and only then; a View another session also opened, and the operator's, stay (D-14, D-27).
-Before such a close, a View of a document with unsaved work that only that session's Views show asks once for the whole close: `Save and close` saves each and then closes, `Close without saving` drops the text, and `Cancel` closes nothing; a document whose text this page does not hold stays open as the operator's View, as does one a close that did not ask finds unsaved.
-A pane that closes outside Hide, such as a shell's `exit`, closes no Views; they leave the strip with their session and the cap below closes them first.
-Closing the lane preserves its documents, unsaved text and save state.
+Before such a close, a View of a document with unsaved work that only that session's Views show asks once for the whole close: `Save and close` saves each and then closes, `Close without saving` drops the text, and `Cancel` closes nothing; a document whose text this page does not hold stays open as the operator's View on the desk in front, as does one a close that did not ask finds unsaved.
+A pane that closes outside Hide, such as a shell's `exit`, closes no Views.
+An Agent tab the engine no longer lists takes its desk: its agents' Views go to their panes' lists, and the operator's go to the desk in front, or wait for the first tab shown when none is left, so no page, card or document leaves with the tab (conductor decision 2026-11-19).
+An unanswered connected-device session or unresolved catalog preserves saved state, and a tab's pending opens leave with it.
+
+Closing the lane preserves every desk, its documents, unsaved text and save state.
 Closing the selected input View chooses its area's most recently visited surviving View, then the right neighbour and then the left when none was visited, and the keyboard follows the confirmed result.
 Closing a background View, including the selected View of another area, leaves input where it was.
 A View context menu borrows the current input without selecting its target, and its automatic focus return does not cancel a pending close follow.
@@ -417,32 +419,16 @@ An emptied area collapses and input follows its surviving neighbour.
 The last View returns input to the existing tree if it is on, else closes the lane and returns to the existing Agent pane; with no pane there is no invented input target.
 A last document reference waits for save protection; failure or conflict leaves it open, and a newer input destination wins over a delayed close completion.
 
-From the pane the operator is in, a file, diff or browser open or a select brings the View to the front, its area becomes the active one and the lane is called to Files.
-From another pane of the Workspace on screen, of the same tab or another, the View is added at the end of the area it lands in, in that pane's session's strip; the selection, the active area, the keyboard, the lane and the tab on screen stay as they were, and the Files icon's badge counts the Views the strip on screen draws.
-On a Workspace not on screen, the agent in its active tab brings the View to that Workspace's front and an agent in another tab adds it behind; neither moves the screen or calls the lane.
-A shell bound only to the checkout counts as another pane there; the browser gateway's new page comes to the front of its area, where it loads.
-The operator brings it forward from the strip; selecting the caller's tab does not.
-A GUI action, such as a click on a terminal link, acts for the operator as before.
-A file read remains bound to the original tab and native session: a closed, moved or replaced caller is refused rather than falling back to the operator's tab.
-
 Matching checkout and path documents use one shared buffer, and the same address opened from two tabs is one page.
 Dirty-document close guards count every reference.
 A page added behind the front may stay pending until it first appears, and `--wait` proves only a real load.
-The desktop hides every retained page absent from the current placements.
 
-The list, split and selection are saved with the Workspace and survive restart and core moves.
-Obsolete `tab_views` bookmarks are ignored without erasing the saved `view_layout`, lane, documents or comments.
-A first start after the update shows an empty list: Views saved per tab by the earlier build are not read, while the lane's tool, pin, tree, widths, comments and the Agent layout are kept.
-Authoritative topology drops a closed tab's pending opens and keeps the Views and documents; only Hide's own close closes a session's Views.
-An unanswered connected-device session or unresolved catalog preserves saved state.
+Every desk and the Views on no desk are saved with the Workspace and survive restart and core moves (B27).
+A first start after the update moves an older file once (D-18, B34, B35): the checkout's open documents go to the desk of the Agent tab last seen, each pane's 보기 slot cards to the desk of that pane's tab in the order they stacked, a pinned lane opens over the agents, and documents, comments and unsaved drafts stay; the file is then saved only in the new form.
 Local and connected-device callers follow the same rules; the phone keeps its existing flow.
-No additional badge, notice or setting is introduced.
-The checkout keeps at most 32 Views in its six View areas and depth three.
-An open that would add the 33rd View first closes the View looked at longest ago in the checkout, the way closing its last View closes a file (Reopen Closed brings it back); a View in front of any area and a document with unsaved work never close.
-Only when nothing can close is the open refused, with the View notice, and existing content stays as it was.
-Web owner: the shell draws the snapshot projection, the strip already filtered, and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
+Web owner: the shell draws the snapshot projection of the desk on screen and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
 Core owner: `hide-core/src/runtime/{view_sessions,view_callers,view_areas,workspace_control,workspace_view}.rs` and `hide-core/src/workspace_views.rs`.
-Regression owners are `runtime/tests/view_bookmarks.rs`, `runtime/view_sessions.rs`, `web/e2e/{view-bookmarks,right-lane}.spec.ts` and `desktop/e2e/browser.spec.ts`.
+Regression owners are `runtime/tests/desk_views.rs`, `runtime/tests/unseen_views.rs`, `runtime/view_sessions.rs`, `web/e2e/right-lane.spec.ts` and `desktop/e2e/browser.spec.ts`.
 
 ### Opening, preview, and Open to the side
 
@@ -567,11 +553,10 @@ Web owners: `web/src/ViewComments.tsx`, `web/src/viewFeedback.ts`, `web/src/edit
 
 ### Narrow windows
 
-Whether a pinned lane docks depends on the Workspace body's width, not the window's, so hiding the sidebar with ⌘B can dock it again.
-A pinned lane docks while its columns' minimums and Agent Views' 480px fit side by side with the dividers, the viewing column narrowing first and the tool column after; when both columns cannot stand side by side they stack, the one the rail last brought forward drawn and the other behind it, and in a body too narrow for even one column the lane opens over Agent Views with its pin still filled; widening the body docks it again (PRD lane-two-columns B19).
+Whether the two columns stand side by side depends on the Workspace body's width, not the window's, so hiding the sidebar with ⌘B can bring them side by side again: the viewing column narrows first and the tool column after, and when both cannot stand side by side they stack, the one the rail last brought forward drawn and the other behind it (PRD lane-two-columns B19).
 The lane opens at any width: in a body narrower than the lane it takes the whole body, giving up the viewing column's width down to its minimum first and the tool column's after, and a body narrower than one column's minimum is still the lane's whole width, never the sidebar's.
 When the View areas cannot all have their minimum, only the active area shows, with an area switcher to the others.
-Widening the window brings back what the Workspace stores, the lane's columns, pin, widths and the area sizes, because none of these narrow arrangements is stored, and another Workspace's lane never changes while one is narrow.
+Widening the window brings back what the Workspace stores, the lane's columns, widths and the area sizes, because none of these narrow arrangements is stored, and another Workspace's lane never changes while one is narrow.
 
 ### Library masters
 
@@ -610,7 +595,7 @@ An agent pane's head carries no task chip, no checklist popover and no chord for
 A turn the agent's provider refused for a usage limit or an API error ends as the label's `한도`, and the second row and the turn card draw it as `막힘` with its line as the cause (B9); only the session record tells the two apart.
 A plain shell keeps its terminal mark.
 A pane's terminal stands 8px in from the pane's sides and 4px from its top and bottom, so its text never touches the pane's border, and its grid is the one that fits that inset box.
-On an agent pane whose session Hide knows, the status mark, the logo and the title are one button, except a `볼 것` mark, which is a button of its own just before it ([View openers and comments](#view-openers-and-comments)): under the pointer or focus they light together and open nothing, since a card under the head kept rising in the way of the terminal (the turn card opens from the turn on the second row, and the record shows the whole title), and a press shows that session's record in the lane's 보기 slot ([The 보기 slot](#tasks-the-보기-slot-and-the-pr-list)), opening the lane when it is closed, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `레인에서 보기` lands the same way.
+On an agent pane whose session Hide knows, the status mark, the logo and the title are one button, except a `볼 것` mark, which is a button of its own just before it ([View openers and comments](#view-openers-and-comments)): under the pointer or focus they light together and open nothing, since a card under the head kept rising in the way of the terminal (the turn card opens from the turn on the second row, and the record shows the whole title), and a press shows that session's record as a card on the desk of the pane's Agent tab ([The 보기 slot](#tasks-the-보기-slot-and-the-pr-list)), opening the lane when it is closed, while the keyboard and the input cursor stay in the pane's terminal (PRD overview-device-tasks B22, sidebar-task-lens B15); the Overview's `레인에서 보기` lands the same way.
 A press while the lane already draws that record turns the lane back to its tool, and the fork mark and the PR mark keep their own presses outside the button (B23).
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
@@ -751,7 +736,7 @@ Web owners: `web/src/components/sleeping-session-row.tsx`, `web/src/sleeping-ses
 
 The sidebar is one list of operator-owned roots under projects and checkouts, with Needs You (`내 차례`) and Unread (`읽을 것`) raised above it.
 A root whose descendant is raised enters Needs You itself, at any depth, and the raised descendant never appears there on its own row; its second line is what to do, with no verb, name, count, PR or path.
-A mission whose node waits on the operator with no Conductor or worker row to carry it is its own Needs You row, above the agent rows in this list and, in the 태스크 list's 내 차례, among the tasks by when its node began to wait, newest first as the asks stand, after the unread asks that came later and before every read ask and block (operator decisions 2026-11-08 and 2026-11-14; `bandRows` in `web/src/taskList.ts`), laid out as the agent rows beside it: the turn mark, the mission's mark (`--kind-mission`, `KindIcon`) where an agent row draws its logo and only while the rows draw logos, the mission's title with how long its node has waited at the title line's end, `<node> · <why>` (`외 N건` for its other such nodes, the safety net counted among them), or for a mission whose only wait is its safety net that net's line (`걸린 일 N건 · Conductor가 아직 풀지 못했어요`, `이 미션에 Conductor가 없어요 · 걸린 일 N건`), the mission's project as the place line (left out where the group already names the project, and never made up when the catalog does not hold it), and under them `확인하기`, which opens the mission, led by `지휘 다시 열기` only while no Conductor holds the mission and by `터미널로 이동` for a safety net its Conductor holds, every line on the title's column; the node's choices are not drawn on the row, since read without the context of the mission's 내 차례 card they left the operator guessing (operator report on M41); the row opens the mission's card in the 보기 slot. The Overview's `나를 기다리는 것` lists the same mission first with the same line and buttons, the mission's mark where an agent's logo stands and its project after the title as the agents' asks there show theirs, also when the map draws no session; a map narrowed to one project lists and counts that project's missions only, and the whole map every one the scope names. The device's Needs You number (the sidebar's `내 차례 · N`, `개요 · 내 차례 N` and the device rail) counts it once with the agents, from the device scope's `mission_asks`; which raises the mission carries is the core's one rule (`item`: waits on the operator, no row carries it, the mission still asks, the node is not dropped), with its safety net, read by the count and the list alike, so a cancelled mission keeps its record and leaves both (`web/src/components/sidebar-mission-row.tsx`, drawn by `web/src/sidebar.tsx` and `web/src/TaskLens.tsx`, `web/src/OverviewGraph.tsx`; core owners `hide-core/src/runtime/missions.rs` `on_row`, `item` and `publish_mission_asks`, `hide-core/src/agent_state/tally/scope.rs`; PRD mission-node-simple D-19).
+A mission whose node waits on the operator with no Conductor or worker row to carry it is its own Needs You row, above the agent rows in this list and, in the 태스크 list's 내 차례, among the tasks by when its node began to wait, newest first as the asks stand, after the unread asks that came later and before every read ask and block (operator decisions 2026-11-08 and 2026-11-14; `bandRows` in `web/src/taskList.ts`), laid out as the agent rows beside it: the turn mark, the mission's mark (`--kind-mission`, `KindIcon`) where an agent row draws its logo and only while the rows draw logos, the mission's title with how long its node has waited at the title line's end, `<node> · <why>` (`외 N건` for its other such nodes, the safety net counted among them), or for a mission whose only wait is its safety net that net's line (`걸린 일 N건 · Conductor가 아직 풀지 못했어요`, `이 미션에 Conductor가 없어요 · 걸린 일 N건`), the mission's project as the place line (left out where the group already names the project, and never made up when the catalog does not hold it), and under them `확인하기`, which opens the mission, led by `지휘 다시 열기` only while no Conductor holds the mission and by `터미널로 이동` for a safety net its Conductor holds, every line on the title's column; the node's choices are not drawn on the row, since read without the context of the mission's 내 차례 card they left the operator guessing (operator report on M41); the row opens the mission's map as a card on the desk. The Overview's `나를 기다리는 것` lists the same mission first with the same line and buttons, the mission's mark where an agent's logo stands and its project after the title as the agents' asks there show theirs, also when the map draws no session; a map narrowed to one project lists and counts that project's missions only, and the whole map every one the scope names. The device's Needs You number (the sidebar's `내 차례 · N`, `개요 · 내 차례 N` and the device rail) counts it once with the agents, from the device scope's `mission_asks`; which raises the mission carries is the core's one rule (`item`: waits on the operator, no row carries it, the mission still asks, the node is not dropped), with its safety net, read by the count and the list alike, so a cancelled mission keeps its record and leaves both (`web/src/components/sidebar-mission-row.tsx`, drawn by `web/src/sidebar.tsx` and `web/src/TaskLens.tsx`, `web/src/OverviewGraph.tsx`; core owners `hide-core/src/runtime/missions.rs` `on_row`, `item` and `publish_mission_asks`, `hide-core/src/agent_state/tally/scope.rs`; PRD mission-node-simple D-19).
 A node's choices are one part wherever they stand, the mission's 내 차례 and the node's panel (`AttentionChoices`, `web/src/components/mission-attention.tsx`); this row and the Overview's `나를 기다리는 것` open the mission with `확인하기` instead.
 Before the choices it says which of the node's finish lines failed in a few words: a CI, a check, a review or a verification by its kind (`리뷰 실패`), and the lines the plan wrote, whose sentences run long, as one count (`완료 기준 3개 실패`), each failed line in full on hover, so the choices stay on the row however long the plan's sentences are.
 First comes the pull request the raise is about with its mark and the reason the PRs list gives it (`충돌`, `머지 큐 · N번째 대기`, `CI 실패`, the core's `agent_scope.prs` row; the state's word only when the list holds no row), and a line of the node that failed and that reason does not already say (`리뷰 실패`), so the choice is made with the cause in view.
@@ -1080,7 +1065,7 @@ Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider
 
 ## The Project tool
 
-Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table, 남은 것 and 작업 비용 in the 보기 slot); core owners: `hide-core/src/agent_state/tally/project_status.rs` (the counts and 흘린 것), `hide-core/src/runtime/strays.rs` (마무리 맡기기, 놔두기 and 되돌리기), `hide-core/src/usage_ledger/project_cost.rs` (each session's spend) and `hide-core/src/usage_ledger/tasks.rs` (the tasks and the week).
+Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table, 남은 것 and 작업 비용 as cards on the desk); core owners: `hide-core/src/agent_state/tally/project_status.rs` (the counts and 흘린 것), `hide-core/src/runtime/strays.rs` (마무리 맡기기, 놔두기 and 되돌리기), `hide-core/src/usage_ledger/project_cost.rs` (each session's spend) and `hide-core/src/usage_ledger/tasks.rs` (the tasks and the week).
 The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
 Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column.
 The left of the screen is state and the middle is work under way; this column is what came of it (PRD project-panel-results D-01), so it holds no list of what waits on the operator, which the sidebar's 태스크 and PR list already show.
@@ -1148,7 +1133,7 @@ The turn card, sidebar, mission list and phone read the same open PR list (`node
 
 Web owner: `web/src/MissionScreen.tsx`, `web/src/missionList.ts`, `web/src/components/sidebar-header.tsx`; core owner for which mission's events are sent: `hide-core/src/runtime/mission_events.rs` (`mission_shown`).
 Every mission is listed on a screen of the page's own beside the Overview and Desk, which lists the missions of the device in front on the rail, every project of it, and opens one's map beside the list; it edits no mission (PRD mission-screen D-01, D-02).
-A mission pressed anywhere else opens its map as a card in the 보기 slot of its Conductor's pane, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19).
+A mission pressed anywhere else opens its map as a card on the desk of its Conductor pane's Agent tab, under the rules of a pull request's card (operator decision 2026-11-09, replacing D-09, B12, B14, B19).
 There is no Mission tool in the right lane (B18).
 
 The sidebar's `미션` row sits on its own line under the Overview row and above `Add project`, the waypoints mark before it and, on its right, the warning-coloured count of the device's open missions with anything in their 내 차례 (a decision, letters the Conductor has not got, a worker the core raised, a person's turn a worker declared, a merge or join order, the safety net, no Conductor), none at 0, its hint `미션 · 내 차례 N`; the tabs below stay 프로젝트, 태스크 and PR (B1).
@@ -1233,15 +1218,15 @@ The map's head names the branch the mission's results go to and the options the 
 The model reads by the name that item's own model list shows for it, the list Settings and the start panel show (a gateway profile's `deepseek/deepseek-v4.1-flash` for `opus`, `catalogFor` and `modelLabel`, `itemNames` in `web/src/missions.ts`), and as the start passes it (`opus`) while that list is not read, where the list does not name it, and for a worker on another machine than this one, whose lists Hide AI does not read.
 Those lists are read only while a screen reads them, so a drawn mission map is one such screen (`ai_settings.start_observing`), and the map keeps no list of its own.
 A node's worker that its Conductor spawns without `--profile` starts as its plan names it, the built-in default included, rather than with the Conductor's own profile, so what the map shows before the start is what runs ([delivery.md: Missions](delivery.md#missions)).
-A node's `크게 ›`, a worker's or checker's record and a pull request's card, pressed in the detail, leave the screen for the Workspace in front, whose 보기 slot shows them, or for the Overview's panel at Home for a record (D-09).
+A node's `크게 ›`, a worker's or checker's record and a pull request's card, pressed in the detail, leave the screen for the Workspace in front, whose desk shows them as cards, or for the Overview's panel at Home for a record (D-09).
 ↑ and ↓ in the list show the previous or next mission's detail; `✕` returns to the table with the same scroll and project chip (B11).
 A mission removed or no longer held while its detail shows returns the screen to its table with no message (B22).
 The page tells the core which mission the detail shows, or none, with one event (`mission_shown`), which the core holds unsaved, only for a mission its book holds, and uses to send that one mission's event record (`mission_events`); leaving the screen says none, the page names it again whenever its connection comes back, and with two windows on missions the last one to name a mission wins (D-16).
-While the page names none, the core sends the events of the mission whose card is on top of the front pane's 보기 slot while the slot is drawn; the slot is the core's, so the card needs no event of its own.
+While the page names none, the core sends the events of the mission whose card is in front of the active area of the front Agent tab's desk while the desk is drawn; the desk is the core's, so the card needs no event of its own.
 In a window too narrow for the list beside the detail the list stacks above it and the table leaves out its project column, which the chips still name (`missions-split`, 760 px of the screen's width); a long title truncates with its full text on hover (B23).
 On the screen, a mission of another device than the one in front brings that device's rail tile forward first, then opens on the mission (B13).
 ⌃Tab (⌥` in a browser tab) goes to the most recent agent pane, the first stop of the recent cycle, as from the Overview or Desk; Esc closes an open menu or popover and nothing else, neither leaving the screen nor closing the detail; choosing a task, a project or a pane in the sidebar leaves the screen for it (B15, B16, B17).
-Which mission is selected, the chip and the scroll are the page's own and are not saved; a mission's card in a 보기 slot is saved with the slot like any card, and a lane saved on the Mission tool loads with no tool column (B20).
+Which mission is selected, the chip and the scroll are the page's own and are not saved; a mission's card on a desk is saved with the desk like any card, and a lane saved on the Mission tool loads with no tool column (B20).
 
 ### A mission's card in the 보기 slot
 
@@ -1418,7 +1403,7 @@ Before the eye the same pointing shows a `+`, `<project>에서 에이전트 시�
 
 The map starts new work where it is drawn (issue #2514).
 Each unfolded project has a start circle where its next session would stand: a root session's circle size, a faint dashed outline in the project's colour with a `+` inside, no words and no line to `나`, named and hinted `<project>에서 에이전트 시작`; it lights and turns solid under the pointer or focus, and pressing it opens the start panel on that project.
-It takes part in the placement as a place with its circle's room and no push of its own, so it never covers a session or its words and does not spread the project; the project's name and glow take it in, and it moves with a project drag and folds away with the project.
+It takes part in the placement as a place with no push of its own whose room reaches a gap past the farthest corner of a session's circle and words, so no session covers it, from whatever angles the sessions start at, and it does not spread the project; the project's name and glow take it in, and it moves with a project drag and folds away with the project.
 A folded project's name under its circle carries a `+` beside it instead, faint until the circle is pointed at; the name itself stays the project's drag handle and the row's own press keeps moving the camera, so neither becomes a start.
 `나` wears a small ringed `+` on its rim, `새 에이전트`, which fills under the pointer or focus and opens the start panel on no project, choosing its target as ⌘K's `에이전트 시작…` does; Hide has no session outside a project to start instead.
 Wherever the map draws a project, it also draws `프로젝트 추가`: a dashed, rounded place in the widest gap between the projects (opposite a lone project), quieter than any of them and turning solid and filled under the pointer or focus, placed with them so it covers none, which opens the sidebar's Add project dialog (⇧⌘N).

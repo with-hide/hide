@@ -8,7 +8,7 @@ import { startFixture } from "./engine-fixture";
 import { labelAgentPane } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { countSent, enterWorkspace } from "./wire";
+import { closeFrontCard, countSent, enterWorkspace } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -31,9 +31,13 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     const sourceRow = page.locator(`nav[data-sidebar] [data-pane="${source}"] [data-agent-title]`);
     await expect(sourceRow).toHaveText("Restore this conversation", { timeout: 30_000 });
     await withControl(daemon, (control) => closePane(control, source));
-    // The record was the closed pane's slot, so it leaves the screen with the pane.
+    // The record is a tab on the Agent tab's desk, which outlives the pane
+    // (PRD lane-desk-pair-view D-12, B35); its tab's ✕ closes it.
+    await expect(page.locator(`[data-pane-view="${source}"]`)).toHaveCount(0);
+    await expect(record).toContainText("Restore this conversation 진행해줘");
+    await closeFrontCard(page);
     await expect(record).toHaveCount(0, { timeout: 30_000 });
-    // ⌘K finds the session by its title, and its record opens again in the slot in front.
+    // ⌘K finds the session by its title, and its record opens again as a tab on the desk in front.
     await page.keyboard.press(chord("search"));
     const search = page.locator('[data-palette="Search"]');
     await expect(search.locator("[data-palette-input]")).toBeFocused();

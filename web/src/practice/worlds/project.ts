@@ -1,8 +1,8 @@
 // Flow 5's world: one invented project with an agent at work beside the
 // right lane, and a second one in the sidebar for the pin to move. It answers
 // the pin (`workspace_pin_set`) as the core does, listing a pinned project first,
-// and the lane opening and closing, showing a tool and
-// its pin, as the core's `workspace_view` does, and the Explorer's folds,
+// and the lane opening and closing and showing a tool, as the core's
+// `workspace_view` does, and the Explorer's folds,
 // and sends what the lane's tools read: the project's 현황 and 할 일 with two
 // pull requests waiting on the operator, the checkout's files and the ones
 // the agent changed, the project's cost over the week, and its Memory's
@@ -23,8 +23,8 @@ const ROOT = `/work/${PLACE.project}`;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** What the world can change: the desk, the other project's desk, which projects are pinned in the sidebar, whether the lane is open, which tool its column shows and whether it is pinned, and the Explorer's open folders. */
-export type ProjectModel = { desk: DeskModel; other: DeskModel; pins: string[]; open: boolean; tool: Tool | null; pinned: boolean; expanded: string[] };
+/** What the world can change: the desk, the other project's desk, which projects are pinned in the sidebar, whether the lane is open, which tool its column shows, and the Explorer's open folders. */
+export type ProjectModel = { desk: DeskModel; other: DeskModel; pins: string[]; open: boolean; tool: Tool | null; expanded: string[] };
 
 /** The project the learner is to pin, the second one listed. */
 export const PIN_TARGET = DOCS.project;
@@ -38,9 +38,9 @@ export const laneDrawn = (model: ProjectModel) => model.open && model.tool !== n
 
 function initial(): ProjectModel {
   const lead = agent({ pane_id: "lead", identity_label: "Fix the checkout 500", agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "4m" });
-  // The lane comes back on the Project tool, the shape it was left in, pinned so it docks beside the agent as the operator's would.
+  // The lane comes back on the Project tool, the shape it was left in.
   const docs = agent({ pane_id: "docs", identity_label: "Reword the payments page", agent_kind: "claude", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "9m" });
-  return { desk: oneTabDesk({ id: "lead", agent: lead, title: "Fix the checkout 500" }), other: oneTabDesk({ id: "docs", agent: docs, title: "Reword the payments page" }), pins: [], open: false, tool: "project", pinned: true, expanded: [`${ROOT}/src`, `${ROOT}/src/payment`] };
+  return { desk: oneTabDesk({ id: "lead", agent: lead, title: "Fix the checkout 500" }), other: oneTabDesk({ id: "docs", agent: docs, title: "Reword the payments page" }), pins: [], open: false, tool: "project", expanded: [`${ROOT}/src`, `${ROOT}/src/payment`] };
 }
 
 // --- The checkout's files --------------------------------------------------------
@@ -180,7 +180,7 @@ function snapshot(model: ProjectModel, nowMs: number): WorldSnapshot {
       ...base.rest,
       navigator: { ...navigator, workspaces, changes_root_path: ROOT },
       ui_state: { ...base.rest.ui_state!, expanded_paths: model.expanded, workspace_registrations: workspaces.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: row.pinned })) },
-      workspace_view: { ...base.rest.workspace_view!, open: model.open, tool: model.tool, pinned: model.pinned },
+      workspace_view: { ...base.rest.workspace_view!, open: model.open, tool: model.tool },
       // Hide AI on, so the Memory tool reads as it does for an operator who keeps one.
       status: { ...base.rest.status, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
     },
@@ -194,22 +194,20 @@ function snapshot(model: ProjectModel, nowMs: number): WorldSnapshot {
 /**
  * The lane after a `workspace_view` patch, as the core applies it: a tool
  * shown opens the lane, a reveal shows the Explorer, and a lane opened with
- * no column comes back on the Explorer, and the pin docks it or floats it
- * over the agent. Widths are the core's alone here and change nothing on the
+ * no column comes back on the Explorer. Widths are the core's alone here and change nothing on the
  * screen.
  */
 function applyView(model: ProjectModel, p: Record<string, unknown>): ProjectModel | null {
-  let { open, tool, pinned } = model;
+  let { open, tool } = model;
   if (typeof p.tool === "string" && (TOOLS as readonly string[]).includes(p.tool)) [tool, open] = [p.tool as Tool, true];
   if (p.tool === null) tool = null;
   if (typeof p.reveal === "string") [tool, open] = ["explorer", true];
   if (p.open === false) open = false;
-  if (typeof p.pinned === "boolean") pinned = p.pinned;
   if (p.open === true) {
     open = true;
     tool ??= "explorer";
   }
-  return open === model.open && tool === model.tool && pinned === model.pinned ? null : { ...model, open, tool, pinned };
+  return open === model.open && tool === model.tool ? null : { ...model, open, tool };
 }
 
 function apply(model: ProjectModel, event: CoreEvent): ProjectModel | null {

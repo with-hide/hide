@@ -865,6 +865,7 @@ impl Runtime {
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
         self.snapshot.navigator.workspaces = workspaces;
+        self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
@@ -2043,9 +2044,10 @@ impl Runtime {
     ) -> bool {
         let changed = self.apply_remote_session(target_id, fetched);
         self.request_home_retirements();
-        // The device's word on the pane in front, or a pane it closed.
-        let detail = self.sync_detail_pane() | self.prune_detail_panes();
-        changed | detail | self.complete_look()
+        // An older build's slot cards of the device's panes move onto their
+        // trays once the device lists the panes.
+        let moved = self.move_slot_cards();
+        changed | moved | self.complete_look()
     }
 
     fn apply_remote_session(
@@ -2579,8 +2581,9 @@ impl Runtime {
         self.ingesting_session = false;
         // The projects are known now: an old Home waiting on them is asked.
         self.request_home_retirements();
-        // A pane that closed takes its 보기 slot.
-        let detail = self.prune_detail_panes();
+        // An older build's slot cards move onto their pane's tray once the
+        // engine lists the pane.
+        let detail = self.move_slot_cards();
         // A close waiting in a tab's line starts from the session just
         // applied, never from the one it replaced.
         let pumped = self.pump_geometry_queues();
@@ -6091,6 +6094,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         self.snapshot.navigator.workspaces = workspaces;
+        self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
             &self.node,
@@ -6249,6 +6253,7 @@ impl Runtime {
             && let Some(key) = self.workspace_key(&payload.workspace_id, &payload.checkout_id)
             && !self.admit_view_open(
                 &key,
+                &self.front_place(&key),
                 &payload.path,
                 crate::view_layout::DisplayKind::File,
                 None,

@@ -117,7 +117,7 @@ import {
   type ViewMenuId,
   type ViewWorkspace,
 } from "./viewLayout";
-import { workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { frontCard, workspaceViewOf, type LaneView, type Tool } from "./workspace";
 import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
@@ -128,10 +128,10 @@ function deviceField(device: string, node: string): { device_id?: string } {
 export type Actions = ReturnType<typeof createActions>;
 
 /**
- * Whether an event puts the front Workspace's unpinned lane up (PRD
- * right-lane B15, B16): a tool, a reveal or a linked folder. Read here,
- * where every operator event passes, so no path can forget it; it is page
- * state and never sent. Choosing an agent or a tab leaves the lane as it
+ * Whether an event calls the front Workspace's lane up (PRD right-lane B15,
+ * B16): a tool, a reveal, the desk, an open or a linked folder. Read here,
+ * where every operator event passes, so no path can forget to draw the
+ * column the call is for in a stacked lane. Choosing an agent or a tab leaves the lane as it
  * is: only the operator closes it. An open, a History selection or a Recent
  * Panels display calls the lane through the core's call number instead
  * (`laneCalls.ts`), the one way a call from the CLI or another page arrives too.
@@ -467,7 +467,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * did once. The core keeps the lane per Workspace, so another Workspace is
    * never touched.
    */
-  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; pinned?: boolean; document_width?: number; detail_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; document_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -482,12 +482,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
   /** Whether the viewing column draws `view` now. */
   const viewUp = (view: LaneView) => laneUp() && ui().drawnLane.view === view;
-
-  /** Whether the core says the 보기 slot stands in front of the documents (PRD sidebar-task-lens D-50). */
-  const detailShown = () => {
-    const detail = rest()?.ui_state?.detail;
-    return Boolean(detail?.shown && detail.items.length > 0);
-  };
 
   /**
    * Shows one tool in the tool column (B3, B14): a stacked lane draws the
@@ -589,7 +583,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (ui().screen?.kind === "missions" && frontCheckout(rest()) && workspaceViewOf(rest())) ui().setScreen({ kind: "workspace" });
   };
 
-  /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
+  /** Closes the lane (B15): ⌘E, the path's menu and Escape in the lane; both columns keep their shape for ⌘E's reopen. */
   const closeLane = () => setWorkspaceView({ open: false });
 
   /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
@@ -599,8 +593,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleTool = (tool: Tool) => (toolUp(tool) ? closeTool() : showTool(tool));
 
   /**
-   * Brings the documents in front of the viewing column (B6, B11): an
-   * unpinned lane comes up, a stacked lane draws them, and the keyboard goes
+   * Brings the desk in front of the viewing column (B6, B11): the lane comes
+   * up, a stacked lane draws them, and the keyboard goes
    * into the active area, so typing and ⌘W act on the document the operator
    * brought back rather than on the terminal behind it.
    */
@@ -608,7 +602,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     ui().setStackFront("view");
-    if (!view.open || !view.documents || detailShown()) setWorkspaceView({ documents: true });
+    if (!view.open || !view.tray.shown) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
       followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
     }
@@ -639,15 +633,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     setWorkspaceView({ open: true });
-    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.documents || view.tool === null);
+    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.tray.shown || view.tool === null);
     if (documents && view.layout) {
       followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
     }
-  };
-
-  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it with ⌘E or Escape. */
-  const setLanePinned = (pinned: boolean) => {
-    setWorkspaceView({ pinned });
   };
 
   /**
@@ -2236,9 +2225,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       openDetail(item);
     },
 
+    /** A card's control pressed while its card is in front of the drawn desk folds the desk; otherwise it opens the card (PRD lane-desk-pair-view B6). */
     toggleDetailItem(item: import("./snapshot").DetailItem) {
-      if (detailShown() && viewUp("detail") && sameDetailItem(rest()?.ui_state?.detail?.items.at(-1), item)) {
-        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
+      if (viewUp("documents") && sameDetailItem(frontCard(workspaceViewOf(rest())), item)) {
+        return setWorkspaceView({ documents: false });
       }
       openDetail(item);
     },
@@ -2255,24 +2245,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openSettings("conductor");
     },
 
-    /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
-    detailBack() {
-      dispatch({ schema_version: 2, kind: "detail_back", payload: {} });
-    },
-
-    /** ✕ in the 보기 head (B47): the slot empties and the lane goes back to its tool, or closes. */
-    detailClose() {
-      dispatch({ schema_version: 2, kind: "detail_close", payload: {} });
-    },
-
-    /** The rail's 보기 button (lane-two-columns B11): the viewing column draws the slot again, or, pressed while it does, folds. */
-    toggleDetail() {
-      if (detailShown() && viewUp("detail")) {
-        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
-      }
-      ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: true } });
-    },
 
     /** The 프로젝트 | 태스크 switch (B1), or ⇧⌘B with `show` set while the sidebar is hidden (B2). */
     setSidebarLens(lens: import("./snapshot").SidebarLens, show = false) {
@@ -2985,9 +2957,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
         displayId: viewUp("documents") ? area?.active ?? null : null,
         paneIds: tab?.panes.map((pane) => pane.id) ?? [],
-        detailShown: ui().screen?.kind === "workspace" && !ui().overviewOpen && viewUp("detail"),
       });
-      if (target.kind === "detail") return this.detailClose();
       if (target.kind === "view") return closeView(target.id);
       if (target.kind === "pane") return this.closePane(target.id);
       diagnostic(`close_shortcut: ${target.reason}`);
@@ -3401,13 +3371,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
     /**
-     * A pane head's title (B15): the pane's slot shows that session's
-     * record, or, when the lane already draws it, the lane goes back to its
-     * tool. The keyboard goes to the pane pressed.
+     * A pane head's title (B15): its session's record opens on the pane's
+     * tab desk, or, while the drawn desk shows it in front, the desk folds.
+     * The keyboard goes to the pane pressed.
      */
     togglePaneRecord(session: import("./snapshot").WorkSession, paneId: string) {
-      const top = rest()?.ui_state?.detail?.items.at(-1);
-      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("detail")) return this.toggleDetail();
+      const top = frontCard(workspaceViewOf(rest()));
+      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("documents")) return setWorkspaceView({ documents: false });
       this.openSessionRecord(session, { pane: paneId });
     },
     searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
@@ -3466,13 +3436,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     readSessionRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "session_record_open", payload: { session } });
     },
-    /** The Overview panel's record closed: the 보기 slot's own record, when it holds one, is read again. */
+    /** The Overview panel's record closed: the record in front of the desk, when there is one, is read again. */
     leaveOverviewRecord() {
       // Another record taking the panel reads its own session; only a record that left the screen hands the read back.
       const state = ui();
       const shown = state.overviewOpen || state.screen?.kind === "main";
       if (shown && state.overview.panel?.kind === "record") return;
-      const top = rest()?.ui_state?.detail?.items.at(-1);
+      const top = frontCard(workspaceViewOf(rest()));
       const lane = top?.kind === "record" ? top.session : null;
       if (lane) dispatch({ schema_version: 2, kind: "session_record_open", payload: { session: lane } });
       else dispatch({ schema_version: 2, kind: "session_record_close", payload: {} });
@@ -3526,7 +3496,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     toggleDocuments,
     showDocuments,
     closeLane,
-    setLanePinned,
 
     toggleLane,
 

@@ -7,7 +7,7 @@
 import type { AgentGroup, AgentLayout } from "../../agentLayout";
 import type { AgentScope, AgentTreeScope, ProjectTasksScope } from "../../agentScope";
 import type { PaneMoveIntent } from "../../paneMove";
-import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, Workspace } from "../../snapshot";
+import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, DetailItem, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, ViewDisplaySnapshot, Workspace } from "../../snapshot";
 import type { CoreEvent, WorldSnapshot } from "../world";
 
 export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
@@ -518,8 +518,7 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
     status: { async_operations: desks.flatMap((desk) => desk.model.operations) },
     pane_layouts: desks.flatMap((desk) => desk.model.tabs.map((tab) => ({ workspace_id: desk.place.project, tab_id: tab.id, focused_pane_id: tab.focused, zoomed: tab.zoomed, root: tab.root }))),
     workspace_view: {
-      device_id: "local", path: main.path, open: false, documents: false, tool: null, pinned: false,
-      document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: main.path, open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", display_count: 0, limits: { areas: 4, depth: 3, displays: 32 } },
       agent_layout: agentLayout,
     },
@@ -554,6 +553,34 @@ function everyScope(rest: SnapshotRest, change: (scope: AgentScope) => AgentScop
  * and no longer roots of their own, as the core draws a delegated child. The
  * kit lists every agent as a root.
  */
+type WorldView = NonNullable<WorldSnapshot["rest"]["workspace_view"]>;
+
+/** The id of the card tab a world draws `index`-th on the desk. */
+export const cardDisplayId = (index: number) => `card-${index}`;
+
+/**
+ * The desk in front holding `cards` as card tabs, the last in front, as the
+ * core draws a card opened onto the front Agent tab's desk (PRD
+ * lane-desk-pair-view D-13); with none it is the desk as `view` has it.
+ */
+export function cardDesk(view: WorldView, cards: readonly DetailItem[]): WorldView {
+  if (cards.length === 0) return view;
+  const displays: ViewDisplaySnapshot[] = cards.map((card, index) => ({ id: cardDisplayId(index), tab_id: null, path: "", label: "", kind: "card", committed: null, preview: false, state: "open", reason: null, card }));
+  return {
+    ...view,
+    tray: { ...view.tray, shown: true, count: displays.length },
+    layout: { root: { area: { id: "v1", active: displays.at(-1)!.id, displays } }, active_area: "v1", display_count: displays.length, limits: { areas: 4, depth: 3, displays: 32 } },
+  };
+}
+
+/** The index of the card tab a `view_layout` close takes off a world's desk, or null for any other event. */
+export function closedCard(event: CoreEvent): number | null {
+  const p = event.payload;
+  if (event.kind !== "view_layout" || p.action !== "close" || typeof p.display_id !== "string") return null;
+  const match = /^card-(\d+)$/.exec(p.display_id);
+  return match ? Number(match[1]) : null;
+}
+
 export function withLineage(rest: SnapshotRest, parent: string, children: readonly string[]): SnapshotRest {
   const nest = (tree: AgentTreeScope): AgentTreeScope => {
     const rows = tree.rows.filter((row) => !children.includes(row.pane_id)).flatMap((row) => (row.pane_id === parent ? [row, ...children.map((pane_id) => ({ pane_id, occurrence: 0, depth: 1 }))] : [row]));

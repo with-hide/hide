@@ -15,7 +15,7 @@ import type { HideAnswer } from "./agent-pane";
 import { checkoutAt, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { chooseTheme, enterWorkspace, screenshot } from "./wire";
+import { chooseTheme, enterWorkspace, screenshot, showDocuments } from "./wire";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, writes } from "./work-prs-fixture";
 
@@ -82,13 +82,14 @@ async function readyPull(page: Page, label: string, planned: ReturnType<typeof p
       const planFile = path.join(repo, "merge-owner-plan.txt");
       fs.writeFileSync(planFile, shown);
       await ok(conductor, ["file", "open", planFile]);
+      await showDocuments(page);
       await expect(page.getByText("머지까지 · schema만 👤 내가 머지", { exact: false }).first()).toBeVisible();
       await chooseTheme(page, "dark");
       await screenshot(page, "merge-owner-plan-dark");
       await chooseTheme(page, "light");
       await screenshot(page, "merge-owner-plan-light");
       await page.locator("[data-pane-mission-chip]").click();
-      const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+      const map = page.locator('[data-card="mission"]');
       await expect(map.locator('[data-mission-turn-item="merge"]')).toHaveCount(0);
       await expect(page.locator("nav[data-sidebar] [data-mission-ask]")).toHaveCount(0);
       await screenshot(page, "merge-owner-before-light");
@@ -142,7 +143,7 @@ test("a node the plan leaves to the operator is done once its pull request is re
 
     // The mission's map: its turn names the merge as the operator's.
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     const turn = map.locator('[data-mission-turn] [data-mission-turn-item="merge"]');
     await expect(turn).toContainText("머지할 차례");
     await expect(turn).toContainText("#31");
@@ -189,7 +190,7 @@ test("a mission whose scope stops at the pull request asks nothing for a ready o
     expect((await conductor(["mission", "show"])).out).not.toContain("👤");
 
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await expect(map.locator('[data-mission-node="schema"]')).toHaveAttribute("data-node-status", "done");
     await expect(map.locator('[data-mission-turn-item="merge"]')).toHaveCount(0);
     await expect(page.locator("nav[data-sidebar] [data-mission-ask]")).toHaveCount(0);

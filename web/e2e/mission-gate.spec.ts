@@ -45,7 +45,7 @@ test("a planned review stays quiet until arrival and the phone's answer passes t
       { key: "screen", title: "화면 확인", kind: "research", criteria: ["화면이 준비됨"], gate: "계획과 결과 화면" },
     ] })]);
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await expect(map.locator("[data-mission-gates]")).toHaveAttribute("data-mission-gates", "1");
     await expect(map.locator("[data-mission-gate-when]")).toHaveText("before each step's review and CI");
     await expect(map.locator('[data-node-gate="ahead"]')).toHaveText("계획과 결과 화면");

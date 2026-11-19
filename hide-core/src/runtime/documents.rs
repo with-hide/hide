@@ -23,6 +23,7 @@ use super::*;
 use crate::files::{DocumentPlace, DocumentRoot, OpenFailure, SaveOutcome};
 use crate::model::{EditorConflictSnapshot, EditorOpeningSnapshot, EditorSaveSnapshot};
 use crate::node_access::{LinkError, NodeLink};
+use crate::workspace_views::Place;
 
 #[derive(Default)]
 pub(super) struct SaveSlot {
@@ -161,13 +162,13 @@ impl Runtime {
         })
     }
 
-    /// Opens still being read that will add a View display to the
+    /// Opens still being read that will add a View display at `place` of the
     /// Workspace `key`, so the display cap counts them before they land.
-    pub(super) fn pending_view_placements(&self, key: &WorkspaceKey) -> usize {
+    pub(super) fn pending_view_placements(&self, key: &WorkspaceKey, place: &Place) -> usize {
         self.document_opens
             .values()
             .flat_map(|open| &open.placements)
-            .filter(|placement| &placement.key == key)
+            .filter(|placement| &placement.key == key && &placement.place == place)
             .count()
     }
 
@@ -180,10 +181,8 @@ impl Runtime {
             let count = open.placements.len();
             open.placements.retain(|placement| {
                 &placement.key != key
-                    || !placement
-                        .owner
-                        .as_deref()
-                        .is_some_and(|owner| !tabs.contains(&owner))
+                    || !matches!(&placement.place, Place::Tray(tab)
+                        if tab != crate::workspace_views::PENDING_TRAY && !tabs.contains(&tab.as_str()))
             });
             changed |= count != open.placements.len();
             count == 0 || !open.placements.is_empty() || open.reload || open.restore
@@ -343,7 +342,7 @@ impl Runtime {
                     .any(|held| held.same_destination(placement))
             });
             if !repeated
-                && self.pending_view_placements(&placement.key)
+                && self.pending_view_placements(&placement.key, &placement.place)
                     >= crate::view_layout::MAX_VIEW_DISPLAYS
             {
                 let error = crate::view_layout::LayoutError::DisplayLimit;

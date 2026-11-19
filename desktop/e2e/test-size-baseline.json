@@ -40,9 +40,9 @@
       "lines": 124,
       "expect": 14
     },
-    "right-lane.spec.ts::the lane comes and goes over the terminals without a resize, the pin and a docked divider resize once, and input continues through all of it": {
-      "lines": 222,
-      "expect": 49
+    "right-lane.spec.ts::the lane comes and goes over the terminals without a resize, its divider lands once without a resize, and input continues through all of it": {
+      "lines": 204,
+      "expect": 43
     }
   }
 }

@@ -61,10 +61,8 @@ function session(checkoutId: string, tabId: string, displays: ViewDisplaySnapsho
     workspace_view: {
       device_id: "local",
       path: front.path,
-      open: true, documents: true, tool: null,
-      pinned: false,
+      open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null,
       document_width: null,
-      detail_width: null,
       explorer_width: null,
       panel_width: null,
       lane_called: 0,

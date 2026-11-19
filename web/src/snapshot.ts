@@ -1385,7 +1385,7 @@ export type ProjectAddReceipt = { request_id: string; device_id: string; path: s
 );
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
-/** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
+/** One card a desk tab shows (`DetailItem`, PRD sidebar-task-lens D-50; lane-desk-pair-view D-13). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
@@ -1402,11 +1402,12 @@ export type DetailItem =
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
 
 /**
- * Which agent's 보기 slot an item opens in, where it was pressed (operator
- * decision 2026-11-09): `here` the slot in front, over what it shows, for
- * what a card opens inside the slot; `{ pane }` the slot of the agent whose
- * row, head or chip was pressed, that pane taking the keyboard; `owner` the
- * slot of the agent that owns the item, pressed where no agent is.
+ * Which Agent tab's desk a card opens on, where it was pressed (PRD
+ * lane-desk-pair-view D-12, B6, B7): `here` the desk in front, beside what
+ * it holds, for what a card opens inside a card; `{ pane }` the desk of the
+ * tab of the agent whose row, head or chip was pressed, that pane taking the
+ * keyboard; `owner` the desk of the tab of the agent that owns the item,
+ * pressed where no agent is.
  */
 export type DetailPlace = "here" | "owner" | { pane: string };
 
@@ -1913,9 +1914,6 @@ export type ConductorCandidate = { agent: string; profile?: string | null; model
 export type MissionMapFlow = "down" | "across";
 export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
 
-/** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
-export type DetailSlot = { items: DetailItem[]; shown: boolean };
-
 /** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
 export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
 export type GraphProjectKey = { device_id: string; workspace_id: string };
@@ -1961,7 +1959,7 @@ export type ViewDisplaySnapshot = {
   path: string;
   /** The document's name, a browser page's title (its host until it has one), or an outside file's name. */
   label: string;
-  kind: "file" | "diff" | "browser" | "external";
+  kind: "file" | "diff" | "browser" | "external" | "card";
   /** Which History group a diff shows; null for a file. */
   committed: boolean | null;
   preview: boolean;
@@ -1983,6 +1981,8 @@ export type ViewDisplaySnapshot = {
   unseen?: boolean;
   /** An outside file's desktop grant, name and viewer (PRD outside-path-in-hide); absent for every other kind. */
   external?: { grant: string; name: string; kind: import("./host").ExternalKind };
+  /** A card tab's card (PRD lane-desk-pair-view D-13); absent for every other kind. */
+  card?: DetailItem;
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */
@@ -3623,8 +3623,6 @@ export type SnapshotRest = {
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
     practice_invite_closed?: boolean;
-    /** The lane's 보기 slot (D-50) of the Agent tab in front; each tab keeps its own in the core. */
-    detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
     overview_graph?: OverviewGraphChoices;
     selected_path?: string | null;
@@ -3724,7 +3722,8 @@ export type SnapshotRest = {
   /** The front Workspace's layout and tools (S6 D-10); absent when no Workspace is in front. */
   workspace_view?: import("./workspace").WorkspaceView | null;
   /** All retained Browser Views, including those outside the front Workspace. */
-  browser_views?: { device_id: string; path: string; view_id: string; area_id: string }[];
+  /** `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37). */
+  browser_views?: { device_id: string; path: string; view_id: string; area_id: string; tray?: string | null }[];
   /** Positive connected Workspace area authority from the core, including empty areas; incarnation changes on revoke/regrant. */
   browser_scopes?: { device_id: string; path: string; area_id: string; incarnation: number }[];
   /** The desktop grants every outside file's tab stands on, across every Workspace; absent while none does. */

@@ -312,10 +312,10 @@ describe("an open from Main or an Overview", () => {
 
   it("waits for the requested tool on the target checkout and device", () => {
     const opening = { target: { workspaceId: "w", checkoutId: "c2", deviceId: "local", path: "/w2", tool: "project" as const }, errorBefore: null, failure: null };
-    const arrived = { ...rest("c2"), workspace_view: { device_id: "local", path: "/w2", open: true, documents: false, tool: "project", pinned: false, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" } } as SnapshotRest;
+    const arrived = { ...rest("c2"), workspace_view: { device_id: "local", path: "/w2", open: true, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "project", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" } } as SnapshotRest;
     expect(openingProgress(rest("c2"), opening)).toBeNull();
     expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, tool: null } }, opening)).toBeNull();
-    expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, open: true, documents: true, tool: null } }, opening)).toBeNull();
+    expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null } }, opening)).toBeNull();
     expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, device_id: "other" } }, opening)).toBeNull();
     expect(openingProgress({ ...arrived, workspace_view: { ...arrived.workspace_view!, path: "/w" } }, opening)).toBeNull();
     expect(openingProgress({ ...arrived, navigator: rest("c1").navigator }, opening)).toBeNull();

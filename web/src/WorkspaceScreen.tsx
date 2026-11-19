@@ -32,20 +32,18 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // PRD lane-two-columns D-01, D-02, D-09): one checkout's path in the
 // window's top row (PRD sidebar-titlebar-refresh D-15, `WorkspaceTitle`),
 // and in the body Agent Views (its engine tabs and their panes), the right
-// lane's two columns (the documents or the front tab's 보기 slot at the agents'
-// side, and a tool, Memory, PRs, Explorer or Changes, beside the rail) and,
-// at the right edge, the tool rail. Which columns show, the tool, the pin
-// and the four widths are the core's, per Workspace; this draws them and
+// lane's two columns (the front Agent tab's desk at the agents' side, and a
+// tool, Memory, PRs, Explorer or Changes, beside the rail) and, at the right
+// edge, the tool rail. Which columns show, the tool, each tab's desk and the
+// three widths are the core's, per Workspace; this draws them and
 // sends one event per operator choice.
 //
-// An unpinned lane is drawn over Agent Views, which keeps its width, so
-// opening and closing it resizes no terminal (B20); a terminal click or an
-// agent chosen leaves it up, and ⌘E or Escape closes it (PRD right-lane B4;
-// operator decision 2026-10-23). A pinned lane docks and Agent Views gives up its width,
-// so the pin, a column opening or closing and a divider landing resize the
-// agents' terminals once (B21); a drag moves only a guide until it lands.
-// The rail is always there, so nothing the lane does changes Agent Views'
-// width but the pin.
+// The lane is drawn over Agent Views, which keeps its width, so opening and
+// closing it resizes no terminal (B20; PRD lane-desk-pair-view B16); a
+// terminal click or an agent chosen leaves it up, and ⌘E or Escape closes it
+// (PRD right-lane B4; operator decision 2026-10-23); a drag moves only a
+// guide until it lands. The rail is always there, so nothing the lane does
+// changes Agent Views' width.
 
 export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -71,16 +69,13 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   );
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
-  // The viewing column draws the front tab's 보기 slot while it is shown, else the Workspace's documents (PRD sidebar-task-lens D-50; lane-two-columns D-04).
-  const detail = useShellStore((s) => s.rest?.ui_state?.detail);
-  const laneView = laneViewOf(view, detail, hasViews);
+  // The viewing column draws the front tab's desk (PRD lane-desk-pair-view D-06).
+  const laneView = laneViewOf(view, hasViews);
   const input: LaneInput = {
     open: view?.open === true,
     view: laneView,
     tool: view?.tool ?? null,
-    pinned: view?.pinned === true,
     documentWidth: view?.document_width ?? null,
-    detailWidth: view?.detail_width ?? null,
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
     expanded,
@@ -89,7 +84,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     sizes,
   };
   const frame = laneFrame(input);
-  // The documents kept under the 보기 slot or folded are laid out at their own
+  // The documents of a folded desk are laid out at their own
   // width, so their View areas measure what they will show (an Open to the
   // side's room).
   const documents = laneView === "documents" ? frame : laneFrame({ ...input, open: true, view: "documents", front: "view" });
@@ -138,8 +133,8 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     const owner = keyboardOwner();
     if (agentsCovered && (owner.kind === "pane" || owner.kind === "agent") && owner.workspace === checkoutId) noteKeyboardOwner({ kind: "none" });
   }, [agentsCovered, checkoutId]);
-  // A lane that goes out of sight with the keyboard inside it, or documents
-  // the 보기 slot or a fold replaces with the keyboard in them, hands the
+  // A lane that goes out of sight with the keyboard inside it, or a desk
+  // folded with the keyboard in it, hands the
   // keyboard to the pane the core has focused, as after a closing sheet, so
   // no focus is reported for it (PRD right-lane B4, B23; lane-two-columns
   // B11). Documents that closed with their last view are not a fold: the
@@ -152,7 +147,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     const before = shownBefore.current;
     shownBefore.current = { up, documentsUp };
     const owner = keyboardOwner();
-    const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail")) || (before.documentsUp && !documentsUp && displays > 0 && owner.kind === "view");
+    const lost = (before.up && !up && (owner.kind === "view" || owner.kind === "tool")) || (before.documentsUp && !documentsUp && displays > 0 && owner.kind === "view");
     if (!lost || owner.workspace !== checkoutId) return;
     const paneId = useShellStore.getState().focusedPaneId;
     // A native page can report its focus after a menu command ran. The
@@ -172,8 +167,8 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-shows={drawnTool ?? "none"}
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} frame={frame} documents={documents} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
-      <div className="contents" onKeyDown={(event) => laneEscape(event, frame, view.pinned, actions)}>
+      <LaneRow view={view} frame={frame} documents={documents} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
+      <div className="contents" onKeyDown={(event) => laneEscape(event, frame, actions)}>
         <ToolRail actions={actions} />
       </div>
     </section>
@@ -182,15 +177,15 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
 
 /**
  * Escape in the lane or on its rail, once nothing inside answered (a menu, a
- * filter, a document's find), returns an expanded lane, or closes an
- * unpinned one as ⌘E does and gives the keyboard to the focused pane, so a
+ * filter, a document's find), returns an expanded lane, or closes it as
+ * ⌘E does and gives the keyboard to the focused pane, so a
  * tool or an open afterwards brings its own column alone (B4, B8, B15;
  * operator decision 2026-10-23); Escape in a terminal stays the program's.
  */
-function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, pinned: boolean, actions: Actions): void {
+function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, actions: Actions): void {
   if (event.key !== "Escape" || event.defaultPrevented) return;
   if (frame.mode === "expanded") useUiStore.getState().setLaneExpanded(false);
-  else if (frame.mode === "overlay" && !pinned) {
+  else if (frame.mode === "overlay") {
     actions.closeLane();
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
@@ -218,22 +213,18 @@ function useWidth(element: HTMLElement | null): number {
 
 /**
  * The body left of the rail: Agent Views, and the lane. The lane is always
- * placed over the body's right edge, so moving between over, beside and
- * expanded never mounts it again; a docked lane, and an
- * expanded one that was docked, keep their width beside Agent Views with a
- * divider and an empty slot under the lane, so Agent Views keeps the width
- * it has (B8).
+ * placed over the body's right edge, so moving between over and expanded
+ * never mounts it again, and Agent Views keeps the width it has (B8;
+ * lane-desk-pair-view B35).
  */
-function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
+function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
-  // The width Agent Views gives up: a docked lane's, kept while it is expanded.
-  const slot = frame.agents > 0 && frame.agents < width ? width - frame.agents - sizes.divider : 0;
-  // A terminal click leaves the lane where it is, pinned or not: only the
-  // operator closes it, with ⌘E, or Escape for an unpinned one (B4).
-  const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, view.pinned, actions);
+  // A terminal click leaves the lane where it is: only the operator closes
+  // it, with ⌘E or Escape (B4).
+  const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : "inset-y-0 right-0 z-20";
-  const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-overlay" : "";
+
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane
@@ -242,16 +233,9 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
       <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" inert={frame.mode === "expanded"} data-agent-area="true">
         <AgentArea checkout={checkout} actions={actions} />
       </div>
-      {slot > 0 ? (
-        <>
-          {/* The divider draws the lane's own surface up to the agents' hairline, so no strip of another fill stands between them, while the lane's content (a page's native view included) starts after it and never covers it. */}
-          <LaneDivider kind="lane" label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
-          <div className="shrink-0" style={{ width: slot }} aria-hidden="true" data-lane-slot="true" />
-        </>
-      ) : null}
       {frame.mode !== "closed" ? (
         <div
-          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", placed, raised)}
+          className={cn("absolute flex min-h-0 min-w-0 flex-col border-l border-border bg-card shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}

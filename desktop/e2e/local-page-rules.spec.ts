@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentPane } from "../../web/e2e/agent-pane";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { enterWorkspaceWithLane } from "../../web/e2e/wire";
 import { fitWindow, hostLog, launchShell, startStack, test, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
@@ -53,7 +53,7 @@ test("A local HTML page loads its own folder's files and nothing else", async ()
   const launched = await launchShell(run.env);
   app = launched.app;
   await fitWindow(app, { width: 1400, height: 900 });
-  await enterWorkspace(launched.page, "fixture");
+  await enterWorkspaceWithLane(launched.page, "fixture");
   const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, fixture.panes[0]);
 
   const checkout = path.join(fixture.root, "fixture");

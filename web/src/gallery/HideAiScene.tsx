@@ -261,9 +261,9 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
   }
 }
 
-/** The lane pinned on the Hide AI tool (lane id `memory`), the scene's width wide. */
-const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "memory", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
-const FRAME: LaneFrame = { mode: "docked", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false, narrowPin: false };
+/** The lane open on the Hide AI tool (lane id `memory`), the scene's width wide. */
+const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "memory", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
+const FRAME: LaneFrame = { mode: "overlay", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false };
 const SIZES: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
 
 export function HideAiScene({ theme, state, width, language }: HideAiSceneParams) {

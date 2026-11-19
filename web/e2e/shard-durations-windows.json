@@ -54,7 +54,6 @@
   "right-lane.spec.ts › an opened file comes up over Agent Views without resizing a terminal, stays through a terminal click, and Escape puts it away with its document (PRD right-lane B1, B3, B4, B16; lane-two-columns B6, B11, B17, B20) @platform": 5.2,
   "right-lane.spec.ts › expand takes the whole body and returns on Escape without resizing a terminal (PRD right-lane B8; lane-two-columns B15) @platform": 4.1,
   "right-lane.spec.ts › the Explorer opens beside the document without narrowing it, stays through a tool switch and the last view closing, and its chord closes the column alone (B4, B5, B7, B8, B12, B14) @platform": 3.7,
-  "right-lane.spec.ts › the pin docks the lane once, keeps it through a terminal click, a tool and an Agent tab, and a restart brings it back docked (PRD right-lane B5, B7, B15, B22, B24; lane-two-columns B21, B23) @platform": 7.2,
   "s2.spec.ts › a drag selects locally without a click, and its copy joins wrapped lines and keeps a shared margin's indentation": 9.1,
   "s2.spec.ts › a tab switch mounts the new tab, ⌥T opens a terminal directly, and recent agents, reorder and close still work": 9.2,
   "s2.spec.ts › a wheel over a shell pane is one terminal_scroll per batch, and a click is a terminal_mouse press and release answered by the SGR report": 11.4,
