@@ -188,12 +188,11 @@ export function refusalKey(code: string): (typeof REFUSAL_KEYS)[keyof typeof REF
 }
 
 /**
- * `~/hide/automations/<이름>-…`: where an automation with no folder works (B5),
- * the root as the core names it, home shortened to `~` on every system; the
- * id after the name is the core's to give.
+ * `~/hide/automations/<이름>-…`: the folder the core's preview names for an
+ * automation with no folder (B5), under the root the section names, with the
+ * home shortened to `~` on every system; any other path is shown whole.
  */
-export function ownFolderLine(root: string, name: string): string {
-  const shown = /[\\/]hide[\\/]automations$/.test(root) ? "~/hide/automations" : root;
-  const slug = name.trim().replace(/\s+/g, "-").replace(/[<>:"/\\|?*.]/g, "");
-  return `${shown}/${slug ? `${slug}-` : ""}…`;
+export function shownOwnFolder(root: string | undefined, path: string): string {
+  if (!root || !path.startsWith(`${root}/`) || !/[\\/]hide[\\/]automations$/.test(root)) return path;
+  return `~/hide/automations${path.slice(root.length)}`;
 }

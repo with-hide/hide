@@ -72,7 +72,7 @@ function standInCore(now: number) {
     if (event.kind !== "automation_call") return true;
     const { request_id, call } = event.payload as { request_id: string; call: AutomationCall };
     queueMicrotask(() => {
-      if (call.call === "preview") receiveAutomationResult({ request_id, ok: true, value: { reads_as: call.schedule, next_run_at_unix_ms: now + 15 * HOUR, zone: null } });
+      if (call.call === "preview") receiveAutomationResult({ request_id, ok: true, value: { reads_as: call.schedule, next_run_at_unix_ms: now + 15 * HOUR, zone: null, own_folder: `${ROOT}/${call.name.replace(/\s+/g, "-")}${call.name ? "-" : ""}…` } });
       else if (call.call === "run_open") receiveAutomationResult({ request_id, ok: true, value: { id: call.id, run: call.run } });
       else receiveAutomationResult({ request_id, ok: false, code: "automations_unavailable" });
     });

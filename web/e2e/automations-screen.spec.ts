@@ -65,10 +65,9 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "table");
     await expect(page.locator('[data-automation-screen-state="empty"]')).toBeVisible();
 
-    // B4, B5: the form opens in the automation's own folder, named under the home.
+    // B4, B5: the form opens in the automation's own folder, with no worktree to ask for.
     await page.locator("[data-automation-new]").first().click();
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "form");
-    await expect(page.locator("[data-automation-own-folder]")).toContainText("~/hide/automations/");
     await expect(page.locator('[data-automation-field="worktree"]')).toHaveCount(0);
     const create = page.locator("[data-automation-create]");
     await expect(create).toBeDisabled();
@@ -78,6 +77,8 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     await page.locator('[data-automation-field="name"]').fill("아침 점검");
     await expect(page.locator('[data-automation-refusal="automation_name_missing"]')).toHaveCount(0);
     await page.locator('[data-automation-field="task"]').fill("의존성 점검");
+    // B5: the core names the own folder by the name, under the home, its id still to come.
+    await expect(page.locator("[data-automation-own-folder]")).toHaveText("~/hide/automations/아침-점검-…");
     // B6: the default schedule is read back with its next run.
     await expect(page.locator("[data-automation-preview]")).toBeVisible();
     await expect(create).toBeEnabled();

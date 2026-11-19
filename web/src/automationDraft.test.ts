@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addCall, draftOf, editCall, ownFolderLine, refusalField, refusalKey } from "./automationDraft";
+import { addCall, draftOf, editCall, refusalField, refusalKey, shownOwnFolder } from "./automationDraft";
 import type { Automation } from "./snapshot";
 
 // PRD automations B4, B5, B7, B26: what the form opens on and what a press
@@ -58,8 +58,10 @@ describe("the automation form's values", () => {
     expect(refusalKey("socket_closed")).toBe("automationScreen.refusal.other");
   });
 
-  it("names the own folder under the home on every system, its id left to the core", () => {
-    expect(ownFolderLine("/Users/u/hide/automations", "아침 이슈 정리")).toBe("~/hide/automations/아침-이슈-정리-…");
-    expect(ownFolderLine("C:\\Users\\u\\hide\\automations", "")).toBe("~/hide/automations/…");
+  it("shows the own folder the core names under the home as ~ on every system, and any other path whole", () => {
+    expect(shownOwnFolder("/Users/u/hide/automations", "/Users/u/hide/automations/아침-이슈-정리-…")).toBe("~/hide/automations/아침-이슈-정리-…");
+    expect(shownOwnFolder("C:/Users/u/hide/automations", "C:/Users/u/hide/automations/…")).toBe("~/hide/automations/…");
+    expect(shownOwnFolder("/Users/u/hide/automations", "/elsewhere/x-…")).toBe("/elsewhere/x-…");
+    expect(shownOwnFolder(undefined, "/Users/u/hide/automations/x-…")).toBe("/Users/u/hide/automations/x-…");
   });
 });

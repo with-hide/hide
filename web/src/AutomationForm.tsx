@@ -2,7 +2,7 @@ import { ChevronLeftIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { callAutomations, type SchedulePreview } from "./automationCall";
-import { addCall, draftOf, draftSchedule, editCall, emptyField, exampleDraft, ownFolderLine, refusalField, refusalKey, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
+import { addCall, draftOf, draftSchedule, editCall, emptyField, exampleDraft, refusalField, refusalKey, shownOwnFolder, type AutomationExample, type FormDraft, type ScheduleDraft, type ScheduleKind } from "./automationDraft";
 import { scheduleText, whenText, WEEKDAYS, weekdayText } from "./automationWords";
 import { AgentPicker } from "./components/agent-picker";
 import { useMinuteClock } from "./components/elapsed";
@@ -18,7 +18,7 @@ import { effortsOf } from "./conductorSettings";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { listedWorkspaces, localDeviceId, type Automation, type AutomationsSection, type AutomationWeekday, type Workspace } from "./snapshot";
+import { listedWorkspaces, localDeviceId, type Automation, type AutomationSchedule, type AutomationsSection, type AutomationWeekday, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -79,7 +79,7 @@ export function AutomationForm({ section, automation, example = null, actions }:
       open.current = false;
     };
   }, []);
-  const preview = usePreview(draft.schedule);
+  const { preview, ownFolder } = usePreview(draft.schedule, draft.name);
   const folders = useFolders();
   const chosen = draft.folder === null ? null : folders.find((workspace) => workspace.path === draft.folder) ?? null;
   const git = chosen?.is_git === true;
@@ -160,8 +160,8 @@ export function AutomationForm({ section, automation, example = null, actions }:
                 {folders.map((workspace) => <SelectItem key={workspace.id} value={workspace.path} description={workspace.path}>{workspace.label}</SelectItem>)}
               </SelectContent>
             </Select>
-            {draft.folder === null && section.own_folder_root ? (
-              <p className="truncate font-mono text-caption text-muted-foreground" data-automation-own-folder="true">{ownFolderLine(section.own_folder_root, draft.name)}</p>
+            {draft.folder === null && ownFolder ? (
+              <p className="truncate font-mono text-caption text-muted-foreground" data-automation-own-folder="true">{shownOwnFolder(section.own_folder_root, ownFolder)}</p>
             ) : null}
             {git ? (
               <label className="flex items-center gap-xs text-body text-subtle-foreground">
@@ -219,26 +219,34 @@ function PreviewLine({ preview }: { preview: Preview }) {
   return <p className="text-caption text-subtle-foreground" data-automation-preview="true">{text}</p>;
 }
 
-/** The core's reading of the schedule as it is typed (B6, B7); a newer schedule's answer replaces an older one. */
-function usePreview(schedule: ScheduleDraft): Preview {
+/**
+ * The core's reading of the schedule and the name as they are typed (B5-B7);
+ * a newer draft's answer replaces an older one. The own folder is the last one
+ * the core named, kept while the next is read or the schedule is refused, so
+ * the folder line does not come and go with each key.
+ */
+function usePreview(schedule: ScheduleDraft, name: string): { preview: Preview; ownFolder: string | null } {
   const live = useShellStore((s) => s.connection === "live");
-  const key = JSON.stringify(draftSchedule(schedule));
+  const key = JSON.stringify({ schedule: draftSchedule(schedule), name: name.trim() });
   const [preview, setPreview] = useState<{ key: string; value: Preview }>({ key: "", value: { state: "reading" } });
+  const [ownFolder, setOwnFolder] = useState<string | null>(null);
   const latest = useRef(key);
   latest.current = key;
   useEffect(() => {
     if (!live) return undefined;
     const timer = setTimeout(() => {
-      void callAutomations({ call: "preview", schedule: JSON.parse(key) }).then((answer) => {
+      const draft = JSON.parse(key) as { schedule: AutomationSchedule; name: string };
+      void callAutomations({ call: "preview", schedule: draft.schedule, name: draft.name }).then((answer) => {
         if (latest.current !== key) return;
         // A call the socket dropped says nothing about the schedule; the next connection reads it again.
         if (!answer.ok && answer.code === "socket_closed") return;
         setPreview({ key, value: answer.ok ? { state: "read", value: answer.value } : { state: "refused", code: answer.code } });
+        if (answer.ok) setOwnFolder(answer.value.own_folder);
       });
     }, PREVIEW_WAIT_MS);
     return () => clearTimeout(timer);
   }, [key, live]);
-  return preview.key === key ? preview.value : { state: "reading" };
+  return { preview: preview.key === key ? preview.value : { state: "reading" }, ownFolder };
 }
 
 /** The agent with its profile and model as an agent start picks them, and its effort (B4, D-07). */
