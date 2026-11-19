@@ -43,6 +43,8 @@ pub mod node_pages;
 pub mod node_uploads;
 mod outside_open;
 pub mod page_forward;
+pub mod pairing;
+pub mod pairing_ssh;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
@@ -55,6 +57,7 @@ pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_host;
 pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
@@ -155,6 +158,8 @@ pub struct RunningDaemon {
     node_attach_socket: std::path::PathBuf,
     node_attach_record: std::path::PathBuf,
     pub mobile: Arc<mobile::Mobile>,
+    /// This machine's endpoint for other Hides; closed by the role's end.
+    pub peers: Arc<peer_host::PeerHost>,
     /// Ended on drop, before the instance lock is released: the core's last
     /// layout and state saves are on disk before another daemon can start,
     /// and before whoever owns the state folder can remove it.
@@ -305,6 +310,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // This machine's name in every key that names it. A machine Hide cannot
     // name refuses to start rather than guess one (PRD core-host-node D-28).
     let node = hide_core::node::NodeId::of_this_machine()?;
+    // The id this machine gives a peer as its product device id.
+    let peer_device = node.to_string();
     // A machine whose core runs elsewhere starts the node role instead.
     if placement::read(&env.state_dir, node.as_str())?.is_some() {
         return Err(
@@ -459,6 +466,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         // amendment 3).
         effects_held: !move_gate.is_open(),
         machine_name: host_name(),
+        windows_drives: hide_host::serve::windows_drives(),
         account_state_folder: env.account_state_folder,
     };
     let effects_held = options.effects_held;
@@ -557,6 +565,54 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         roots: Arc::clone(&roots),
         browser_control: Arc::clone(&browser_control),
     });
+    seat.starting("core.peers");
+    let peers = peer_host::PeerHost::new(
+        peer_host::Settings {
+            state_dir: env.state_dir.clone(),
+            build: build_order::Release::of_this_build().version,
+            device: peer_device.clone(),
+            release: build_order::Release::of_this_build().is_official(),
+            direct: env.peer_direct,
+        },
+        shutdown.clone(),
+    );
+    // Each stream kind's owner hands its handler in here, before the
+    // endpoint opens. The start is not held for the endpoint: a machine
+    // whose network is down still starts, and the reason is in the log.
+    let pairing = pairing::Pairing::new(
+        Arc::clone(&peers),
+        Arc::clone(&core),
+        hide_peer::pairing::Me {
+            name: host_name()
+                .as_deref()
+                .and_then(hide_peer::link::clean_name)
+                .unwrap_or_else(|| peer_device.clone()),
+            device: peer_device,
+        },
+        pairing_ssh::Reach {
+            home: env.home.clone(),
+            command_folder: env.host_cli_dir.clone(),
+        },
+        shutdown.clone(),
+    );
+    {
+        let peers = Arc::clone(&peers);
+        let pairing = Arc::clone(&pairing);
+        tokio::spawn(async move {
+            match peers.start().await {
+                // Paired with something: dial every known host and go on
+                // with what was not settled.
+                Ok(Some(_)) => pairing.started().await,
+                // Nothing to dial: a machine a host dropped is still listed.
+                Ok(None) => pairing.rested().await,
+                Err(error) => hide_core::diagnostic!(serde_json::json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.open_failed",
+                    "reason": error.to_string(),
+                })),
+            }
+        });
+    }
     let app = AppState {
         core: Arc::clone(&core),
         boundary,
@@ -616,6 +672,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "core_instance": core_instance(),
         })),
         mobile: Arc::clone(&mobile),
+        peers: Arc::clone(&peers),
+        pairing: Arc::clone(&pairing),
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),
@@ -637,12 +695,15 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     server::renderers_drawn(&app, false);
     tokio::spawn(pane_auth::serve(
         pane_listener,
-        Arc::clone(&pane_capabilities),
-        Arc::clone(&core),
-        Some(core.engine().clone()),
-        port,
+        pane_auth::Answering {
+            registry: Arc::clone(&pane_capabilities),
+            core: Arc::clone(&core),
+            engine: Some(core.engine().clone()),
+            port,
+            desktop_renderers: Arc::clone(&app.desktop_renderers),
+            pairing,
+        },
         shutdown.clone(),
-        Arc::clone(&app.desktop_renderers),
     ));
     tokio::spawn(attach::serve(
         attach_listener,
@@ -691,6 +752,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         node_attach_socket,
         node_attach_record: attach::attach_record(&env.state_dir),
         mobile,
+        peers,
         core,
         move_gate,
         role_ended,

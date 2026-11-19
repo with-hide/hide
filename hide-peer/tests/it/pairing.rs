@@ -11,7 +11,7 @@ use hide_peer::wire::{read_message, write_message};
 
 use crate::{Machine, granted, within};
 
-async fn read(stream: &mut hide_peer::PeerStream<hide_peer::loopback::LoopConn>) -> Pairing {
+pub async fn read(stream: &mut hide_peer::PeerStream<hide_peer::loopback::LoopConn>) -> Pairing {
     let body = within(
         "a pairing message",
         read_message(&mut stream.recv, MAX_MESSAGE),
@@ -43,6 +43,7 @@ async fn a_guest_runs_nothing_until_both_sides_settled() {
         secret: "5e".repeat(32),
         device: "macbook".into(),
         name: "MacBook".into(),
+        commit: "c0".repeat(32),
     };
     write_message(&mut asking.send, &pair).await.unwrap();
 

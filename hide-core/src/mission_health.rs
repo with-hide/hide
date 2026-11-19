@@ -621,8 +621,8 @@ fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
     !pull.badge.is_settled() && !pull.is_draft && needs(pull).is_empty()
 }
 
-/// The review's failures in a row that warn a node's Conductor
-/// (with-hide/hide-private#552). Fixed: no Settings row sets it.
+/// The failures in a row of a node's review or verification that warn its
+/// Conductor (with-hide/hide-private#552). Fixed: no Settings row sets it.
 pub(crate) const REVIEW_FAILS_THAT_WARN: u32 = 2;
 /// How long a node at work goes with no push before its Conductor is warned.
 pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
@@ -685,11 +685,11 @@ pub(crate) enum WarnAct {
 }
 
 /// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
-/// a node at work in a running mission warns once its review failed
-/// `REVIEW_FAILS_THAT_WARN` times in a row, and once it went
+/// a node at work in a running mission warns once its review or
+/// verification failed `REVIEW_FAILS_THAT_WARN` times in a row, and once it went
 /// `QUIET_THAT_WARNS_MS` with no push
 /// while it had work of its own, a change by pull request whose pull request
-/// does not just wait on others. The first goes when the review passes or
+/// does not just wait on others. The first goes when that line passes or
 /// is skipped, the second when a new push arrives, and both when the node
 /// is no longer at work. A pull request GitHub's answer does not hold now
 /// decides nothing, so a stale answer raises no quiet warning on a node
@@ -1028,11 +1028,11 @@ fn waiting_pull<'a>(
         .then_some(pull)
 }
 
-/// When a checker last answered the node's review.
+/// When a checker last answered the node's review or verification.
 fn last_review_at(node: &MissionNode) -> Option<u64> {
     node.criteria
         .iter()
-        .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
+        .filter(|line| line.kind.checker_judges())
         .flat_map(|line| &line.checkers)
         .filter_map(|checker| checker.at_unix_ms)
         .max()

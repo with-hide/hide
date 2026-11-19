@@ -188,7 +188,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       if (frame.type === "daemon") {
         announcedCore = (frame.payload as { core_instance?: string } | undefined)?.core_instance ?? null;
       }
-      if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "core_link") {
+      if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "pairing" || frame.type === "core_link") {
         useShellStore.getState().applyFrame(frame);
         return;
       }

@@ -15,6 +15,7 @@ import { CoreMoveDialog, requestOfView } from "../settings/CoreMoveDialog";
 import { clientI18n } from "../i18n/translator";
 import { DevicesTab } from "../settings/DevicesTab";
 import { Sidebar } from "../sidebar";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { CORE_MOVE_STATES, CORE_WINDOW_STATES, coreMoveRest, DIALOG_VIEWS, GIVE_UP_STATES, MENU_STATES, NODE_DEVICE, sideOf, WINDOW_STATES, type CoreMoveState } from "./coreMoveSceneData";
@@ -59,7 +60,7 @@ export function CoreMoveScene({ scene, theme, state, content, language }: CoreMo
     // A node's window names its machine in the address, as `hide connect` does.
     window.history.replaceState(null, "", side === "node" ? `${window.location.pathname}${window.location.search}#node=${NODE_DEVICE}` : `${window.location.pathname}${window.location.search}`);
     const shown = WINDOW_STATES[state];
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, connection: shown?.connection ?? "live", coreMove: shown?.move ?? DIALOG_VIEWS[state] ?? null, coreMoveRefusal: null, coreLink: shown?.link ?? null });
+    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, connection: shown?.connection ?? "live", coreMove: shown?.move ?? DIALOG_VIEWS[state] ?? null, coreMoveRefusal: null, coreLink: shown?.link ?? null });
     useUiStore.setState({ screen: { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "herdr-ide" } });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

@@ -280,6 +280,12 @@ fn testing_an_unconnected_device_reports_the_way_out() {
 }
 
 pub(super) fn runtime_with_home() -> Runtime {
+    runtime_showing_drives(None)
+}
+
+/// A runtime on a machine that shows its Windows PC's drives at
+/// `windows_drives`: a WSL distribution, or none for any other machine.
+fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
     let folder = scratch_dir("hide-core-devices-");
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
@@ -297,6 +303,7 @@ pub(super) fn runtime_with_home() -> Runtime {
         local_issues_path: None,
         effects_held: false,
         machine_name: None,
+        windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
     };
     let mut runtime = Runtime::new(
@@ -311,6 +318,31 @@ pub(super) fn runtime_with_home() -> Runtime {
     );
     runtime.test_dirs.push(folder);
     runtime
+}
+
+/// PRD wsl-device B16 for a core that itself runs in a distribution: its own
+/// device row says where the Windows PC's drives show, as a device's helper
+/// reports its own, and a row built again keeps it. Any other machine names
+/// none, so a pasted Windows path stays as typed there.
+#[test]
+fn a_cores_own_device_row_names_where_its_windows_drives_show() {
+    let drives = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .devices
+            .iter()
+            .find(|device| device.kind != "remote")
+            .expect("this machine's row")
+            .host
+            .windows_drives
+            .clone()
+    };
+    let mut distribution = runtime_showing_drives(Some("/mnt"));
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    distribution.rebuild_device_rows();
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    assert_eq!(drives(&runtime_with_home()), None);
 }
 
 /// A real worker resolves the alias with the system `ssh`, which refuses a
@@ -956,4 +988,72 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
         runtime.device_command(core, remove()).err().as_deref(),
         Some("device_unknown")
     );
+}
+
+/// hided tells the core the machines this one is paired with as one list;
+/// the snapshot and `hide device list` then say both directions of each
+/// pair, and a list that is not such a list changes nothing (PRD
+/// device-connect-iroh D-72, B24).
+#[test]
+fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, machines: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": machines }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    let pc = serde_json::json!({
+        "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+        "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
+        "reason": null, "update": null,
+    });
+    assert!(told(&mut runtime, serde_json::json!([pc])));
+    assert!(
+        !told(&mut runtime, serde_json::json!([pc])),
+        "the same list again publishes nothing"
+    );
+    let (answer, _) = runtime
+        .device_command(crate::node::TEST_NODE, DeviceCommand::List)
+        .expect("listed");
+    assert_eq!(
+        answer["peers"],
+        serde_json::json!([{
+            "id": "windows-pc", "name": "Windows PC", "connection_id": "ab".repeat(32),
+            "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
+            "reason": null, "update": null,
+        }])
+    );
+    assert_eq!(answer["devices"], serde_json::json!([]));
+    // A window draws its rows from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["peers"].clone(),
+        )
+    };
+    let (seen, peers) = sent(&mut runtime, 0);
+    assert_eq!(peers[0]["device_id"], "windows-pc");
+    assert_eq!(peers[0]["opened_by"], "paused");
+
+    // A machine paired in neither direction is not a paired machine: the
+    // list is refused whole and the one before it stands.
+    let mut nobody = pc.clone();
+    nobody["opens"] = serde_json::Value::Null;
+    nobody["opened_by"] = serde_json::Value::Null;
+    told(&mut runtime, serde_json::json!([nobody]));
+    assert_eq!(runtime.snapshot.navigator.peers.len(), 1);
+
+    // The store is the owner: an empty list clears it.
+    assert!(told(&mut runtime, serde_json::json!([])));
+    assert!(runtime.snapshot.navigator.peers.is_empty());
+    // A window that drew the machine is told it is gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
 }

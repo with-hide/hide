@@ -164,5 +164,10 @@
   "automation_run_state": ["starting", "running", "succeeded", "failed", "stopped"],
   "automation_pause_reason": ["operator", "login_expired", "folder_missing", "agent_missing", "folder_detached", "machine_changed", "folder_in_repository"],
   "automation_missed_reason": ["core_off", "asleep"],
-  "automation_weekday": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+  "automation_weekday": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+  "peer_opens": ["confirming", "active", "paused", "paused_there", "removing", "unpaired"],
+  "peer_opened_by": ["active", "paused"],
+  "peer_path": ["direct", "relay", "local"],
+  "peer_reason": ["relay_unreachable", "relay_monthly_limit"],
+  "peer_update": ["here", "there"]
 }

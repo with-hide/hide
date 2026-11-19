@@ -49,6 +49,16 @@ impl Release {
         }
     }
 
+    /// Whether this build is an official release: a package numbered it
+    /// and its version is the release's own `MAJOR.MINOR.PATCH`. A local
+    /// package is named `<newest release>-main.<commit>` and a build no
+    /// package made has no number (docs/BUILD.md).
+    pub fn is_official(&self) -> bool {
+        self.order > 0
+            && release_numbers(&self.version).is_some()
+            && !self.version.contains(['-', '+'])
+    }
+
     fn key(&self) -> Option<((u64, u64, u64), u64)> {
         Some((release_numbers(&self.version)?, self.order))
     }
@@ -100,6 +110,21 @@ mod tests {
             version: version.to_owned(),
             order,
             commit: None,
+        }
+    }
+
+    #[test]
+    fn only_a_numbered_package_of_a_plain_release_version_is_official() {
+        assert!(release("1.2.10", 1042).is_official());
+        for (version, order) in [
+            // A local package, a build no package made, and versions that
+            // name no release.
+            ("1.2.10-main.f77c2a43", 1042),
+            ("1.2.10+dirty", 1042),
+            ("0.1.0", 0),
+            ("1.2", 7),
+        ] {
+            assert!(!release(version, order).is_official(), "{version} {order}");
         }
     }
 

@@ -460,11 +460,12 @@ fn serve_in(
     result
 }
 
-/// Where this machine shows the Windows PC's drives, for `Hello`: none on a
-/// machine that is not a WSL distribution, and none, logged, on one whose
-/// `/etc/wsl.conf` cannot be read or names no usable root, so a pasted
-/// Windows path stays as typed rather than becoming a guess.
-fn windows_drives() -> Option<String> {
+/// Where this machine shows the Windows PC's drives, for `Hello` and for a
+/// core's own device row: none on a machine that is not a WSL distribution,
+/// and none, logged, on one whose `/etc/wsl.conf` cannot be read or names
+/// no usable root, so a pasted Windows path stays as typed rather than
+/// becoming a guess.
+pub fn windows_drives() -> Option<String> {
     match hide_platform::host::windows_drives() {
         Ok(root) => Some(root),
         Err(error)
