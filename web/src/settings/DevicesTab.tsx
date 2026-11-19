@@ -14,6 +14,7 @@ import { deviceRemovalLines, draftExported, kitRemovalLine, unstoredDeviceDrafts
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
+import { switchFailureKey } from "../deviceSwitch";
 import { AddByLink, AddDevice } from "./AddDevice";
 import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./CoreMoveDialog";
 import { DeviceDetails } from "./DeviceDetails";
@@ -64,6 +65,8 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   // pairing, and any screen adds an SSH device as before pairing.
   const pairs = useShellStore((s) => deviceConnectOffered(s.daemon));
   const paired = useShellStore((s) => pairedMachines(s.rest).length);
+  // What the last Add over SSH did not add, and why (B41).
+  const notAdded = useShellStore((s) => s.rest?.navigator?.device_not_added ?? null);
   // Adding a machine is this computer's own window's to do (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const canAdd = ownScreen || !pairs;
@@ -144,7 +147,16 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             handlers={handlers}
           />
         ))}
-        {remoteRows.length === 0 && (!pairs || paired === 0) ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
+        {notAdded ? (
+          <Row
+            label={
+              <Note tone="warn" data-device-not-added={notAdded.reason}>
+                {t("devices.notAdded", { name: notAdded.label })} · {t(switchFailureKey(notAdded.reason))}
+              </Note>
+            }
+          />
+        ) : null}
+        {remoteRows.length === 0 && (!pairs || paired === 0) && !notAdded ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
       {adding !== null && canAdd ? (

@@ -112,6 +112,13 @@ pub(crate) struct Place {
     /// describes it, so a mission worker does not come back on another
     /// model (PRD engine-bundle-4-herdr-removal D-24).
     pub(crate) launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
+    /// The open that follows a device's switch to its machine's own
+    /// connection (PRD device-connect-iroh D-49, B36): a saved pane the new
+    /// link holds no holder for closes, where a restore otherwise starts it
+    /// again, and the session names each with its saved agent
+    /// (`ProjectionState::not_carried`) so the core keeps its conversation
+    /// for 이어가기.
+    pub(crate) switched: bool,
 }
 
 /// The engine and whatever it holds, shared by every gated view of it.
@@ -223,8 +230,7 @@ pub(crate) fn open_device(
     device: &str,
     node: Arc<dyn NodeLink>,
     state_dir: &std::path::Path,
-    home: String,
-    windows: bool,
+    link: DeviceLink,
     definitions: Arc<hide_agent_adapter::definition::Catalog>,
     launches: Arc<BTreeMap<String, crate::model::PaneLaunch>>,
 ) -> Result<OwnEngine<'static>, String> {
@@ -233,14 +239,24 @@ pub(crate) fn open_device(
         link_panes(Arc::clone(&node)),
         Place {
             engine_dir,
-            home,
+            home: link.home,
             hooks_records: None,
             node,
-            windows,
+            windows: link.windows,
             definitions,
             launches,
+            switched: link.switched,
         },
     )
+}
+
+/// What one link of a device says of the engine opened for it: the home
+/// and the system its node's hello named, and whether this is the open
+/// that follows the device's switch ([`Place::switched`]).
+pub(crate) struct DeviceLink {
+    pub(crate) home: String,
+    pub(crate) windows: bool,
+    pub(crate) switched: bool,
 }
 
 /// Whether the workspace, tab or pane id `id` is in a workspace this engine
@@ -3834,6 +3850,116 @@ mod tests {
         }
     }
 
+    /// The open after a device's switch (PRD device-connect-iroh D-49, B36,
+    /// review of #2682): a saved pane the new link holds no holder for
+    /// closes and is named with its saved agent, so the core keeps its
+    /// conversation where a new shell under its id would start it a second
+    /// time; a pane whose holder runs is taken as it is. Any other open
+    /// starts the missing ones again, as after a reboot.
+    #[test]
+    fn the_open_after_a_switch_closes_the_panes_its_link_does_not_hold() {
+        use hide_node_link::holders::ScreenState;
+        let root = tempfile::tempdir().unwrap();
+        // As `open_device` makes it.
+        let place = Place {
+            hooks_records: None,
+            ..place(root.path())
+        };
+        let folder = root.path().join("repo");
+        for dir in [&home(&place), &folder] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let first_holders = Holders::found(HolderRecovery::default());
+        first_holders.idle_shell(41, "zsh");
+        let first = OwnEngine::open(
+            Arc::clone(&first_holders) as Arc<dyn PaneHolders>,
+            place.clone(),
+        )
+        .unwrap();
+        let (_, _, carried) = first
+            .create_workspace(WAIT, &wire(&folder), "w", true, Env::new())
+            .unwrap();
+        let split = |at: &str| {
+            first
+                .split_pane_at(
+                    WAIT,
+                    at,
+                    ClosedSplitDirection::Right,
+                    &wire(&folder),
+                    0.5,
+                    Env::new(),
+                )
+                .unwrap()
+        };
+        let agent = split(&carried);
+        let shell = split(&agent);
+        first_holders.say(&agent, &running("2.1.318", ScreenState::Working));
+        first
+            .hook_session(&agent, "claude-code", "s-1", None)
+            .unwrap();
+        drop(first);
+
+        // The connection the switch gave the device holds one of the three.
+        let holders = Arc::new(Holders::default());
+        let next = OwnEngine::open(
+            Arc::clone(&holders) as Arc<dyn PaneHolders>,
+            Place {
+                switched: true,
+                ..place.clone()
+            },
+        )
+        .unwrap();
+        holders.hand(HolderRecovery {
+            owner: 1,
+            present: vec![carried.clone()],
+            ..HolderRecovery::default()
+        });
+        next.restored().unwrap();
+        assert!(holders.started().is_empty(), "{:?}", holders.started());
+        let session = next.session(WAIT).unwrap();
+        let listed: Vec<&str> = session
+            .panes
+            .iter()
+            .map(|pane| pane.pane_id.as_str())
+            .collect();
+        assert_eq!(listed, [carried.as_str()]);
+        let mut left = session.not_carried.clone().expect("what the open closed");
+        left.sort_by(|a, b| a.pane_id.cmp(&b.pane_id));
+        let mut expected = vec![
+            crate::session_sync::NotCarried {
+                pane_id: agent.clone(),
+                cwd: wire(&folder),
+                agent: Some("claude-code".to_owned()),
+                name: None,
+                session: Some("s-1".to_owned()),
+            },
+            crate::session_sync::NotCarried {
+                pane_id: shell.clone(),
+                cwd: wire(&folder),
+                agent: None,
+                name: None,
+                session: None,
+            },
+        ];
+        expected.sort_by(|a, b| a.pane_id.cmp(&b.pane_id));
+        assert_eq!(left, expected);
+        drop(next);
+
+        // The save holds the close: the open after it, an ordinary one,
+        // starts neither again and names nothing.
+        let holders = Arc::new(Holders::default());
+        let later =
+            OwnEngine::open(Arc::clone(&holders) as Arc<dyn PaneHolders>, place.clone()).unwrap();
+        holders.hand(HolderRecovery {
+            owner: 2,
+            present: vec![carried.clone()],
+            ..HolderRecovery::default()
+        });
+        later.restored().unwrap();
+        assert!(holders.started().is_empty(), "{:?}", holders.started());
+        assert_eq!(later.session(WAIT).unwrap().not_carried, None);
+    }
+
     /// 2026-11-06: a restart that failed took the pane's agent with it, so
     /// the next start opened that pane as a bare shell and its conversation
     /// was not resumed. The agent stays the pane's until a start runs it.
@@ -4158,6 +4284,7 @@ mod tests {
             hooks_records: Some(home.join(".hide").join("agent-hooks")),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
+            switched: false,
         }
     }
 

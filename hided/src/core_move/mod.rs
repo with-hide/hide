@@ -14,39 +14,21 @@ pub mod answer;
 pub mod back;
 pub mod control;
 pub mod driver;
-pub mod flags;
 pub mod gate;
 pub mod handover;
 pub mod journal;
 pub mod preflight;
 pub mod screen;
-pub mod starter;
 pub mod target;
 
 use std::io::Read;
 use std::path::Path;
 
-/// The longest intent id.
-const MAX_INTENT: usize = 64;
-
-/// A move's id: lowercase letters, digits and `-`, at most 64.
-pub fn checked_intent(intent: &str) -> Result<&str, String> {
-    if intent.is_empty()
-        || intent.len() > MAX_INTENT
-        || !intent
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
-        return Err(format!("{intent:?} is not a move id"));
-    }
-    Ok(intent)
-}
+pub use crate::core_install::checked_intent;
 
 /// A fresh move id.
 pub fn new_intent() -> String {
-    let mut bytes = [0_u8; 8];
-    getrandom::getrandom(&mut bytes).expect("getrandom");
-    format!("move-{}", hex::encode(bytes))
+    crate::core_install::new_intent("move")
 }
 
 /// Reads a private record of at most `cap` bytes; a record another account

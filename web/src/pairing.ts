@@ -47,13 +47,29 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh" | "switch";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
 
 /** The daemon's answer to one `pairing_*` event, for the window that sent it. */
-export type PairingResult = { verb: string; ok: boolean; reason?: string | null; request_id?: string | null; link?: string; alias?: string; looked?: SshLook };
+export type PairingResult = {
+  verb: string;
+  ok: boolean;
+  reason?: string | null;
+  request_id?: string | null;
+  link?: string;
+  alias?: string;
+  looked?: SshLook;
+  /** `switch`: how the press ended, or what it asks the operator first (hided `Ask::Switch`). */
+  switch?: "done" | "held" | "install_needed";
+  /** `switch`: the helper device the press was for. */
+  device_id?: string;
+  /** `switch` `held`: the computer that switched the device first. */
+  by?: string;
+  /** `switch` `install_needed`: the system of the machine with no Hide. */
+  system?: string;
+};
 
 export type PairRequest = { key: string; state: "waiting" | "declined" | "unanswered" | "unreachable" };
 

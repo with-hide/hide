@@ -73,7 +73,8 @@ it("lists each Host with its address, and fills the name and adds only the alias
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
   // The core gives the device its id: the shell sends none.
-  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true });
+  // Every Add over SSH is added to be switched at once (B41).
+  expect(register[0]?.payload).toEqual({ label: "lab", ssh_alias: "lab", host_consent: true, switch_first: true });
   await unmount();
 });
 

@@ -26,7 +26,7 @@ const CORE_LOG_LOOK_EVERY: Duration = Duration::from_secs(60);
 /// Installs the login item that runs `program` as the core on
 /// `state_dir`, with the folder's marker, which starts it; one already
 /// installed for that folder is replaced, which ends its core. What asks is
-/// never that core: a starter replacing it (`core_move::starter`).
+/// never that core: a starter replacing it (`core_install::starter`).
 pub fn start(
     agents: &UserAgents,
     home: &Path,
@@ -128,7 +128,7 @@ fn put_in(
         && previous.is_proven_running()
         && cfg!(windows)
     {
-        crate::core_move::starter::stop_pid(previous.pid)?;
+        crate::core_install::starter::stop_pid(previous.pid)?;
     }
     Ok(())
 }
@@ -234,7 +234,7 @@ pub fn exited_at_start(
 
 /// What the core's login item runs it with: the account's home and the
 /// state folder. A move's checks of the account's logins run with it too
-/// (`core_move::preflight`).
+/// (`core_install::checks`).
 pub fn core_environment(home: &Path, state_dir: &Path) -> Result<Vec<(String, String)>, String> {
     let environment = vec![
         ("HOME".to_owned(), home.to_string_lossy().into_owned()),
