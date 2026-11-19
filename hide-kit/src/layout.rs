@@ -326,16 +326,6 @@ pub fn access_keys(home: &Path) -> PathBuf {
     hide_home(home).join("access")
 }
 
-/// The operator's MCP keys, the values of the variables and headers of the
-/// MCP servers in the store (PRD skill-mcp-manager D-11): one owner-only
-/// file in the store's folder (`crate::mcp_keys`), the only place Hide keeps
-/// a key, so a device keeps its own with its store.
-pub const MCP_KEYS: &str = "mcp-keys.json";
-
-pub fn mcp_keys(store_dir: &Path) -> PathBuf {
-    store_dir.join(MCP_KEYS)
-}
-
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
 

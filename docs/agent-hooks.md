@@ -628,7 +628,9 @@ Codex's `config.toml` was a file only Codex wrote (its trust of Hide's hooks and
 
 ### MCP keys
 
-A variable's or header's value, an API key or anything the operator typed there, is kept in one file, `mcp-keys.json` in the store's folder (`hide_kit::mcp_keys`, `hide_kit::layout::mcp_keys`), owner-only on every system (0600 on macOS and Linux, an access list naming only the account on Windows), and a key file anyone else could read or change is refused rather than read (B10, D-11).
+A variable's or header's value, an API key or anything the operator typed there, is kept in `keys.json` in the store's folder of the item it belongs to (`hide_kit::mcp_keys`), owner-only on every system (0600 on macOS and Linux, an access list naming only the account on Windows), and a key file anyone else could read or change is refused rather than read (B10, D-11).
+The file goes where its item's folder goes: a delete moves it to the undo list with the item and a restore brings it back, so the agents' files lose the server at once while Hide alone keeps the key, and a permanent delete removes it (B18, D-39).
+Two items of one name, one in the store and one in the undo list, therefore never share a key.
 It is the only place Hide keeps a key: the store's record, the screen, the wire and the logs carry a server with the names of its keys and never a value, and a key reaches an agent's file only when the converter writes it.
 A value prints as `••••` wherever a key is formatted, and a failure of the key file never quotes it, since a parser's message can quote the value it stopped at (B13).
 A key that starts with `!` is refused for every agent: Pi and omp run such a value as a shell command in place of the value, and `${NAME}` in a value is expanded by them too.
