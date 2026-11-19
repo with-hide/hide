@@ -330,8 +330,14 @@ pub enum MissedReason {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Entry {
     Run(Run),
+    /// Times skipped in a row for one reason, one line (D-14, D-16): from
+    /// `at_unix_ms` to `last_unix_ms`, `count` of them.
     Skipped {
         at_unix_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_unix_ms: Option<u64>,
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        count: u32,
         reason: SkipReason,
     },
     /// The times that passed while nothing could run them, one line (D-15).
@@ -343,7 +349,25 @@ pub enum Entry {
     },
 }
 
+fn one() -> u32 {
+    1
+}
+
+fn is_one(count: &u32) -> bool {
+    *count == 1
+}
+
 impl Entry {
+    /// One time skipped for `reason`.
+    pub fn skipped(at_unix_ms: u64, reason: SkipReason) -> Self {
+        Self::Skipped {
+            at_unix_ms,
+            last_unix_ms: None,
+            count: 1,
+            reason,
+        }
+    }
+
     fn run(&self) -> Option<&Run> {
         match self {
             Self::Run(run) => Some(run),
@@ -471,6 +495,26 @@ impl Automation {
         })
     }
 
+    /// A time skipped for `reason` (D-14, D-16): one right after a line
+    /// skipped for the same reason joins that line, so a five-minute
+    /// schedule's skips do not push its runs and their answers out of the
+    /// records; a run or a missed line between starts a new one.
+    pub fn skip(&mut self, at_unix_ms: u64, reason: SkipReason) {
+        if let Some(Entry::Skipped {
+            last_unix_ms,
+            count,
+            reason: last,
+            ..
+        }) = self.records.last_mut()
+            && *last == reason
+        {
+            *last_unix_ms = Some(at_unix_ms);
+            *count = count.saturating_add(1);
+            return;
+        }
+        self.push(Entry::skipped(at_unix_ms, reason));
+    }
+
     /// Adds a record, dropping the oldest ones past the cap that nothing
     /// holds (B28).
     pub fn push(&mut self, entry: Entry) {
@@ -522,10 +566,7 @@ impl Automation {
             .iter_mut()
             .find(|entry| matches!(entry, Entry::Run(run) if run.number == number))
         {
-            *entry = Entry::Skipped {
-                at_unix_ms,
-                reason: SkipReason::UsageLimit { agent },
-            };
+            *entry = Entry::skipped(at_unix_ms, SkipReason::UsageLimit { agent });
         }
     }
 
@@ -935,8 +976,11 @@ pub struct RecentSpend {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordSnapshot {
     Run(RunSnapshot),
+    /// From `at_unix_ms` to `last_unix_ms`, `count` times in a row.
     Skipped {
         at_unix_ms: u64,
+        last_unix_ms: u64,
+        count: u32,
         reason: SkipReason,
     },
     Missed {
@@ -1035,8 +1079,15 @@ impl AutomationsSnapshot {
                             seen: run.seen,
                             spend: run.spend,
                         }),
-                        Entry::Skipped { at_unix_ms, reason } => RecordSnapshot::Skipped {
+                        Entry::Skipped {
+                            at_unix_ms,
+                            last_unix_ms,
+                            count,
+                            reason,
+                        } => RecordSnapshot::Skipped {
                             at_unix_ms: *at_unix_ms,
+                            last_unix_ms: last_unix_ms.unwrap_or(*at_unix_ms),
+                            count: *count,
                             reason: reason.clone(),
                         },
                         Entry::Missed {
@@ -1348,21 +1399,51 @@ mod tests {
         run.state = RunState::Succeeded;
         run.opened = Some(Opened::default());
         for index in 0..60 {
-            automation.push(Entry::Skipped {
-                at_unix_ms: now + index * HOUR,
-                reason: SkipReason::PreviousRunning,
-            });
+            automation.push(Entry::skipped(
+                now + index * HOUR,
+                SkipReason::PreviousRunning,
+            ));
         }
         assert_eq!(automation.records.len(), RECORD_CAP);
         assert!(automation.run_mut(open).is_some(), "an open run is kept");
         assert_eq!(
             automation.records[1],
-            Entry::Skipped {
-                at_unix_ms: now + 11 * HOUR,
-                reason: SkipReason::PreviousRunning,
-            },
+            Entry::skipped(now + 11 * HOUR, SkipReason::PreviousRunning),
             "the oldest skips went first"
         );
+    }
+
+    /// D-14, D-16: times skipped in a row for one reason are one line with
+    /// their count and first and last time; a run between, or another
+    /// reason, starts a new line.
+    #[test]
+    fn skips_in_a_row_for_one_reason_are_one_line() {
+        let now = at("2026-11-19T14:00");
+        let mut automation = automation(Schedule::EveryMinutes { minutes: 5 }, now);
+        let limit = || SkipReason::UsageLimit {
+            agent: "claude".into(),
+        };
+        for index in 0..60 {
+            automation.skip(now + index * 5 * 60_000, limit());
+        }
+        automation.skip(now + 300 * 60_000, SkipReason::PreviousRunning);
+        automation.new_run(Trigger::Scheduled, None, now + 305 * 60_000);
+        automation.skip(now + 310 * 60_000, SkipReason::PreviousRunning);
+        assert_eq!(
+            automation.records,
+            [
+                Entry::Skipped {
+                    at_unix_ms: now,
+                    last_unix_ms: Some(at("2026-11-19T18:55")),
+                    count: 60,
+                    reason: limit(),
+                },
+                Entry::skipped(now + 300 * 60_000, SkipReason::PreviousRunning),
+                automation.records[2].clone(),
+                Entry::skipped(now + 310 * 60_000, SkipReason::PreviousRunning),
+            ]
+        );
+        assert!(matches!(automation.records[2], Entry::Run(_)));
     }
 
     /// B13: the first run gets the task alone; the next one the last run's
@@ -1411,12 +1492,12 @@ mod tests {
         automation.skip_run(refused, now + 2 * HOUR);
         assert_eq!(
             automation.records[1],
-            Entry::Skipped {
-                at_unix_ms: now + 2 * HOUR,
-                reason: SkipReason::UsageLimit {
+            Entry::skipped(
+                now + 2 * HOUR,
+                SkipReason::UsageLimit {
                     agent: "claude".into()
                 },
-            }
+            )
         );
         let next = automation.new_run(Trigger::Manual, None, now + 3 * HOUR);
         assert!(
@@ -1454,10 +1535,7 @@ mod tests {
         let now = at("2026-11-19T09:00");
         let mut automation = automation(daily("09:00"), now);
         automation.records = (0..70)
-            .map(|index| Entry::Skipped {
-                at_unix_ms: index,
-                reason: SkipReason::PreviousRunning,
-            })
+            .map(|index| Entry::skipped(index, SkipReason::PreviousRunning))
             .collect();
         let stored = Stored {
             automations: vec![automation],

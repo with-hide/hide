@@ -621,10 +621,7 @@ impl Runtime {
             automation.push(line);
         }
         if automation.active_run().is_some() {
-            automation.push(Entry::Skipped {
-                at_unix_ms: now,
-                reason: SkipReason::PreviousRunning,
-            });
+            automation.skip(now, SkipReason::PreviousRunning);
             return;
         }
         let trigger = if missed {
@@ -636,10 +633,7 @@ impl Runtime {
             Gate::Go => {
                 automation.new_run(trigger, Some(due.due_unix_ms), now);
             }
-            Gate::Skip(reason) => automation.push(Entry::Skipped {
-                at_unix_ms: now,
-                reason,
-            }),
+            Gate::Skip(reason) => automation.skip(now, reason),
             Gate::Pause(reason) => {
                 let number = automation.new_run(trigger, Some(due.due_unix_ms), now);
                 let id = automation.id.clone();

@@ -1077,6 +1077,7 @@ Times that passed while the core was off (the first tick) or the machine slept (
 Runs are followed at most once a second, and a core waiting for its move's link starts nothing.
 
 One run goes at a time: a time that comes while the automation's run is starting or running is a skipped line (D-14), and a finished run whose terminal is still open does not hold the next time.
+Times skipped in a row for the same reason (the run still going, or the same agent at its limit) are one line with their count and first and last time (`Automation::skip`; the record's `count` and `last_unix_ms`), as the missed times are, so a five-minute schedule's skips do not push the runs and their answers out of the 50 records; a run or a missed line between starts a new line.
 Before a run starts, the account its agent runs in is judged from the usage the core already reads: a profile's own account, or the agent's default account when the profile shares it (`UsageModel::account_limits`).
 Signed out or not installed stops the automation for a person (D-12, D-17), and 100% before its reset skips a scheduled time; an account it cannot read runs (D-16).
 A run asked for with run now, the first run of an automation made with it included, is judged the same, except for the limit.

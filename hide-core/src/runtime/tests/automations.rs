@@ -189,7 +189,7 @@ fn a_time_at_the_usage_limit_is_skipped_and_a_manual_run_still_starts() {
     assert_eq!(
         records(&mut runtime, &id),
         [json!({
-            "kind": "skipped", "at_unix_ms": due,
+            "kind": "skipped", "at_unix_ms": due, "last_unix_ms": due, "count": 1,
             "reason": {"kind": "usage_limit", "agent": "claude"},
         })]
     );
@@ -1774,7 +1774,7 @@ fn a_turn_refused_for_the_usage_limit_skips_the_run_without_a_retry() {
     assert_eq!(
         harness.records(&id),
         [json!({
-            "kind": "skipped", "at_unix_ms": refused_at,
+            "kind": "skipped", "at_unix_ms": refused_at, "last_unix_ms": refused_at, "count": 1,
             "reason": {"kind": "usage_limit", "agent": "claude"},
         })]
     );
