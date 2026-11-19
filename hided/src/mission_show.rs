@@ -256,9 +256,9 @@ fn waits_on(node: &Value) -> Result<Option<String>, String> {
         WaitingOn::Nodes { keys } => format!(
             "기다림 {}",
             keys.iter()
-                .map(|key| match key.split_once(':') {
-                    Some((node, line)) => format!("{node} 줄 {line}"),
-                    None => key.clone(),
+                .map(|key| match &key.line {
+                    Some(line) => format!("{} 줄 {line}", key.node),
+                    None => key.node.clone(),
                 })
                 .collect::<Vec<_>>()
                 .join(", ")

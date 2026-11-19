@@ -411,41 +411,16 @@ fn node_work(
     }
 }
 
-/// Whether the dependency `key` of a node of `mission` is met, and when:
-/// `None` while it is not, else when it was met, which is none when the
-/// record cannot say (a key naming no node holds nothing back, and a book
-/// may keep no finish time). A plain key is met when its node is done, at
-/// its finish; `<node>:<line>` also when that line passed or was skipped,
-/// at its record. The one rule a planned node waits by (`waiting_on`),
-/// could start by (`mission_health::could_start`) and is told about by
-/// (`mission_health::follow_lines`).
-pub(crate) fn dependency_met(
-    mission: &Mission,
-    key: &crate::missions::Dependency,
-) -> Option<Option<u64>> {
-    let Some(before) = mission.node(&key.node) else {
-        return Some(None);
-    };
-    if before.status == NodeStatus::Done {
-        return Some(before.finished_at_unix_ms);
-    }
-    let line = key.line.as_deref()?;
-    before
-        .criteria
-        .iter()
-        .find(|known| {
-            known.key == line
-                && matches!(known.state, CriterionState::Pass | CriterionState::Skipped)
-        })
-        .map(|known| known.by.as_ref().map(|by| by.at_unix_ms))
-}
-
 /// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
 /// first, then the decision that stopped it, then by its status what it has
 /// not met. A planned node waits on the nodes before it, a working one on
 /// its first line not met (a failed line is its worker's), then its pull
 /// request's merge, and a done one on the merge left before main.
-fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
+fn waiting_on(
+    mission: &Mission,
+    view: &NodeView,
+    lines: &[crate::missions::LinesNow],
+) -> Option<WaitingOn> {
     if let Some(attention) = &view.attention {
         return Some(WaitingOn::Attention {
             to: attention.to,
@@ -469,11 +444,11 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             {
                 return Some(WaitingOn::Decision);
             }
-            let keys: Vec<String> = view
+            let keys: Vec<crate::missions::Dependency> = view
                 .depends_on
                 .iter()
-                .filter(|key| dependency_met(mission, key).is_none())
-                .map(ToString::to_string)
+                .filter(|key| mission.dependency_met(key, lines).is_none())
+                .cloned()
                 .collect();
             Some(if keys.is_empty() {
                 WaitingOn::Start
@@ -1230,7 +1205,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 .as_ref()
                 .map_or_else(|| "-".to_owned(), ToString::to_string);
             news(
-                format!("Node {} can start: line {line} passed", wake.node),
+                format!("Node {} can start: line {line} is met", wake.node),
                 &start_words(mission, node),
             )
         }
@@ -1272,15 +1247,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 .filter(|_| wake.reason == Some(crate::missions::AttentionReason::NotStarted));
             let (what, act) = match owed {
                 Some(line) => fix_owed_words(line),
-                None if wake.reason == Some(crate::missions::AttentionReason::NotStarted)
-                    && node.is_some_and(|node| mission.stacks_on(node).is_some()) =>
-                {
-                    (
-                        "it could start and was not started".to_owned(),
-                        start_words(mission, node),
-                    )
-                }
-                None => attention_words(wake.reason, &pr),
+                None => attention_words(wake.reason, &pr, &start_words(mission, node)),
             };
             news(
                 format!("Node {} needs you to look: {what}", wake.node),
@@ -1425,7 +1392,13 @@ fn fix_owed_words(line: &str) -> (String, String) {
 /// What a raise tells the Conductor, and what it asks of it. A stall ends
 /// its ask with when the operator is shown it: one left standing is held in
 /// the mission's safety net (`mission_health::SAFETY_NET_AFTER_MS`).
-fn attention_words(reason: Option<crate::missions::AttentionReason>, pr: &str) -> (String, String) {
+/// `start` is how its worker starts (`start_words`), which a node that
+/// could start is asked to do.
+fn attention_words(
+    reason: Option<crate::missions::AttentionReason>,
+    pr: &str,
+    start: &str,
+) -> (String, String) {
     use crate::missions::AttentionReason as Reason;
     let raise = |what: String, act: &str| (what, act.to_owned());
     let stall = |what: String, act: &str| {
@@ -1466,7 +1439,9 @@ fn attention_words(reason: Option<crate::missions::AttentionReason>, pr: &str) -
         ),
         Some(Reason::NotStarted) => stall(
             "it could start and was not started".to_owned(),
-            "start its worker; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`",
+            &format!(
+                "{start}; or, to hold it, hold the node with `hide mission node <key> --hold <why> --for <30m|2h>`, wait on a pull request as an `external` node, or hold the mission with `hide mission delay --line <why> --for <30m|2h>`"
+            ),
         ),
         Some(Reason::WaitStood) => stall(
             format!("{pr} has waited over an hour on CI, a review or the merge"),
@@ -1642,6 +1617,14 @@ fn wake_key(wake: &PendingWake) -> String {
         WakeEvent::Ci => format!(
             "{fact}:{}",
             wake.ci.as_ref().map_or("-", |ci| ci.result.as_str())
+        ),
+        // Each line is its own letter, and each time it moves again.
+        WakeEvent::LineMet | WakeEvent::LineReopened => format!(
+            "{fact}:{}:{}",
+            wake.line
+                .as_ref()
+                .map_or_else(|| "-".to_owned(), ToString::to_string),
+            super::unix_milliseconds()
         ),
         WakeEvent::Merged
         | WakeEvent::ChangesRequested
@@ -4837,6 +4820,7 @@ impl Runtime {
         let blocked = mission.blocked();
         let conductor_present = self.conductor_present(&mission.conductor.actor);
         let operator_waits = self.operator_waits(mission);
+        let lines = self.lines_now(mission);
         let nodes = mission
             .nodes
             .iter()
@@ -4999,7 +4983,7 @@ impl Runtime {
                         github.is_some_and(|pulls| crate::mission_health::merge_ready(node, pulls)),
                     ),
                 };
-                view.waiting_on = waiting_on(mission, &view);
+                view.waiting_on = waiting_on(mission, &view, &lines);
                 let activity = record.and_then(|record| self.worker_activity(record));
                 // The map draws a stop, and a worker gone, from when a
                 // warning judgment first saw it (`stop_clock`), so not

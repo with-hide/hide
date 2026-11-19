@@ -144,7 +144,8 @@ impl Runtime {
                     && (!line.shown.is_empty() || self.own_lines_met(mission, node))
             }
             GateWhen::Start => {
-                crate::mission_health::could_start(mission, node) && open_fix(node).is_none()
+                crate::mission_health::could_start(mission, node, &self.lines_now(mission))
+                    && open_fix(node).is_none()
             }
         }
     }

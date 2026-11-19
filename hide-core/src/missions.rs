@@ -354,11 +354,11 @@ pub enum WaitingOn {
     Decision,
     /// A node it depends on was dropped.
     Blocked,
-    /// The dependencies it names that are not met (`dependency_met`), in its
-    /// order, each as written: `<node>`, or `<node>:<line>` for a finish
-    /// line of it.
+    /// The dependencies it names that are not met
+    /// (`Mission::dependency_met`), in its order, each written as the plan
+    /// wrote it: `<node>`, or `<node>:<line>` for a finish line of it.
     Nodes {
-        keys: Vec<String>,
+        keys: Vec<Dependency>,
     },
     /// Nothing before it: it waits to be started.
     Start,
@@ -879,11 +879,12 @@ pub enum WakeEvent {
     /// The operator's answer to a node's gate sent it back with their words
     /// as a defect: to the Conductor, and to the node's worker (`to`).
     GateFix,
-    /// The finish line `line` names passed and the node could start now,
+    /// The finish line `line` names is met and the node could start now,
     /// stacked on the node that line is of (`Mission::stacks_on`).
     LineMet,
-    /// Finish line `line` of the node opened again (failed, or opened by a
-    /// new head or a defect) after nodes that wait on it started; they go on.
+    /// Finish line `line` of the node opened again (failed, reopened, or a
+    /// check passed on a commit its work folder left, `Criterion::shown`)
+    /// after nodes that wait on it started; they go on.
     LineReopened,
 }
 
@@ -1895,18 +1896,55 @@ impl Mission {
                 .is_some_and(|question| question.names(key))
     }
 
-    /// The code node `node` starts on by one of its finish lines
-    /// (`<node>:<line>`) rather than by its merge: `node`'s branch starts
-    /// from that node's branch and its pull request takes that branch as
-    /// its base. A plan names at most one node by a line
-    /// (`mission_dependency_stack_split`); none when it names none, or a
-    /// node that leaves no branch.
+    /// The pull-request change `node`, itself one, starts on by one of its
+    /// finish lines (`<node>:<line>`) rather than by its merge: `node`'s
+    /// branch starts from that node's branch and its pull request takes
+    /// that branch as its base. A plan names at most one node by a line
+    /// (`mission_dependency_stack_split`); none when it names none, or when
+    /// either node opens no pull request.
     pub(crate) fn stacks_on(&self, node: &MissionNode) -> Option<&MissionNode> {
+        if !pull_change(node) {
+            return None;
+        }
         node.depends_on
             .iter()
             .find(|dependency| dependency.line.is_some())
             .and_then(|dependency| self.node(&dependency.node))
-            .filter(|lower| lower.kind == NodeKind::Change)
+            .filter(|lower| pull_change(lower))
+    }
+
+    /// When `key`, a dependency of a node of this mission, is met: `None`
+    /// while it is not, else when, which is none when the record cannot say
+    /// (a key naming no node holds nothing back, and a book may keep no
+    /// finish time). A plain key is met when its node is done, at its
+    /// finish; `<node>:<line>` also when that line is met now as its owner
+    /// shows it (`Criterion::met` against the node's heads, read into
+    /// `lines` by `Runtime::lines_now`), at the line's record, so a check
+    /// line passed on an older commit is open again. A dropped node meets
+    /// nothing. The one rule a planned node waits by (`waiting_on`), could
+    /// start by (`mission_health::could_start`) and is told about by
+    /// (`mission_health::follow_lines`).
+    pub(crate) fn dependency_met(
+        &self,
+        key: &Dependency,
+        lines: &[LinesNow],
+    ) -> Option<Option<u64>> {
+        let Some(at) = self.nodes.iter().position(|node| node.key == key.node) else {
+            return Some(None);
+        };
+        let before = &self.nodes[at];
+        match before.status {
+            NodeStatus::Done => return Some(before.finished_at_unix_ms),
+            NodeStatus::Dropped => return None,
+            NodeStatus::Planned | NodeStatus::Working => {}
+        }
+        let line = key.line.as_deref()?;
+        let known = before.criteria.iter().find(|known| known.key == line)?;
+        // A node `lines` was not read for shows no line met.
+        let open = lines
+            .get(at)
+            .is_none_or(|now| now.unmet.iter().any(|unmet| unmet == line));
+        (!open).then(|| known.by.as_ref().map(|by| by.at_unix_ms))
     }
 
     /// The node a spawn's intent names as its worker's,
@@ -1966,10 +2004,28 @@ impl crate::dag::Node for NodeInput {
     }
 }
 
+/// Whether `node` is a change that reaches its destination through a pull
+/// request, the only node a stack holds.
+fn pull_change(node: &MissionNode) -> bool {
+    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Pr)
+}
+
+/// A node's finish lines as their owner shows them now
+/// (`Runtime::lines_now`), which a dependency on one of them reads
+/// (`Mission::dependency_met`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinesNow {
+    /// The keys of its lines not met now (`Runtime::node_unmet`).
+    pub unmet: Vec<String>,
+    /// Hide read the commit its work folder is on: a check line it cannot
+    /// read shows open, which is not known to be open again.
+    pub head_read: bool,
+}
+
 /// One entry of a node's `depends_on`, written as the plan wrote it: another
 /// node, `<node>`, met once that node is done, or one finish line of it,
-/// `<node>:<line>`, met once that line passes or is skipped, or the node is
-/// done (`Mission::met`). A node key has no `:`, so each text reads one
+/// `<node>:<line>`, met once that line is met, or the node is done
+/// (`Mission::dependency_met`). A node key has no `:`, so each text reads one
 /// way, and a plan of plain keys reads and writes as it did.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(from = "String", into = "String")]
@@ -3269,15 +3325,17 @@ pub(crate) fn apply_plan(
     if edges.is_err() {
         return Err("mission_dependency_cycle".into());
     }
-    // A stacked pull request merges after the one under it.
+    // A stacked pull request merges after the one under it; a node the
+    // order leaves out merges after every node it names
+    // (`mission_landing::landing_order`).
     let merged_at = |key: &str| input.merge_order.iter().position(|named| named == key);
     for node in &input.nodes {
         if let Some(lower) = node
             .depends_on
             .iter()
             .find(|dependency| dependency.line.is_some())
-            && let (Some(upper), Some(below)) = (merged_at(&node.key), merged_at(&lower.node))
-            && upper < below
+            && let Some(upper) = merged_at(&node.key)
+            && merged_at(&lower.node).is_none_or(|below| upper < below)
         {
             return Err(crate::coordination::refusal(
                 "mission_merge_order_stack",
@@ -4036,7 +4094,7 @@ pub fn next_action(code: &str) -> &'static str {
             "A node stacks on one node only: name finish lines of one node in depends_on, and wait on any other by its key alone"
         }
         "mission_merge_order_stack" => {
-            "Put the node a stacked node waits on by a line before it in merge_order: a stacked pull request merges after the one under it"
+            "Name the node a stacked node waits on by a line before it in merge_order, or leave both out: a stacked pull request merges after the one under it, and a node merge_order leaves out merges after every node it names"
         }
         "mission_delivery_required" | "mission_delivery_invalid" => {
             "Give each change node a delivery (pr or direct) and no other node one"
@@ -4783,9 +4841,68 @@ pub(crate) mod tests {
             refused(upside_down),
             ("mission_merge_order_stack".into(), Some("host".into()))
         );
+        let mut lower_left_out = stacked.clone();
+        lower_left_out.merge_order = vec!["host".into()];
+        assert_eq!(
+            refused(lower_left_out),
+            ("mission_merge_order_stack".into(), Some("host".into()))
+        );
+        let mut both_left_out = stacked.clone();
+        both_left_out.merge_order = Vec::new();
+        assert!(apply_plan(&mission(), &both_left_out, 2).is_ok());
         let mut in_order = stacked;
         in_order.merge_order = vec!["core".into(), "host".into()];
         assert!(apply_plan(&mission(), &in_order, 2).is_ok());
+    }
+
+    /// A dependency on a line reads the line as its owner shows it now
+    /// (`LinesNow`, so a check passed on a commit the folder left is not
+    /// met), a dropped node meets nothing, and only a pull-request change
+    /// stacks, on a pull-request change.
+    #[test]
+    fn a_line_dependency_reads_the_line_as_shown_and_stacks_only_pull_requests() {
+        let mut planned = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c1"]),
+                node("note", NodeKind::General, &["core:c1"]),
+            ]),
+            2,
+        )
+        .unwrap();
+        planned.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
+        let key = Dependency::from("core:c1");
+        let shown = |unmet: &[&str]| {
+            let core = LinesNow {
+                unmet: unmet.iter().map(|key| (*key).to_owned()).collect(),
+                head_read: true,
+            };
+            vec![core, LinesNow::default(), LinesNow::default()]
+        };
+        assert!(planned.dependency_met(&key, &shown(&[])).is_some());
+        assert_eq!(planned.dependency_met(&key, &shown(&["c1"])), None);
+        assert_eq!(planned.dependency_met(&key, &[]), None, "a node not read");
+        planned.nodes[0].status = NodeStatus::Dropped;
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), None);
+        planned.nodes[0].status = NodeStatus::Working;
+
+        let on = |mission: &Mission, at: usize| {
+            mission
+                .stacks_on(&mission.nodes[at])
+                .map(|lower| lower.key.clone())
+        };
+        assert_eq!(on(&planned, 1).as_deref(), Some("core"));
+        assert_eq!(on(&planned, 2), None, "a general node has no branch");
+        planned.nodes[1].delivery = Some(Delivery::Direct);
+        assert_eq!(
+            on(&planned, 1),
+            None,
+            "a direct change opens no pull request"
+        );
+        planned.nodes[1].delivery = Some(Delivery::Pr);
+        planned.nodes[0].delivery = Some(Delivery::Direct);
+        assert_eq!(on(&planned, 1), None, "nothing to stack on");
     }
 
     /// mission-82 c2: a node written with plain keys reads and writes its

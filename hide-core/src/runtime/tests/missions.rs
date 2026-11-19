@@ -17852,7 +17852,7 @@ fn a_node_waiting_on_a_line_starts_when_it_passes_stacked_on_that_branch_and_mer
     let mission = runtime.missions.book.get("mission-1").unwrap();
     let body = crate::runtime::missions::wake_body(mission, &told[0]);
     assert!(
-        body.contains("line core:c1 passed") && body.contains("gh pr create --base m82/core"),
+        body.contains("line core:c1 is met") && body.contains("gh pr create --base m82/core"),
         "{body}"
     );
     // The same facts judged again tell nothing more.
@@ -17910,6 +17910,164 @@ fn a_node_waiting_on_a_line_starts_when_it_passes_stacked_on_that_branch_and_mer
     let host = node_view(&runtime, "host");
     assert_eq!(host.stack, None);
     assert_eq!(host.waiting_on, Some(WaitingOn::Merge));
+}
+
+/// A check line passed on one commit is met only while the work folder is
+/// on it, as the map shows it: once core's folder moves on, the node that
+/// started on `core:check` is told the line opened again, and a node that
+/// had not started waits on it again.
+#[test]
+fn a_check_line_passed_on_a_commit_the_folder_left_opens_again_for_the_nodes_waiting_on_it() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Contract first"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+            {"key": "core", "title": "Core", "kind": "change", "delivery": "pr",
+             "criteria": ["the wire is fixed"]},
+            {"key": "host", "title": "Host", "kind": "change", "delivery": "pr",
+             "depends_on": ["core:check"], "criteria": ["the host reads the wire"]},
+            {"key": "desk", "title": "Desk", "kind": "change", "delivery": "pr",
+             "depends_on": ["core:check"], "criteria": ["the desk reads the wire"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "core", "patch": {"agent_id": "agent-2", "branch": "m82/core", "pr": 11}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("core", "check", json!({"commit": &HEAD[..7]})),
+    )
+    .unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert_eq!(
+        node_view(&runtime, "desk").waiting_on,
+        Some(WaitingOn::Start)
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "host", "patch": {"agent_id": "agent-3"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 1);
+    assert!(line_wakes(&runtime, WakeEvent::LineReopened).is_empty());
+
+    checkout_at(&mut runtime, &"f".repeat(40));
+    runtime.drive_mission_health(now + 2);
+    runtime.drive_mission_health(now + 3);
+    let told = line_wakes(&runtime, WakeEvent::LineReopened);
+    assert_eq!(told.len(), 1, "one letter for one opening");
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let body = crate::runtime::missions::wake_body(mission, &told[0]);
+    assert!(
+        body.contains("Line core:check opened again") && body.contains("(host)"),
+        "{body}"
+    );
+    assert_eq!(node_view(&runtime, "host").status, NodeStatus::Working);
+    assert_eq!(
+        node_view(&runtime, "desk").waiting_on,
+        Some(WaitingOn::Nodes {
+            keys: vec!["core:check".into()]
+        })
+    );
+}
+
+/// Two lines of one node that open again in one evaluation are two letters,
+/// and a held node whose line passes is not told it can start: its hold
+/// keeps any worker off it.
+#[test]
+fn each_line_that_opens_again_is_its_own_letter_and_a_held_node_is_not_told_to_start() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Contract first"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "core", "title": "Core", "kind": "change", "delivery": "pr",
+             "criteria": ["the wire is fixed", "the schema is fixed"]},
+            {"key": "host", "title": "Host", "kind": "change", "delivery": "pr",
+             "depends_on": ["core:c1", "core:c2"], "criteria": ["the host reads the wire"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "core", "patch": {"agent_id": "agent-2", "branch": "m82/core"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "host", "patch": {"hold": {"why": "tonight", "for_minutes": 30}}}),
+    )
+    .unwrap();
+    for line in ["c1", "c2"] {
+        command(
+            &mut runtime,
+            "recipient",
+            record_of("core", line, json!({})),
+        )
+        .unwrap();
+    }
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now);
+    assert!(line_wakes(&runtime, WakeEvent::LineMet).is_empty(), "held");
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "host", "patch": {"hold": null, "agent_id": "agent-3"}}),
+    )
+    .unwrap();
+    runtime.drive_mission_health(now + 1);
+    for line in ["c1", "c2"] {
+        command(
+            &mut runtime,
+            "recipient",
+            record_of("core", line, json!({"pass": false, "evidence": "moved"})),
+        )
+        .unwrap();
+    }
+    runtime.drive_mission_health(now + 2);
+    let told: Vec<String> = line_wakes(&runtime, WakeEvent::LineReopened)
+        .iter()
+        .filter_map(|wake| wake.line.as_ref().map(ToString::to_string))
+        .collect();
+    assert_eq!(told, ["core:c1", "core:c2"]);
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let intents: std::collections::HashSet<String> = mission
+        .wakes
+        .iter()
+        .filter(|wake| wake.event == WakeEvent::LineReopened)
+        .map(|wake| crate::runtime::missions::wake_intent(mission, wake))
+        .collect();
+    assert_eq!(intents.len(), 2, "two letters, not one kept twice");
 }
 
 /// mission-82 c2: a line that opens again after the nodes waiting on it

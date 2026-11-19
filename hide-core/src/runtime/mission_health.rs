@@ -51,6 +51,10 @@ pub(crate) struct HealthMadeFrom {
     sleeping: crate::coordination::RegistrationFacts,
     present: Vec<bool>,
     stale: Vec<bool>,
+    /// Each mission's lines another node waits on, as they show now
+    /// (`Runtime::lines_now`): a commit that opens a check line again moves
+    /// nothing else the evaluation reads.
+    lines: Vec<Vec<crate::missions::LinesNow>>,
     made: bool,
 }
 
@@ -67,6 +71,7 @@ impl PartialEq for HealthMadeFrom {
             && self.sleeping == other.sleeping
             && self.present == other.present
             && self.stale == other.stale
+            && self.lines == other.lines
             && self.made == other.made
     }
 }
@@ -548,15 +553,19 @@ pub(super) fn closing_report(mission: &Mission) -> String {
 }
 
 /// Brings each node's finish-line dependencies (`<node>:<line>`) to where
-/// they stand now (`MissionNode::lines_met`) and tells the Conductor what
-/// moved, once per move: a node that could start only now that the line it
-/// waits on passed (`line_met`, which names its stack), and a line that
-/// opened again after nodes waiting on it started (`line_reopened`, one
-/// letter per line naming those nodes, which go on: the Conductor decides).
-/// A stacked node holding a pull request takes the one under it as its
-/// `base_pr` once both exist, which the stack's rules read. Whether the
-/// mission changed.
-pub(super) fn follow_lines(mission: &mut Mission) -> bool {
+/// they stand now (`MissionNode::lines_met`), as `lines` shows them
+/// (`Runtime::lines_now`), and tells the Conductor what moved, once per
+/// move: a node that may start only now that the line it waits on is met
+/// (`line_met`, which names its stack; a held node, or one behind a start
+/// gate, is told by its hold or gate instead), and a line that opened again
+/// after nodes waiting on it started (`line_reopened`, one letter per line
+/// naming those nodes, which go on: the Conductor decides), by a failed or
+/// reopened record or a check passed on a commit its work folder has left.
+/// A check line Hide cannot read the folder of is not known to be open, so
+/// it keeps what was last seen. A stacked node holding a pull request takes
+/// the one under it as its `base_pr` once both exist, which the stack's
+/// rules read. Whether the mission changed.
+pub(super) fn follow_lines(mission: &mut Mission, lines: &[crate::missions::LinesNow]) -> bool {
     let mut changed = false;
     let mut reopened: Vec<crate::missions::Dependency> = Vec::new();
     let mut startable = Vec::new();
@@ -566,7 +575,9 @@ pub(super) fn follow_lines(mission: &mut Mission) -> bool {
             .depends_on
             .iter()
             .filter(|key| {
-                key.line.is_some() && super::missions::dependency_met(mission, key).is_some()
+                key.line.is_some()
+                    && (mission.dependency_met(key, lines).is_some()
+                        || (node.lines_met.contains(key) && unread(mission, key, lines)))
             })
             .cloned()
             .collect();
@@ -588,7 +599,8 @@ pub(super) fn follow_lines(mission: &mut Mission) -> bool {
             if let Some(first) = met
                 .iter()
                 .find(|dependency| !node.lines_met.contains(dependency))
-                && crate::mission_health::could_start(mission, node)
+                && crate::mission_health::could_start(mission, node, lines)
+                && node.start_refusal().is_none()
             {
                 startable.push((node.key.clone(), first.clone()));
             }
@@ -618,6 +630,24 @@ pub(super) fn follow_lines(mission: &mut Mission) -> bool {
         super::missions::record_line_wake(mission, node, WakeEvent::LineMet, line);
     }
     changed
+}
+
+/// Whether `key` names a check line that shows open only because Hide
+/// cannot read the commit its node's work folder is on (`LinesNow::head_read`).
+fn unread(
+    mission: &Mission,
+    key: &crate::missions::Dependency,
+    lines: &[crate::missions::LinesNow],
+) -> bool {
+    let Some(at) = mission.nodes.iter().position(|node| node.key == key.node) else {
+        return false;
+    };
+    !lines.get(at).is_some_and(|now| now.head_read)
+        && mission.nodes[at].criteria.iter().any(|line| {
+            Some(line.key.as_str()) == key.line.as_deref()
+                && line.kind == crate::mission_criteria::CriterionKind::Check
+                && line.state == crate::mission_criteria::CriterionState::Pass
+        })
 }
 
 impl Runtime {
@@ -655,6 +685,13 @@ impl Runtime {
                 .missions
                 .iter()
                 .map(|mission| self.mission_stale(mission))
+                .collect(),
+            lines: self
+                .missions
+                .book
+                .missions
+                .iter()
+                .map(|mission| self.lines_now(mission))
                 .collect(),
             made: true,
         };
@@ -901,6 +938,7 @@ impl Runtime {
                 self.mission_pulls(mission),
                 cap_full,
                 &operator_waits,
+                &self.lines_now(mission),
             );
             let mut due = Vec::new();
             for stall in standing {
@@ -1023,6 +1061,7 @@ impl Runtime {
             pulls,
             nodes,
             device_stale: self.mission_stale(mission),
+            lines: self.lines_now(mission),
         }
     }
 
@@ -1146,9 +1185,11 @@ impl Runtime {
         if let Some(mission) = self.missions.book.get(id)
             && mission.status == MissionStatus::Running
             && !self.mission_stale(mission)
-            && let Some(mission) = self.missions.book.get_mut(id)
         {
-            lines_moved = follow_lines(mission);
+            let lines = self.lines_now(mission);
+            if let Some(mission) = self.missions.book.get_mut(id) {
+                lines_moved = follow_lines(mission, &lines);
+            }
         }
         let acts = {
             let Some(mission) = self.missions.book.get(id) else {
