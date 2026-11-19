@@ -464,6 +464,8 @@ pub(crate) fn mission_reservations_end(ledger: &Ledger, now: u64) -> u64 {
 pub const MEMORY_PROMOTE_TASK: &str = "memory_promote";
 /// The serialized value of a 제안 line's application.
 pub const SUGGESTION_APPLY_TASK: &str = "suggestion_apply";
+/// The serialized value of an automation's run (PRD automations).
+pub const AUTOMATION_TASK: &str = "automation";
 
 /// What Hide started an agent for. Every kind Hide knows names the screen that
 /// owns its progress, its home, in one exhaustive match, so a kind added
@@ -479,6 +481,9 @@ pub enum TaskKind {
     /// A 제안 line's fix, as a pull request or an issue (PRD
     /// hide-ai-suggestions B11-B14).
     SuggestionApply,
+    /// An automation's run (PRD automations D-11); the target is the
+    /// automation's id.
+    Automation,
     /// A kind this build has no home for, with the value as written.
     Unknown(String),
 }
@@ -493,6 +498,21 @@ pub enum TaskHome {
     /// repository's documents (`m72`), which the tab took over from the
     /// Memory tab (PRD hide-ai-suggestions D-02).
     Suggestions,
+    /// The automation screen, on the automation the task's target names
+    /// (PRD automations D-11): its run list shows the work and opens its
+    /// terminal. Unlike the 제안 tab's work, a View the agent opened calls
+    /// the operator too (B15).
+    Automations,
+}
+
+impl TaskHome {
+    /// Whether a View the agent opened and the operator has not looked at
+    /// brings its row to Needs You (PRD automations B15): the automation's
+    /// home shows no result of its own, so what its run opened is the
+    /// result.
+    pub fn calls_on_look(self) -> bool {
+        matches!(self, Self::Automations)
+    }
 }
 
 impl TaskKind {
@@ -500,6 +520,7 @@ impl TaskKind {
         match code {
             MEMORY_PROMOTE_TASK => Self::MemoryPromote,
             SUGGESTION_APPLY_TASK => Self::SuggestionApply,
+            AUTOMATION_TASK => Self::Automation,
             // A code this build does not know is shown and logged, never
             // acted on, so only a short printable form of it is kept.
             other => Self::Unknown(
@@ -516,6 +537,7 @@ impl TaskKind {
         match self {
             Self::MemoryPromote => MEMORY_PROMOTE_TASK,
             Self::SuggestionApply => SUGGESTION_APPLY_TASK,
+            Self::Automation => AUTOMATION_TASK,
             Self::Unknown(code) => code,
         }
     }
@@ -525,6 +547,7 @@ impl TaskKind {
     pub fn home(&self) -> Option<TaskHome> {
         match self {
             Self::MemoryPromote | Self::SuggestionApply => Some(TaskHome::Suggestions),
+            Self::Automation => Some(TaskHome::Automations),
             Self::Unknown(_) => None,
         }
     }

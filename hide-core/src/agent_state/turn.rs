@@ -669,11 +669,20 @@ pub fn agent_group_for(
         // group as on every root, reaches the operator (B29).
         return AgentGroup::Seen;
     }
-    if let Ownership::HideAi { operator_turn } = ownership {
+    if let Ownership::HideAi {
+        operator_turn,
+        look_calls,
+    } = ownership
+    {
         // Its home shows the work's progress and result; the operator is
         // called out only for what the operator has to do: the agent's own
-        // question or block, read like any row's, or the home's turn.
-        return if operator_turn || blocked || (demand != AgentDemand::None && unread) {
+        // question or block, read like any row's, the home's turn, or, for
+        // a home that shows no result of its own, a View the agent opened.
+        return if operator_turn
+            || blocked
+            || (demand != AgentDemand::None && unread)
+            || (look_calls && look)
+        {
             AgentGroup::NeedsYou
         } else {
             AgentGroup::Seen

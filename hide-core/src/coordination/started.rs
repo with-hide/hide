@@ -129,9 +129,13 @@ pub(crate) fn hide_started(ledger: &Ledger) -> HideStarted {
         let machine = super::spawn_machine(ledger, spawn);
         // A tool's checkout is one its spawn made: a spawn that started in
         // a worktree already there, the operator's, or in the repository's
-        // own folder leaves that checkout the operator's.
+        // own folder leaves that checkout the operator's. The project's own
+        // folder is never a checkout Hide made, whoever started there (an
+        // automation's run in the folder the operator chose, PRD
+        // automations D-08).
         if let (Some(path), Some(machine)) = (&spawn.path, machine)
             && (tool.is_none() || spawn.made)
+            && path.trim_end_matches('/') != spawn.repo.trim_end_matches('/')
         {
             started.checkouts.push(StartedCheckout {
                 machine: machine.to_owned(),

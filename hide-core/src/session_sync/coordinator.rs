@@ -258,8 +258,11 @@ fn run_coordinator(
                         // core's, or a node's that dials it.
                         changed
                             | match &context.target {
+                                // Automations run on this core's own machine
+                                // (PRD automations D-21).
                                 SessionSyncTarget::Local { .. } => {
                                     guard.tick_agent_sleep(now_unix_ms)
+                                        | guard.tick_automations(now_unix_ms)
                                 }
                                 SessionSyncTarget::Remote { target_id, .. } => {
                                     guard.tick_node_agent_sleep(target_id, now_unix_ms)

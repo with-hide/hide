@@ -4125,7 +4125,10 @@ impl Runtime {
                         crate::coordination::TaskKind::SuggestionApply => {
                             self.suggestions_work.apply.home_attempt(&started.agent_id)
                         }
-                        crate::coordination::TaskKind::Unknown(_) => None,
+                        // The automation screen keeps no attempt of its own:
+                        // its run is the row's.
+                        crate::coordination::TaskKind::Automation
+                        | crate::coordination::TaskKind::Unknown(_) => None,
                     });
                     crate::model::HideAiSnapshot {
                         task: started.task.clone(),
@@ -4196,6 +4199,7 @@ impl Runtime {
                 task: started.task.clone(),
                 tool: started.tool.as_ref().map(|tool| tool.name.clone()),
             })
+            .chain(self.automation_own_folders())
             .collect()
     }
 

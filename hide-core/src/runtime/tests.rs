@@ -36,6 +36,8 @@ mod agent_update;
 mod agents_settings_remote;
 #[path = "tests/appearance.rs"]
 mod appearance;
+#[path = "tests/automations.rs"]
+mod automations;
 #[path = "tests/backlog.rs"]
 mod backlog;
 #[path = "tests/beside_spawn.rs"]

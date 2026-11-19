@@ -78,7 +78,12 @@ pub enum Ownership {
     /// is Seen otherwise, never Working or Done. `operator_turn` is the
     /// home's own turn (a pull request to review, a failed check), beside
     /// the agent's own demand, which every row carries.
-    HideAi { operator_turn: bool },
+    HideAi {
+        operator_turn: bool,
+        /// A View the agent opened calls the operator, as on their own row
+        /// (`TaskHome::calls_on_look`, PRD automations B15).
+        look_calls: bool,
+    },
     /// Work an external tool started and keeps (PRD hide-external-control
     /// D-09): a root whose `tool` mark says its connection stands at Act.
     /// Unlike Hide AI's, the agent's own question, approval or block does
@@ -728,6 +733,7 @@ pub fn ownership_of(agent: &SidebarAgentSnapshot) -> Ownership {
     } else if let Some(home) = agent.hide_ai.as_ref().filter(|mark| mark.home.is_some()) {
         Ownership::HideAi {
             operator_turn: home.turn.is_some(),
+            look_calls: home.home.is_some_and(|home| home.calls_on_look()),
         }
     } else if tool_keeps(agent) {
         Ownership::Tool
