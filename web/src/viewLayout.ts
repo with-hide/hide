@@ -290,13 +290,14 @@ export function viewAreaStepUnavailable(layout: ViewLayoutSnapshot, drawn: { geo
 /**
  * Where the keyboard goes once the core shows it (B20): a display a menu,
  * the palette or a drop moved or split, with where it stood when asked; an
- * area a focus command chose; or a file or diff the operator opened, which
+ * area a focus command chose, on its front tab when `tab` (the rail's desk
+ * button); or a file or diff the operator opened, which
  * has no display id until the core places it; each in the Workspace it was
  * asked in.
  */
 export type ViewFocusRequest =
   | { workspace: string; displayId: string; from: { areaId: string; index: number } | null }
-  | { workspace: string; areaId: string; revision?: number }
+  | { workspace: string; areaId: string; revision?: number; tab?: boolean }
   | { workspace: string; opened: { path: string; kind: "file" | "diff"; committed: boolean | null } }
   | { workspace: string; browserOpen: string };
 

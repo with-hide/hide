@@ -106,8 +106,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
         focusBrowserDisplay(key, browserId);
         return;
       }
-      const content = editorContent(area);
       const tab = area.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      const content = "tab" in request && request.tab ? null : editorContent(area);
       (content ?? tab)?.focus({ preventScroll: true });
       if (content || !tab || !area.querySelector(READING)) return;
       const waitingRevision = keyboardInputRevision();
@@ -272,7 +272,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
         ) : null}
       </span>
       {attached ? <Badge aria-hidden="true" data-browser-attached="true"><Link2Icon /></Badge> : null}
-      <span className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
+      <span data-tab-title="true" className={`min-w-0 flex-1 truncate ${fit.title} ${display.preview ? "italic" : ""} ${unavailable ? "text-muted-foreground line-through" : ""} ${elsewhere ? "text-muted-foreground opacity-[var(--opacity-dimmed)]" : ""}`}>
         {display.label}
         {saving ? <span className="text-muted-foreground"> {t("documents.tabSaving")}</span> : dirty ? <span className="text-warning"> ●</span> : null}
         {tabOnly ? <span className="text-muted-foreground"> {t("documents.tabOnly")}</span> : null}

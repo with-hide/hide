@@ -596,15 +596,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * Brings the desk in front of the viewing column (B6, B11): the lane comes
    * up, a stacked lane draws them, and the keyboard goes
    * into the active area, so typing and ⌘W act on the document the operator
-   * brought back rather than on the terminal behind it.
+   * brought back rather than on the terminal behind it. From the rail's desk
+   * button it stops on the area's front tab instead: a click or Tab enters
+   * the editor, and Escape there closes the lane (PRD lane-desk-pair-view B30).
    */
-  const showDocuments = () => {
+  const showDocuments = (onTab = false) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     ui().setStackFront("view");
     if (!view.open || !view.tray.shown) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
-      followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
+      const workspace = { device_id: view.device_id, path: view.path };
+      if (onTab) ui().setViewFocusRequest({ workspace: workspaceKey(workspace), areaId: view.layout.active_area, tab: true });
+      else followFocus({ workspace, layout: view.layout }, { areaId: view.layout.active_area });
     }
   };
 
@@ -617,7 +621,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
-    showDocuments();
+    showDocuments(true);
   };
 
   /**
