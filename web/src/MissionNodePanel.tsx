@@ -12,6 +12,7 @@ import { MissionPrMark } from "./components/mission-pr";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
+import { LinkedViewRow } from "./components/linked-view";
 import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -57,18 +58,25 @@ import { useShellStore } from "./store";
 // scrolls (its mark, title, the ways to its worker's terminal and record, and
 // one line of who works it, how long it took and its branch), what waits on
 // someone, its worker's plan, what it made, its finish lines as one list, the
-// nodes before and after it as one line, and its events folded.
+// nodes before and after it as one line, and its events folded. A done node
+// starts with what it made and its finish lines, its result first
+// (issue 2637), and its plan follows as history.
 
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
+  const done = node.status === "done";
+  const made = <Made mission={mission} node={node} events={events} actions={actions} />;
+  const criteria = <Criteria mission={mission} node={node} actions={actions} />;
   return (
     <MapPanel data={{ "data-mission-detail": node.key }}>
       <Head mission={mission} node={node} events={events} end={end} onClose={onClose} actions={actions} />
+      {done ? made : null}
+      {done ? criteria : null}
       <Gate mission={mission} node={node} />
       <Attention mission={mission} node={node} actions={actions} />
       <Now mission={mission} node={node} events={events} />
       <Plan mission={mission} node={node} actions={actions} />
-      <Made mission={mission} node={node} />
-      <Criteria mission={mission} node={node} actions={actions} />
+      {done ? null : made}
+      {done ? null : criteria}
       <Links mission={mission} node={node} onSelect={onSelect} />
       <Ways mission={mission} node={node} actions={actions} />
       <HideRecord mission={mission} node={node} events={events} />
@@ -269,8 +277,8 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
   const question = ended ? null : nodeQuestion(mission, node);
   const options = question ? (mission.question?.options ?? []) : [];
   const checks = ended || question || look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
-  // Beside a question, finished work or an ended node only the Conductor's own line is left to say; a done general node's line is its result, which the result part shows.
-  const own = node.line && !node.plan && !(node.kind === "general" && look === "done") ? { text: node.line, attention: false } : null;
+  // Beside a question or an ended node only the Conductor's own line is left to say; a done node's line is its conclusion, which the result part shows.
+  const own = node.line && !node.plan && look !== "done" ? { text: node.line, attention: false } : null;
   const line = ended || question || look === "done" || node.plan ? own : cardLine(mission, node, null, t);
   if (!question && !line && checks.length === 0) return null;
   // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
@@ -364,15 +372,40 @@ function PlanPart({ plan, planned, folded, actions }: { plan: PlanView; planned:
 }
 
 /**
- * What the node made (B31): its earlier pull requests with their states and
- * the base its current one stacks on, the CI line, its commit on main, a
- * general node's result line and verdict; its current pull request
- * and its branch are the head's. Nothing the record does not hold.
+ * What the node made (B31): a done node's conclusion, the Conductor's line or
+ * else the first line of its worker's last report, and the documents its
+ * worker left, each opening with one press (issue 2637); its earlier
+ * pull requests with their states and the base its current one stacks on, the
+ * CI line, its commit on main and a general node's verdict; its current pull
+ * request and its branch are the head's. Nothing the record does not hold.
  */
-function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
+function Made({ mission, node, events, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const ci = node.criteria.find((line) => line.kind === "ci");
   const rows: [string, ReactNode][] = [];
+  const done = node.status === "done";
+  const conclusion = done ? (node.line ?? node.reported ?? null) : null;
+  if (conclusion) {
+    // The Conductor's line stays its own word, dimmed once Hide's facts moved past it (B4); a report's line is the worker's last word.
+    const behind = conclusion === node.line && lineOutrun(node, events);
+    rows.push([
+      t("mission.panel.conclusion"),
+      <span key="conclusion" className={cn("min-w-0 break-keep text-body text-foreground [overflow-wrap:anywhere]", behind && "text-muted-foreground opacity-(--opacity-dimmed)")} title={behind ? t("mission.line.behind") : undefined} data-panel-line-behind={behind || undefined} data-panel-conclusion={node.line ? "line" : "report"}>{conclusion}</span>,
+    ]);
+  }
+  const views = done ? (node.views ?? []) : [];
+  if (views.length > 0) {
+    rows.push([
+      t("mission.panel.documents"),
+      <ul key="documents" className="flex min-w-0 flex-col" data-panel-documents={views.length}>
+        {views.map((view) => (
+          <li key={`${view.device_id}:${view.checkout_path}:${view.display_id}`} className="min-w-0">
+            <LinkedViewRow view={view} by={false} onOpen={(linked) => actions.openLinkedView(mission.id, { node: node.key }, linked)} data={{ "data-panel-document": view.display_id }} />
+          </li>
+        ))}
+      </ul>,
+    ]);
+  }
   const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
   // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
   const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
@@ -391,20 +424,16 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   const left = landingLeft(node);
   if (commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={commit} data-panel-commit={commit}>{t("mission.result.main", { commit: shortCommit(commit) })}</span>]);
   else if (left) rows.push(["main", <span key="left" className="font-semibold text-mission-hold" data-panel-landing={left}>{t(left === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span>]);
-  // A done general node's result as its card's result line reads it, whatever its preset or plan: its verdict, then its line (PRD node-presets D-08).
+  // A done general node's verdict as its card's result line reads it, whatever its preset or plan (PRD node-presets D-08); its line is the conclusion above.
   const result = node.kind === "general" ? resultLine(lineNode(node)) : null;
-  if (result && result.shows !== "kind") {
-    const line = result.line;
+  if (result && result.shows === "verdict") {
     rows.push([
       t("mission.result.verify"),
       <span key="result" className="flex min-w-0 flex-wrap items-baseline gap-x-xs" data-panel-result={result.shows}>
-        {result.shows === "verdict" ? (
-          <span className={cn("shrink-0 font-mono font-semibold", result.verdict === "fail" && "text-mission-failed")} data-panel-verdict={result.verdict}>
-            {t(result.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
-            {result.checks ? ` ${result.checks.passed}/${result.checks.total}` : ""}
-          </span>
-        ) : null}
-        {line ? <span className="min-w-0 break-words" data-panel-result-line="true">{line}</span> : null}
+        <span className={cn("shrink-0 font-mono font-semibold", result.verdict === "fail" && "text-mission-failed")} data-panel-verdict={result.verdict}>
+          {t(result.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
+          {result.checks ? ` ${result.checks.passed}/${result.checks.total}` : ""}
+        </span>
       </span>,
     ]);
   }
@@ -483,6 +512,9 @@ function CriterionLine({ mission, line, actions }: { mission: Mission; line: Mis
   const note = line.state === "skipped" ? null : criterionNote(line, mission, t);
   const checks = line.kind === "review" || line.kind === "verify" ? { kind: line.kind, checkers: line.checkers ?? [] } : null;
   const whole = [name, note, line.evidence].filter(Boolean).join("\n\n");
+  // The worker's one line under every line (issue 2637): a failed line's verdict and a skipped one's already carry it.
+  const summary = line.summary?.trim() || null;
+  const verdict = (line.state === "skipped" && line.skip != null) || (line.state === "fail" && !checks);
   return (
     <li className="grid min-w-0 grid-cols-[var(--size-agent-mark)_minmax(0,1fr)] items-center gap-x-xs gap-y-xxs">
       <div className="contents" data-panel-line={line.key} data-line-state={line.state} data-line-kind={line.kind}>
@@ -501,8 +533,15 @@ function CriterionLine({ mission, line, actions }: { mission: Mission; line: Mis
       </div>
       {line.state === "skipped" && line.skip ? (
         <Verdict tone="skipped" word={t("mission.verdict.skipped")}>
+          {summary ? <p className="min-w-0 break-keep text-foreground [overflow-wrap:anywhere]" data-line-summary="true">{summary}</p> : null}
           <p className="min-w-0 break-words text-foreground" data-verdict-summary="true">{criterionNote(line, mission, t)}</p>
         </Verdict>
+      ) : null}
+      {summary && !verdict ? (
+        <p className="col-start-2 flex min-w-0 gap-xs text-caption text-muted-foreground" data-line-summary="true">
+          <span aria-hidden="true" className="shrink-0 text-subtle-foreground">└</span>
+          <span className="min-w-0 break-keep [overflow-wrap:anywhere]">{summary}</span>
+        </p>
       ) : null}
       {line.state === "fail" && !checks ? (
         <Verdict tone="fail" word={t("mission.verdict.failed")}>

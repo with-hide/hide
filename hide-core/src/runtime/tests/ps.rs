@@ -306,6 +306,8 @@ fn mission(
             stage: None,
             attempts: 0,
             line: None,
+            reported: None,
+            views: Vec::new(),
             change: None,
             review: None,
             criteria: Vec::new(),

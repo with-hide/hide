@@ -35,6 +35,7 @@ mod environment;
 mod fetch;
 mod files;
 pub use files::{FileRoots, inode_text};
+pub use fork::AGENT_NAME_LIMIT;
 mod agent_groups;
 mod agent_layout;
 pub mod find;

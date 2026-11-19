@@ -4794,11 +4794,13 @@
                 "session_too_long",
                 "codex_capability_unknown",
                 "invalid_brief",
+                "invalid_agent_name",
                 "brief_not_submitted",
                 "mission_brief_missing",
                 "mission_node_held",
                 "mission_gate_before_start",
                 "mission_machine_node_refused",
+                "mission_other_repository",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
                 "mission_machine_no_repository",
@@ -7007,7 +7009,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:d660dfb3c43e001bbdb27b3fb408e15dc1e0d8eecc16564a9786cc254515cb81",
+    "digest": "sha256:cc1ffeab4d1fd5bdd33f7b4dcd8342d29bbe11b180d91b9522531404d4f6596b",
     "envelopes": {
         "access": {
             "answer": "value",
