@@ -1070,18 +1070,12 @@ fn pass(
     record: &mut Record,
     mode: Mode<'_>,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
 ) -> (Vec<ProfileReport>, bool) {
-    let Some(source) = target.profiles.as_ref() else {
+    // Without the profiles ([`read_profiles`]) every profile account stays
+    // as it is.
+    let Some(profiles) = profiles else {
         return (Vec::new(), false);
-    };
-    // Read now, under the account's lock in a pass: a file that cannot be
-    // read leaves every profile account as it is.
-    let profiles = match source.read() {
-        Ok(profiles) => profiles,
-        Err(reason) => {
-            log("profile_target.profiles_unread", None, &reason);
-            return (Vec::new(), false);
-        }
     };
     let home = &target.home;
     let defaults = default_files(home, &target.install);
@@ -1336,21 +1330,28 @@ impl ProfileAccount {
     }
 }
 
-/// The machine's profile accounts, read from the node's profile file now.
-pub(crate) fn accounts(target: &KitTarget) -> Accounts {
-    let unknown = Accounts {
-        known: false,
-        list: Vec::new(),
-    };
-    let Some(source) = target.profiles.as_ref() else {
-        return unknown;
-    };
-    let profiles = match source.read() {
-        Ok(profiles) => profiles,
+/// The machine's profiles as one pass reads them, once: the profile
+/// accounts and the store's places follow the same read, made under the
+/// account's lock in a pass, so what a pass installs by is what the node's
+/// file holds while it writes. `None` without a source, or for a file that
+/// cannot be read, which leaves every profile account as it is.
+pub(crate) fn read_profiles(target: &KitTarget) -> Option<KitProfiles> {
+    match target.profiles.as_ref()?.read() {
+        Ok(profiles) => Some(profiles),
         Err(reason) => {
             log("profile_target.profiles_unread", None, &reason);
-            return unknown;
+            None
         }
+    }
+}
+
+/// The machine's profile accounts, from the profiles a pass read.
+pub(crate) fn accounts(target: &KitTarget, profiles: Option<&KitProfiles>) -> Accounts {
+    let Some(profiles) = profiles else {
+        return Accounts {
+            known: false,
+            list: Vec::new(),
+        };
     };
     let mut by_key: BTreeMap<String, ProfileAccount> = BTreeMap::new();
     for profile in &profiles.live {
@@ -1385,8 +1386,15 @@ pub(crate) fn apply(
     reinstall: &BTreeSet<ProfileId>,
     record: &mut Record,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
 ) -> (Vec<ProfileReport>, bool) {
-    pass(target, record, Mode::Apply { scope, reinstall }, detection)
+    pass(
+        target,
+        record,
+        Mode::Apply { scope, reinstall },
+        detection,
+        profiles,
+    )
 }
 
 /// Every profile account judged, nothing changed (`crate::status`).
@@ -1394,9 +1402,10 @@ pub(crate) fn status(
     target: &KitTarget,
     record: &Record,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
 ) -> Vec<ProfileReport> {
     let mut record = record.clone();
-    pass(target, &mut record, Mode::Read, detection).0
+    pass(target, &mut record, Mode::Read, detection, profiles).0
 }
 
 /// Takes Hide's pieces out of every profile account this installation

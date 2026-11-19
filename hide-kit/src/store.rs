@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::agent_kit::enabled;
 use crate::agents::{Detection, RETIRED_SKILLS, SKILLS};
 use crate::record::Record;
-use crate::{KitTarget, Scope};
+use crate::{KitProfiles, KitTarget, Scope};
 
 pub use mcp::McpBody;
 pub(crate) use source::Fetched;
@@ -976,18 +976,35 @@ pub(crate) fn pass(
     scope: &Scope,
     record: &Record,
     detection: &Detection,
+    profiles: Option<&KitProfiles>,
     fetched: source::Fetched,
 ) -> StoreReport {
-    run(target, scope, record, detection, fetched, Mode::Apply)
+    let accounts = crate::targets::accounts(target, profiles);
+    run(
+        target,
+        scope,
+        record,
+        detection,
+        &accounts,
+        fetched,
+        Mode::Apply,
+    )
 }
 
 /// The store judged without changing anything (`crate::status`).
-pub(crate) fn status(target: &KitTarget, record: &Record, detection: &Detection) -> StoreReport {
+pub(crate) fn status(
+    target: &KitTarget,
+    record: &Record,
+    detection: &Detection,
+    profiles: Option<&KitProfiles>,
+) -> StoreReport {
+    let accounts = crate::targets::accounts(target, profiles);
     run(
         target,
         &Scope::default(),
         record,
         detection,
+        &accounts,
         source::Fetched::default(),
         Mode::Read,
     )
@@ -1012,6 +1029,7 @@ fn run(
     scope: &Scope,
     record: &Record,
     detection: &Detection,
+    accounts: &crate::targets::Accounts,
     fetched: source::Fetched,
     mode: Mode,
 ) -> StoreReport {
@@ -1026,11 +1044,10 @@ fn run(
         Err(reason) => return refused(reason),
     };
     let before = store.clone();
-    let accounts = crate::targets::accounts(target);
     let ctx = Ctx {
         target,
         dir,
-        accounts: &accounts,
+        accounts,
         detection,
         record,
         scope,
@@ -1493,7 +1510,12 @@ fn receive(
 /// This machine's store as a copy carries it to another (B28): every item
 /// with its kind's content, refused whole past [`COPY_BYTE_LIMIT`] or when an
 /// item cannot be carried, before anything is sent.
-pub(crate) fn export(target: &KitTarget, record: &Record, detection: &Detection) -> StoreExport {
+pub(crate) fn export(
+    target: &KitTarget,
+    record: &Record,
+    detection: &Detection,
+    profiles: Option<&KitProfiles>,
+) -> StoreExport {
     let refused = |refusal: StoreRefusal| {
         log("store.export_refused", None, &refusal.reason);
         StoreExport {
@@ -1509,7 +1531,7 @@ pub(crate) fn export(target: &KitTarget, record: &Record, detection: &Detection)
         Ok(store) => store,
         Err(reason) => return refused(failed(reason)),
     };
-    let accounts = crate::targets::accounts(target);
+    let accounts = crate::targets::accounts(target, profiles);
     let scope = Scope::default();
     let ctx = Ctx {
         target,

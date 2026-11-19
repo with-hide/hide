@@ -681,11 +681,11 @@ pub fn status(target: &KitTarget) -> KitReport {
         .collect();
     let agents = agent_kit::status(target, &record, &agent_kit::part_views(&components));
     let detection = agents::Detection::probe(target);
-    let profiles = match target.profiles {
-        Some(_) => targets::status(target, &record, &detection),
-        None => Vec::new(),
-    };
-    let store = store::status(target, &record, &detection);
+    // One read of the profiles for both: the store's places are the
+    // accounts the profile report names.
+    let read = targets::read_profiles(target);
+    let profiles = targets::status(target, &record, &detection, read.as_ref());
+    let store = store::status(target, &record, &detection, read.as_ref());
     let daemon = codex_daemon(target);
     KitReport {
         components,
@@ -953,18 +953,28 @@ fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> Ki
     let applied = agent_kit::apply(target, scope, &mut record);
     changed |= applied.changed;
     // Every profile's account follows the same switches and Reinstall as
-    // the default one (PRD agent-profiles D-28).
+    // the default one (PRD agent-profiles D-28). The profiles are read once,
+    // under the lock, for the accounts and the store alike.
+    let read = targets::read_profiles(target);
     let (profiles, profiles_changed) = targets::apply(
         target,
         scope,
         &BTreeSet::new(),
         &mut record,
         &applied.detection,
+        read.as_ref(),
     );
     changed |= profiles_changed;
     // The store's items follow the same switches: an agent switched on, a
     // new profile or a new agent gets every item that is on (D-13, D-31).
-    let store = store::pass(target, scope, &record, &applied.detection, fetched);
+    let store = store::pass(
+        target,
+        scope,
+        &record,
+        &applied.detection,
+        read.as_ref(),
+        fetched,
+    );
     // Whether this pass wrote the entries or found them, Codex trusts Hide's,
     // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
@@ -1055,6 +1065,7 @@ pub fn apply_store(target: &KitTarget, changes: Vec<store::StoreChange>) -> stor
         &scope,
         &record,
         &agents::Detection::probe(target),
+        targets::read_profiles(target).as_ref(),
         fetched,
     )
 }
@@ -1082,7 +1093,12 @@ pub fn export_store(target: &KitTarget) -> store::StoreExport {
         Ok(record) => record,
         Err(refusal) => return refused(refusal),
     };
-    store::export(target, &record, &agents::Detection::probe(target))
+    store::export(
+        target,
+        &record,
+        &agents::Detection::probe(target),
+        targets::read_profiles(target).as_ref(),
+    )
 }
 
 /// The follow of the store's folders (PRD skill-mcp-manager D-33): a pass
@@ -1123,6 +1139,7 @@ pub fn apply_profiles(
         reinstall,
         &mut record,
         &detection,
+        targets::read_profiles(target).as_ref(),
     );
     let unsaved = changed
         .then(|| record::save(&target.home, &record).err())
@@ -1137,6 +1154,7 @@ pub fn profile_status(target: &KitTarget) -> Result<Vec<ProfileReport>, KitRefus
         target,
         &record,
         &agents::Detection::probe(target),
+        targets::read_profiles(target).as_ref(),
     ))
 }
 
