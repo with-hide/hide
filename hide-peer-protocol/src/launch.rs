@@ -168,13 +168,14 @@ pub const FOLDER_HELD_RETRIES: u32 = 10;
 /// work while its node runs or a pane of it is left on the host, and that
 /// long its hook entries are on the host's account, where every agent
 /// event, the host's own among them, starts each guest's helper once. The
-/// number keeps what the guests add to one event on the slowest system
-/// Hide supports inside a quarter of a second: `windows check` printed
-/// what one start takes there
+/// number keeps what the guests add to one event inside a second on the
+/// slowest system Hide supports, for an agent that runs its hooks one after
+/// another: a Windows runner printed what one start takes there, about a
+/// quarter of a second with the PowerShell an entry runs in
 /// (`hide-agent-hooks/tests/it/windows_hook_command.rs`), and
 /// `docs/ARCHITECTURE.md`, What a guest may take, has the figures. A guest
 /// past it is told [`crate::manage::NodeStop::HostFull`].
-pub const MAX_GUEST_NODES: usize = 8;
+pub const MAX_GUEST_NODES: usize = 4;
 /// A node that crashed more than [`CRASHES`] times within
 /// [`CRASH_WINDOW_SECS`] is not started again by itself (B70).
 pub const CRASHES: usize = 5;
@@ -258,6 +259,12 @@ pub const EXIT_ENDED: i32 = 0;
 /// A write to the host failed or a thread of the node panicked: the node
 /// ends rather than run on unheard. The host counts it as a crash.
 pub const EXIT_HOST_UNREACHABLE: i32 = 70;
+/// The node ended itself to be started again: a holder of one of its panes
+/// died without saying why, and a node's start is what settles such a pane.
+/// It asks at most once in [`HOLDER_LOST_RESTART_SECS`]; the host starts it
+/// again at once and counts the end with the crashes, so a node that asks
+/// without end is left stopped like one that crashes (D-77 (6)).
+pub const EXIT_RESTART: i32 = 71;
 /// A word after `serve` the node does not know: the build is too old or too
 /// new for this host (`update_needed`), not a crash.
 pub const EXIT_UNKNOWN_WORD: i32 = 64;

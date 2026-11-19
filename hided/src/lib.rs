@@ -606,13 +606,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // Each stream kind's owner hands its handler in here, before the
     // endpoint opens. The start is not held for the endpoint: a machine
     // whose network is down still starts, and the reason is in the log.
-    // A paired machine's login item follows the peer records (PRD
-    // device-connect-iroh D-41).
-    let always_on = always_on::Follower::new(
-        env.home.clone(),
-        env.state_dir.clone(),
-        env.starter_program.is_some(),
-    );
     //
     // Other machines' work here: each guest's node runs from that guest's
     // build, and a guest of this build runs from the programs beside this
@@ -631,6 +624,13 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         }),
     );
     guests.serve(&peers, shutdown.clone());
+    // A paired machine's login item follows the peer records (PRD
+    // device-connect-iroh D-41).
+    let always_on = always_on::Follower::new(
+        env.home.clone(),
+        env.state_dir.clone(),
+        env.starter_program.is_some(),
+    );
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
         Arc::clone(&core),

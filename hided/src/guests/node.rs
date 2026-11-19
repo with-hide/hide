@@ -85,6 +85,8 @@ enum Exit {
     UpdateNeeded(String),
     FolderRefused(String),
     FolderHeld,
+    /// It asked to be started again, for a holder it lost.
+    Restart,
     Crashed(String),
 }
 
@@ -100,8 +102,67 @@ fn exit_of(code: Option<i32>) -> Exit {
             Exit::FolderRefused("the node could not make its folder or an endpoint".to_owned())
         }
         Some(launch::EXIT_FOLDER_HELD) => Exit::FolderHeld,
+        Some(launch::EXIT_RESTART) => Exit::Restart,
         Some(code) => Exit::Crashed(format!("the node exited with code {code}")),
         None => Exit::Crashed("the node was ended by a signal".to_owned()),
+    }
+}
+
+/// What follows a run of the node that ended as `exit` at `now`: the phase
+/// its guest is told, and how long until it is started again, `None` to
+/// leave it stopped. `held` counts the starts in a row that found another
+/// node in the folder.
+fn follows(
+    exit: Exit,
+    held: &mut u32,
+    crashes: &mut VecDeque<Instant>,
+    now: Instant,
+) -> (Phase, Option<Duration>) {
+    let stopped = |reason, retry, detail: String| Phase::Stopped {
+        reason,
+        retry,
+        detail: Some(detail),
+    };
+    match exit {
+        Exit::Ended => (Phase::ended(), None),
+        Exit::UpdateNeeded(detail) => (stopped(NodeStop::UpdateNeeded, false, detail), None),
+        Exit::FolderRefused(detail) => (stopped(NodeStop::FolderRefused, false, detail), None),
+        Exit::FolderHeld if *held < launch::FOLDER_HELD_RETRIES => {
+            *held += 1;
+            (
+                Phase::Starting,
+                Some(Duration::from_secs(launch::FOLDER_HELD_RETRY_SECS)),
+            )
+        }
+        // The node's own word that it is to be started again is no crash
+        // to tell its guest of, but it is counted with them: a build that
+        // asks at every start is stopped like one that crashes.
+        Exit::Restart if !crashed_too_often(crashes, now) => {
+            *held = 0;
+            (Phase::Starting, Some(Duration::ZERO))
+        }
+        Exit::Restart => (
+            stopped(
+                NodeStop::Crashed,
+                false,
+                "the node asked to be started again too often".to_owned(),
+            ),
+            None,
+        ),
+        exit => {
+            let detail = match exit {
+                Exit::Crashed(detail) => detail,
+                _ => "another node still holds the guest's folder".to_owned(),
+            };
+            *held = 0;
+            match crashed_too_often(crashes, now) {
+                true => (stopped(NodeStop::Crashed, false, detail), None),
+                false => (
+                    stopped(NodeStop::Crashed, true, detail),
+                    Some(CRASH_RESTART_AFTER),
+                ),
+            }
+        }
     }
 }
 
@@ -498,46 +559,13 @@ impl GuestNode {
             self.phase.send_replace(Phase::Starting);
             let exit = self.run(&program);
             self.record("guest_node.exited", json!({"exit": format!("{exit:?}")}));
-            let stopped = |reason, retry, detail| Phase::Stopped {
-                reason,
-                retry,
-                detail,
-            };
             let mut control = lock(&self.control);
-            let (phase, again) = match exit {
-                // Another build was asked for while this one ran, or the
-                // daemon ends: this end is the make-way, whatever it says.
-                _ if control.next.is_some() || control.stopping => {
-                    (Phase::Starting, Some(Duration::ZERO))
-                }
-                Exit::Ended => (Phase::ended(), None),
-                Exit::UpdateNeeded(detail) => {
-                    (stopped(NodeStop::UpdateNeeded, false, Some(detail)), None)
-                }
-                Exit::FolderRefused(detail) => {
-                    (stopped(NodeStop::FolderRefused, false, Some(detail)), None)
-                }
-                Exit::FolderHeld if held < launch::FOLDER_HELD_RETRIES => {
-                    held += 1;
-                    (
-                        Phase::Starting,
-                        Some(Duration::from_secs(launch::FOLDER_HELD_RETRY_SECS)),
-                    )
-                }
-                exit => {
-                    let detail = match exit {
-                        Exit::Crashed(detail) => detail,
-                        _ => "another node still holds the guest's folder".to_owned(),
-                    };
-                    held = 0;
-                    match crashed_too_often(&mut control.crashes, Instant::now()) {
-                        true => (stopped(NodeStop::Crashed, false, Some(detail)), None),
-                        false => (
-                            stopped(NodeStop::Crashed, true, Some(detail)),
-                            Some(CRASH_RESTART_AFTER),
-                        ),
-                    }
-                }
+            // Another build was asked for while this one ran, or the daemon
+            // ends: this end is the make-way, whatever it says.
+            let (phase, again) = if control.next.is_some() || control.stopping {
+                (Phase::Starting, Some(Duration::ZERO))
+            } else {
+                follows(exit, &mut held, &mut control.crashes, Instant::now())
             };
             match again {
                 Some(wait) => {
@@ -742,12 +770,61 @@ mod tests {
         }
     }
 
+    /// D-77 (6): a node that ends to be started again, for a holder it
+    /// lost, is started at once with no crash told to its guest; the ends
+    /// are counted with the crashes, so one that asks without end stops.
+    #[test]
+    fn a_node_that_asks_to_be_started_again_is_started_at_once_and_counted_with_the_crashes() {
+        let now = Instant::now();
+        let (mut held, mut crashes) = (3, VecDeque::new());
+        for ask in 0..launch::CRASHES {
+            let (phase, again) = follows(Exit::Restart, &mut held, &mut crashes, now);
+            assert!(matches!(phase, Phase::Starting), "ask {ask}: {phase:?}");
+            assert_eq!(again, Some(Duration::ZERO), "ask {ask}");
+        }
+        assert_eq!(held, 0);
+        let (phase, again) = follows(Exit::Restart, &mut held, &mut crashes, now);
+        assert!(
+            matches!(
+                phase,
+                Phase::Stopped {
+                    reason: NodeStop::Crashed,
+                    retry: false,
+                    ..
+                }
+            ),
+            "{phase:?}"
+        );
+        assert_eq!(again, None);
+
+        // A crash is told with its retry and waits a moment first.
+        let (phase, again) = follows(
+            Exit::Crashed("boom".to_owned()),
+            &mut 0,
+            &mut VecDeque::new(),
+            now,
+        );
+        assert!(
+            matches!(
+                phase,
+                Phase::Stopped {
+                    reason: NodeStop::Crashed,
+                    retry: true,
+                    ..
+                }
+            ),
+            "{phase:?}"
+        );
+        assert_eq!(again, Some(CRASH_RESTART_AFTER));
+    }
+
     #[test]
     fn an_exit_code_reads_as_the_contract_names_it() {
         assert_eq!(exit_of(Some(0)), Exit::Ended);
         assert!(matches!(exit_of(Some(64)), Exit::UpdateNeeded(_)));
         assert!(matches!(exit_of(Some(73)), Exit::FolderRefused(_)));
         assert_eq!(exit_of(Some(75)), Exit::FolderHeld);
+        assert_eq!(exit_of(Some(71)), Exit::Restart);
         for crash in [Some(70), Some(1), Some(101), None] {
             assert!(matches!(exit_of(crash), Exit::Crashed(_)), "{crash:?}");
         }
