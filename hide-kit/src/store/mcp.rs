@@ -25,10 +25,12 @@
 //! pass gets through (B12, B26).
 //!
 //! Whether an agent's entry is the item, or two agents' entries are one
-//! server, takes the keys too: the same server with another key is the
-//! operator's other server (B21). The keys are compared inside this applier
-//! as a fingerprint keyed for this process alone ([`keys_fingerprint`]),
-//! never written, so no value leaves it.
+//! server, or an entry is still the one Hide wrote, takes the keys too: the
+//! same server with another key is the operator's other server (B21), and a
+//! key typed into a file by hand makes the entry the operator's (B22). The
+//! values travel only inside [`KeyValues`], which compares and fingerprints
+//! them and gives none out; the record keeps a fingerprint keyed with the
+//! store's secret (`crate::mcp_keys::KeysSecret`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -262,7 +264,7 @@ fn entry_of(found: &mcp::Found) -> Entry {
             digest: server.digest(),
             link: None,
             whole: found.whole,
-            keys: Some(keys_fingerprint(server, keys)),
+            keys: Some(KeyValues::of(server, keys)),
         },
         None => Entry {
             digest: "unreadable".to_owned(),
@@ -273,39 +275,68 @@ fn entry_of(found: &mcp::Found) -> Entry {
     }
 }
 
-/// The values of the keys `server` names, folded into a fingerprint keyed
-/// with a secret drawn once per process: equal fingerprints are equal keys
-/// within this run, and the fingerprint is never written, logged or
-/// compared across runs, so it tells nothing of a value.
-fn keys_fingerprint(server: &Server, keys: &Keys) -> String {
-    use sha2::{Digest as _, Sha256};
-    use std::hash::BuildHasher as _;
-    static SECRET: std::sync::OnceLock<[u64; 2]> = std::sync::OnceLock::new();
-    let secret = SECRET.get_or_init(|| {
-        let random = std::collections::hash_map::RandomState::new();
-        [random.hash_one(0u8), random.hash_one(1u8)]
-    });
-    let mut hash = Sha256::new();
-    hash.update(secret[0].to_le_bytes());
-    hash.update(secret[1].to_le_bytes());
-    let mut names = server.reach.key_names().to_vec();
-    names.sort();
-    for name in names {
-        hash.update((name.len() as u64).to_le_bytes());
-        hash.update(name.as_bytes());
-        match keys.get(&name) {
-            Some(value) => {
-                hash.update([1]);
-                hash.update((value.expose().len() as u64).to_le_bytes());
-                hash.update(value.expose().as_bytes());
-            }
-            None => hash.update([0]),
-        }
+/// The values of the keys a server names, as one entry or item holds them:
+/// they compare, and fingerprint with the store's secret, and give no value
+/// out, so they print as names alone.
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct KeyValues(Vec<(String, Option<Secret>)>);
+
+impl KeyValues {
+    fn of(server: &Server, keys: &Keys) -> Self {
+        let mut names = server.reach.key_names().to_vec();
+        names.sort();
+        names.dedup();
+        Self(
+            names
+                .into_iter()
+                .map(|name| {
+                    let value = keys.get(&name).cloned();
+                    (name, value)
+                })
+                .collect(),
+        )
     }
-    hash.finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+
+    /// An HMAC-SHA256 of the values under `secret`, for the record.
+    pub(crate) fn fingerprint(&self, secret: &crate::mcp_keys::KeysSecret) -> String {
+        use sha2::{Digest as _, Sha256};
+        let mut message = Vec::new();
+        for (name, value) in &self.0 {
+            message.extend((name.len() as u64).to_le_bytes());
+            message.extend(name.as_bytes());
+            match value {
+                Some(value) => {
+                    message.push(1);
+                    message.extend((value.expose().len() as u64).to_le_bytes());
+                    message.extend(value.expose().as_bytes());
+                }
+                None => message.push(0),
+            }
+        }
+        let mut block = [0u8; 64];
+        block[..32].copy_from_slice(secret.bytes());
+        let pad = |with: u8| block.iter().map(|byte| byte ^ with).collect::<Vec<u8>>();
+        let inner = Sha256::new()
+            .chain_update(pad(0x36))
+            .chain_update(&message)
+            .finalize();
+        Sha256::new()
+            .chain_update(pad(0x5c))
+            .chain_update(inner)
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+impl fmt::Debug for KeyValues {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_list()
+            .entries(self.0.iter().map(|(name, _)| name))
+            .finish()
+    }
 }
 
 fn keys_failed(error: crate::mcp_keys::KeyFileError) -> StoreRefusal {
@@ -404,11 +435,10 @@ impl Applier for McpApplier {
             .collect())
     }
 
-    fn keys(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<Option<String>, String> {
+    fn keys(&self, item: &StoreItem, files: &Path) -> Result<Option<KeyValues>, String> {
         let body = body_of(item)?;
-        let keys =
-            crate::mcp_keys::read(&ctx.item_files(&item.id)).map_err(|error| error.to_string())?;
-        Ok(Some(keys_fingerprint(&body.server, &keys)))
+        let keys = crate::mcp_keys::read(files).map_err(|error| error.to_string())?;
+        Ok(Some(KeyValues::of(&body.server, &keys)))
     }
 
     fn entry_path(&self, place: &Place, _name: &str) -> PathBuf {

@@ -870,6 +870,72 @@ fn the_same_server_with_two_keys_is_two_servers_and_a_take_over_keeps_both_keys(
 }
 
 #[test]
+fn a_key_typed_into_hides_entry_by_hand_makes_it_the_operators_and_is_never_lost() {
+    let fixture = mcp_agents();
+    add(&fixture, github(), &[("GITHUB_TOKEN", "ghp_hide_a")]);
+    let codex = path_of(&fixture, "codex");
+    let typed = std::fs::read_to_string(&codex)
+        .unwrap()
+        .replace("ghp_hide_a", "ghp_typed_b");
+    write(&codex, &typed);
+    let typed_key = || key_of(&held(&fixture, "codex", "github").unwrap(), "GITHUB_TOKEN");
+
+    // The record keeps a fingerprint of the key Hide wrote, never a value.
+    let record =
+        std::fs::read_to_string(crate::layout::store_dir(fixture.home()).join("store.json"))
+            .unwrap();
+    assert!(!record.contains("ghp_hide_a") && !record.contains("ghp_typed_b"));
+    let report = store(&fixture, Vec::new());
+    assert_eq!(
+        cells(&report, "mcp:github")["codex"],
+        CellState::HandWritten
+    );
+
+    // (1) Switched off and on again for Codex: the typed key stays.
+    for on in [false, true] {
+        store(
+            &fixture,
+            vec![StoreChange::Set {
+                item: "mcp:github".to_owned(),
+                column: Some("codex".to_owned()),
+                on,
+            }],
+        );
+        assert_eq!(typed_key(), "ghp_typed_b", "on: {on}");
+    }
+
+    // (2) A key edit in Hide reaches every other agent and leaves Codex's.
+    store(
+        &fixture,
+        vec![StoreChange::SetMcp {
+            item: "mcp:github".to_owned(),
+            server: github(),
+            keys: sent(&[("GITHUB_TOKEN", "ghp_hide_c")]),
+        }],
+    );
+    assert_eq!(typed_key(), "ghp_typed_b");
+    for (agent, _) in FILES.iter().filter(|(agent, _)| *agent != "codex") {
+        assert_eq!(
+            key_of(&held(&fixture, agent, "github").unwrap(), "GITHUB_TOKEN"),
+            "ghp_hide_c",
+            "{agent}"
+        );
+    }
+
+    // (3) Deleting the item takes Hide's copies out and leaves Codex's.
+    store(
+        &fixture,
+        vec![StoreChange::Delete {
+            item: "mcp:github".to_owned(),
+        }],
+    );
+    assert_eq!(typed_key(), "ghp_typed_b");
+    for (agent, _) in FILES.iter().filter(|(agent, _)| *agent != "codex") {
+        assert!(held(&fixture, agent, "github").is_none(), "{agent}");
+    }
+}
+
+#[test]
 fn removing_the_machine_takes_hides_servers_and_their_keys_out() {
     let fixture = mcp_agents();
     add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);

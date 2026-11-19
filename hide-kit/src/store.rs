@@ -297,6 +297,12 @@ pub struct TrashEntry {
 pub struct Written {
     pub item: String,
     pub digest: String,
+    /// The keys Hide wrote there beside what the digest covers (an MCP
+    /// server's), fingerprinted with the store's secret
+    /// (`crate::mcp_keys::KeysSecret`): a key typed into the file by hand
+    /// since makes the entry the operator's (B22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<String>,
 }
 
 /// One place Hide wrote into, as the record keeps it: enough to take its
@@ -865,9 +871,9 @@ pub(crate) struct Entry {
     /// ever Hide's to replace or take out.
     pub(crate) whole: bool,
     /// The keys it holds beside what its digest covers (an MCP server's
-    /// variables and headers), as [`Applier::keys`] fingerprints them; none
-    /// for a kind without keys. A copy is an item only when both agree.
-    pub(crate) keys: Option<String>,
+    /// variables and headers); none for a kind without keys. A copy is an
+    /// item, or the one Hide wrote, only when these agree too.
+    pub(crate) keys: Option<mcp::KeyValues>,
 }
 
 /// One entry as a place's listing read it, or why it could not be read.
@@ -892,11 +898,9 @@ pub(crate) trait Applier {
     fn entry_path(&self, place: &Place, name: &str) -> PathBuf {
         place.path.join(name)
     }
-    /// A fingerprint of the keys `item` keeps beside its body, comparable
-    /// only with an [`Entry::keys`] read in this process: no value leaves
-    /// the applier, and the fingerprint is never written. None for a kind
-    /// without keys.
-    fn keys(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<Option<String>, String> {
+    /// The keys `item` keeps in its folder `files` beside its body; none for
+    /// a kind without keys.
+    fn keys(&self, _item: &StoreItem, _files: &Path) -> Result<Option<mcp::KeyValues>, String> {
         Ok(None)
     }
     /// Writes `item` at `place`, replacing what is there under its name
@@ -964,6 +968,9 @@ pub(crate) struct Ctx<'a> {
     /// The pass may change places, so every entry is read again
     /// ([`Place::fresh`]).
     pub(crate) fresh: bool,
+    /// The store's secret, for the fingerprints of the keys Hide wrote
+    /// ([`Written::keys`]); none before anything with keys was written.
+    pub(crate) secret: Option<crate::mcp_keys::KeysSecret>,
 }
 
 impl Ctx<'_> {
@@ -1173,6 +1180,10 @@ fn run(
         Err(reason) => return refused(reason),
     };
     let before = store.clone();
+    let secret = match crate::mcp_keys::secret(&dir, mode == Mode::Apply && dir.is_dir()) {
+        Ok(secret) => secret,
+        Err(error) => return refused(error.to_string()),
+    };
     let ctx = Ctx {
         target,
         dir,
@@ -1181,6 +1192,7 @@ fn run(
         record,
         scope,
         fresh: mode == Mode::Apply,
+        secret,
     };
     let mut outcomes = Vec::new();
     if mode == Mode::Apply {
@@ -1285,6 +1297,9 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         Ok(store) => store,
         Err(reason) => return vec![("store".to_owned(), RemoveOutcome::Failed { reason })],
     };
+    // Without its secret, no copy whose keys Hide recorded reads as Hide's,
+    // so none is taken out.
+    let secret = crate::mcp_keys::secret(&dir, false).ok().flatten();
     let mut outcomes = Vec::new();
     let mut failed = false;
     let originals = sole_originals(&dir, &store);
@@ -1302,7 +1317,7 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
             if stays.contains(place.path.join(name).as_path()) {
                 continue;
             }
-            match take_out_if_ours(applier(kind), &at, name, written) {
+            match take_out_if_ours(applier(kind), &at, name, written, secret.as_ref()) {
                 Ok(true) => removed = true,
                 Ok(false) => {}
                 Err(reason) => failure = Some(reason),
@@ -1806,6 +1821,7 @@ pub(crate) fn export(
         record,
         scope: &scope,
         fresh: true,
+        secret: None,
     };
     let mut items = Vec::new();
     let mut size = 0;
@@ -1903,6 +1919,7 @@ fn copies_of<'a>(
     applier: &dyn Applier,
     places: &'a [Place],
     name: &str,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
 ) -> Result<Vec<(&'a Place, Entry)>, StoreRefusal> {
     let mut copies = Vec::new();
     for place in places {
@@ -1911,7 +1928,7 @@ fn copies_of<'a>(
             .get(&place.key)
             .and_then(|kept| kept.entries.get(name));
         match applier.entry(place, name) {
-            Ok(Some(entry)) if !ours(written, &entry) => copies.push((place, entry)),
+            Ok(Some(entry)) if !ours(written, &entry, secret) => copies.push((place, entry)),
             Ok(_) => {}
             Err(reason) => return Err(failed(reason)),
         }
@@ -1942,7 +1959,7 @@ fn adopt(
     let applier = applier(kind);
     let places = applier.places(ctx);
     let id = StoreItem::id_of(kind, name);
-    let copies = copies_of(store, applier, &places, name)?;
+    let copies = copies_of(store, applier, &places, name, ctx.secret.as_ref())?;
     let existing = store.item(&id).is_some();
     let chosen = match from {
         Some(key) => Some(
@@ -1998,10 +2015,13 @@ fn adopt(
     let digest = item.digest();
     // A copy is the item only with the item's keys too: one holding another
     // key is the operator's other server, and goes to the undo list whole.
-    let keys = applier.keys(ctx, &item).map_err(failed)?;
+    let keys = applier
+        .keys(&item, &ctx.item_files(&item.id))
+        .map_err(failed)?;
     for (place, entry) in &copies {
         if entry.digest == digest && entry.keys == keys && entry.link.is_none() && entry.whole {
-            record_written(store, place, &item, &digest);
+            let mark = keys_mark(keys.as_ref(), ctx.secret.as_ref());
+            record_written(store, place, &item, &digest, mark);
         } else if entry.link.is_some() {
             // A link goes as a link; what it leads to stays (D-20).
             applier.remove(place, name).map_err(failed)?;
@@ -2064,13 +2084,36 @@ fn set_aside(
 
 /// Whether a place's entry is the copy Hide wrote, unedited and holding
 /// nothing a copy leaves out.
-fn ours(written: Option<&Written>, entry: &Entry) -> bool {
-    written.is_some_and(|written| written.digest == entry.digest)
-        && entry.link.is_none()
+/// The fingerprint [`Written::keys`] keeps of `keys`, none without keys or
+/// before the store has a secret.
+fn keys_mark(
+    keys: Option<&mcp::KeyValues>,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
+) -> Option<String> {
+    keys.zip(secret)
+        .map(|(keys, secret)| keys.fingerprint(secret))
+}
+
+fn ours(
+    written: Option<&Written>,
+    entry: &Entry,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
+) -> bool {
+    written.is_some_and(|written| {
+        written.digest == entry.digest && written.keys == keys_mark(entry.keys.as_ref(), secret)
+    }) && entry.link.is_none()
         && entry.whole
 }
 
-fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, digest: &str) {
+/// Records Hide's copy of `item` at `place`, with the fingerprint of the
+/// keys written with it.
+fn record_written(
+    store: &mut StoreRecord,
+    place: &Place,
+    item: &StoreItem,
+    digest: &str,
+    keys: Option<String>,
+) {
     let kept = store
         .written
         .entry(place.key.clone())
@@ -2083,6 +2126,7 @@ fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, dige
     let written = Written {
         item: item.id.clone(),
         digest: digest.to_owned(),
+        keys,
     };
     if kept.entries.get(&item.name) != Some(&written) {
         kept.entries.insert(item.name.clone(), written);
@@ -2147,6 +2191,18 @@ fn reconcile(
     let applier = applier(item.kind);
     let columns = applier.columns();
     let digest = item.digest();
+    // The keys every write of this pass puts in with the item.
+    let keys = match applier.keys(item, &ctx.item_files(&item.id)) {
+        Ok(keys) => keys_mark(keys.as_ref(), ctx.secret.as_ref()),
+        Err(reason) => {
+            for place in places {
+                failures
+                    .0
+                    .insert((item.id.clone(), place.key.clone()), reason.clone());
+            }
+            return;
+        }
+    };
     for place in places {
         let governing: Vec<&Column> = columns
             .iter()
@@ -2169,7 +2225,7 @@ fn reconcile(
                     now: all.now || one.now,
                 },
             );
-        let held = match judge(store, applier, place, item, &digest) {
+        let held = match judge(store, applier, place, item, &digest, ctx.secret.as_ref()) {
             Ok(held) => held,
             Err(reason) => {
                 failures
@@ -2185,16 +2241,16 @@ fn reconcile(
         let result = if want.now && place.blocked.is_none() {
             match held {
                 Held::Missing | Held::Older => applier.write(ctx, place, item).map(|written| {
-                    record_written(store, place, item, &written);
+                    record_written(store, place, item, &written, keys.clone());
                     true
                 }),
                 // Hide's copy, written before the item's keys changed.
                 Held::Current if stale => applier.write(ctx, place, item).map(|written| {
-                    record_written(store, place, item, &written);
+                    record_written(store, place, item, &written, keys.clone());
                     true
                 }),
                 Held::Current => {
-                    record_written(store, place, item, &digest);
+                    record_written(store, place, item, &digest, keys.clone());
                     Ok(false)
                 }
                 Held::Theirs => Ok(false),
@@ -2274,6 +2330,7 @@ fn judge(
     place: &Place,
     item: &StoreItem,
     digest: &str,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
 ) -> Result<Held, String> {
     let written = store
         .written
@@ -2282,7 +2339,7 @@ fn judge(
         .filter(|written| written.item == item.id);
     Ok(match applier.entry(place, &item.name)? {
         None => Held::Missing,
-        Some(entry) if !ours(written, &entry) => Held::Theirs,
+        Some(entry) if !ours(written, &entry, secret) => Held::Theirs,
         Some(entry) if entry.digest == digest => Held::Current,
         Some(_) => Held::Older,
     })
@@ -2305,9 +2362,12 @@ fn take_out_if_ours(
     place: &Place,
     name: &str,
     written: &Written,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
 ) -> Result<bool, String> {
     match applier.entry(place, name)? {
-        Some(entry) if ours(Some(written), &entry) => applier.remove(place, name).map(|()| true),
+        Some(entry) if ours(Some(written), &entry, secret) => {
+            applier.remove(place, name).map(|()| true)
+        }
         _ => Ok(false),
     }
 }
@@ -2353,7 +2413,7 @@ fn release_orphans(
             .and_then(|places| places.iter().find(|place| place.key == key))
             .cloned()
             .unwrap_or_else(|| recorded_place(&key, &kept));
-        match take_out_if_ours(applier(kind), &at, &name, &written) {
+        match take_out_if_ours(applier(kind), &at, &name, &written, ctx.secret.as_ref()) {
             Ok(_) => forget_written(store, &key, &name),
             Err(reason) => log("store.release_failed", Some(&written.item), &reason),
         }
@@ -2433,7 +2493,7 @@ fn item_report(
         .map(|place| {
             let held = match failures.0.get(&(item.id.clone(), place.key.clone())) {
                 Some(reason) => Err(reason.clone()),
-                None => judge(store, applier, place, item, &digest),
+                None => judge(store, applier, place, item, &digest, ctx.secret.as_ref()),
             };
             (place, held)
         })
@@ -2576,7 +2636,7 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
     // What tells the copies apart, a digest and an MCP server's keys as
     // fingerprinted for this process alone, kept beside them and never
     // reported.
-    type Sameness = (String, Option<String>);
+    type Sameness = (String, Option<mcp::KeyValues>);
     let mut sameness: BTreeMap<(ItemKind, String), Vec<Sameness>> = BTreeMap::new();
     for (kind, places) in places {
         let applier = applier(*kind);

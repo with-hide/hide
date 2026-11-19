@@ -32,6 +32,8 @@ use serde::{Deserialize, Serialize};
 
 /// The key file's name in an item's folder.
 pub const FILE: &str = "keys.json";
+/// The store's secret's file in the store's folder ([`KeysSecret`]).
+pub const SECRET_FILE: &str = "keys.secret";
 /// The largest key file Hide reads or writes.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// The longest value of one key.
@@ -73,6 +75,80 @@ impl fmt::Display for KeyFileError {
                 write!(formatter, "{} could not be used: {kind}", path.display())
             }
         }
+    }
+}
+
+/// The store's own secret, which keys the fingerprints of key values the
+/// store's record keeps (which keys Hide wrote where, so a key the operator
+/// typed into a file by hand reads as theirs): 32 random bytes, in the
+/// owner-only [`SECRET_FILE`] beside the store's record. A fingerprint read
+/// without it tells nothing of a value, a short one included. It prints
+/// nothing of itself.
+#[derive(Clone, Eq, PartialEq)]
+pub struct KeysSecret([u8; 32]);
+
+impl KeysSecret {
+    pub(crate) fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for KeysSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("KeysSecret(••••)")
+    }
+}
+
+/// The secret of the store in `store_dir`, made the first time when `make`
+/// asks; none when it is not there and `make` does not. A file that is not
+/// the account's own private file, or not a secret this Hide made, is
+/// refused rather than used or replaced.
+pub fn secret(store_dir: &Path, make: bool) -> Result<Option<KeysSecret>, KeyFileError> {
+    let path = store_dir.join(SECRET_FILE);
+    let io = |kind: ErrorKind| KeyFileError::Io {
+        path: path.clone(),
+        kind,
+    };
+    match hide_platform::fs::private::open_own_file(&path, false) {
+        Ok(file) => {
+            if !hide_platform::fs::private::is_private(&path).unwrap_or(false) {
+                return Err(KeyFileError::NotPrivate { path });
+            }
+            let mut text = String::new();
+            file.take(128)
+                .read_to_string(&mut text)
+                .map_err(|error| io(error.kind()))?;
+            let text = text.trim();
+            let unreadable = || KeyFileError::Unreadable { path: path.clone() };
+            if text.len() != 64 {
+                return Err(unreadable());
+            }
+            let mut bytes = [0u8; 32];
+            for (at, byte) in bytes.iter_mut().enumerate() {
+                *byte =
+                    u8::from_str_radix(&text[at * 2..at * 2 + 2], 16).map_err(|_| unreadable())?;
+            }
+            Ok(Some(KeysSecret(bytes)))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound && make => {
+            let mut bytes = [0u8; 32];
+            getrandom::getrandom(&mut bytes).map_err(|_| io(ErrorKind::Other))?;
+            let text: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            hide_platform::fs::private::create_dir_all(store_dir)
+                .map_err(|error| io(error.kind()))?;
+            hide_platform::fs::atomic::write_file(
+                &path,
+                format!("{text}\n").as_bytes(),
+                hide_platform::fs::Access::Private,
+            )
+            .map_err(|error| io(error.kind()))?;
+            Ok(Some(KeysSecret(bytes)))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == ErrorKind::PermissionDenied => {
+            Err(KeyFileError::NotPrivate { path })
+        }
+        Err(error) => Err(io(error.kind())),
     }
 }
 
