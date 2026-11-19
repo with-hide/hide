@@ -1141,8 +1141,9 @@ fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
 
 /// B49, D-50: the work a machine this one opens told of stands in the
 /// snapshot under that machine while it is connected, replaced whole each
-/// time; a machine this one does not open is refused, and the rows go when
-/// the machine is no longer connected.
+/// time; a machine this one does not open is refused, the rows go when
+/// the machine is no longer connected, and a list that arrives before the
+/// paired machines' list says the connection is up shows when it does.
 #[test]
 fn a_connected_machines_own_work_is_listed_until_it_is_no_longer_connected() {
     let mut runtime = runtime();
@@ -1219,7 +1220,31 @@ fn a_connected_machines_own_work_is_listed_until_it_is_no_longer_connected() {
         machine("active", false)
     ));
     assert!(runtime.snapshot.navigator.peer_work.is_empty());
-    assert!(!dispatch(&mut runtime, "peer_work", work("Fix login")));
+    // It connects again and tells its list first: the list is kept, and
+    // shows once the paired machines' list says it is connected. What it
+    // told before it left is gone.
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", true)
+    ));
+    assert!(runtime.snapshot.navigator.peer_work.is_empty());
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", false)
+    ));
+    assert!(!dispatch(&mut runtime, "peer_work", work("Fix signup")));
+    assert!(runtime.snapshot.navigator.peer_work.is_empty());
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", true)
+    ));
+    assert_eq!(
+        runtime.snapshot.navigator.peer_work[0].told.rows[0].title,
+        "Fix signup"
+    );
 
     // Connected and paused: not opened now, so nothing of it is listed.
     assert!(dispatch(

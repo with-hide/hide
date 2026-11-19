@@ -2660,7 +2660,7 @@ impl Runtime {
                 if changed {
                     let before =
                         std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
-                    self.drop_unreachable_peer_work();
+                    self.peer_work_follows_machines(&before);
                     self.reconcile_peer_devices(&before);
                 }
                 self.core_machines_told();

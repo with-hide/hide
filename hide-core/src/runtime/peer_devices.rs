@@ -29,67 +29,81 @@ fn active(machine: &PeerMachine) -> bool {
 
 impl Runtime {
     /// Takes what the machine under `key` told of its own work, or forgets
-    /// it when it tells no more (D-50). Only a connected machine this one
-    /// may open is listed: what another sends is refused and recorded.
+    /// it when it tells no more (D-50). Only a machine this one may open is
+    /// kept: what another sends is refused and recorded.
     pub(super) fn take_peer_work(
         &mut self,
         key: &str,
         work: Option<crate::peer_work::Told>,
     ) -> bool {
-        let held = self
-            .snapshot
-            .navigator
-            .peer_work
-            .iter()
-            .position(|peer| peer.key == key);
         let Some(told) = work else {
-            return held
-                .map(|index| self.snapshot.navigator.peer_work.remove(index))
-                .is_some();
+            self.peer_told.remove(key);
+            return self.list_peer_work();
         };
-        let Some(device_id) = self
+        let opened = self
             .snapshot
             .navigator
             .peers
             .iter()
-            .find(|machine| machine.key == key && active(machine) && machine.connected)
-            .map(|machine| machine.device_id.clone())
-        else {
+            .any(|machine| machine.key == key && active(machine));
+        if !opened {
             crate::diagnostic!(serde_json::json!({
                 "component": "peer_work",
                 "kind": "peer_work.refused",
                 "target": key,
-                "reason": "not a connected machine this one opens",
+                "reason": "not a machine this one opens",
             }));
             return false;
-        };
-        let work = crate::peer_work::PeerWork {
-            device_id,
-            key: key.to_owned(),
-            told,
-        };
-        match held {
-            Some(index) if self.snapshot.navigator.peer_work[index] == work => false,
-            Some(index) => {
-                self.snapshot.navigator.peer_work[index] = work;
-                true
-            }
-            None => {
-                self.snapshot.navigator.peer_work.push(work);
-                true
-            }
         }
+        self.peer_told.insert(key.to_owned(), told);
+        self.list_peer_work()
     }
 
-    /// A machine that is no longer connected, or no longer opened, has no
-    /// rows here: its list goes with the connection (D-50).
-    pub(super) fn drop_unreachable_peer_work(&mut self) {
+    /// The paired machines changed from `before`: a machine that
+    /// disconnected has no rows here until it tells them again, and the
+    /// list follows (D-50).
+    pub(super) fn peer_work_follows_machines(&mut self, before: &[PeerMachine]) {
         let peers = &self.snapshot.navigator.peers;
-        self.snapshot.navigator.peer_work.retain(|work| {
+        self.peer_told.retain(|key, _| {
+            let was = before
+                .iter()
+                .any(|machine| machine.key == *key && machine.connected);
+            let is = peers
+                .iter()
+                .any(|machine| machine.key == *key && machine.connected);
+            !was || is
+        });
+        self.list_peer_work();
+    }
+
+    /// Lists what the connected machines this one opens told, in the paired
+    /// machines' order, and forgets a machine this one opens no longer. A
+    /// list held for a machine not connected yet shows when it is. True
+    /// when the snapshot's list changed.
+    fn list_peer_work(&mut self) -> bool {
+        let peers = &self.snapshot.navigator.peers;
+        self.peer_told.retain(|key, _| {
             peers
                 .iter()
-                .any(|machine| machine.key == work.key && active(machine) && machine.connected)
+                .any(|machine| machine.key == *key && active(machine))
         });
+        let listed: Vec<crate::peer_work::PeerWork> = peers
+            .iter()
+            .filter(|machine| active(machine) && machine.connected)
+            .filter_map(|machine| {
+                let told = self.peer_told.get(&machine.key)?;
+                Some(crate::peer_work::PeerWork {
+                    device_id: machine.device_id.clone(),
+                    key: machine.key.clone(),
+                    told: told.clone(),
+                })
+            })
+            .collect();
+        if self.snapshot.navigator.peer_work == listed {
+            return false;
+        }
+        self.snapshot.navigator.peer_work = listed;
+        true
     }
 
     /// Who answers a call made in `folder` on this machine and proved by
