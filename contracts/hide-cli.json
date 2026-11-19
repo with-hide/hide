@@ -3178,11 +3178,17 @@
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide workspace purpose`: the purpose the checkout now shows.",
             "properties": {
+                "checkout": {
+                    "description": "The folder of the checkout that shows it.",
+                    "type": "string"
+                },
                 "purpose": {
+                    "description": "The purpose, empty once cleared.",
                     "type": "string"
                 }
             },
             "required": [
+                "checkout",
                 "purpose"
             ],
             "title": "PurposeSet",
@@ -5332,7 +5338,8 @@
                 "pane_required",
                 "purpose_invalid",
                 "purpose_too_long",
-                "purpose_no_workspace"
+                "purpose_no_workspace",
+                "purpose_checkout_unlisted"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7000,7 +7007,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:53d4a2d1d3e4d4aa1a325301404c5b458cc486c4ebcd9c9167e84b3ff05393fc",
+    "digest": "sha256:d660dfb3c43e001bbdb27b3fb408e15dc1e0d8eecc16564a9786cc254515cb81",
     "envelopes": {
         "access": {
             "answer": "value",
