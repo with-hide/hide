@@ -84,7 +84,7 @@ import { requestLine } from "./editor/lineRequest";
 import { paneContext, terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } from "./externalFiles";
 import type { AiItemRef } from "./hideAi";
-import { homeOpening } from "./hideAiOrigin";
+import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
@@ -2751,6 +2751,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
+      // An automation run's row opens its terminal in the automation screen, where the run is; a View it opened opens as any row's does (PRD automations B15).
+      const run = agent?.look ? null : automationOpening(state.automations, agent);
+      if (run) return this.openAutomation(run.id, run.run);
       this.openAgent(paneId, agent?.look);
     },
 

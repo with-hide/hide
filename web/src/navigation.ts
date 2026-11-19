@@ -14,7 +14,7 @@ import { translate } from "./i18n/client";
 import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { hideAiPlace } from "./hideAiOrigin";
+import { hideAiPlace, originLine, type AutomationNames } from "./hideAiOrigin";
 import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
 import { startAnswer } from "./startAnswer";
@@ -139,10 +139,11 @@ export function agentPlaces(
   remote: RemoteStatus[] | undefined,
   devices: Device[] | undefined,
   hideAi?: ReadonlyMap<string, HideAi>,
+  names?: AutomationNames,
 ): (device: string | null, paneId: string) => string | null {
-  const byDevice = new Map<string | null, Map<string, string>>([[null, checkoutPlaces(localWorkspaces ?? [], hideAi)]]);
+  const byDevice = new Map<string | null, Map<string, string>>([[null, checkoutPlaces(localWorkspaces ?? [], hideAi, names)]]);
   for (const status of remote ?? []) {
-    byDevice.set(deviceLabel(devices, status.target_id), checkoutPlaces((status.session?.workspaces ?? []).filter((p) => p.agent_scope.places_live), hideAi));
+    byDevice.set(deviceLabel(devices, status.target_id), checkoutPlaces((status.session?.workspaces ?? []).filter((p) => p.agent_scope.places_live), hideAi, names));
   }
   return (device, paneId) => byDevice.get(device)?.get(paneId) ?? null;
 }
@@ -150,16 +151,22 @@ export function agentPlaces(
 /**
  * Where each pane sits, as `project › branch` (Home, or the project alone for
  * a plain folder), keyed by pane id. A pane whose agent Hide AI started names
- * its task where the branch would stand (`project › Memory 반영하기 · m72`).
+ * its task where the branch would stand (`project › Memory 반영하기 · m72`);
+ * one in an automation's own folder, which is no project, names the task
+ * alone (`↻ 자동화: <이름>`, PRD automations B15, B30).
  */
-export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<string, HideAi>): Map<string, string> {
+export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<string, HideAi>, names?: AutomationNames): Map<string, string> {
   const places = new Map<string, string>();
   for (const workspace of workspaces) {
     for (const [pane, value] of Object.entries(workspace.agent_scope.places)) {
       const checkout = workspace.checkouts.find((c) => c.id === value.checkout_id);
       if (!checkout) throw new Error(`Missing place checkout: ${value.checkout_id}`);
       const started = hideAi?.get(pane);
-      places.set(pane, value.kind === "folder" ? workspace.label : started ? hideAiPlace(translate, workspace.label, started) : `${workspace.label} › ${checkout.branch ?? checkout.label}`);
+      if (workspace.unlisted) {
+        if (started) places.set(pane, originLine(translate, started, names));
+        continue;
+      }
+      places.set(pane, value.kind === "folder" ? workspace.label : started ? hideAiPlace(translate, workspace.label, started, names) : `${workspace.label} › ${checkout.branch ?? checkout.label}`);
     }
   }
   return places;

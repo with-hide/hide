@@ -4,6 +4,7 @@ import type { Actions } from "./actions";
 import { deviceScope, type ToolCell } from "./agentScope";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { deviceMissionAsks } from "./components/sidebar-mission-row";
+import { missionOwnAsks, ownAskProject } from "./ownAsks";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
@@ -55,7 +56,7 @@ export function projectCounts(tasks: TaskList, prs: PrListModel, prTurn = true):
     counts.set(id, count);
   };
   for (const group of tasks.groups) for (const entry of group.entries) add(entry.project?.id, groupOf(entry.card.state) === "needs_you");
-  for (const group of tasks.groups) for (const band of group.bands) for (const ask of band.missions) add(ask.mission.workspace_id, true);
+  for (const group of tasks.groups) for (const band of group.bands) for (const own of band.asks) add(ownAskProject(own) ?? undefined, true);
   for (const group of prs.groups) {
     if (group.group === "merged") continue;
     for (const entry of [...group.entries, ...group.team, ...group.old]) add(entry.project.id, prTurn && group.group === "needs_you");
@@ -65,7 +66,7 @@ export function projectCounts(tasks: TaskList, prs: PrListModel, prTurn = true):
 
 function deviceCounts(rest: SnapshotRest | null, localAgents: AgentRow[], deviceId: string): Map<string, ProjectCount> {
   const byPane = agentsByPane(allAgents(localAgents, rest?.status?.remote));
-  const tasks = taskList(deviceScope(rest, deviceId)?.tasks, deviceId, byPane, catalogWorkspaces(rest), "status", [], deviceMissionAsks(rest, deviceId));
+  const tasks = taskList(deviceScope(rest, deviceId)?.tasks, deviceId, byPane, catalogWorkspaces(rest), "status", [], missionOwnAsks(deviceMissionAsks(rest, deviceId)));
   return projectCounts(tasks, prListModel(boardProjects(rest, localAgents, deviceId), null, Date.now()));
 }
 

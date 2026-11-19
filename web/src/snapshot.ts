@@ -100,9 +100,10 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
+ * A Memory promotion or a suggestion's home is the Hide AI tool's 제안 tab, where it is one of the rows (PRD hide-ai-suggestions D-02, B2);
+ * an automation run's is the automation screen, where its terminal is (PRD automations D-11, B15).
  */
-export type HideAiHome = "suggestions";
+export type HideAiHome = "suggestions" | "automations";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 /** `branch_ready`: the agent committed on its branch and the operator decides (PRD hide-ai-branch-first-apply B3). */
