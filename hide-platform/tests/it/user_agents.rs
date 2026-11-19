@@ -392,7 +392,7 @@ fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
     let agent = LoginAgent {
         label: "example.agent",
         program: Path::new("/opt/a b/hided"),
-        arguments: &["core-login", "--state-dir", "/home/x/state"],
+        arguments: &["core-login", "--state-dir", "/home/example/state"],
         environment: &[],
         log: &home.join("agent.log"),
     };
@@ -406,7 +406,7 @@ fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
     );
     assert!(
         unit.contains(
-            "ExecStart=\"/opt/a b/hided\" \"core-login\" \"--state-dir\" \"/home/x/state\"\n"
+            "ExecStart=\"/opt/a b/hided\" \"core-login\" \"--state-dir\" \"/home/example/state\"\n"
         ),
         "{unit}"
     );

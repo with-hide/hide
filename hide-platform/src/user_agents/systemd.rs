@@ -451,20 +451,20 @@ mod tests {
     fn a_unit_keeps_every_word_as_written() {
         let agent = LoginAgent {
             label: "dev.withhide.core",
-            program: Path::new("/home/a b/.hide/core/0123/hided"),
-            arguments: &["core-login", "--state-dir", "/home/a%b/$x\"y"],
+            program: Path::new("/home/example/a b/.hide/core/0123/hided"),
+            arguments: &["core-login", "--state-dir", "/home/example/a%b/$x\"y"],
             environment: &[("HIDE_KEEP_ALIVE", "1")],
-            log: Path::new("/home/a b/state/Logs/core.log"),
+            log: Path::new("/home/example/a b/state/Logs/core.log"),
         };
-        let unit = unit(&agent, Path::new("/home/a b/state/keep-alive"));
+        let unit = unit(&agent, Path::new("/home/example/a b/state/keep-alive"));
         assert!(
             unit.contains(
-                "ExecStart=\"/home/a b/.hide/core/0123/hided\" \"core-login\" \"--state-dir\" \"/home/a%%b/$$x\\\"y\"\n"
+                "ExecStart=\"/home/example/a b/.hide/core/0123/hided\" \"core-login\" \"--state-dir\" \"/home/example/a%%b/$$x\\\"y\"\n"
             ),
             "{unit}"
         );
         assert!(
-            unit.contains("ConditionPathExists=/home/a b/state/keep-alive\n"),
+            unit.contains("ConditionPathExists=/home/example/a b/state/keep-alive\n"),
             "{unit}"
         );
         assert!(

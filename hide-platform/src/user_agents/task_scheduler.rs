@@ -351,8 +351,8 @@ mod tests {
     fn a_task_starts_at_logon_repeats_and_runs_under_a_headless_console() {
         let agent = LoginAgent {
             label: "dev.withhide.core",
-            program: Path::new("C:\\Users\\a&b\\.hide\\core\\0123\\hided.exe"),
-            arguments: &["core-login", "--state-dir", "C:\\Users\\a&b\\.hide\\state"],
+            program: Path::new("C:\\Users\\example\\a&b\\.hide\\core\\0123\\hided.exe"),
+            arguments: &["core-login", "--state-dir", "C:\\Users\\example\\a&b\\.hide\\state"],
             environment: &[],
             log: Path::new("C:\\unused"),
         };
@@ -370,7 +370,7 @@ mod tests {
             "{task}"
         );
         assert!(
-            task.contains("<Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless &quot;C:\\Users\\a&amp;b\\.hide\\core\\0123\\hided.exe&quot; &quot;core-login&quot; &quot;--state-dir&quot; &quot;C:\\Users\\a&amp;b\\.hide\\state&quot;</Arguments>"),
+            task.contains("<Command>C:\\Windows\\System32\\conhost.exe</Command><Arguments>--headless &quot;C:\\Users\\example\\a&amp;b\\.hide\\core\\0123\\hided.exe&quot; &quot;core-login&quot; &quot;--state-dir&quot; &quot;C:\\Users\\example\\a&amp;b\\.hide\\state&quot;</Arguments>"),
             "{task}"
         );
         assert_eq!(&utf16_le("<")[..4], &[0xFF, 0xFE, b'<', 0]);
