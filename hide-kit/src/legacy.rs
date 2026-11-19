@@ -188,7 +188,9 @@ pub fn build_of(program: &str) -> Result<BuildPlace, String> {
     let (folder, name) = program.rsplit_once('/').ok_or_else(not_a_build)?;
     let (root, version) = folder.rsplit_once('/').ok_or_else(not_a_build)?;
     if !matches!(name, "hided" | "hided.exe")
-        || !is_build_name(version) || !hide_platform::path::is_wire_absolute(root) {
+        || !is_build_name(version)
+        || !hide_platform::path::is_wire_absolute(root)
+    {
         return Err(not_a_build());
     }
     Ok(BuildPlace {

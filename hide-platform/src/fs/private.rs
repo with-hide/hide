@@ -1021,7 +1021,10 @@ mod sys {
         if unsafe { GetUserProfileDirectoryW(token.0, buffer.as_mut_ptr(), &mut units) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let length = buffer.iter().position(|unit| *unit == 0).unwrap_or(buffer.len());
+        let length = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
         Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
             &buffer[..length],
         )))
