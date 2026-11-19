@@ -308,6 +308,12 @@ const PAIRING_ANSWER_LIMIT: u64 = 256 * 1024;
 /// socket. The answer is the daemon's line, a refusal included; an `Err` is
 /// the reason none arrived.
 pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    pairing_ask_within(env, ask, PAIRING_TIMEOUT)
+}
+
+/// [`pairing_ask`] for an ask whose answer is the end of work the daemon
+/// does first, which `within` bounds.
+pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
     let request = serde_json::to_value(PaneRequest {
@@ -324,7 +330,7 @@ pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
     .map_err(|_| "reference_unavailable".to_owned())?;
     let mut stream = connect_bootstrap(&env.state_dir)?;
     stream
-        .set_read_timeout(Some(PAIRING_TIMEOUT))
+        .set_read_timeout(Some(within))
         .map_err(|_| "hide_unavailable".to_owned())?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     let mut line = String::new();

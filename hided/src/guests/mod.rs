@@ -1728,6 +1728,80 @@ mod tests {
         PeerKey::from_hex(&format!("{byte:02x}").repeat(32)).unwrap()
     }
 
+    /// D-49, D-75: the folder a device helper ran in goes to the first
+    /// paired machine that asks for it with the helper's root, a later one
+    /// is told who holds it and keeps a folder of its own, and a holder
+    /// whose pairing never finished is replaced.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_paired_machine_to_ask_takes_the_helpers_folder_and_a_later_one_is_told_who_holds_it()
+     {
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        let root = "~/.hide/host-helper";
+        let paired = |_: &PeerKey| true;
+        assert_eq!(
+            guests.take_helper(&key(1), root, paired),
+            HelperFolder::Absent,
+            "no helper ever ran on this account"
+        );
+        // What an SSH device left: its node's folder with its panes'
+        // records, and a build under the root its core was allowed.
+        let node = layout::device_node_state(home.path());
+        std::fs::create_dir_all(layout::pane_records(&node)).unwrap();
+        let build = home.path().join(".hide/host-helper/0123456789abcdef");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(
+            build.join(format!("hided{}", std::env::consts::EXE_SUFFIX)),
+            b"",
+        )
+        .unwrap();
+        assert_eq!(
+            guests.take_helper(&key(1), "~/elsewhere", paired),
+            HelperFolder::Absent,
+            "a folder with no build of Hide's is no helper root"
+        );
+
+        assert_eq!(guests.take_helper(&key(1), root, paired), HelperFolder::Taken);
+        assert_eq!(
+            guests.take_helper(&key(1), root, paired),
+            HelperFolder::Taken,
+            "the same machine asks again"
+        );
+        let place = guests.place(&key(1));
+        assert!(place.helper);
+        assert_eq!(place.node, node);
+        assert_eq!(place.install, home.path().join(".hide/host-helper"));
+
+        assert_eq!(
+            guests.helper_for(&key(2), root, paired),
+            HelperFolder::HeldBy(key(1))
+        );
+        assert_eq!(
+            guests.take_helper(&key(2), root, paired),
+            HelperFolder::HeldBy(key(1)),
+            "a later machine changes nothing"
+        );
+        assert!(guests.place(&key(1)).helper);
+        let own = guests.place(&key(2));
+        assert!(!own.helper);
+        assert!(own.node.starts_with(state.path()), "{:?}", own.node);
+
+        // The holder holds no grant here and runs nothing: its pairing
+        // never finished, and the next machine takes the folder.
+        assert_eq!(
+            guests.take_helper(&key(2), root, |_| false),
+            HelperFolder::Taken
+        );
+        assert!(guests.place(&key(2)).helper);
+        assert!(!guests.place(&key(1)).helper);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_guests_panes_go_by_a_device_id_that_is_its_own_on_this_machine() {
         let state = short_root();

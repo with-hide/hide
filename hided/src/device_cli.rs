@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--own-folder] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -28,6 +28,11 @@ pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\n
 /// once, so this bounds only the attempt's own work.
 const WAIT_BOUND: Duration = Duration::from_secs(300);
 const WAIT_POLL: Duration = Duration::from_millis(500);
+
+/// How long `switch` waits for its answer: past ssh signing in, the target
+/// answering twice and the new connection being confirmed
+/// (`pairing::SWITCH_CONNECTS_WITHIN`).
+const SWITCH_BOUND: Duration = Duration::from_secs(240);
 
 /// How long a share or a pasted link is followed: past the link's nine
 /// minutes and the two an answer may take.
@@ -86,6 +91,13 @@ pub enum Verb {
     Retry {
         device: String,
     },
+    /// An SSH device switched to the connection of the Hide on its machine
+    /// (D-49). `own_folder` goes on after another machine switched it first
+    /// (D-75).
+    Switch {
+        device: String,
+        own_folder: bool,
+    },
     /// What a machine about to pair over SSH runs on its target first: it
     /// changes nothing and says whether a Hide of the target's own runs
     /// (B7); not a command a person types.
@@ -119,6 +131,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut json = false;
     let mut wait = false;
     let mut wsl = false;
+    let mut own_folder = false;
     let mut helper = None;
     let mut direction = None;
     let (mut name, mut request, mut key, mut device) = (None, None, None, None);
@@ -131,6 +144,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             }
             "--wait" if verb == Some("retry") && !wait => {
                 wait = true;
+                continue;
+            }
+            "--own-folder" if verb == Some("switch") && !own_folder => {
+                own_folder = true;
                 continue;
             }
             "--wsl" if accept && !wsl => {
@@ -209,6 +226,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         }
         (Some("retry"), [device]) => Verb::Retry {
             device: named(device)?,
+        },
+        (Some("switch"), [device]) => Verb::Switch {
+            device: named(device)?,
+            own_folder,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
         (Some("accept-ssh"), []) => match (request, key, device, name) {
@@ -378,6 +399,36 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             ),
             Err(refused) => Err(refused),
         },
+        Verb::Switch { device, own_folder } => {
+            operators(env)?;
+            let ask = json!({"verb":"switch","device":device,"own_folder":own_folder});
+            let mut answer = crate::workspace_cli::pairing_ask_within(env, ask, SWITCH_BOUND)
+                .map_err(Refused::Unreachable)?;
+            if answer["ok"] != true {
+                let code = answer["reason"]
+                    .as_str()
+                    .unwrap_or("device_unavailable")
+                    .to_owned();
+                let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
+                return Err(Refused::Answer { code, message });
+            }
+            if let Some(fields) = answer.as_object_mut() {
+                fields.remove("ok");
+            }
+            let lines = match answer["switch"].as_str() {
+                Some("held") => format!(
+                    "{} switched {device} first, and its terminals there carry on. Run hide device switch {device} --own-folder to go on: the terminals this machine ran there close, and their AI conversations can be resumed.\n",
+                    answer["by"].as_str().unwrap_or("Another computer"),
+                ),
+                Some("install_needed") => format!(
+                    "{device} runs no Hide of its own. Install Hide there, then run hide device switch {device} again.\n"
+                ),
+                _ => format!(
+                    "Switched {device} to the new connection. Its running terminals carry on.\n"
+                ),
+            };
+            Ok(Printed::Value(answer, lines))
+        }
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
             let look = |core: bool| json!({"system": std::env::consts::OS, "core": core});

@@ -839,3 +839,164 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
         Ok(())
     })
 }
+
+/// `hide device switch` for the fixture's device, at a terminal of the
+/// core's machine: whether it succeeded, and the line it answered.
+fn switch_device(fixture: &Fixture) -> Result<(bool, Value)> {
+    let mut command = fixture.local.environment.command(&fixture.hide);
+    command.args(["device", "switch", fixture::DEVICE, "--json"]);
+    let ran = fixture::capture(command)?;
+    let text = String::from_utf8_lossy(&ran.stdout).into_owned();
+    let answer = serde_json::from_str(text.lines().last().unwrap_or_default()).with_context(|| {
+        format!(
+            "the switch answered no JSON line: {text} {}",
+            String::from_utf8_lossy(&ran.stderr)
+        )
+    })?;
+    Ok((ran.status.success(), answer))
+}
+
+/// The fixture's device as the core's snapshot lists it.
+fn device_row(snapshot: &Value) -> Result<Value> {
+    snapshot
+        .pointer("/navigator/devices")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|row| row["id"] == fixture::DEVICE))
+        .cloned()
+        .context("the device left the core's list")
+}
+
+/// The switch of an SSH device to the connection of the Hide on its machine
+/// (PRD device-connect-iroh D-49, B36, B41), over the system's ssh and two
+/// daemons: the core's, and the device account's own.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_on() -> Result<()> {
+    Fixture::journey(|fixture| {
+        // The stand-in agent in the device's pane, by the process its
+        // scripts are children of: the same one for as long as the
+        // terminal runs.
+        let stand_in = |fixture: &mut Fixture| -> Result<String> {
+            let ran = fixture.remote.run_in_pane("echo $PPID")?;
+            ensure!(ran.status == 0, "the pane's command failed: {}", ran.stderr);
+            Ok(ran.stdout.trim().to_owned())
+        };
+        let before = stand_in(fixture)?;
+        let session_pane = |fixture: &Fixture| -> Result<Option<String>> {
+            Ok(fixture::pane_on_session(
+                &fixture.snapshot()?,
+                "fixture-remote-session",
+            ))
+        };
+        ensure!(
+            session_pane(fixture)?.as_deref() == Some(fixture.remote.pane.as_str()),
+            "the device's agent is not in its pane before the switch"
+        );
+
+        // The account runs no Hide of its own: the switch asks first, and
+        // the device stays the helper's (B41).
+        let (ok, answer) = switch_device(fixture)?;
+        ensure!(
+            ok && answer["value"]["switch"] == "install_needed"
+                && answer["value"]["device_id"] == fixture::DEVICE,
+            "a device with no Hide of its own: {answer}"
+        );
+        let row = device_row(&fixture.snapshot()?)?;
+        ensure!(
+            row["peer_key"].is_null() && row["switch"].is_null(),
+            "a switch that asked first changed the device: {row}"
+        );
+
+        // The account's own Hide, as a login there runs it: the same home,
+        // state folder and machine id an SSH session of the account gets.
+        let account = fixture.remote.environment.clone();
+        let state = std::path::PathBuf::from(
+            account
+                .var("HIDE_STATE_DIR")
+                .context("the device account's state folder")?,
+        );
+        let mut own = account.clone();
+        own.set("HIDE_KEEP_ALIVE", "1");
+        own.set("HIDE_OPEN_COMMAND", "/usr/bin/true");
+        own.set("HIDE_TAILSCALE_BIN", account.home.join("absent-tailscale"));
+        for (name, value) in fixture::LOOPBACK_PEERS {
+            own.set(name, value);
+        }
+        std::fs::create_dir_all(state.join("Logs"))?;
+        let log = std::fs::File::create(state.join("Logs/own-hided.log"))?;
+        let mut command = own.command(fixture.hide.with_file_name("hided"));
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log);
+        let mut hide_there = hide_platform::process::OwnedChild::spawn(&mut command)?;
+        let journey = (|| -> Result<()> {
+            wait_for("the device account's own Hide", || {
+                Ok(state.join("hided.json").exists().then_some(()))
+            })?;
+
+            let (ok, answer) = switch_device(fixture)?;
+            ensure!(
+                ok && answer["value"]["switch"] == "done"
+                    && answer["value"]["folder"] == "taken",
+                "the switch: {answer}"
+            );
+            // The same device under the same name, now its machine's: the
+            // core reads it over the two Hides' connection.
+            wait_for("the device on its machine's connection", || {
+                let snapshot = fixture.snapshot()?;
+                let row = device_row(&snapshot)?;
+                let connected = snapshot
+                    .pointer("/status/remote")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row["target_id"] == fixture::DEVICE && row["state"] == "connected"
+                        })
+                    });
+                Ok((row["peer_key"].is_string() && row["switch"].is_null() && connected)
+                    .then_some(()))
+            })?;
+            let snapshot = fixture.snapshot()?;
+            let row = device_row(&snapshot)?;
+            ensure!(row["label"] == "Remote fixture", "the device's name: {row}");
+            let peers = snapshot
+                .pointer("/navigator/peers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            ensure!(
+                matches!(peers.as_slice(), [peer] if peer["key"] == row["peer_key"]
+                    && peer["opens"] == "active"),
+                "the paired machine: {peers:?}"
+            );
+            // The helper's folder is that machine's guest folder now, under
+            // the helper root the device was allowed.
+            let node = hide_kit::layout::device_node_state(&account.home);
+            let claim = hide_kit::layout::HelperGuest::read(&node)
+                .context("the helper folder names no guest")?;
+            ensure!(
+                claim.root == account.home.join("helper"),
+                "the helper folder's guest: {claim:?}"
+            );
+
+            // The terminal carried on: the agent is in the pane it was in,
+            // and the program in it is the one that ran before.
+            wait_for("the device's agent in its pane again", || {
+                Ok((session_pane(fixture)?.as_deref() == Some(fixture.remote.pane.as_str()))
+                    .then_some(()))
+            })?;
+            let after = stand_in(fixture)?;
+            ensure!(
+                before == after,
+                "the pane's program was started again: {before} then {after}"
+            );
+            Ok(())
+        })();
+        hide_there.kill_tree()?;
+        wait_for("the device account's own Hide ended", || {
+            Ok(hide_there.try_wait()?.map(|_| ()))
+        })?;
+        journey
+    })
+}

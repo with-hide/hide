@@ -1004,6 +1004,35 @@ pub const COMMANDS: &[Spec] = &[
             "device_wait_timeout",
         ],
     },
+    // Switches an SSH device to the connection of the Hide on its machine:
+    // the two are paired over the device's SSH login, and the device keeps
+    // its id, its name and its running terminals. `held` names the machine
+    // that switched it first; `--own-folder` goes on without its terminals.
+    Spec {
+        words: &["device", "switch"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--own-folder"), switch("--json")],
+        rest: None,
+        answers: &["device_switched"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "switch_unsupported",
+            "switch_running",
+            "switch_not_connected",
+            "ssh_not_reached",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "device_already_connected",
+        ],
+    },
     // What a machine about to pair over SSH runs on its target first: it
     // changes nothing there and answers whether a Hide of that account's
     // own runs. A refusal carries the same `look`, with `core` false on an
@@ -2142,6 +2171,7 @@ fn answers() -> Value {
     map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
     map.insert("device_allowed".into(), shape(&["answered"]));
     map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_switched".into(), shape(&["device_id", "switch"]));
     map.insert("device_accepted".into(), shape(&["accepted"]));
     map.insert("device_looked".into(), shape(&["look"]));
     map.insert(

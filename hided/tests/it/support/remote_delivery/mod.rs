@@ -31,6 +31,13 @@ pub const PROMPT: &str = "fixture-ready> ";
 /// The device's id, as the fixture registers it.
 pub const DEVICE: &str = "remote";
 
+/// What keeps a daemon's connection to another Hide on this machine: its
+/// endpoint binds loopback and reaches no relay.
+pub const LOOPBACK_PEERS: [(&str, &str); 2] = [
+    ("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws"),
+    ("HIDE_PEER_DIRECT", "127.0.0.1:0"),
+];
+
 /// The Claude Code version `Fixture::journey_installed` installs on the device,
 /// and the one the core's composer checks hold as passed.
 pub const FIXTURE_VERSION: &str = "2.1.319";
@@ -883,6 +890,11 @@ impl Fixture {
             "HIDE_TAILSCALE_BIN",
             local_env.home.join("absent-tailscale").into_os_string(),
         );
+        // A journey that pairs the two machines keeps their connection on
+        // this one: both endpoints bind loopback and name no relay.
+        for (name, value) in LOOPBACK_PEERS {
+            local_env.set(name, value);
+        }
         // Claude Code `FIXTURE_VERSION`'s composer was checked on a screen
         // that read empty, as an earlier run of the daemon left it
         // (`composer-checks.json`, docs/delivery.md, Catching an agent's
