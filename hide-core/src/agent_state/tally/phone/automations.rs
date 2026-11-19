@@ -12,8 +12,8 @@ use serde::Serialize;
 
 use super::{LIST_BUDGET, wire_len};
 use crate::automations::{
-    AutomationSnapshot, AutomationsSnapshot, MissedReason, PauseReason, RecordSnapshot,
-    RunSnapshot, RunState, Schedule, SkipReason, Trigger,
+    AutomationSnapshot, AutomationsSnapshot, MissedReason, Pause, RecordSnapshot, RunSnapshot,
+    RunState, Schedule, SkipReason, Trigger,
 };
 
 /// How many automations one frame carries, in the core's order; the rest are
@@ -31,6 +31,10 @@ pub struct PhoneAutomations {
     /// Automations past the caps, which no frame carries.
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted: usize,
+    /// The zone the schedules run in, by its IANA name: the phone words a
+    /// time in it, as the schedule reads (B6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -41,9 +45,9 @@ pub struct PhoneAutomation {
     pub schedule: Schedule,
     /// None while it is paused.
     pub next_run_at_unix_ms: Option<u64>,
-    /// Why it does not run on schedule; none while it is on.
+    /// Why it does not run on schedule, and since when; none while it is on.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub paused: Option<PauseReason>,
+    pub paused: Option<Pause>,
     /// A run goes now: [지금 실행] is off (B19).
     pub running: bool,
     pub unseen: usize,
@@ -104,7 +108,11 @@ impl PhoneAutomations {
             .map(phone_automation)
             .collect();
         omitted += fit(&mut items, LIST_BUDGET);
-        Self { items, omitted }
+        Self {
+            items,
+            omitted,
+            zone: section.zone.clone(),
+        }
     }
 
     pub fn find(&self, id: &str) -> Option<&PhoneAutomation> {
@@ -134,7 +142,7 @@ fn phone_automation(automation: &AutomationSnapshot) -> PhoneAutomation {
         name: automation.name.chars().take(NAME_CHARS).collect(),
         schedule: automation.reads_as.clone(),
         next_run_at_unix_ms: automation.next_run_at_unix_ms,
-        paused: automation.paused.map(|pause| pause.reason),
+        paused: automation.paused,
         running: automation.running,
         unseen: automation.unseen,
         records: automation
@@ -184,7 +192,7 @@ fn phone_run(run: &RunSnapshot) -> PhoneRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::automations::{AgentChoice, Folder, Pause};
+    use crate::automations::{AgentChoice, Folder, PauseReason};
     use serde_json::json;
 
     fn schedule() -> Schedule {
@@ -265,7 +273,11 @@ mod tests {
         assert_eq!(first.next_run_at_unix_ms, Some(42));
         assert_eq!(first.records.len(), 2);
         assert!(matches!(&first.records[0], PhoneRecord::Run(run) if run.number == 1));
-        assert_eq!(projected.find("b").unwrap().paused, Some(PauseReason::LoginExpired));
+        assert_eq!(
+            projected.find("b").unwrap().paused.map(|pause| pause.reason),
+            Some(PauseReason::LoginExpired)
+        );
+        assert_eq!(projected.zone.as_deref(), Some("Asia/Seoul"));
         let sent = serde_json::to_string(&projected).unwrap();
         for private in ["secret", "folder", "task", "pane", "branch"] {
             assert!(!sent.contains(private), "{private} reached the phone: {sent}");

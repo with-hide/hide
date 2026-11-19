@@ -321,6 +321,7 @@ fn prs_frame(prs: &PhonePrs) -> Value {
 fn automations_frame(automations: &PhoneAutomations) -> Value {
     json!({
         "type": "automations", "items": automations.items, "omitted": automations.omitted,
+        "zone": automations.zone,
     })
 }
 
@@ -3325,6 +3326,7 @@ mod tests {
                 records_omitted: 0,
             }],
             omitted: 0,
+            zone: None,
         }
     }
 
