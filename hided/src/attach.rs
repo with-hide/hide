@@ -629,14 +629,14 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         return;
     }
     // From here the stream carries the node's link and its screens'
-    // streams (`link_mux`); nothing of the handshake is left unread, since
+    // streams (`hide_peer::mux`); nothing of the handshake is left unread, since
     // the node writes nothing more until it reads the acceptance.
     drop(reader);
     drop(writer);
     let _ = stream.set_read_timeout(None);
     // The connection ends when `served` drops: on a failure below, or once
     // the core is done with the link.
-    let (served, stream) = match crate::link_mux::serve(stream) {
+    let (served, stream) = match hide_peer::mux::serve(stream) {
         Ok(served) => served,
         Err(error) => {
             service.grants.revoke(&relay_token);

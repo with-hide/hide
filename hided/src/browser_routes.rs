@@ -32,10 +32,10 @@ use tokio::sync::{Mutex, Semaphore, oneshot, watch};
 
 use crate::browser_assets::{self, Asset};
 use crate::core::CoreHandle;
-use crate::link_mux::Mux;
 use crate::page_forward::{PageForward, PageLink};
 use crate::state_file::new_token;
 use hide_node::pane_proof::process_start;
+use hide_peer::mux::Mux;
 
 const MAX_ROUTES: usize = 12;
 const MAX_ROUTE_BUILDS: usize = 4;

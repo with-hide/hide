@@ -27,8 +27,19 @@ platforms = [
 # pane holder that links it, and the protocol it speaks, stay off it too: a
 # holder runs for as long as its pane and carries its few dependencies only,
 # the screen rules it will evaluate among them.
+# What two machines say to each other stays off it as well: its four
+# dependencies are all the contract file is written from
+# (contracts/README.md, Peer link).
 # Their own dependencies still count toward everyone else's features.
+#
+# The iroh transport, `hide-peer-iroh`, is on it: what iroh turns on in the
+# crates everything shares (tokio, syn, tower, hyper-util, once_cell) would
+# otherwise differ between a `--workspace` command and a `-p` one, and each
+# would build nearly every crate again. A crate only the transport reaches
+# must not be listed, or every member would build it;
+# `scripts/check-iroh-stays-behind-the-seam.py` fails when one is, and it
+# then goes under `third-party` below.
 [final-excludes]
 # The relay protocol also builds for browsers; the native workspace feature
 # union includes OS-only crates which cannot enter that WASM module.
-workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol"]
+workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol", "hide-peer-protocol"]

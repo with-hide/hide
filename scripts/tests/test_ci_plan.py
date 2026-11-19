@@ -251,6 +251,35 @@ class Selection(unittest.TestCase):
         self.assertEqual(set(contract["lanes"]), (set(node["lanes"]) | {"checks", "package"}) - {"repeat"})
         self.assertIn("repeat", node["lanes"])
 
+    def test_the_peer_link_contract_plans_what_the_crate_that_includes_it_plans(self):
+        contract = plan("contracts/peer-link.json")
+        self.assertFalse(contract["full"])
+        protocol = plan("hide-peer-protocol/src/hello.rs")
+        self.assertEqual(contract["rust_packages"], protocol["rust_packages"])
+        # The daemon links it through hide-peer, so its lanes run too.
+        self.assertLessEqual({"hide-peer-protocol", "hide-peer", "hide-kit", "hided"}, set(contract["rust_packages"]))
+        self.assertEqual(set(contract["lanes"]), set(protocol["lanes"]) - {"repeat"})
+
+    def test_licenses_and_advisories_are_checked_where_a_dependency_changed_and_nightly(self):
+        for path in ("Cargo.lock", "deny.toml", "scripts/install-cargo-deny.sh"):
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertTrue(result["deny"])
+                # The Rust lane, which runs the check, is planned with it.
+                self.assertIn("rust", result["lanes"])
+        for path in ("hide-peer/src/peers.rs", "hide-peer-iroh/Cargo.toml", ".github/workflows/pr.yml", "docs/BUILD.md"):
+            with self.subTest(path=path):
+                self.assertFalse(plan(path)["deny"])
+        # A new advisory is the nightly's to find; it never stops main.
+        self.assertFalse(ci.plan("push", None, None, ROOT)["deny"])
+        for event in ("schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(ci.plan(event, None, None, ROOT)["deny"])
+                self.assertTrue(ci.plan(event, None, None, ROOT, nightly_agent_checks=True)["deny"])
+        rust = pr_jobs()["rust"]
+        self.assertIn("DENY: ${{ needs.plan.outputs.deny }}", rust)
+        self.assertEqual(rust.count("if: env.DENY == 'true'"), 2)
+
     def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
         pin = plan("contracts/conpty.json")
         self.assertFalse(pin["full"])
@@ -311,19 +340,20 @@ class Selection(unittest.TestCase):
         )
         self.assertNotIn("desktop-e2e", result["lanes"])
         # The data-only adapter and the screen rules it compiles, the
-        # text-only shell reader and the terminal parser are independent, and
-        # workspace-hack depends on no member; every other crate consumes the
-        # platform layer.
+        # text-only shell reader, the terminal parser and what two machines
+        # say to each other are independent, and workspace-hack depends on no
+        # member; every other crate consumes the platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "hide-peer-protocol",
+                                          "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
         # These consumers follow the workspace manifests, independently of the planner.
         consumers = [
             "hide-agent-adapter", "hide-agent-hooks", "hide-ai", "hide-core", "hide-desk", "hide-holder", "hide-host",
-            "hide-kit", "hide-memory", "hide-node", "hide-node-link", "hide-session", "hided",
+            "hide-kit", "hide-memory", "hide-node", "hide-node-link", "hide-peer", "hide-peer-iroh", "hide-session", "hided",
         ]
         for path in ("hide-agent-adapter/src/lib.rs", "hide-agent-adapter/Cargo.toml"):
             with self.subTest(path=path):

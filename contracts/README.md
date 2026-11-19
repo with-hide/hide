@@ -72,3 +72,16 @@ It gives the release manifest's format and name, the archive name, the four prog
 It is written by hand, and its readers are the core, which compiles it in (`hide-node/src/ssh/kit/contract.rs`), and the packaging scripts (`desktop/scripts/device-helpers.mjs`), each with its own tests over it.
 `scripts/check-device-kits-single-source.py` fails when a platform name appears anywhere else in that code.
 A new platform is one entry here, a runner that builds it, and its row in [docs/INSTALL.md](../docs/INSTALL.md#what-each-system-supports); raising `format` makes every core of an earlier build refuse the new manifest by its number.
+
+# Peer link
+
+`peer-link.json` is what two machines that each run Hide say to each other on their one connection ([docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-peer-connection)): the ALPN, the spelling of a key, the hello and the link versions this build speaks, every stream kind with its tag, its priority and whether it needs a grant, the close codes, the pairing, revoke and management messages, the event a core hands another and the limits of the box that keeps it, a guest node's launch contract (its arguments, its folder and socket names with the longest socket tail they make, its ready and idle lines and exit codes), the tap's frames and its cap, and the list of panes a guest keeps.
+`hide-peer-protocol` is the writer: `contract::shape` builds the file's content from the crate's own constants and types, and its test `the_committed_contract_is_what_the_code_speaks` fails until this file matches.
+The crate also includes the file in its source, and a build that is not a release sends the file's hash in its hello, so two development builds of different contracts refuse each other instead of misreading one another.
+A change to it is a change to what a peer of another build reads: add a field or a message type an older reader skips, and raise the link version (`hello::NEWEST_LINK`) for anything an older reader would misread.
+Regenerate it from that crate alone, so the keys come out in one order whatever else the build selects, and never edit it by hand:
+
+```sh
+bash scripts/verify-cargo.sh build -p hide-peer-protocol --example export_contract
+target/debug/examples/export_contract > contracts/peer-link.json
+```

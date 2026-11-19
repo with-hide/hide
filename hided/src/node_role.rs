@@ -38,9 +38,9 @@ use tokio::sync::watch;
 
 use crate::attach::{self, Accepted, AttachOutcome, Line, NodeHello};
 use crate::backoff::Backoff;
-use crate::link_mux::Mux;
 use crate::placement::Placement;
 use crate::screen_sign_in::{NotOwner, ScreenSignIn, Shown};
+use hide_peer::mux::Mux;
 
 /// A link that lived this long starts the wait over.
 const SETTLED: Duration = Duration::from_secs(30);

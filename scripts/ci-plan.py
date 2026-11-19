@@ -146,6 +146,16 @@ ARM_DEVICE_FILES = ("hided/tests/it/device_own_engine.rs",)
 # source (`include_str!`), so a change to it is a change to that crate, and
 # the packaging scripts read it too (READERS, MACOS_LANE_INPUTS).
 DEVICE_KIT_CONTRACT = "contracts/device-kits.json"
+# What two machines say to each other: `hide-peer-protocol` includes it in its
+# source (`include_str!`) and a build that is not a release sends its hash in
+# its hello, so a change to it is a change to that crate.
+PEER_LINK_CONTRACT = "contracts/peer-link.json"
+# What `cargo deny` reads (`scripts/verify-cargo.sh deny`): a pull request
+# that changes one has every crate's license and the advisory database
+# checked in its Rust lane. The nightly checks too, and finds an advisory
+# published against a crate main already has; main's push run does not, so a
+# new advisory never stops merges (CONTRIBUTING.md, CI gates).
+DENY_PATHS = ("Cargo.lock", "deny.toml", "scripts/install-cargo-deny.sh")
 # The WSL device lane (`wsl-device.yml`) connects a real WSL 2 distribution
 # through `wsl.exe`, and the runner's own OpenSSH Server and an sshd in that
 # distribution over Windows' own `ssh.exe`: the crates the links cross (the
@@ -437,6 +447,7 @@ POLICY_ONLY = (
     "scripts/check-capability-readers-off-lock.sh",
     "scripts/check-harness-ignore-anchor.sh",
     "scripts/check-core-touches-no-machine.py",
+    "scripts/check-iroh-stays-behind-the-seam.py",
     "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
     "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
@@ -718,6 +729,8 @@ def classify(path, status, crates, root):
         crate = crates.get("hide-holder")
     if path.as_posix() == DEVICE_KIT_CONTRACT:
         crate = crates.get("hide-node")
+    if path.as_posix() == PEER_LINK_CONTRACT:
+        crate = crates.get("hide-peer-protocol")
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
         # Every crate compiles into the Windows workspace `windows check` builds.
@@ -747,8 +760,10 @@ def classify(path, status, crates, root):
             lanes.add("relay-protocol")
         if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
             lanes.add("holder-restart")
-        # The device kit contract is compiled into hide-node's code.
-        if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path) or path.as_posix() == DEVICE_KIT_CONTRACT:
+        # The device kit contract is compiled into hide-node's code, and the
+        # peer link contract into hide-peer-protocol's.
+        if (path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path)
+                or path.as_posix() in (DEVICE_KIT_CONTRACT, PEER_LINK_CONTRACT)):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
     if parts[0] == "web" and len(parts) > 1:
@@ -863,6 +878,7 @@ def select(entries, crates, root=ROOT, full_reason=None):
         # What the `repeat` lane runs; a plan of that lane for a CI definition
         # or the script itself, with no changed test, runs nothing.
         "repeat": repeat,
+        "deny": any(name in DENY_PATHS for _, name in entries),
     }
 
 
@@ -1041,8 +1057,9 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             reason = f"crate graph unavailable: {error}"
             return with_macos(select([], {}, root, reason), True, [reason])
     if event != "pull_request":
-        return with_macos(select([], crates, root, f"{event}: every lane runs on main"), True,
-                          [f"{event}: every macOS job runs"])
+        result = select([], crates, root, f"{event}: every lane runs on main")
+        result["deny"] = event != "push"
+        return with_macos(result, True, [f"{event}: every macOS job runs"])
     try:
         # A pull request's checkout is the merge commit GitHub made; anything
         # else would compare against a parent that is not the base.
@@ -1079,6 +1096,7 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         "rust_packages": rerun["rust_packages"],
         "reasons": rerun["reasons"],
         "repeat": rerun["repeat"],
+        "deny": rerun.get("deny", False),
         "commits": result["commits"],
         "reuse": {"run": verified["run"], "why": why},
         "verified": verified,
@@ -1209,6 +1227,7 @@ def main():
                 output.write(f"full={str(result['full']).lower()}\n")
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
                 output.write(f"macos={str(result['macos']['runs']).lower()}\n")
+                output.write(f"deny={str(result.get('deny', False)).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
                 repeat = result.get("repeat", NO_REPEAT)
                 output.write(f"repeat-web={json.dumps(repeat['web'], separators=(',', ':'))}\n")

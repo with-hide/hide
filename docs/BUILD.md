@@ -74,12 +74,26 @@ It writes each version as a semver range rather than the members' exact pins, si
 The rust lane runs `scripts/verify-cargo.sh hakari`, which fails when either command would change a file.
 `hide-platform` stays off the shared set (`final-excludes`): the OS contract lanes build and test exactly that crate, which would otherwise compile tokio, hyper and schemars for nothing.
 `hide-vt`, `hide-holder` and `hide-holder-protocol` stay off it too: a pane's holder runs for as long as its pane, so the program carries only the few dependencies it names.
+`hide-peer-protocol` stays off it as well: `contracts/peer-link.json` is written from that crate alone, with its four dependencies.
 Their own dependencies still count toward the set, and a command that selects them alone builds their small subtree once more.
+
+The iroh transport, `hide-peer-iroh`, is on the shared set although only it links iroh.
+What iroh turns on in crates the rest of the workspace already builds (tokio, syn, tower, hyper-util, once_cell) would otherwise make a `--workspace` command and a `-p` one resolve different features, and each would build nearly every crate again: `cargo tree` showed syn, tokio, tower, tracing, once_cell and hyper-util differing between the two before the crate joined the set.
+A crate only the transport reaches is another matter: listed in `workspace-hack` it would become every member's build, so `scripts/check-iroh-stays-behind-the-seam.py` fails when one is, and it then goes under `[final-excludes] third-party` in `.config/hakari.toml`.
 
 hakari cannot unify a member's own features, so no member has a feature only a test build turns on.
 `hide-host`'s `call-log` and `hide-node`'s `test-support` were enabled by other members' dev-dependencies, which built those crates and every crate above them twice, once for a test build and once for a `--bins` build.
 The git call log is now a recorder the core's tests turn on at run time (`hide_host::worktrees::record_git_calls`), which records nothing in a running daemon, and `RemoteHost::detached` is always compiled.
 `test_debug_build_size.py` refuses a dev-dependency that sets a member's features.
+
+### Licenses and advisories
+
+`deny.toml` is what [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) holds the lockfile to: every crate's license is one of the permissive ones listed there, and none has an advisory in the RustSec database.
+`bash scripts/verify-cargo.sh deny` runs both checks (`deny licenses` or `deny advisories` for one), over every platform and feature, so a crate only the Windows or Linux package links is read too; `bash scripts/install-cargo-deny.sh` installs the pinned release.
+The Rust lane runs it for a pull request that changes `Cargo.lock`, `deny.toml` or the installer, and nightly.
+Main's push run does not: the advisory database changes with no commit of ours, and a new advisory against a crate main already has is the nightly's to report, not a reason to stop merges.
+A new license is added to `deny.toml` in the pull request that brings its crate.
+An advisory is fixed by moving the crate; when the fix is behind a pin and the fault reaches no code Hide calls, it is listed under `ignore` with that reason and what removes the entry.
 
 ### One integration test binary per crate
 
