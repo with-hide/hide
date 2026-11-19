@@ -1042,7 +1042,13 @@ impl Guests {
                 limits::MAX_GRANTS
             ));
         }
-        let node = GuestNode::new(*guest, self.place(guest).node, self.home.clone());
+        let place = self.place(guest);
+        let node = GuestNode::new(
+            *guest,
+            place.node,
+            self.home.clone(),
+            place.helper.then(|| self.state_dir.clone()),
+        );
         let tap = self.tap_of(guest, device, &node);
         hosted.insert(
             *guest,
