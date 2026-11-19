@@ -1715,6 +1715,77 @@
             "title": "AskHumanAnswer",
             "type": "object"
         },
+        "automation": {
+            "properties": {
+                "automation": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "automation"
+            ],
+            "type": "object"
+        },
+        "automation_list": {
+            "properties": {
+                "items": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "items"
+            ],
+            "type": "object"
+        },
+        "automation_preview": {
+            "properties": {
+                "next_run_at": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "next_run_at_unix_ms": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "reads_as": {
+                    "type": "object"
+                },
+                "reads_as_text": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "zone": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            },
+            "required": [
+                "reads_as",
+                "next_run_at_unix_ms",
+                "next_run_at",
+                "zone"
+            ],
+            "type": "object"
+        },
+        "automation_removed": {
+            "properties": {
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "removed"
+            ],
+            "type": "object"
+        },
         "confirmed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide inbox --confirm`.",
@@ -7288,6 +7359,417 @@
         },
         {
             "answers": [
+                "automation"
+            ],
+            "arguments": [],
+            "command": "automation add",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [
+                        "--folder"
+                    ],
+                    "value": null
+                },
+                {
+                    "name": "--run-now",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_under_hour",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_list"
+            ],
+            "arguments": [],
+            "command": "automation list",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation show",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation run",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation pause",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation resume",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation edit",
+            "needs_one_of": [
+                "--name",
+                "--task",
+                "--schedule",
+                "--kind",
+                "--folder",
+                "--own-folder",
+                "--worktree",
+                "--no-worktree"
+            ],
+            "options": [
+                {
+                    "name": "--name",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--own-folder"
+                    ],
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--folder"
+                    ],
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--no-worktree"
+                    ],
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--worktree"
+                    ],
+                    "name": "--no-worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_under_hour",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation remove",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_preview"
+            ],
+            "arguments": [],
+            "command": "automation preview",
+            "options": [
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_under_hour",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "plan"
             ],
             "arguments": [],
@@ -7465,7 +7947,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6f3fa26a9b8a3b21bca2cbc41c3f832a5fc328bdd8c12c8e44bfdbf6f9862afd",
+    "digest": "sha256:507db848a09ef64b6285350b26fe9ea719493aadf67fbd636f77af7a392a60ff",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -7473,6 +7955,11 @@
             "ok": "ok"
         },
         "agent": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
+        "automation": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"
