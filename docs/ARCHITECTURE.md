@@ -3275,14 +3275,39 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 
 A guest's work runs on this machine in the guest's own node (`hided node serve --guest`), and this machine's daemon reaches its panes only through the tap that node serves (`hided/src/guests/tap.rs`), whether or not the guest is connected.
 The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, sizes, redraws and a close.
-Nothing on this machine sends that close for one pane yet: the screen that lists a guest's panes and closes one is the ownership work's, and until then a guest's panes end here together, with its removal ([A guest taken off the host](#a-guest-taken-off-the-host)).
+A window of this machine ends one pane with the daemon-only client event `guest_pane_close`, taken from an operator window alone: the daemon finds the guest by the address's device id, refuses an address that is no listed pane (`pane_unavailable`), and writes the close to that guest's tap (`Guests::close_pane`); a guest's panes also end together with its removal ([A guest taken off the host](#a-guest-taken-off-the-host)).
+The node also says the folder each pane was started in, read once from the pane's holder record, in a `folder` frame after the pane's own (`hide_peer_protocol::tap`, kind `0x93`, at most 4096 bytes); a host that predates the frame skips its kind, and the daemon keeps the folder with the pane, spelled through its links as a caller's own folder is, so the two are compared as the same path.
 The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 128 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
-The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field, from the daemon-only `guest_panes` event that replaces the list whole; `hide device list` answers it and prints each pane's address under its machine, with the panes a machine left after it was taken off under its id.
+The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field and each pane with its folder once the node said it, from the daemon-only `guest_panes` event that replaces the list whole and that the daemon refuses from a client; `hide device list` answers it and prints each pane's address under its machine, with the panes a machine left after it was taken off under its id.
 The node keeps a session on every pane its holders' records say may run, so the host draws a pane whether or not the guest's core looks at it, and the guest's core's attach and release only decide whether a pane's output also goes up the node link.
 It lists each by the id its core names it by (`Holders::live_pane_ids`), never by the name its record's file has, so the host, the node's sessions and the guest's core name one pane one way.
 With no link, from its start to its first one too, nothing the node reports waits for a core that is not there, and its diagnostics go to the host's log.
 After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
 A screen of this machine draws a guest's pane and types into it by its `guest:` address, and `hide pane send` types text and Enter into it through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
+
+### Whose work is whose between machines
+
+Two paired machines see some of each other's work, and one place decides what each of them does with a piece of it (PRD device-connect-iroh D-78).
+`hide_core::whose_work::judge` reads two facts, the core that answers for the work and the machine it runs on, and `whose_work::reach` is the one table of what follows:
+
+| The work | In this machine's Needs You and Done | To this machine's phones | Told to the machines that may open it | Drawn here marked as another machine's | This core judges its notification |
+| --- | --- | --- | --- | --- | --- |
+| This core's, running here | yes | yes | yes | no | yes |
+| This core's, running on another machine | yes | yes | no | no | yes |
+| Another core's, running here (a guest's pane) | no | no | no | yes | no |
+| Another core's, on its own machine, told over the connection | yes | no | no | no | no |
+
+Nothing received is sent on, so a row never travels to a third machine, and no row rings in two cores.
+The phone projection (`agent_state::phone::project`) tags every row it builds with that answer, and the daemon, the phone bridge and the sender to other machines read the tag rather than decide for themselves.
+What a machine tells the machines that may open it is `peer_work::told`: its own top rows in Needs You and Done that run on it, an external tool's work left out, as two counts and at most 64 rows with bounded text.
+The receiving daemon hands it to its core as the daemon-only `peer_work` event, one per machine and replaced whole; the core takes it only for a connected machine it opens, holds it as `navigator.peer_work`, and drops it when that machine is no longer connected or opened.
+`notice_place::places` orders the places one notification is tried (D-60): this machine while someone uses it and a window shows notices, else the connected computers in use that may open it, the most recently used first, else the phone; the latest phone action any of the machines knows of takes every computer until the next computer input, and every input is a length of time, never a clock reading.
+
+A call proved only by the folder it was made in (a shell outside every pane) is a guest's when panes of that one guest live in the folder and no pane of this machine's own does (`guest_panes::folder_call`, D-55): a pane lives in a folder when the folder is the one it was started in or below it, and a pane of this core's lives there when a checkout of this machine that holds the folder has a pane.
+With a pane of this machine's own there too, or panes of two guests, the call stays with this machine and the diagnostic `folder_call.kept_by_host` records which rule kept it.
+For a guest's folder the daemon's bootstrap binds nothing and answers `handed_to` with the guest's installation by name (`guest:<short key>`, `hide_peer_protocol::launch::HandedTo`), never a path.
+`hide` finds that installation's own `hide` under its state folder by that name (`pane_install::hand_to_guest`), runs the same call there with the guest's node's state folder and installation named, and returns its exit code; the guest's node proves the caller by its folder as a device's node does, the guest's core binds it to its checkout or refuses, and that answer is final.
+A call that already names an installation is a pane's or one already handed and is never handed on, and an installation whose `hide` is not on this machine answers `guest_install_missing`.
 
 ### A guest's build on the host
 

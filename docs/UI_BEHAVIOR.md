@@ -2336,6 +2336,7 @@ A mark's digits are `--status-foreground`, white in Light and near-black in Dark
 The counts come from the device's published `agent_scope` values; the browser does not rederive them.
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported; while the center already offers `다시 연결` for that device (its Work, Projects and Backlog body, or its Workspace's surface or stale line), the sidebar leaves its own out, so the same action is drawn once.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
+A paired machine's tile is that machine's own screen, so it counts what that machine told of its own Needs You and Done (`navigator.peer_work`) and nothing while it tells nothing; this computer's work that runs on a paired machine opens in this computer's tile with that machine's mark, so it is counted on this computer's tile, and this computer's tile is the one ringed while the center shows it (`railFrontId`, PRD device-connect-iroh D-50, D-55).
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row of its own names the device, while Needs You also lists the other connected devices' rows, each with its device's chip ([Sidebar hierarchy](#sidebar-hierarchy), operator decision 2026-11-08).
 In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌥⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
 ⇧⌘ would have been the shorter chord, but macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so three tiles could never be reached; ⌘1-9 belongs to the tabs.
@@ -2384,6 +2385,26 @@ A window on a machine whose core runs elsewhere shows its core's state and takes
 - otherwise the shell's own connecting state.
 
 The window takes no input while its strip shows, and sends none of what was typed meanwhile once the core is back; the strip goes when the core's snapshot arrives, and a move that ends on another machine rewrites the window's address to it without a reload (`addressAfterMove`).
+
+## Another machine's work on this computer
+
+Web owner: `web/src/guestWork.ts`, `web/src/GuestWorkRows.tsx`, `web/src/GuestPaneScreen.tsx`.
+
+A paired machine that may open this computer runs work here, and each pane of that work is listed in this computer's sidebar whether or not that machine is connected (PRD device-connect-iroh B10, B68).
+A pane started in a folder one of this computer's projects holds stands right under that project's row, whatever the project has folded; every other pane stands at the end of the list under a group named for its machine (`MacBook에서 시킨 일`), and the 태스크 list, which draws no projects, lists them all so.
+The row is the folder's own name, or the pane's id on its machine when its node said no folder, with the machine's letters in the other-device colour (`MB`) and its name as the hint; the work's state is the other machine's to show, so the row carries no mark, count or time.
+Screen copy never calls that machine a guest: it is named, or its work is `<machine>에서 시킨 일`.
+Pressing a row shows the pane in the center as the window's own page (`Screen` `guest`), since the pane is no tab of this core's: a tab strip of that machine's panes in the same place (the project, or the machine's own group), the pane's folder with the machine's chip, and its terminal.
+The operator reads it, types into it, and it follows this window's size while this window is the one typing; this computer's tile is ringed.
+Splitting, a new tab, renaming and starting an agent are drawn dimmed in its menu with `<machine>에서 할 수 있어요` under each, whether or not that machine is connected (D-74), and their shortcuts say the same line as a notice in place of acting.
+`닫기…`, ⌘W and the pane-close shortcut ask first (`이 터미널을 닫을까요?`, with what ends and that the machine is told); confirming sends `guest_pane_close`, and the page leaves for the Overview.
+A pane that left the list while its page is open says `이 터미널은 끝났어요`.
+A program's mouse reports are not sent to another machine's pane.
+
+A connected machine this computer opens tells its own Needs You and Done, and those rows follow this computer's in the same sections of both sidebar lists, each with the machine's filled chip, its mark, title and the sentence its own core chose (D-50, B49).
+A section is drawn for them alone, and its count includes them.
+Pressing one selects that machine's tile; rows of this computer's own work on another machine keep the outline chip and open in this computer's tile.
+This computer rings nothing for another machine's rows, and they leave the list when that machine is no longer connected.
 
 ## Start panel
 
