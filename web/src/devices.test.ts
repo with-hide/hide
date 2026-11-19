@@ -2,7 +2,7 @@ import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deviceScope } from "./agentScope";
-import { badgeText, deviceConnected, frontDeviceId, frontTitle as frontTitleIn, railShown, readsHere, sidebarBody, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
+import { badgeText, deviceConnected, frontDeviceId, frontTitle as frontTitleIn, railFrontId, railShown, readsHere, sidebarBody, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { numberedDevices } from "./numbering";
 import { contextAgents, contextWorkspaces } from "./remote";
@@ -66,6 +66,29 @@ describe("the device rail's facts (quick device-rail-badges)", () => {
     // Working and Seen alone mark nothing.
     expect(tileCounts(rest(), [agent("x", "working"), agent("y", "seen")], "local")).toEqual({ needs_you: 0, done: 0 });
     expect(tileCounts(rest(), LOCAL_AGENTS, "mini")).toEqual({ needs_you: 1, done: 1 });
+  });
+
+  // PRD device-connect-iroh D-50, D-55: a paired machine's tile is that
+  // machine's own screen, so it counts what that machine told of its own
+  // work; this computer's work that runs there is counted on this computer's
+  // tile, where it opens.
+  it("counts a paired machine's tile from what it told, and this computer's work there on this computer's tile", () => {
+    const paired = rest();
+    paired.navigator!.devices = paired.navigator!.devices!.map((device) => (device.id === "mini" ? { ...device, peer_key: "ab".repeat(32) } : device));
+    expect(tileCounts(paired, LOCAL_AGENTS, "mini")).toEqual({ needs_you: 0, done: 0 });
+    expect(tileCounts(paired, LOCAL_AGENTS, "local")).toEqual({ needs_you: 3, done: 1 });
+    paired.navigator!.peer_work = [{ device_id: "mini", key: "ab".repeat(32), needs_you: 4, done: 2 }];
+    expect(tileCounts(paired, LOCAL_AGENTS, "mini")).toEqual({ needs_you: 4, done: 2 });
+    expect(tileCounts(paired, LOCAL_AGENTS, "local")).toEqual({ needs_you: 3, done: 1 });
+  });
+
+  it("rings this computer's tile for its own work on a paired machine and for another machine's pane here", () => {
+    const front = rest();
+    front.navigator!.focused_device_id = "mini";
+    expect(railFrontId(front, false)).toBe("mini");
+    expect(railFrontId(front, true)).toBe("local");
+    front.navigator!.devices = front.navigator!.devices!.map((device) => (device.id === "mini" ? { ...device, peer_key: "ab".repeat(32) } : device));
+    expect(railFrontId(front, false)).toBe("local");
   });
 
   it("gives a device that is not connected no count, its stale session ignored (B4, B8)", () => {

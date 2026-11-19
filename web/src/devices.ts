@@ -35,6 +35,20 @@ export function frontDeviceId(rest: SnapshotRest | null): string {
 }
 
 /**
+ * The tile the rail rings (PRD device-connect-iroh D-55): the device in
+ * front, except that this computer's work on a paired machine is this
+ * computer's, opened in its own tile with that machine's mark, and so is a
+ * pane of another machine's work that runs here. A paired machine's own tile
+ * is that machine's screen, never this computer's work on it.
+ */
+export function railFrontId(rest: SnapshotRest | null, guestPaneInFront: boolean): string {
+  const front = frontDeviceId(rest);
+  if (guestPaneInFront) return localDeviceId(rest) || front;
+  const paired = rest?.navigator?.devices?.find((device) => device.id === front)?.peer_key != null;
+  return paired ? localDeviceId(rest) || front : front;
+}
+
+/**
  * Whether the core reads and changes this project's Git facts, issues and
  * disk as its own: one of its own machine's, or one of a node that dials it
  * (`Device.dials_in`, PRD core-host-node-move D-29); never a device it dials.
@@ -73,8 +87,29 @@ export type BadgeState = (typeof BADGE_STATES)[number]["state"];
 export type TileCounts = { needs_you: number; done: number };
 
 export function tileCounts(rest: SnapshotRest | null, _localAgents: AgentRow[], deviceId: string): TileCounts {
-  const counts = deviceScope(rest, deviceId)?.groups;
-  return { needs_you: counts?.needs_you ?? 0, done: counts?.done ?? 0 };
+  const devices = rest?.navigator?.devices ?? [];
+  const own = (id: string): TileCounts => {
+    const counts = deviceScope(rest, id)?.groups;
+    return { needs_you: counts?.needs_you ?? 0, done: counts?.done ?? 0 };
+  };
+  // A paired machine's tile is that machine's own screen, so it counts what
+  // that machine told of its own work and nothing else (PRD
+  // device-connect-iroh D-50); this computer's work that runs there opens in
+  // this computer's tile (D-55) and is counted on it.
+  const peerKey = devices.find((device) => device.id === deviceId)?.peer_key;
+  if (peerKey != null) {
+    const told = rest?.navigator?.peer_work?.find((peer) => peer.key === peerKey);
+    return { needs_you: told?.needs_you ?? 0, done: told?.done ?? 0 };
+  }
+  const counts = own(deviceId);
+  if (deviceId !== localDeviceId(rest)) return counts;
+  for (const device of devices) {
+    if (device.peer_key == null || !deviceConnected(rest, device.id)) continue;
+    const away = own(device.id);
+    counts.needs_you += away.needs_you;
+    counts.done += away.done;
+  }
+  return counts;
 }
 
 /** The number the Needs You pill draws: the count, or `9+` from ten. */

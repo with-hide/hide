@@ -42,6 +42,7 @@ import { backlogIntent } from "./overviewBacklog";
 import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
 import { expectSurface, recentPanes, type Surface } from "./recent";
 import { frontTool, keptBy, toolKeeps } from "./toolCells";
+import { guestPanes } from "./guestWork";
 import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
 import { armKeyTarget } from "./keyTarget";
@@ -3120,6 +3121,42 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     cancelViewsClose() {
       ui().setPendingViewsClose(null);
+    },
+
+    /**
+     * Another machine's pane on this computer in the center (PRD
+     * device-connect-iroh B10): the window's own page, since that pane is
+     * no tab of this core's and the core hears nothing of it.
+     */
+    openGuestPane(paneId: string) {
+      ui().setScreen({ kind: "guest", paneId });
+    },
+
+    /** Asks before this window ends another machine's pane: the work in it stops. */
+    askCloseGuestPane(paneId: string) {
+      ui().setGuestClose(paneId);
+    },
+
+    /** The operator confirmed: the pane's node ends it and tells the machine that asked for the work. */
+    closeGuestPane() {
+      const paneId = ui().guestClose;
+      if (paneId === null) return;
+      ui().setGuestClose(null);
+      dispatch({ schema_version: 2, kind: "guest_pane_close", payload: { pane_id: paneId } });
+      const screen = ui().screen;
+      if (screen?.kind === "guest" && screen.paneId === paneId) ui().setScreen({ kind: "main" });
+    },
+
+    cancelGuestPaneClose() {
+      ui().setGuestClose(null);
+    },
+
+    /** A Workspace command pressed over another machine's pane: said, not done (D-74). */
+    refuseOnGuestPane(paneId: string) {
+      const state = rest();
+      const pane = guestPanes(state, []).find((row) => row.id === paneId);
+      if (!pane) return;
+      ui().showNotice({ level: "info", text: translate("pairing.work.onThatMachine", { name: pane.machine }), refreshable: false, key: "guest_pane_refused" });
     },
 
     /** Every current agent row the close lists read, this machine's and each connected device's. */
