@@ -4,7 +4,7 @@ import type { Catalog, Catalogs } from "../schema";
 // next run and a record read is `automationWords.ts`, shared with the desktop;
 // names are the operator's own data.
 export const mobileAutomationsEnglish = {
-  "mobile.tab.automations": "Automations",
+  "mobile.tab.automations": "Routines",
   "mobile.automations.title": "Automations",
   "mobile.automations.empty": "No automations yet",
   "mobile.automations.byAgent": "You can create one by asking an agent",

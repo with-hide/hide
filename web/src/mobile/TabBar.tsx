@@ -49,7 +49,7 @@ export function TabBar({ active }: { active: PhoneTab }) {
             aria-label={count > 0 ? `${t(label)} ${count}` : t(label)}
             data-phone-tab={id}
             data-phone-tab-count={count > 0 ? String(count) : undefined}
-            className={`h-auto min-h-(--size-touch-target) flex-col gap-xxs rounded-none py-sm text-caption ${here ? "text-foreground" : "text-muted-foreground"}`}
+            className={`h-auto min-h-(--size-touch-target) min-w-0 flex-col gap-xxs rounded-none px-xxs py-sm text-caption ${here ? "text-foreground" : "text-muted-foreground"}`}
             onClick={() => setTab(id)}
           >
             <span className="relative">
@@ -58,7 +58,8 @@ export function TabBar({ active }: { active: PhoneTab }) {
                 <Badge aria-hidden="true" className="absolute -right-md -top-xs min-w-(--size-badge-height) rounded-full bg-mission-hold px-xs font-mono text-background">{count}</Badge>
               ) : null}
             </span>
-            <span>{t(label)}</span>
+            {/* Five places share a phone's width; a long word at a large text size ends in an ellipsis rather than meeting the next. */}
+            <span className="max-w-full truncate">{t(label)}</span>
           </Button>
         );
       })}
