@@ -63,6 +63,7 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
             on: true,
             folder_missing: false,
             files: Vec::new(),
+            server: None,
             cells: vec![
                 cell("claude", CellState::On, None),
                 cell("agents", CellState::Waiting, None),
