@@ -3310,7 +3310,7 @@ Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more
 
 The first row is set by the hook entries.
 A guest at work adds one start of its helper to every agent event on the host's account, and the guests together are to add no more than a second to one event on the slowest system Hide supports, for an agent that runs its hooks one after another.
-That system is Windows, where an entry runs in PowerShell: on a GitHub Windows runner (2026-11-19, a debug build, two runs of ten starts each) a guest's entry took 225 to 290 ms at the median started as Claude Code starts it and 145 to 157 ms as Codex does, of which PowerShell alone took 140 ms, and the first start of a new helper file 2.9 s.
+That system is Windows, where an entry runs in PowerShell: on a GitHub Windows runner (2026-11-19, a debug build, four runs of ten starts each) a guest's entry took 225 to 290 ms at the median started as Claude Code starts it, and as Codex does 145 to 167 ms through Windows PowerShell and 263 to 275 ms through PowerShell 7, of which the shell alone took 140 and 240 ms; the first start of a new helper file took 2.6 to 2.9 s.
 Four guests therefore add about one second there at the most, and one start's time for an agent that runs its hooks at once.
 On a Mac a start took about 5 ms in a release build, so four guests add about 20 ms.
 The `windows check` lane prints the figures on every run (`windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each`), beside what PowerShell alone takes.
