@@ -5577,6 +5577,9 @@
                 "switch_not_connected",
                 "ssh_core_not_started",
                 "ssh_not_reached",
+                "ssh_busy",
+                "ssh_mac_from_mac_only",
+                "ssh_mac_signed_out",
                 "ssh_update_there",
                 "ssh_hide_not_running",
                 "device_already_connected"
@@ -7601,7 +7604,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e7d9eb96391e9423b6269cd68bd8881d44e5278cb845cc57df433000a2d20ceb",
+    "digest": "sha256:6399aa58cb0eb60318b60778bed052333f86dd34ecd6dba63db0c20792f07c44",
     "envelopes": {
         "access": {
             "answer": "value",
