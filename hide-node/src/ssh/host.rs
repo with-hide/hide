@@ -1172,9 +1172,20 @@ impl HelperPackages {
             )
         })?;
         for file in &payload.files {
-            let path = version_dir.join(&file.relative);
+            // A part may sit in a folder of the build (the holder's ConPTY
+            // runtime, `holder-conpty/x64/OpenConsole.exe`), named with `/`
+            // on every system.
+            let path = file
+                .relative
+                .split('/')
+                .fold(version_dir.clone(), |path, name| path.join(name));
             if std::fs::read(&path).is_ok_and(|bytes| hex_digest(&bytes) == file.digest) {
                 continue;
+            }
+            if let Some(folder) = path.parent() {
+                private::create_dir_all(folder).map_err(|error| {
+                    format!("The folder {} could not be made: {error}", folder.display())
+                })?;
             }
             let access = if file.executable {
                 DurableAccess::PrivateExecutable
@@ -2999,7 +3010,14 @@ mod tests {
         let holder = folder.join(device_program(HOLDER_NAME, std::env::consts::OS));
         assert_eq!(std::fs::read(holder).unwrap(), HOLDER_NAME.as_bytes());
         if cfg!(windows) {
-            assert!(folder.join(hide_kit::holders::CONPTY_SOURCE).is_dir());
+            // The ConPTY runtime's parts sit in folders of their own.
+            assert!(
+                folder
+                    .join(hide_kit::holders::CONPTY_SOURCE)
+                    .join("x64")
+                    .join("OpenConsole.exe")
+                    .is_file()
+            );
         }
     }
 
