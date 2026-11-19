@@ -3331,7 +3331,6 @@ mod tests {
                 paused: None,
                 running,
                 unseen: 0,
-                recent_spend: None,
                 records: Vec::new(),
                 records_omitted: 0,
             }],
