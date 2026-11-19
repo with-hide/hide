@@ -58,6 +58,7 @@ pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_dial;
 pub mod peer_host;
 pub mod placement;
 mod product_analytics;
@@ -476,8 +477,27 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let node_panes = Arc::new(node_panes::NodePanes::new(tokio::runtime::Handle::current()));
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
+    // How the core opens its node on a machine it is paired with; the
+    // endpoint it uses is handed in below, once it exists.
+    let this_build = build_order::Release::of_this_build();
+    let peer_dial = peer_dial::Dialer::new(
+        tokio::runtime::Handle::current(),
+        this_build.version.clone(),
+        this_build
+            .is_official()
+            .then(|| this_build.commit.clone())
+            .flatten()
+            .map(|commit| hide_peer::protocol::manage::Release {
+                commit,
+                order: this_build.order,
+            }),
+    );
     seat.starting("core.owner");
-    let core = Arc::new(CoreHandle::spawn(options, Arc::clone(&pane_events))?);
+    let core = Arc::new(CoreHandle::spawn(
+        options,
+        Arc::clone(&pane_events),
+        Some(Arc::clone(&peer_dial) as Arc<dyn hide_node::ssh::host::peer::PeerDial>),
+    )?);
     seat.starting("core.services");
     if effects_held {
         let mut open = move_gate.subscribe();
@@ -576,6 +596,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         shutdown.clone(),
     );
+    peer_dial.attach(Arc::clone(&peers));
     // Each stream kind's owner hands its handler in here, before the
     // endpoint opens. The start is not held for the endpoint: a machine
     // whose network is down still starts, and the reason is in the log.

@@ -928,6 +928,7 @@ impl CoreHandle {
     pub fn spawn(
         options: CoreOptions,
         panes: hide_node::ssh::PaneEventsSlot,
+        peers: Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
     ) -> Result<Self, String> {
         let node = options.node_id.clone();
         let state_dir = std::path::Path::new(&options.app_state_path)
@@ -972,7 +973,7 @@ impl CoreHandle {
                 owner_loop(
                     options,
                     (own_node, core_engine),
-                    panes,
+                    (panes, peers),
                     (routes, terminal_reports),
                     command_rx,
                     ready_tx,
@@ -1514,7 +1515,10 @@ fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
 fn owner_loop(
     options: CoreOptions,
     (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
-    panes: hide_node::ssh::PaneEventsSlot,
+    (panes, peers): (
+        hide_node::ssh::PaneEventsSlot,
+        Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
+    ),
     (terminals, terminal_reports): (Arc<Router>, hide_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
@@ -1555,6 +1559,12 @@ fn owner_loop(
     // holders the device's node runs (PRD
     // engine-bundle-3-core-owns D-22).
     .with_device_home(device_home);
+    // Machines paired with this one are devices too (PRD
+    // device-connect-iroh D-61), reached on the connection the daemon keeps.
+    let devices = match peers {
+        Some(dial) => devices.with_peers(dial),
+        None => devices,
+    };
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
@@ -1983,6 +1993,7 @@ impl CoreHandle {
                 account_state_folder: false,
             },
             Default::default(),
+            None,
         )
         .unwrap()
     }

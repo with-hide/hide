@@ -544,6 +544,42 @@ fn carry(stream: Stream, endpoint: &Path, runtime: &Handle) -> io::Result<()> {
     result
 }
 
+/// A build whose node is a stand-in, for tests on both sides of a guest's
+/// node.
+#[cfg(all(test, unix))]
+pub(crate) mod stand_in {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    use hide_peer::protocol::launch;
+
+    /// Lays out in `folder` the programs of "another build" whose node is a
+    /// few lines of shell: all a host knows of a guest's node is the launch
+    /// contract, which they keep. They say they are ready, name the link
+    /// endpoint a test listens on, and end when told to or when their input
+    /// ends.
+    pub(crate) fn programs(folder: &Path) {
+        let node = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{{\"guest_node\":{},\"build\":\"9.9.9\",\"build_id\":\"0000000000000000\",\"pid\":'\"$$\"',\"link\":\"{}\",\"tap\":\"{}\",\"tap_versions\":[{},{}],\"capabilities\":[]}}'\nwhile read -r line; do\n  case \"$line\" in *'\"end\"'*) exit 0 ;; esac\ndone\nexit 0\n",
+            launch::GUEST_NODE,
+            launch::LINK_ENDPOINT,
+            launch::TAP_ENDPOINT,
+            hide_peer::protocol::tap::OLDEST_TAP,
+            hide_peer::protocol::tap::NEWEST_TAP,
+        );
+        for (name, bytes) in [
+            ("hided", node.as_bytes()),
+            ("hide", b"hide".as_slice()),
+            ("hide-agent-hooks", b"hooks".as_slice()),
+            ("hide-holder", b"holder".as_slice()),
+        ] {
+            let path = folder.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hide_peer::protocol::build::BuildFile;
@@ -698,34 +734,6 @@ mod tests {
         ));
     }
 
-    /// A node of "another build": all this host knows of it is the launch
-    /// contract, which a few lines of shell keep.
-    #[cfg(unix)]
-    fn stand_in_build(folder: &Path) -> guest_build::GuestBuild {
-        use std::os::unix::fs::PermissionsExt;
-        let node = format!(
-            "#!/bin/sh\nprintf '%s\\n' '{{\"guest_node\":{},\"build\":\"9.9.9\",\"build_id\":\"0000000000000000\",\"pid\":'\"$$\"',\"link\":\"{}\",\"tap\":\"{}\",\"tap_versions\":[{},{}],\"capabilities\":[]}}'\nwhile read -r line; do\n  case \"$line\" in *'\"end\"'*) exit 0 ;; esac\ndone\nexit 0\n",
-            launch::GUEST_NODE,
-            launch::LINK_ENDPOINT,
-            launch::TAP_ENDPOINT,
-            hide_peer::protocol::tap::OLDEST_TAP,
-            hide_peer::protocol::tap::NEWEST_TAP,
-        );
-        for (name, bytes) in [
-            ("hided", node.as_bytes()),
-            ("hide", b"hide".as_slice()),
-            ("hide-agent-hooks", b"hooks".as_slice()),
-            ("hide-holder", b"holder".as_slice()),
-        ] {
-            let path = folder.join(name);
-            std::fs::write(&path, bytes).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        HelperPackages::new(Some(folder.to_path_buf()), crate::cli::RELEASE)
-            .guest_build(std::env::consts::OS, std::env::consts::ARCH)
-            .unwrap_or_else(|error| panic!("the stand-in build is whole: {error}"))
-    }
-
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_guest_uploads_its_build_and_its_node_runs_from_it_carries_its_link_and_ends_when_asked()
@@ -734,7 +742,10 @@ mod tests {
         let guest = pair.guest_key();
         let state = pair.host.dir.path();
         let programs = tempfile::tempdir().unwrap();
-        let build = stand_in_build(programs.path());
+        stand_in::programs(programs.path());
+        let build = HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE)
+            .guest_build(std::env::consts::OS, std::env::consts::ARCH)
+            .unwrap_or_else(|error| panic!("the stand-in build is whole: {error}"));
         let bytes: Vec<&[u8]> = (0..build.files().len())
             .map(|index| build.bytes(index).unwrap())
             .collect();
