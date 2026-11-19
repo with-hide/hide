@@ -146,6 +146,7 @@ pub fn pair(host: &Machine, guest: &Machine) {
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: Vec::new(),
+                started: None,
             })
         })
         .unwrap();

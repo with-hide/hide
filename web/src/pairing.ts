@@ -86,9 +86,28 @@ export type Peer = {
   connected: boolean;
   path?: "direct" | "relay" | "local" | null;
   reason?: "relay_unreachable" | "relay_monthly_limit" | null;
-  /** Which side must update before the two connect. */
-  update?: "here" | "there" | null;
+  /**
+   * Which side must update before the two connect, or where this machine's
+   * update of the Hide it started there stands (B23).
+   */
+  update?: "here" | "there" | "updating" | "update_not_reached" | "update_rolled_back" | "update_busy" | "update_failed" | null;
 };
+
+/** Why this machine's update of the Hide it started on `peer` did not happen; none when it did not fail. */
+function updateFailure(update: Peer["update"]): MessageKey | null {
+  switch (update) {
+    case "update_not_reached":
+      return "pairing.update.notReached";
+    case "update_rolled_back":
+      return "pairing.update.rolledBack";
+    case "update_busy":
+      return "pairing.update.busy";
+    case "update_failed":
+      return "pairing.update.failed";
+    default:
+      return null;
+  }
+}
 
 export type Direction = "outgoing" | "incoming";
 
@@ -167,6 +186,11 @@ export function peerState(peer: Peer): { key: MessageKey; tone: "ok" | "muted" |
   const line = (key: MessageKey, tone: "ok" | "muted" | "warn", action: PeerAction = null, reason: MessageKey | null = null) => ({ key, tone, action, reason });
   if (peer.update === "here") return line("pairing.state.updateHere", "warn");
   if (peer.update === "there") return line("pairing.state.updateThere", "warn");
+  // The Hide this machine started there is this machine's to update: the
+  // row says it is doing so, or why it did not and offers it again (B23).
+  if (peer.update === "updating") return line("pairing.state.updating", "muted");
+  const failed = updateFailure(peer.update);
+  if (failed) return line("pairing.state.updateFailed", "warn", "retry", failed);
   if (peer.opens === "unpaired") return line("pairing.state.unpaired", "warn", "remove_outgoing");
   if (peer.opens === "removing") return line("pairing.state.removing", "warn");
   // A pair with two directions says which one is paused: "paused" beside

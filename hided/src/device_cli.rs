@@ -1100,15 +1100,22 @@ fn peer_line(peer: &Value) -> String {
     if let Some(reason) = peer["reason"].as_str() {
         line.push_str(&format!("  reason: {}\n", reason.replace('_', " ")));
     }
-    if let Some(update) = peer["update"].as_str() {
-        line.push_str(&format!(
-            "  update needed: {}\n",
-            if update == "here" {
-                "this machine"
-            } else {
-                "that machine"
+    match peer["update"].as_str() {
+        Some("here") => line.push_str("  update needed: this machine\n"),
+        Some("there") => line.push_str("  update needed: that machine\n"),
+        // The Hide this machine started there, kept at this machine's
+        // build (B23).
+        Some("updating") => line.push_str("  its Hide is being updated to this machine's build\n"),
+        Some(failed) if failed.starts_with("update_") => line.push_str(&format!(
+            "  its Hide was not updated to this machine's build ({}); hide device retry asks again\n",
+            match failed {
+                "update_not_reached" => "this machine's login did not reach it",
+                "update_rolled_back" => "the new build did not start there, and the one before runs",
+                "update_busy" => "another update runs there now",
+                _ => "the diagnostic log says why",
             }
-        ));
+        )),
+        _ => {}
     }
     line
 }

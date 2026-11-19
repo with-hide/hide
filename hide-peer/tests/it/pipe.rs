@@ -102,6 +102,7 @@ fn pair(pc: &Machine, distro: &Machine) {
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: in_wsl(distro).candidates,
+                started: None,
             })
         })
         .unwrap();

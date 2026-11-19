@@ -76,6 +76,38 @@ impl Login for Wsl<'_> {
     fn first(&self, _own: &[Candidate]) -> Vec<Candidate> {
         vec![Candidate::Wsl(self.distro.to_owned())]
     }
+
+    /// A distribution that is off is not started for it: nobody pressed
+    /// anything (B43).
+    fn install(
+        &self,
+        packages: &hide_node::ssh::host::HelperPackages,
+        root: &str,
+    ) -> Result<String, pairing_ssh::NotInstalled> {
+        use pairing_ssh::NotInstalled;
+        match self.access.runs(self.distro) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(NotInstalled::NotReached(
+                    "the distribution is off".to_owned(),
+                ));
+            }
+            Err(error) => return Err(NotInstalled::NotReached(error)),
+        }
+        self.access
+            .install_build(self.distro, packages, root)
+            .map_err(NotInstalled::Failed)
+    }
+}
+
+/// Brings the Hide this PC started in `distro` to this build
+/// (`crate::started_cores`), through `wsl.exe`.
+pub fn raise(
+    access: &WslAccess,
+    distro: &str,
+    packages: &hide_node::ssh::host::HelperPackages,
+) -> Result<crate::started_cores::Raised, crate::started_cores::Failure> {
+    crate::started_cores::raise_on(&Wsl { access, distro }, packages)
 }
 
 /// Asks `distro` whether it can pair through `wsl.exe`. Blocks for as long

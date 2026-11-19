@@ -136,6 +136,7 @@ fn pair(host: &Machine, guest: &Machine) {
                 grant: grant.id,
                 state: KnownState::Active,
                 candidates: host.addr().candidates,
+                started: None,
             })
         })
         .unwrap();

@@ -178,6 +178,51 @@ impl WslAccess {
             .map_err(|error| format!("wsl.exe could not start: {error}"))
     }
 
+    /// Puts this build's programs in their version folder under `root` in
+    /// `distro`, sending only what it lacks, and answers where the build's
+    /// `hided` is there: what `Upstream::install_build` does over SSH, for
+    /// the Hide this PC started in the distribution (PRD
+    /// device-connect-iroh B23). It starts a distribution that is off, as
+    /// [`Self::run`] does, and ends its `wsl.exe` before it answers.
+    pub fn install_build(
+        &self,
+        distro: &str,
+        packages: &HelperPackages,
+        root: &str,
+    ) -> Result<String, String> {
+        valid(distro)?;
+        let _admitted = admitted("the build was not sent")?;
+        let mut command = self.command(distro, &bootstrap::WRAPPER);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = hide_platform::process::OwnedChild::spawn(&mut command)
+            .map_err(|error| format!("wsl.exe could not start: {error}"))?;
+        let cancel = hide_node_link::device::Cancel::default();
+        let link = ChildLink::start(&format!("wsl:{distro}"), child, Some(&cancel))
+            .map_err(|error| format!("The distribution's link could not start: {error}"))?;
+        let mut pipe = UnaskedStart::new(link, cancel);
+        let installed = (|pipe: &mut UnaskedStart| {
+            let facts = match bootstrap::probe(&mut *pipe, Instant::now() + PROBE_TIMEOUT) {
+                Ok(facts) => facts,
+                Err(bootstrap::ProbeError::Unsupported(reason)) => return Err(reason),
+                Err(bootstrap::ProbeError::Stopped(stop)) => {
+                    return Err(WslDevice::stopped(pipe, stop));
+                }
+            };
+            let payload = packages
+                .payload_for(&facts.os, &facts.arch)
+                .map_err(|error| error.to_string())?;
+            // Sent as they are, as a device's install is.
+            bootstrap::install_build(&mut *pipe, root, &facts.home, payload, false)
+                .map_err(|error| error.to_string())
+        })(&mut pipe);
+        // The start script waits for a helper to start: nothing follows.
+        pipe.link.kill();
+        installed
+    }
+
     fn distribution(&self, name: &str) -> Result<Distribution, EstablishError> {
         let found = (self.distributions)().map_err(|error| {
             EstablishError::Helper(format!(

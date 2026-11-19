@@ -48,6 +48,7 @@ pub mod page_forward;
 pub mod pairing;
 pub mod pairing_ssh;
 pub mod pairing_wsl;
+pub mod started_cores;
 // The stand-in `wsl.exe` and `hide` of `pairing_wsl`'s tests, ready before
 // the deadlines those tests run them under.
 pub mod pane_cli;
@@ -711,6 +712,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         starter_program: env
             .starter_program
             .as_deref()
+            .map(|program| Arc::from(program.to_string_lossy().as_ref())),
+        program: std::env::current_exe()
+            .ok()
             .map(|program| Arc::from(program.to_string_lossy().as_ref())),
         renderer_transitions: Arc::new(Mutex::new(())),
         shutdown: shutdown.clone(),

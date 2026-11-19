@@ -25,7 +25,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use hide_node::ssh::session::{Ran, SshTarget};
+use hide_node::ssh::host::HelperPackages;
+use hide_node::ssh::session::{Ran, SessionError, SshTarget};
 use hide_node::ssh::upstream::Upstream;
 use hide_peer::pairing::{Accepted, Me};
 use hide_peer::protocol::{Candidate, PeerKey};
@@ -121,6 +122,20 @@ pub trait Login {
     /// The addresses to try before the ones the target named (`own`): what
     /// this channel knows of where the target is.
     fn first(&self, own: &[Candidate]) -> Vec<Candidate>;
+
+    /// Puts this build's programs in their version folder under `root`
+    /// there, sending only what the account lacks, and answers where the
+    /// build's `hided` is (B23).
+    fn install(&self, packages: &HelperPackages, root: &str) -> Result<String, NotInstalled>;
+}
+
+/// Why this build was not put on a target.
+#[derive(Debug)]
+pub enum NotInstalled {
+    /// The channel did not reach the account.
+    NotReached(String),
+    /// The account was reached and the build did not go in.
+    Failed(String),
 }
 
 /// The SSH session `upstream` signs in, as a [`Login`].
@@ -151,6 +166,33 @@ impl Login for Ssh<'_> {
             .map(|host| login_addresses(&host, own))
             .unwrap_or_default()
     }
+
+    fn install(&self, packages: &HelperPackages, root: &str) -> Result<String, NotInstalled> {
+        self.0
+            .install_build(packages, root)
+            .map_err(|error| match error {
+                SessionError::Ssh(_) | SessionError::Lost(_) => {
+                    NotInstalled::NotReached(error.to_string())
+                }
+                SessionError::Refused(_) | SessionError::Local(_) => {
+                    NotInstalled::Failed(error.to_string())
+                }
+            })
+    }
+}
+
+/// Brings the Hide this machine started on the target `alias` names to
+/// this build (`crate::started_cores`), over one SSH login that asks
+/// nobody: it runs with no operator at the row.
+pub fn raise(
+    reach: &Reach,
+    alias: &str,
+    packages: &HelperPackages,
+) -> Result<crate::started_cores::Raised, crate::started_cores::Failure> {
+    let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
+    let raised = crate::started_cores::raise_on(&Ssh(&upstream), packages);
+    upstream.close();
+    raised
 }
 
 /// The words that start the target's `hide` in a run step. A folder under

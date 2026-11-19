@@ -850,6 +850,7 @@ impl<T: PeerTransport> Pairings<T> {
                 grant: accepted.grant,
                 state: KnownState::Confirming,
                 candidates,
+                started: None,
             })?;
         }
         inner.settle(accepted.key);
@@ -1641,6 +1642,7 @@ impl<T: PeerTransport> Inner<T> {
             grant: grant.clone(),
             state: KnownState::Confirming,
             candidates: link.candidates(),
+            started: None,
         };
         if let Err(error) = self.adopt_host(record) {
             self.revoke_once(conn, grant);
@@ -1898,6 +1900,7 @@ impl<T: PeerTransport> Inner<T> {
             grant: grant.clone(),
             state: KnownState::Confirming,
             candidates,
+            started: None,
         };
         if self.adopt_host(record).is_err() {
             self.revoke_once(link, grant);

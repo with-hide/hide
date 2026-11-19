@@ -11706,10 +11706,24 @@ mod wire_enum_tests {
             assert_wire(&contract, "peer_reason", &reasons);
             checked.insert("peer_reason");
 
-            let updates = [PeerUpdate::Here, PeerUpdate::There];
+            let updates = [
+                PeerUpdate::Here,
+                PeerUpdate::There,
+                PeerUpdate::Updating,
+                PeerUpdate::UpdateNotReached,
+                PeerUpdate::UpdateRolledBack,
+                PeerUpdate::UpdateBusy,
+                PeerUpdate::UpdateFailed,
+            ];
             for variant in updates {
                 match variant {
-                    PeerUpdate::Here | PeerUpdate::There => {}
+                    PeerUpdate::Here
+                    | PeerUpdate::There
+                    | PeerUpdate::Updating
+                    | PeerUpdate::UpdateNotReached
+                    | PeerUpdate::UpdateRolledBack
+                    | PeerUpdate::UpdateBusy
+                    | PeerUpdate::UpdateFailed => {}
                 }
             }
             assert_wire(&contract, "peer_update", &updates);

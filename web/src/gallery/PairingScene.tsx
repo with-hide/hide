@@ -43,6 +43,10 @@ const PEERS: Peer[] = [
   peer("f", "Old laptop", { opens: "unpaired", connected: false, path: null }),
   peer("g", "Office PC", { opens: "removing", connected: false, path: null }),
   peer("h", "Linux box", { opens: "active", connected: false, path: null, update: "there" }),
+  // The Hide this computer started there over SSH or wsl.exe, which it
+  // keeps at its own version (B23).
+  peer("0", "render-box", { opens: "active", update: "updating" }),
+  peer("1", "WSL Debian", { opens: "active", path: "local", update: "update_rolled_back" }),
 ];
 
 /** The MacBook runs two terminals here, so removing it offers to end them (B26). */

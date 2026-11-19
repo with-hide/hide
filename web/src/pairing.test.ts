@@ -28,6 +28,17 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
   it("puts the state the operator acts on before the connection: update, pair again, a removal still owed, a pause", () => {
     expect(peerState(peer({ update: "there", connected: false })).key).toBe("pairing.state.updateThere");
     expect(peerState(peer({ update: "here" })).key).toBe("pairing.state.updateHere");
+    // B23: the Hide this computer started there is being updated, or was
+    // not, with why and Retry, whether or not the two are connected.
+    expect(peerState(peer({ update: "updating" }))).toMatchObject({ key: "pairing.state.updating", action: null });
+    for (const [update, reason] of [
+      ["update_not_reached", "pairing.update.notReached"],
+      ["update_rolled_back", "pairing.update.rolledBack"],
+      ["update_busy", "pairing.update.busy"],
+      ["update_failed", "pairing.update.failed"],
+    ] as const) {
+      expect(peerState(peer({ update }))).toEqual({ key: "pairing.state.updateFailed", tone: "warn", action: "retry", reason });
+    }
     expect(peerState(peer({ opens: "unpaired", connected: false }))).toMatchObject({ key: "pairing.state.unpaired", action: "remove_outgoing" });
     expect(peerState(peer({ opens: "removing", connected: false })).key).toBe("pairing.state.removing");
     expect(peerState(peer({ opens: "paused", connected: false }))).toMatchObject({ key: "pairing.state.paused", action: "resume_outgoing" });

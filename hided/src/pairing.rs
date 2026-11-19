@@ -32,7 +32,7 @@ use hide_core::peer_machines::{
 use hide_peer::pairing::{AcceptError, JoinError, Me, Pairings, RequestError, View};
 use hide_peer::protocol::hello::{Behind, GrantState};
 use hide_peer::protocol::{Candidate, PathKind, PeerKey, StreamKind};
-use hide_peer::store::{Grant, GrantStatus, Host, KnownState, StoreError, Via};
+use hide_peer::store::{Grant, GrantStatus, Host, KnownState, Login, StoreError, Via};
 use hide_peer::words::WordList;
 use hide_peer::{PeerEvent, PeerTransport, RelayState};
 use serde::Deserialize;
@@ -46,6 +46,7 @@ use crate::guests::HelperFolder;
 use crate::pairing_ssh;
 use crate::pairing_wsl;
 use crate::peer_host::{HostPeers, Incoming, Link, PeerHost};
+use crate::started_cores::{Failure, Raised};
 
 type Service = Pairings<crate::peer_host::Transport>;
 
@@ -368,6 +369,11 @@ pub struct Pairing {
     look: watch::Sender<u64>,
     /// Which machines cannot connect until one side updates.
     updates: Mutex<HashMap<PeerKey, PeerUpdate>>,
+    /// Where bringing the Hides this machine started to its build stands.
+    raises: Mutex<Raises>,
+    /// Held by the one raise that runs: each copies a build to a machine
+    /// and restarts its core (B23).
+    raising: tokio::sync::Mutex<()>,
     relay: Mutex<Relay>,
     /// The machines the core was last told, and the turn to tell it.
     told: tokio::sync::Mutex<Option<Vec<PeerMachine>>>,
@@ -418,6 +424,31 @@ struct SshRequest {
     alias: String,
     id: String,
     made: Instant,
+    /// A switch under this request began starting a Hide on the target:
+    /// the machine it pairs with is one this machine started (B23).
+    started: bool,
+}
+
+/// The Hides this machine started on other machines, each brought to this
+/// machine's build once per build it is seen to run (B23,
+/// `crate::started_cores`).
+#[derive(Default)]
+struct Raises {
+    /// A raise that waits or runs, or how the last one failed: what the
+    /// machine's row shows in place of who has to update.
+    shown: HashMap<PeerKey, PeerUpdate>,
+    /// The build each machine named when its raise was last begun.
+    tried: HashMap<PeerKey, String>,
+}
+
+/// A failed raise as its row names it.
+fn raise_failure(failure: Failure) -> PeerUpdate {
+    match failure {
+        Failure::NotReached => PeerUpdate::UpdateNotReached,
+        Failure::RolledBack => PeerUpdate::UpdateRolledBack,
+        Failure::Busy => PeerUpdate::UpdateBusy,
+        Failure::Failed => PeerUpdate::UpdateFailed,
+    }
 }
 
 impl Pairing {
@@ -440,6 +471,8 @@ impl Pairing {
             frame: watch::channel(Arc::new(json!(View::default()))).0,
             look: watch::channel(0).0,
             updates: Mutex::new(HashMap::new()),
+            raises: Mutex::default(),
+            raising: tokio::sync::Mutex::default(),
             relay: Mutex::new(Relay::default()),
             told: tokio::sync::Mutex::new(None),
             guests: OnceLock::new(),
@@ -589,21 +622,110 @@ impl Pairing {
                 changed = saved.changed() => if changed.is_err() { return },
                 changed = look.changed() => if changed.is_err() { return },
                 event = events.recv() => match event {
-                    Ok(PeerEvent::UpdateNeeded { key, behind, .. }) => {
+                    Ok(PeerEvent::UpdateNeeded { key, behind, build, .. }) => {
                         let update = match behind {
                             Behind::Ours | Behind::Either => PeerUpdate::Here,
                             Behind::Theirs => PeerUpdate::There,
                         };
                         lock(&self.updates).insert(key, update);
+                        // A Hide this machine started is brought to its
+                        // build instead of waiting for someone there.
+                        if behind != Behind::Ours {
+                            self.raise_started(&peers, key, &build, false);
+                        }
                     }
                     Ok(PeerEvent::Connected { key, .. }) => {
                         lock(&self.updates).remove(&key);
+                        if let Some(link) = peers.link(&key) {
+                            let build = link.their_hello().build.clone();
+                            self.raise_started(&peers, key, &build, false);
+                        }
                     }
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
             }
         }
+    }
+
+    /// Brings the Hide this machine started on `key`'s machine to this
+    /// build, when that Hide names an older one (`theirs`): once per build
+    /// it names, and again when the operator asks (`asked`). A machine
+    /// this one did not start a Hide on, and one that runs this build or a
+    /// newer release, are left alone. One raise runs at a time.
+    fn raise_started(self: &Arc<Self>, peers: &HostPeers, key: PeerKey, theirs: &str, asked: bool) {
+        let Some(login) = peers.host(&key).and_then(|host| host.started) else {
+            return;
+        };
+        let ours = crate::build_order::Release::of_this_build().version;
+        {
+            let mut raises = lock(&self.raises);
+            if !crate::build_order::may_be_older(&ours, theirs) {
+                // It caught up, by this machine's raise or another's.
+                if raises.shown.remove(&key).is_some() {
+                    self.look.send_modify(|count| *count += 1);
+                }
+                return;
+            }
+            if raises.shown.get(&key) == Some(&PeerUpdate::Updating)
+                || (!asked && raises.tried.get(&key).map(String::as_str) == Some(theirs))
+            {
+                return;
+            }
+            raises.tried.insert(key, theirs.to_owned());
+            raises.shown.insert(key, PeerUpdate::Updating);
+        }
+        self.look.send_modify(|count| *count += 1);
+        let (pairing, peers) = (Arc::clone(self), peers.clone());
+        tokio::spawn(async move {
+            let raised = pairing.raise(login).await;
+            {
+                let mut raises = lock(&pairing.raises);
+                match raised {
+                    Ok(_) => raises.shown.remove(&key),
+                    Err(failure) => raises.shown.insert(key, raise_failure(failure)),
+                };
+            }
+            if raised == Ok(Raised::Updated) {
+                // The core there restarted: its connection is made again
+                // now, not at the next redial.
+                peers.network_changed();
+            }
+            pairing.look.send_modify(|count| *count += 1);
+        });
+    }
+
+    /// One raise through `login`, after the ones begun before it.
+    async fn raise(&self, login: Login) -> Result<Raised, Failure> {
+        let _one = tokio::select! {
+            () = self.shutdown.ended() => return Err(Failure::Failed),
+            one = self.raising.lock() => one,
+        };
+        let dial = Arc::clone(&self.ssh_dials)
+            .acquire_owned()
+            .await
+            .map_err(|_| Failure::Failed)?;
+        let (reach, wsl) = (self.ssh.clone(), self.host.wsl().cloned());
+        tokio::task::spawn_blocking(move || {
+            let _dial = dial;
+            // This build's programs for every system it carries, beside
+            // this one.
+            let packages = hide_node::ssh::host::HelperPackages::new(
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+                crate::cli::RELEASE,
+            );
+            match &login {
+                Login::Ssh(alias) => pairing_ssh::raise(&reach, alias, &packages),
+                Login::Wsl(distro) => match &wsl {
+                    Some(carriers) => pairing_wsl::raise(carriers.access(), distro, &packages),
+                    None => Err(Failure::NotReached),
+                },
+            }
+        })
+        .await
+        .unwrap_or(Err(Failure::Failed))
     }
 
     /// Runs once when the pairing starts and then whenever the machines this
@@ -686,7 +808,10 @@ impl Pairing {
     fn paired(self: &Arc<Self>, peers: &HostPeers) -> Vec<Paired> {
         let hosts = peers.hosts();
         let guests = peers.grants(|grants, now| grants.list(now).cloned().collect::<Vec<_>>());
-        let updates = lock(&self.updates).clone();
+        let mut updates = lock(&self.updates).clone();
+        // A raise under way or failed is what its row says: this machine
+        // is who updates that Hide.
+        updates.extend(lock(&self.raises).shown.clone());
         let (mut paired, away) = rows(&hosts, &guests, |key| peers.link(key), &updates);
         // Why a host this machine dials is not connected: the relay's own
         // answer when it has one (B34), else nothing more than "not
@@ -1029,6 +1154,18 @@ impl Pairing {
                 let paired = self.named(&peers, &device)?;
                 lock(&self.relay).answer = None;
                 peers.network_changed();
+                // A raise that failed is the operator's to ask again.
+                let failed = {
+                    let raises = lock(&self.raises);
+                    raises
+                        .shown
+                        .get(&paired.key)
+                        .filter(|shown| **shown != PeerUpdate::Updating)
+                        .and_then(|_| raises.tried.get(&paired.key).cloned())
+                };
+                if let Some(theirs) = failed {
+                    self.raise_started(&peers, paired.key, &theirs, true);
+                }
                 self.look.send_modify(|count| *count += 1);
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
@@ -1126,8 +1263,16 @@ impl Pairing {
         let projects = source.projects.clone();
         // The install's step is told from the thread that runs the login.
         let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
-        let installed = device.to_owned();
+        let (installed, under) = (device.to_owned(), requested.clone());
         let installing = move || {
+            // Kept with the request, which a switch that stops after the
+            // start is asked again under.
+            if let Some(kept) = lock(&steps.ssh_requests)
+                .iter_mut()
+                .find(|kept| kept.alias == under)
+            {
+                kept.started = true;
+            }
             runtime.block_on(steps.switch_step(&installed, "installing", json!({})));
         };
         // What one switch asks, whichever channel carries it.
@@ -1204,6 +1349,9 @@ impl Pairing {
             connecting["needs"] = needs.payload();
         }
         self.switch_step(device, "connecting", connecting).await;
+        let started = lock(&self.ssh_requests)
+            .iter()
+            .any(|kept| kept.alias == requested && kept.started);
         if let Some(paired) = paired {
             match service.adopt(paired.accepted, paired.first) {
                 // Adopted before, by a switch that stopped after it.
@@ -1213,6 +1361,27 @@ impl Pairing {
                 Err(AcceptError::Store(_)) => return Err("device_not_saved"),
             }
             lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
+        }
+        if started {
+            // The Hide there is this machine's to keep at its build, through
+            // the login it was started through (B23). The pairing stands
+            // without the record, so a store that refuses it is only logged.
+            let login = match &source.reach {
+                hide_core::SwitchReach::Ssh { alias, .. } => Login::Ssh(alias.clone()),
+                hide_core::SwitchReach::Wsl { distro } => Login::Wsl(distro.clone()),
+            };
+            let saved = peers.known(|known| {
+                let mut record = known.of(&host).cloned().ok_or(StoreError::Unknown)?;
+                record.started = Some(login);
+                known.put(record)
+            });
+            if let Err(error) = saved {
+                hide_core::diagnostic!(json!({
+                    "component": "pairing",
+                    "kind": "pairing.started_not_saved",
+                    "reason": format!("{error:?}"),
+                }));
+            }
         }
         // The connection confirms the grant; the core takes the device
         // over the moment it is active.
@@ -1366,6 +1535,7 @@ impl Pairing {
             alias: alias.to_owned(),
             id: id.clone(),
             made: Instant::now(),
+            started: false,
         });
         Ok(id)
     }
@@ -1653,6 +1823,7 @@ mod tests {
             grant: "grant".into(),
             state,
             candidates: Vec::new(),
+            started: None,
         };
         // A host that dropped the pairing is listed and is nothing to dial.
         let (dropped, away) = rows(

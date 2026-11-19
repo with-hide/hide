@@ -3324,7 +3324,7 @@ fn healthy_daemon(env: &Env) -> Option<(DaemonState, serde_json::Value)> {
     healthy_daemon_in(&env.state_dir)
 }
 
-fn healthy_daemon_in(state_dir: &Path) -> Option<(DaemonState, serde_json::Value)> {
+pub(crate) fn healthy_daemon_in(state_dir: &Path) -> Option<(DaemonState, serde_json::Value)> {
     probe_daemon(state_dir, HEALTH_REQUEST).ok()
 }
 

@@ -480,6 +480,7 @@ pub(crate) mod fixture {
                     grant,
                     state: KnownState::Active,
                     candidates: host.addr().candidates,
+                    started: None,
                 })
             })
             .unwrap();
@@ -561,6 +562,7 @@ mod tests {
             grant: "g".to_owned(),
             state,
             candidates: Vec::new(),
+            started: None,
         };
         for (state_now, finished) in [
             (KnownState::Confirming, false),
@@ -598,6 +600,7 @@ mod tests {
                 grant: "grant".to_owned(),
                 state,
                 candidates: Vec::new(),
+                started: None,
             })
             .unwrap();
     }
