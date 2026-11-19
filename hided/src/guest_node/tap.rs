@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
+use std::time::Duration;
 
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
@@ -38,6 +39,8 @@ struct TapState {
     queue: VecDeque<(Option<String>, Vec<u8>)>,
     /// Bytes of waiting output frames.
     bytes: usize,
+    /// A frame left the queue and is being written.
+    writing: bool,
     /// Panes whose picture this client has from a full frame.
     started: HashSet<String>,
     /// Panes asked to draw again whole and not yet drawn.
@@ -51,6 +54,7 @@ impl TapState {
         self.client = 0;
         self.queue.clear();
         self.bytes = 0;
+        self.writing = false;
         self.started.clear();
         self.asked.clear();
         if let Some(stream) = self.stream.take() {
@@ -227,10 +231,16 @@ impl TapHub {
                     if state.client != client {
                         return;
                     }
+                    // The frame before this one is with the host.
+                    if state.writing {
+                        state.writing = false;
+                        self.ready.notify_all();
+                    }
                     if let Some((pane, bytes)) = state.queue.pop_front() {
                         if pane.is_some() {
                             state.bytes -= bytes.len();
                         }
+                        state.writing = true;
                         break bytes;
                     }
                     state = self
@@ -248,6 +258,20 @@ impl TapHub {
                 return;
             }
         }
+    }
+
+    /// Waits until the connected host has every frame queued so far, or
+    /// `within` passed, or no host is connected: what a node that is about
+    /// to exit calls so the host's list is not left with panes that ended.
+    pub(super) fn flushed(&self, within: Duration) {
+        let state = lock(&self.state);
+        drop(
+            self.ready
+                .wait_timeout_while(state, within, |state| {
+                    state.client != 0 && (state.writing || !state.queue.is_empty())
+                })
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
 
     fn read(&self, client: u64, mut stream: LocalStream) {

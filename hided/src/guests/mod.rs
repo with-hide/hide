@@ -19,6 +19,7 @@ pub mod tap;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,7 +27,7 @@ use hide_kit::layout;
 use hide_node::ssh::host::{HelperPackages, guest_build};
 use hide_node_link::address::guest_pane_id;
 use hide_peer::protocol::build::{self, FileMessage};
-use hide_peer::protocol::launch::Position;
+use hide_peer::protocol::launch::{EndMode, Position};
 use hide_peer::protocol::manage::{Manage, NodeStop};
 use hide_peer::protocol::{PeerKey, StreamKind, frame, launch};
 use hide_peer::{limits, wire};
@@ -132,7 +133,26 @@ struct NodeRecord {
 struct Hosted {
     node: Arc<GuestNode>,
     tap: Arc<GuestTap>,
+    /// The guest was taken off this machine: its folder goes once nothing
+    /// of it runs here.
+    removed: Arc<AtomicBool>,
 }
+
+/// What this service was told so far.
+#[derive(Default)]
+struct Told {
+    /// The guests this machine hosted before this start are listed again.
+    resumed: bool,
+    /// The guests that hold a grant here, as last told.
+    granted: Option<Vec<PeerKey>>,
+}
+
+/// The word [`layout::guest_removed`] holds for a guest whose panes are
+/// to end at once; anything else leaves them until the last one ends.
+const END_NOW: &str = "now";
+
+/// How long a node started only to end its panes has to be ready.
+const END_START_WITHIN: Duration = Duration::from_secs(launch::READY_WITHIN_SECS + 5);
 
 pub struct Guests {
     state_dir: PathBuf,
@@ -144,6 +164,7 @@ pub struct Guests {
     /// The name of this daemon's own build for this machine, read once.
     own_build: OnceLock<Option<String>>,
     hosted: Mutex<HashMap<PeerKey, Hosted>>,
+    told: Mutex<Told>,
     /// None in a test of the node's launch alone, where no screen draws a
     /// guest's panes.
     screens: Option<Screens>,
@@ -174,6 +195,7 @@ impl Guests {
             packages,
             own_build: OnceLock::new(),
             hosted: Mutex::new(HashMap::new()),
+            told: Mutex::default(),
             screens,
             runtime: Handle::current(),
         })
@@ -235,6 +257,7 @@ impl Guests {
             None => Arc::new(NoScreens),
         };
         let guests = Arc::downgrade(self);
+        let listed = *guest;
         let tap = GuestTap::open(
             device,
             &guest.short(),
@@ -243,6 +266,8 @@ impl Guests {
             Box::new(move || {
                 if let Some(guests) = guests.upgrade() {
                     guests.tell_core();
+                    // The last pane of a guest that was taken off ended.
+                    guests.forget_if_done(&listed);
                 }
             }),
         );
@@ -254,7 +279,10 @@ impl Guests {
         }
         let mut phase = node.phase();
         let record = layout::guest_node_record(&self.state_dir, guest);
+        let builds = layout::guest_install_root(&self.state_dir, guest);
         let following = Arc::clone(&tap);
+        let guests = Arc::downgrade(self);
+        let followed = *guest;
         // Ends with the node: its phase has no more to say once it is
         // dropped.
         self.runtime.spawn(async move {
@@ -270,7 +298,16 @@ impl Guests {
                             device: following.device().to_owned(),
                         };
                         let record = record.clone();
+                        let builds = builds.clone();
                         tokio::task::spawn_blocking(move || {
+                            // The build that runs and the one before it
+                            // stay; older ones go (D-77 (2)).
+                            let before = std::fs::read(&record)
+                                .ok()
+                                .and_then(|bytes| serde_json::from_slice::<NodeRecord>(&bytes).ok())
+                                .map(|earlier| earlier.build_id)
+                                .unwrap_or_default();
+                            guest_build::prune(&builds, &[&remembered.build_id, &before]);
                             let written = serde_json::to_vec(&remembered)
                                 .map_err(io::Error::other)
                                 .and_then(|bytes| {
@@ -285,7 +322,14 @@ impl Guests {
                             }
                         });
                     }
-                    Phase::Starting | Phase::Stopped { .. } => following.detach(),
+                    Phase::Starting => following.detach(),
+                    Phase::Stopped { .. } => {
+                        following.detach();
+                        // The node of a guest that was taken off ended.
+                        if let Some(guests) = guests.upgrade() {
+                            tokio::task::spawn_blocking(move || guests.forget_if_done(&followed));
+                        }
+                    }
                 }
                 if phase.changed().await.is_err() {
                     break;
@@ -298,40 +342,259 @@ impl Guests {
     /// The guests this machine hosted before this start: each one's panes
     /// are listed again from its `h/panes.json`, and a guest that still has
     /// panes gets its node back from the build it last ran, whether or not
-    /// the guest is connected (B16). Blocking: it reads each guest's folder.
+    /// the guest is connected (B16). A guest that was taken off this
+    /// machine is ended as it was being ended. Blocking: it reads each
+    /// guest's folder.
     pub fn resume(self: &Arc<Self>) {
-        let Ok(folders) = std::fs::read_dir(layout::guests(&self.state_dir)) else {
-            return;
-        };
-        for folder in folders.flatten().take(2 * limits::MAX_GRANTS) {
-            let Some(guest) = std::fs::read_to_string(folder.path().join(launch::KEY_FILE))
-                .ok()
-                .and_then(|key| PeerKey::from_hex(key.trim()).ok())
-                .filter(|key| folder.file_name().to_str() == Some(key.short().as_str()))
-            else {
-                continue;
-            };
-            let Some(remembered) =
-                std::fs::read(layout::guest_node_record(&self.state_dir, &guest))
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<NodeRecord>(&bytes).ok())
-            else {
+        for (guest, _) in self.folders() {
+            let Some(remembered) = self.remembered(&guest) else {
                 continue;
             };
             let Ok(node) = self.node_for(&guest, &remembered.device) else {
                 continue;
             };
-            let has_panes = lock(&self.hosted)
-                .get(&guest)
+            let has_panes = self
+                .known(&guest)
                 .is_some_and(|hosted| !hosted.tap.panes().is_empty());
-            let root = layout::guest_install_root(&self.state_dir, &guest);
-            match guest_build::placed(&root, &remembered.build_id, std::env::consts::OS) {
-                Some(program) if has_panes => node.start(program),
-                _ => {}
+            let removed = std::fs::read_to_string(layout::guest_removed(&self.state_dir, &guest));
+            match removed.as_deref().map(str::trim) {
+                Ok(END_NOW) => self.leave(&guest, EndMode::Now),
+                Ok(_) => self.leave(&guest, EndMode::AfterLastPane),
+                Err(_) => {}
+            }
+            if has_panes && removed.as_deref().map(str::trim).ok() != Some(END_NOW) {
+                self.start_remembered(&guest, &node);
             }
             record("guests.resumed", &guest, json!({"panes": has_panes}));
         }
         self.tell_core();
+        let granted = {
+            let mut told = lock(&self.told);
+            told.resumed = true;
+            told.granted.clone()
+        };
+        if let Some(granted) = granted {
+            self.sweep(&granted);
+        }
+    }
+
+    /// Every guest's folder on this machine with the key it holds, at most
+    /// twice as many as this machine can have guests.
+    fn folders(&self) -> Vec<(PeerKey, PathBuf)> {
+        let Ok(folders) = std::fs::read_dir(layout::guests(&self.state_dir)) else {
+            return Vec::new();
+        };
+        folders
+            .flatten()
+            .take(2 * limits::MAX_GRANTS)
+            .filter_map(|folder| {
+                let guest = std::fs::read_to_string(folder.path().join(launch::KEY_FILE))
+                    .ok()
+                    .and_then(|key| PeerKey::from_hex(key.trim()).ok())
+                    .filter(|key| folder.file_name().to_str() == Some(key.short().as_str()))?;
+                Some((guest, folder.path()))
+            })
+            .collect()
+    }
+
+    fn known(&self, guest: &PeerKey) -> Option<Hosted> {
+        lock(&self.hosted).get(guest).cloned()
+    }
+
+    fn remembered(&self, guest: &PeerKey) -> Option<NodeRecord> {
+        std::fs::read(layout::guest_node_record(&self.state_dir, guest))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    /// Starts the guest's node from the build it last ran, when that build
+    /// is still placed. Blocking.
+    fn start_remembered(&self, guest: &PeerKey, node: &Arc<GuestNode>) -> bool {
+        let root = layout::guest_install_root(&self.state_dir, guest);
+        let program = self.remembered(guest).and_then(|remembered| {
+            guest_build::placed(&root, &remembered.build_id, std::env::consts::OS)
+        });
+        match program {
+            Some(program) => {
+                node.start(program);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The guests that hold a grant on this machine now, told at the start
+    /// and on every change of the paired machines. A guest that has a
+    /// folder here and no grant was taken off this machine (B26, D-77
+    /// (6)): its node takes no new link and ends with its last pane, and
+    /// what is left of it goes once nothing of it runs here. A guest in
+    /// the list that was taken off before is a guest again.
+    pub fn granted(self: &Arc<Self>, granted: Vec<PeerKey>) {
+        let resumed = {
+            let mut told = lock(&self.told);
+            told.granted = Some(granted.clone());
+            told.resumed
+        };
+        // Before the guests of the last start are listed again a folder
+        // says nothing of what runs from it; `resume` sweeps when it is
+        // done.
+        if resumed {
+            let guests = Arc::clone(self);
+            self.runtime.spawn_blocking(move || guests.sweep(&granted));
+        }
+    }
+
+    /// The operator took `guest` off this machine and chose to end its
+    /// work here at once (B26). It needs no connection to the guest: the
+    /// guest's node holds its panes' records.
+    pub fn end_work(self: &Arc<Self>, guest: PeerKey) {
+        let guests = Arc::clone(self);
+        self.runtime
+            .spawn_blocking(move || guests.leave(&guest, EndMode::Now));
+    }
+
+    /// Brings every guest's place here in line with who holds a grant.
+    /// Blocking.
+    fn sweep(self: &Arc<Self>, granted: &[PeerKey]) {
+        let known: Vec<(PeerKey, bool)> = lock(&self.hosted)
+            .iter()
+            .map(|(guest, hosted)| (*guest, hosted.removed.load(Ordering::SeqCst)))
+            .collect();
+        for (guest, removed) in &known {
+            match (granted.contains(guest), removed) {
+                (false, false) => self.leave(guest, EndMode::AfterLastPane),
+                (false, true) => self.forget_if_done(guest),
+                (true, true) => self.back(guest),
+                (true, false) => {}
+            }
+        }
+        // A folder nothing was started from since this daemon's start: a
+        // build placed for a guest that never ran, or what a guest left
+        // that was taken off while this daemon was down.
+        for (guest, _) in self.folders() {
+            if !granted.contains(&guest) {
+                let hosted = lock(&self.hosted);
+                if !hosted.contains_key(&guest) {
+                    self.remove_folder(&guest);
+                }
+            }
+        }
+    }
+
+    /// Marks `guest` as taken off this machine and tells its node how to
+    /// end. With `EndMode::Now` a node that is not running is started to
+    /// end the panes its holders still run. Blocking.
+    fn leave(self: &Arc<Self>, guest: &PeerKey, mode: EndMode) {
+        let Some(hosted) = self.known(guest) else {
+            return;
+        };
+        hosted.removed.store(true, Ordering::SeqCst);
+        // What the next start of this daemon goes on with.
+        let word = match mode {
+            EndMode::Now => END_NOW,
+            EndMode::AfterLastPane => "after_last_pane",
+        };
+        if let Err(error) = atomic::write_file(
+            &layout::guest_removed(&self.state_dir, guest),
+            word.as_bytes(),
+            Access::Private,
+        ) {
+            record(
+                "guests.removal_not_saved",
+                guest,
+                json!({"reason": error.to_string()}),
+            );
+        }
+        if mode == EndMode::Now
+            && hosted.node.running().is_none()
+            && !hosted.tap.panes().is_empty()
+            && self.start_remembered(guest, &hosted.node)
+        {
+            let mut phase = hosted.node.phase();
+            let ready = self.runtime.block_on(async {
+                tokio::time::timeout(
+                    END_START_WITHIN,
+                    phase.wait_for(|phase| !matches!(phase, Phase::Starting)),
+                )
+                .await
+                .is_ok_and(|phase| phase.is_ok_and(|phase| matches!(*phase, Phase::Ready(_))))
+            });
+            if !ready {
+                record("guests.end_not_started", guest, json!({}));
+            }
+        }
+        record(
+            "guests.removed",
+            guest,
+            json!({"mode": word, "panes": hosted.tap.panes().len()}),
+        );
+        hosted.node.end(mode);
+        self.forget_if_done(guest);
+    }
+
+    /// A guest that was taken off this machine is a guest again: its node
+    /// is started again, since the one that runs takes no new link.
+    /// Blocking.
+    fn back(&self, guest: &PeerKey) {
+        let Some(hosted) = self.known(guest) else {
+            return;
+        };
+        if !hosted.removed.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        if let Err(error) = std::fs::remove_file(layout::guest_removed(&self.state_dir, guest))
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            record(
+                "guests.removal_not_cleared",
+                guest,
+                json!({"reason": error.to_string()}),
+            );
+        }
+        hosted.node.restart();
+        record("guests.back", guest, json!({}));
+    }
+
+    /// Drops what is left of a guest that was taken off this machine once
+    /// nothing of it runs here: its place among the guests, the screens'
+    /// way to its panes, and its folder. Blocking.
+    fn forget_if_done(&self, guest: &PeerKey) {
+        let dropped = {
+            let mut hosted = lock(&self.hosted);
+            let done = hosted.get(guest).is_some_and(|known| {
+                known.removed.load(Ordering::SeqCst)
+                    && known.tap.panes().is_empty()
+                    && known.node.stopped_by(Instant::now())
+            });
+            if !done {
+                return;
+            }
+            let dropped = hosted.remove(guest);
+            // Under the lock: a guest that is paired again makes its
+            // folder only after this one is gone.
+            self.remove_folder(guest);
+            dropped
+        };
+        if let Some(dropped) = dropped {
+            dropped.tap.detach();
+            if let Some(screens) = &self.screens {
+                screens.core.terminals.remove_guest(dropped.tap.device());
+            }
+        }
+        record("guests.forgotten", guest, json!({}));
+        self.tell_core();
+    }
+
+    fn remove_folder(&self, guest: &PeerKey) {
+        if let Err(error) = std::fs::remove_dir_all(layout::guest_dir(&self.state_dir, guest))
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            record(
+                "guests.folder_not_removed",
+                guest,
+                json!({"reason": error.to_string()}),
+            );
+        }
     }
 
     /// Takes the three kinds of stream a guest opens for its node, and ends
@@ -510,6 +773,7 @@ impl Guests {
             Hosted {
                 node: Arc::clone(&node),
                 tap,
+                removed: Arc::default(),
             },
         );
         Ok(node)
@@ -528,6 +792,10 @@ impl Guests {
             .await
             .map_err(|error| (NodeStop::Other, error.to_string()))??;
         let node = self.node_for(&guest, device)?;
+        // Only a guest that holds a grant asks: one that was taken off
+        // this machine before is back.
+        let guests = Arc::clone(self);
+        let _ = tokio::task::spawn_blocking(move || guests.back(&guest)).await;
         node.start(program);
         Ok(node)
     }
@@ -893,10 +1161,11 @@ pub(crate) mod stand_in {
 
     /// The node's script: its ready line, then what it does with each line
     /// of its host (`cases`, the arms of a `case "$line"`), ending when
-    /// told to or when its input ends.
+    /// told to end now or when its input ends. Told to end with its last
+    /// pane it stays, as a node whose panes still run does.
     fn node(capabilities: &str, cases: &str) -> String {
         format!(
-            "#!/bin/sh\nseq=0; from=0; acked=0; away=0\nprintf '%s\\n' '{{\"guest_node\":{},\"build\":\"9.9.9\",\"build_id\":\"0000000000000000\",\"pid\":'\"$$\"',\"link\":\"{}\",\"tap\":\"{}\",\"tap_versions\":[{},{}],\"capabilities\":{capabilities}}}'\nwhile read -r line; do\n  case \"$line\" in\n{cases}    *'\"end\"'*) exit 0 ;;\n  esac\ndone\nexit 0\n",
+            "#!/bin/sh\nseq=0; from=0; acked=0; away=0\nprintf '%s\\n' '{{\"guest_node\":{},\"build\":\"9.9.9\",\"build_id\":\"0000000000000000\",\"pid\":'\"$$\"',\"link\":\"{}\",\"tap\":\"{}\",\"tap_versions\":[{},{}],\"capabilities\":{capabilities}}}'\nwhile read -r line; do\n  case \"$line\" in\n{cases}    *'\"end\":\"now\"'*) exit 0 ;;\n  esac\ndone\nexit 0\n",
             launch::GUEST_NODE,
             launch::LINK_ENDPOINT,
             launch::TAP_ENDPOINT,
@@ -1196,39 +1465,34 @@ mod tests {
         assert_eq!(refused(3, "mini"), None);
     }
 
-    /// B16: the host's daemon starts again with the guest away.
+    /// What an earlier run of this daemon left of `guest`: its folder, its
+    /// build (a stand-in node), the build its node ran from and the one
+    /// pane it had.
     #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_host_that_starts_again_lists_a_guests_panes_and_runs_its_node_with_the_guest_away() {
+    fn left_by_an_earlier_run(state: &Path, home: &Path, guest: &PeerKey) {
         use hide_peer::protocol::panes::{self, Pane, Panes};
-        use hide_peer::protocol::tap::ToNode;
 
-        let state = short_root();
-        let home = tempfile::tempdir().unwrap();
-        let guest = key(7);
         let programs = tempfile::tempdir().unwrap();
         stand_in::programs(programs.path());
-        // What an earlier run of this daemon left: the guest's folder, its
-        // build, the build its node ran from and the panes it had.
         let build = HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE)
             .guest_build(std::env::consts::OS, std::env::consts::ARCH)
             .unwrap_or_else(|error| panic!("the stand-in build is whole: {error}"));
         let earlier = Guests::new(
-            state.path().to_path_buf(),
-            home.path().to_path_buf(),
+            state.to_path_buf(),
+            home.to_path_buf(),
             HelperPackages::new(None, crate::cli::RELEASE),
             None,
         );
-        earlier.folder(&guest).unwrap();
+        earlier.folder(guest).unwrap();
         build
-            .place(&layout::guest_install_root(state.path(), &guest))
+            .place(&layout::guest_install_root(state, guest))
             .unwrap();
         let write = |path: PathBuf, bytes: Vec<u8>| {
             private::create_dir_all(path.parent().unwrap()).unwrap();
             atomic::write_file(&path, &bytes, Access::Private).unwrap();
         };
         write(
-            layout::guest_node_record(state.path(), &guest),
+            layout::guest_node_record(state, guest),
             serde_json::to_vec(&NodeRecord {
                 build_id: build.id().to_owned(),
                 device: "macbook".to_owned(),
@@ -1236,7 +1500,7 @@ mod tests {
             .unwrap(),
         );
         write(
-            layout::guest_panes(state.path(), &guest),
+            layout::guest_panes(state, guest),
             serde_json::to_vec(&Panes {
                 version: panes::VERSION,
                 panes: vec![Pane {
@@ -1248,7 +1512,157 @@ mod tests {
             })
             .unwrap(),
         );
-        drop(earlier);
+    }
+
+    /// Waits for `state` without a timed pause: it is looked at again each
+    /// time the runtime has run what else was ready.
+    #[cfg(unix)]
+    async fn until(what: &str, state: impl Fn() -> bool) {
+        within(what, async {
+            while !state() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+    }
+
+    /// B26: the host takes a guest off, and ends its work here or not.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_guest_taken_off_keeps_its_panes_until_the_host_ends_them_and_then_nothing_of_it_is_left()
+     {
+        use hide_peer::protocol::tap::{PaneSize, ToHost, ToNode};
+
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guest = key(7);
+        left_by_an_earlier_run(state.path(), home.path(), &guest);
+        // This test is the tap of the node the stand-in says is ready.
+        let node_dir = layout::guest_node_side(state.path(), &guest);
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let taps = ipc::LocalListener::bind(&node_dir.join(launch::TAP_ENDPOINT)).unwrap();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        {
+            let guests = Arc::clone(&guests);
+            tokio::task::spawn_blocking(move || guests.resume())
+                .await
+                .unwrap();
+        }
+        let mut node = within(
+            "the tap of the guest's node",
+            tokio::task::spawn_blocking(move || {
+                let mut node = taps.accept().unwrap();
+                assert!(matches!(tap::tests::heard(&mut node), ToNode::Hello { .. }));
+                node
+            }),
+        )
+        .await
+        .unwrap();
+        let say = |node: &mut LocalStream, frame: ToHost| {
+            node.write_all(&frame.encode().unwrap()).unwrap();
+        };
+        say(
+            &mut node,
+            ToHost::Welcome {
+                version: hide_peer::protocol::tap::NEWEST_TAP,
+                panes: vec![PaneSize {
+                    pane: "w1:p1".to_owned(),
+                    rows: 24,
+                    cols: 80,
+                }],
+            },
+        );
+
+        // The guest holds no grant any more, with no word about its work:
+        // the work stays. Its node is told to end with its last pane, and
+        // the pane is still this machine's to show.
+        guests.granted(Vec::new());
+        let removed = layout::guest_removed(state.path(), &guest);
+        until("the guest to be marked as taken off", || removed.exists()).await;
+        assert_eq!(guests.panes().len(), 1, "its pane stays on this screen");
+        assert!(guests.node(&guest).unwrap().running().is_some());
+
+        // The operator ends its work: the node is told to end every pane
+        // now, with the guest away. The pane ends, then the node, and then
+        // nothing of the guest is left here.
+        guests.end_work(guest);
+        say(
+            &mut node,
+            ToHost::Gone {
+                pane: "w1:p1".to_owned(),
+            },
+        );
+        let folder = layout::guest_dir(state.path(), &guest);
+        until("the guest's folder to go", || !folder.exists()).await;
+        assert!(guests.node(&guest).is_none());
+        assert!(guests.panes().is_empty());
+    }
+
+    /// A removal that was ending a guest's work when this daemon stopped
+    /// goes on at its next start.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_guests_work_that_was_being_ended_when_the_host_stopped_is_ended_at_its_next_start() {
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guest = key(7);
+        left_by_an_earlier_run(state.path(), home.path(), &guest);
+        atomic::write_file(
+            &layout::guest_removed(state.path(), &guest),
+            END_NOW.as_bytes(),
+            Access::Private,
+        )
+        .unwrap();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        // The node is started only to end the panes: `resume` returns once
+        // it was ready and told, and the stand-in ends when told so.
+        {
+            let guests = Arc::clone(&guests);
+            tokio::task::spawn_blocking(move || guests.resume())
+                .await
+                .unwrap();
+        }
+        let node = guests
+            .node(&guest)
+            .expect("the guest is known until its panes are gone");
+        let mut phase = node.phase();
+        let ended = within(
+            "the node's end",
+            phase.wait_for(|phase| {
+                matches!(
+                    phase,
+                    Phase::Stopped {
+                        reason: NodeStop::Ended,
+                        ..
+                    }
+                )
+            }),
+        )
+        .await
+        .map(|phase| phase.clone());
+        assert!(ended.is_ok(), "{ended:?}");
+    }
+
+    /// B16: the host's daemon starts again with the guest away.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_host_that_starts_again_lists_a_guests_panes_and_runs_its_node_with_the_guest_away() {
+        use hide_peer::protocol::tap::ToNode;
+
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guest = key(7);
+        left_by_an_earlier_run(state.path(), home.path(), &guest);
         // This test is the tap of the node the stand-in says is ready.
         let node_dir = layout::guest_node_side(state.path(), &guest);
         std::fs::create_dir_all(&node_dir).unwrap();

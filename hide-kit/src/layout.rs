@@ -648,6 +648,12 @@ pub fn guests(state_dir: &Path) -> PathBuf {
     state_dir.join(hide_peer_protocol::launch::GUESTS_DIR)
 }
 
+/// The host's mark that a guest was taken off this machine, with how its
+/// node is to end: what is left of it goes once nothing of it runs here.
+pub fn guest_removed(state_dir: &Path, guest: &PeerKey) -> PathBuf {
+    guest_host_side(state_dir, guest).join("removed")
+}
+
 /// What the host build remembers of a guest's node between its own
 /// starts: the build to run it from and the guest's device id.
 pub fn guest_node_record(state_dir: &Path, guest: &PeerKey) -> PathBuf {

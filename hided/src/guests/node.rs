@@ -291,6 +291,21 @@ impl GuestNode {
         }
     }
 
+    /// Starts the running node again from the same build: it is told its
+    /// host is gone, which leaves its panes to their holders, and the node
+    /// that follows takes them. Nothing happens to a node that does not
+    /// run.
+    pub fn restart(&self) {
+        let mut control = lock(&self.control);
+        if control.stopping || !control.supervised || control.next.is_some() {
+            return;
+        }
+        control.next = control.current.clone();
+        control.input = None;
+        drop(control);
+        self.wake.notify_all();
+    }
+
     /// The guest asked for its node again after this host stopped starting
     /// it (B70): the crashes counted so far are forgotten and the build
     /// last asked for is started. `false` when this daemon was never asked

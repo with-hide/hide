@@ -36,6 +36,9 @@ const OWN_WITHIN: Duration = Duration::from_secs(5);
 /// How long the node's own look at every pane's record may take at its
 /// start and before it ends every pane.
 const SCAN_WITHIN: Duration = Duration::from_secs(10);
+/// How long a node that ends waits for its host to have taken the list of
+/// the panes that ended with it.
+const TAP_FLUSH_WITHIN: Duration = Duration::from_secs(2);
 /// How often the node looks again at whether a pane still runs, between
 /// the events that tell it to look: a pane whose program ends on its own
 /// tells no one while no guest is connected.
@@ -249,7 +252,8 @@ pub fn run(dir: &str) -> ! {
         let life = Arc::clone(&life);
         let owned = Arc::clone(&owned);
         let events = events.clone();
-        std::thread::spawn(move || read_host(&life, &owned, events.as_deref()));
+        let hub = Arc::clone(&hub);
+        std::thread::spawn(move || read_host(&life, &owned, &hub, events.as_deref()));
     }
     {
         let slot = slot.clone();
@@ -406,11 +410,16 @@ fn accept_links(link: &LocalListener, life: &Life, sessions: &mpsc::SyncSender<L
 
 /// Reads what the host says on the node's input until that input ends,
 /// which is the host going away: the node exits and leaves its holders.
-fn read_host(life: &Life, owned: &Arc<dyn PaneHolders>, events: Option<&event_box::EventBox>) {
+fn read_host(
+    life: &Life,
+    owned: &Arc<dyn PaneHolders>,
+    tap: &tap::TapHub,
+    events: Option<&event_box::EventBox>,
+) {
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         match ToNode::parse(&line) {
-            Some(ToNode::End(EndMode::Now)) => end_now(owned),
+            Some(ToNode::End(EndMode::Now)) => end_now(owned, tap),
             Some(ToNode::End(EndMode::AfterLastPane)) => {
                 record("guest_node.end_after_last_pane", json!({}));
                 lock(&life.state).after_last_pane = true;
@@ -448,8 +457,10 @@ fn box_did(step: &str, done: Option<io::Result<()>>) {
 }
 
 /// Ends every pane through the node's own ownership, then exits. A pane
-/// that has not ended within the contract's wait is left to its holder.
-fn end_now(owned: &Arc<dyn PaneHolders>) -> ! {
+/// that has not ended within the contract's wait is left to its holder,
+/// and stays in the host's list: the host hears of every pane that ended
+/// before the node goes.
+fn end_now(owned: &Arc<dyn PaneHolders>, tap: &tap::TapHub) -> ! {
     let present = owned
         .recovered(SCAN_WITHIN)
         .map(|found| found.present)
@@ -458,6 +469,7 @@ fn end_now(owned: &Arc<dyn PaneHolders>) -> ! {
     let deadline = Instant::now() + Duration::from_secs(launch::END_NOW_WAITS_SECS);
     let (ended, wait) = mpsc::channel();
     let mut left = present.len();
+    let mut running: Vec<String> = present.clone();
     for pane in present {
         let ended = ended.clone();
         let owned = Arc::clone(owned);
@@ -481,13 +493,18 @@ fn end_now(owned: &Arc<dyn PaneHolders>) -> ! {
                     json!({"pane": pane, "error": format!("{error:?}")}),
                 );
             }
-            Ok((_, Ok(()))) => left -= 1,
+            Ok((pane, Ok(()))) => {
+                left -= 1;
+                running.retain(|live| *live != pane);
+            }
             Err(_) => break,
         }
     }
     if left > 0 {
         record("guest_node.end_now_unfinished", json!({"panes": left}));
     }
+    tap.live(&running);
+    tap.flushed(TAP_FLUSH_WITHIN);
     std::process::exit(launch::EXIT_ENDED)
 }
 
