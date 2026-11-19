@@ -13,6 +13,7 @@ import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
 import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
 import { missionsCatalogs, missionsEnglish } from "./resources/missions";
+import { mobileAutomationsCatalogs, mobileAutomationsEnglish } from "./resources/mobileAutomations";
 import { missionScreenCatalogs, missionScreenEnglish } from "./resources/missionScreen";
 import { automationWordsCatalogs, automationWordsEnglish } from "./resources/automationWords";
 import { automationScreenCatalogs, automationScreenEnglish } from "./resources/automationScreen";
@@ -90,6 +91,7 @@ export const english = {
   ...agentSessionsEnglish,
   ...taskLensEnglish,
   ...missionsEnglish,
+  ...mobileAutomationsEnglish,
   ...missionScreenEnglish,
   ...automationWordsEnglish,
   ...automationScreenEnglish,
@@ -173,6 +175,7 @@ export const catalogs = {
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
     ...missionsCatalogs.ko,
+    ...mobileAutomationsCatalogs.ko,
     ...missionScreenCatalogs.ko,
     ...automationWordsCatalogs.ko,
     ...automationScreenCatalogs.ko,
@@ -251,6 +254,7 @@ export const catalogs = {
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
     ...missionsCatalogs["zh-CN"],
+    ...mobileAutomationsCatalogs["zh-CN"],
     ...missionScreenCatalogs["zh-CN"],
     ...automationWordsCatalogs["zh-CN"],
     ...automationScreenCatalogs["zh-CN"],
@@ -329,6 +333,7 @@ export const catalogs = {
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
     ...missionsCatalogs.ja,
+    ...mobileAutomationsCatalogs.ja,
     ...missionScreenCatalogs.ja,
     ...automationWordsCatalogs.ja,
     ...automationScreenCatalogs.ja,

@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
@@ -25,7 +25,7 @@ export type Screen =
   | "refused";
 
 /** The bottom bar's places (PRD mobile-companion-ui B28). */
-export type PhoneTab = "agents" | "missions" | "prs" | "settings";
+export type PhoneTab = "agents" | "missions" | "automations" | "prs" | "settings";
 
 /** The open pull requests as the last `prs` frame carried them; kept across a lost connection, dimmed under the unreachable line (B45). */
 export type PrsState = { projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted: number };
@@ -160,6 +160,22 @@ type PhoneState = {
   missionAnswerError: { mission: string; notice: Notice } | null;
   /** The press on a closed decision View the page waits on: open again, the agent's 볼 것 opens; refused, its notice shows. */
   missionReopen: MissionReopenSent | null;
+  /** Null until the first `automations` frame; kept across a lost connection, dimmed under the unreachable line (PRD automations B35). */
+  automations: PhoneAutomation[] | null;
+  /** The automations the last frame left out (its caps), shown as a line under the list. */
+  automationsOmitted: number;
+  /** The zone the computer reads schedules in, so a time reads as the schedule does; undefined reads in the phone's own. */
+  automationsZone: string | undefined;
+  /** The automations paused for a person to fix, oldest pause first: each is a line of 내 차례 on the agents tab (PRD automations D-12, B23). */
+  automationAsks: string[];
+  /** The computer could not read its automation list and set it aside: one line above the list. */
+  automationsUnreadable: boolean;
+  /** The automation whose page is open on the automations tab. */
+  automationOpen: string | null;
+  /** A press sent from the tab that hided has not answered yet; its buttons wait. */
+  automationPending: { requestId: string; id: string; action: AutomationAction } | null;
+  /** The line under an automation's buttons for a press hided refused or the connection lost. */
+  automationNotice: { id: string; notice: Notice } | null;
   /** Null until the first `prs` frame; kept across a lost connection, dimmed under the unreachable line (B45). */
   prs: PrsState | null;
   /** The pull request whose page is open on the PR tab, by `PhonePr.key`. */
@@ -221,6 +237,14 @@ const initial: PhoneState = {
   missionAnswer: null,
   missionAnswerError: null,
   missionReopen: null,
+  automations: null,
+  automationsOmitted: 0,
+  automationsZone: undefined,
+  automationAsks: [],
+  automationsUnreadable: false,
+  automationOpen: null,
+  automationPending: null,
+  automationNotice: null,
   prs: null,
   prOpen: null,
   prConfirm: null,
@@ -286,6 +310,20 @@ export function applyFrame(frame: ServerFrame): void {
         missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
         missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),
         missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("decided:") || listed.has(key.slice("decided:".length)))),
+      });
+      return;
+    }
+    case "automations": {
+      const listed = new Set(frame.items.map((automation) => automation.id));
+      patch({
+        automations: frame.items,
+        automationsOmitted: frame.omitted ?? 0,
+        automationsZone: frame.zone ?? undefined,
+        automationAsks: frame.asks ?? [],
+        automationsUnreadable: frame.unreadable === true,
+        // An automation that left the list takes its page and its line with it.
+        automationOpen: state.automationOpen && listed.has(state.automationOpen) ? state.automationOpen : null,
+        automationNotice: state.automationNotice && listed.has(state.automationNotice.id) ? state.automationNotice : null,
       });
       return;
     }
@@ -382,7 +420,7 @@ export function openFold(key: string): void {
 }
 
 export function setTab(tab: PhoneTab): void {
-  usePhone.setState({ tab, missionOpen: null, prOpen: null });
+  usePhone.setState({ tab, missionOpen: null, prOpen: null, automationOpen: null, automationNotice: null });
 }
 
 /** Opens a mission's page on the missions tab. */
@@ -406,6 +444,21 @@ export function setMissionFold(key: string, open: boolean): void {
 
 export function setMissionDraft(id: string, text: string): void {
   usePhone.setState((state) => ({ missionDrafts: { ...state.missionDrafts, [id]: text }, missionAnswerError: null }));
+}
+
+/** Opens an automation's page on the automations tab. */
+export function openAutomation(id: string): void {
+  // A refusal of a press on this automation's row stays under the page's buttons.
+  usePhone.setState((state) => ({ tab: "automations", automationOpen: id, automationNotice: state.automationNotice?.id === id ? state.automationNotice : null }));
+}
+
+export function closeAutomation(): void {
+  usePhone.setState({ automationOpen: null, automationNotice: null });
+}
+
+/** The automation a page shows, from the current list; null once it left. */
+export function automationOf(automations: readonly PhoneAutomation[] | null, id: string | null): PhoneAutomation | null {
+  return automations?.find((automation) => automation.id === id) ?? null;
 }
 
 /** Opens a pull request's page on the PR tab. */
