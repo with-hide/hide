@@ -265,9 +265,9 @@ enum Command {
         device: String,
         reply: Sender<MoveSourceAnswer>,
     },
-    DeviceSwitchSignIn {
+    DeviceSwitchSource {
         device: String,
-        reply: Sender<Option<Arc<dyn hide_node_link::device::SignIn>>>,
+        reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
     },
     InboundNode {
         node: String,
@@ -1179,20 +1179,20 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the release source".to_owned())
     }
 
-    /// Where the SSH login of `device`'s switch asks the operator: the
-    /// device's row; none when the core has no such row to ask on.
-    pub fn device_switch_sign_in(
+    /// What `device`'s switch to its machine's own connection starts from;
+    /// see `Core::device_switch_source`.
+    pub fn device_switch_source(
         &self,
         device: &str,
-    ) -> Option<Arc<dyn hide_node_link::device::SignIn>> {
+    ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
         let (reply, rx) = mpsc::channel();
         self.commands
-            .send(Command::DeviceSwitchSignIn {
+            .send(Command::DeviceSwitchSource {
                 device: device.to_owned(),
                 reply,
             })
-            .ok()?;
-        rx.recv().ok().flatten()
+            .map_err(|_| "hide_unavailable")?;
+        rx.recv().map_err(|_| "hide_unavailable")?
     }
 
     pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
@@ -1926,8 +1926,8 @@ fn owner_loop(
             Command::MoveSource { device, reply } => {
                 let _ = reply.send(core.move_source(&device));
             }
-            Command::DeviceSwitchSignIn { device, reply } => {
-                let _ = reply.send(core.device_switch_sign_in(&device));
+            Command::DeviceSwitchSource { device, reply } => {
+                let _ = reply.send(core.device_switch_source(&device));
             }
             Command::ReleaseSource { node, reply } => {
                 let _ = reply.send(core.release_source(&node));

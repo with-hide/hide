@@ -157,7 +157,6 @@ pub enum Ask {
     /// the helper's folder, which another machine took first (D-75).
     Switch {
         device: String,
-        alias: String,
         #[serde(default)]
         own_folder: bool,
     },
@@ -170,12 +169,13 @@ pub enum Ask {
         name: String,
         #[serde(default)]
         wsl: bool,
-        /// The asking machine dialed a device helper on this account and
-        /// asks for that helper's folder and terminals with the grant
-        /// (D-49). When another machine took them first nothing is saved
-        /// and the answer names that machine (D-75).
+        /// The asking machine dialed a device helper on this account,
+        /// installed under this root, and asks for that helper's folder
+        /// and terminals with the grant (D-49). When another machine took
+        /// them first nothing is saved and the answer names that machine
+        /// (D-75).
         #[serde(default)]
-        helper: bool,
+        helper: Option<String>,
     },
 }
 
@@ -288,6 +288,9 @@ pub fn next_action(code: &str) -> &'static str {
             "The two machines were paired and the new connection did not open in time; the device is used as before. Try the switch again"
         }
         "switch_running" => "This device's switch is already running",
+        "switch_unsupported" => {
+            "Only a device this Hide dials over SSH and has connected to once can be switched"
+        }
         "device_own" => "That is this machine itself",
         _ => "Retry; the reason is in Hide's diagnostic log",
     }
@@ -794,22 +797,13 @@ impl Pairing {
                 lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
                 Ok(answer)
             }
-            Ask::Switch {
-                device,
-                alias,
-                own_folder,
-            } => {
-                if !pairing_ssh::valid_alias(&alias) {
-                    return Err("invalid_request");
-                }
+            Ask::Switch { device, own_folder } => {
                 // One switch of a device at a time: a second press while
                 // the first runs changes nothing.
                 if !lock(&self.switching).insert(device.clone()) {
                     return Err("switch_running");
                 }
-                let answer = self
-                    .switch(&service, &peers, &device, &alias, own_folder)
-                    .await;
+                let answer = self.switch(&service, &peers, &device, own_folder).await;
                 lock(&self.switching).remove(&device);
                 match &answer {
                     // The operator is asked something first: no step shows.
@@ -965,13 +959,16 @@ impl Pairing {
                 self.relay_named(&peers).await;
                 let via = if wsl { Via::Wsl } else { Via::Ssh };
                 let _one = match helper {
-                    true => Some(self.helper_asks.lock().await),
-                    false => None,
+                    Some(_) => Some(self.helper_asks.lock().await),
+                    None => None,
                 };
                 // Who holds the helper's folder is read before the grant is
                 // saved: a machine that came second saves nothing until its
                 // operator said yes to losing the terminals (D-75).
-                if helper && let HelperFolder::HeldBy(holder) = self.helper(&peers, guest, false).await {
+                if let Some(root) = &helper
+                    && let HelperFolder::HeldBy(holder) =
+                        self.helper(&peers, guest, root, false).await
+                {
                     let by = self
                         .paired(&peers)
                         .into_iter()
@@ -984,15 +981,15 @@ impl Pairing {
                     Ok(accepted) => json!(accepted),
                     // A machine that is paired already asks for the folder
                     // alone.
-                    Err(AcceptError::Already) if helper => Value::Null,
+                    Err(AcceptError::Already) if helper.is_some() => Value::Null,
                     Err(AcceptError::Invalid) => return Err("invalid_request"),
                     Err(AcceptError::Already) => return Err("device_already_connected"),
                     Err(AcceptError::Store(error)) => return Err(store(error)),
                 };
-                if !helper {
+                let Some(root) = helper else {
                     return Ok(json!({ "accepted": accepted }));
-                }
-                let folder = match self.helper(&peers, guest, true).await {
+                };
+                let folder = match self.helper(&peers, guest, &root, true).await {
                     HelperFolder::Taken => "taken",
                     HelperFolder::Absent => "absent",
                     // Read as free a moment ago, under the same lock.
@@ -1012,14 +1009,18 @@ impl Pairing {
         service: &Service,
         peers: &HostPeers,
         device: &str,
-        alias: &str,
         own_folder: bool,
     ) -> Result<Value, &'static str> {
+        let (core, row) = (Arc::clone(&self.core), device.to_owned());
+        let source = tokio::task::spawn_blocking(move || core.device_switch_source(&row))
+            .await
+            .map_err(|_| "hide_unavailable")??;
+        let alias = source.ssh_alias.as_str();
         self.switch_step(device, "checking", json!({})).await;
         let request = self.ssh_request(alias)?;
-        let core = Arc::clone(&self.core);
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
-        let (target, row) = (alias.to_owned(), device.to_owned());
+        let target = alias.to_owned();
+        let (helper_root, press) = (source.helper_root.clone(), source.sign_in.clone());
         let switched = self
             .ssh_dial(alias, move || {
                 pairing_ssh::switch(&pairing_ssh::Switch {
@@ -1028,8 +1029,8 @@ impl Pairing {
                     request: &request,
                     me: &me,
                     key: &key,
-                    take_folder: !own_folder,
-                    press: core.device_switch_sign_in(&row),
+                    helper_root: (!own_folder).then_some(helper_root.as_str()),
+                    press,
                 })
             })
             .await??;
@@ -1114,6 +1115,7 @@ impl Pairing {
         self: &Arc<Self>,
         peers: &HostPeers,
         guest: PeerKey,
+        root: &str,
         take: bool,
     ) -> HelperFolder {
         let Some(guests) = self.guests.get().cloned() else {
@@ -1125,11 +1127,12 @@ impl Pairing {
             .filter(|paired| paired.machine.opened_by.is_some())
             .map(|paired| paired.key)
             .collect();
+        let root = root.to_owned();
         tokio::task::spawn_blocking(move || {
             let paired = |key: &PeerKey| granted.contains(key);
             match take {
-                true => guests.take_helper(&guest, paired),
-                false => guests.helper_for(&guest, paired),
+                true => guests.take_helper(&guest, &root, paired),
+                false => guests.helper_for(&guest, &root, paired),
             }
         })
         .await

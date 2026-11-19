@@ -188,15 +188,15 @@ pub fn accept(
     key: &PeerKey,
 ) -> Result<Paired, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let answer = accept_on(&upstream, reach, alias, request, me, key, false);
+    let answer = accept_on(&upstream, reach, alias, request, me, key, None);
     let login = upstream.direct_host();
     upstream.close();
     paired(&answer?["accepted"], login).ok_or("ssh_update_there")
 }
 
 /// Runs the target's `accept-ssh` on `upstream`'s session and answers the
-/// value it printed. With `helper` it also asks for the folder of the
-/// device helper this machine dialed there (D-49).
+/// value it printed. With `helper`, the root this machine's device helper
+/// is installed under there, it also asks for that helper's folder (D-49).
 fn accept_on(
     upstream: &Upstream,
     reach: &Reach,
@@ -204,7 +204,7 @@ fn accept_on(
     request: &str,
     me: &Me,
     key: &PeerKey,
-    helper: bool,
+    helper: Option<&str>,
 ) -> Result<Value, &'static str> {
     let key = key.to_hex();
     let mut words = vec![
@@ -218,8 +218,8 @@ fn accept_on(
         "--name",
         &me.name,
     ];
-    if helper {
-        words.push("--helper");
+    if let Some(root) = helper {
+        words.extend(["--helper", root]);
     }
     let mut answer = match run(upstream, reach, &words) {
         Ok(Said::Answer(answer)) => answer,
@@ -289,9 +289,10 @@ pub struct Switch<'a> {
     pub request: &'a str,
     pub me: &'a Me,
     pub key: &'a PeerKey,
-    /// Whether this machine asks for the helper's folder: not after its
+    /// The root this machine's helper is installed under on the target,
+    /// when this machine asks for the helper's folder: not after its
     /// operator agreed to go on without it (D-75).
-    pub take_folder: bool,
+    pub helper_root: Option<&'a str>,
     /// Where the login's questions go: the device's row.
     pub press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
 }
@@ -332,12 +333,12 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
         switch.request,
         switch.me,
         switch.key,
-        switch.take_folder,
+        switch.helper_root,
     );
     let answer = match accepted {
         // Paired already, and going on without the helper's folder: there
         // is nothing to save on the target.
-        Err("device_already_connected") if !switch.take_folder => {
+        Err("device_already_connected") if switch.helper_root.is_none() => {
             return Ok(Switched::Paired {
                 paired: None,
                 folder: Folder::Kept,
@@ -354,11 +355,11 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
         Some("absent") => Folder::Absent,
         Some("kept") => Folder::Kept,
         // Asked for no folder, and so told of none.
-        None if !switch.take_folder => Folder::Kept,
+        None if switch.helper_root.is_none() => Folder::Kept,
         _ => return Err("ssh_update_there"),
     };
     let paired = match &answer["accepted"] {
-        Value::Null if switch.take_folder => None,
+        Value::Null if switch.helper_root.is_some() => None,
         accepted => {
             Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?)
         }

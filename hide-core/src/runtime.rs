@@ -39,7 +39,7 @@ mod detail;
 mod device_analytics;
 mod device_catalog;
 mod device_names;
-mod device_switch;
+pub(crate) mod device_switch;
 mod device_sign_in;
 mod devices;
 mod disk_sweep;

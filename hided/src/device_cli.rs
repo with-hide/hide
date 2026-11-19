@@ -98,9 +98,9 @@ pub enum Verb {
         device: String,
         name: String,
         wsl: bool,
-        /// The caller dialed a device helper on this account and asks for
-        /// its folder and terminals with the grant (D-49).
-        helper: bool,
+        /// The root of the device helper the caller dialed on this account,
+        /// whose folder and terminals it asks for with the grant (D-49).
+        helper: Option<String>,
     },
 }
 
@@ -119,7 +119,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut json = false;
     let mut wait = false;
     let mut wsl = false;
-    let mut helper = false;
+    let mut helper = None;
     let mut direction = None;
     let (mut name, mut request, mut key, mut device) = (None, None, None, None);
     let mut words = Vec::new();
@@ -137,10 +137,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 wsl = true;
                 continue;
             }
-            "--helper" if accept && !helper => {
-                helper = true;
-                continue;
-            }
+            "--helper" if accept && helper.is_none() => &mut helper,
             "--outgoing" | "--incoming" | "--both" if directed && direction.is_none() => {
                 direction = Some(match arg.as_str() {
                     "--outgoing" => Direction::Outgoing,

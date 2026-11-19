@@ -136,11 +136,14 @@ impl Helper {
         if dir != hide_kit::layout::device_node_state(&home) {
             return None;
         }
-        let root = hide_kit::layout::helper_root(&home);
+        // The host's record of the machine that took the folder names the
+        // root its helper ran from.
+        let root = hide_kit::layout::HelperGuest::read(dir).map(|taken| taken.root);
         let placed = program
             .parent()
             .is_some_and(|build| hide_peer::protocol::build::is_id(&build_name(build)))
-            && program.parent().and_then(Path::parent) == Some(root.as_path());
+            && root.is_some()
+            && program.parent().and_then(Path::parent) == root.as_deref();
         Some(Self { home, placed })
     }
 }

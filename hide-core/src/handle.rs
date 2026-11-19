@@ -1299,17 +1299,17 @@ impl Core {
             .map(str::to_owned)
     }
 
-    /// Where the SSH login of `device`'s switch to its machine's own
-    /// connection asks the operator: the device's row (PRD
-    /// device-connect-iroh D-45, D-49).
-    pub fn device_switch_sign_in(
+    /// What `device`'s switch to its machine's own connection starts from
+    /// (PRD device-connect-iroh D-45, D-49), or the code of why it cannot
+    /// be switched.
+    pub fn device_switch_source(
         &self,
         device: &str,
-    ) -> Option<Arc<dyn hide_node_link::device::SignIn>> {
-        if !check_owner_thread(self, "device_switch_sign_in") {
-            return None;
+    ) -> Result<crate::DeviceSwitchSource, &'static str> {
+        if !check_owner_thread(self, "device_switch_source") {
+            return Err("hide_unavailable");
         }
-        lock_recover(&self.runtime).device_switch_sign_in(device)
+        lock_recover(&self.runtime).device_switch_source(device)
     }
 
     /// What a move of the core to `device` is made from (PRD

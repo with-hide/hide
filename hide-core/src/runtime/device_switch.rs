@@ -28,6 +28,17 @@ pub(super) struct DeviceSwitch {
     key: Option<String>,
 }
 
+/// What a helper device is switched from: how the core reaches it, and
+/// where its helper is.
+pub struct DeviceSwitchSource {
+    pub ssh_alias: String,
+    /// The helper root the operator allowed on the device, as the consent
+    /// spells it.
+    pub helper_root: String,
+    /// Where the questions of the switch's SSH login go: the device's row.
+    pub sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct DeviceSwitchPayload {
     pub(super) device_id: String,
@@ -70,24 +81,50 @@ impl DeviceSwitchPayload {
 }
 
 impl Runtime {
-    /// Where the questions of a switch's SSH login go: the device's row,
-    /// as those of its own connection attempts do (D-45). The operator's
-    /// press on that row started the switch, so it may ask. None for a
-    /// device that never had a connection attempt, whose row has nowhere
-    /// to put a question: its login then asks nobody.
-    pub(crate) fn device_switch_sign_in(
+    /// What hided switches `device_id` from, or the code of why it is not
+    /// a device that can be switched: only a device the core dials over
+    /// SSH under its machine's own id, which the paired machine's device
+    /// then has too.
+    pub(crate) fn device_switch_source(
         &self,
         device_id: &str,
-    ) -> Option<Arc<dyn hide_node_link::device::SignIn>> {
-        let context = self.worker_context.clone()?;
-        let host = self.device_hosts.get(device_id)?;
-        Some(Arc::new(super::device_sign_in::RowSignIn {
-            context,
-            device_id: device_id.to_owned(),
-            generation: host.generation,
-            wake: crate::remote::Wake::Allowed,
-            withdrawn: Arc::default(),
-        }))
+    ) -> Result<DeviceSwitchSource, &'static str> {
+        let registration = self
+            .device_registration(device_id)
+            .ok_or("device_unknown")?;
+        let LinkOrigin::Dialed {
+            ssh_alias,
+            naming: crate::model::DeviceNaming::Named,
+        } = &registration.origin
+        else {
+            return Err("switch_unsupported");
+        };
+        // The operator's press on the device's row started the switch, so
+        // its login asks there, as the device's own connection attempts do
+        // (D-45). A device that never had an attempt has no row state to
+        // put a question in: its login then asks nobody.
+        let sign_in = self
+            .worker_context
+            .clone()
+            .zip(self.device_hosts.get(device_id))
+            .map(|(context, host)| {
+                Arc::new(super::device_sign_in::RowSignIn {
+                    context,
+                    device_id: device_id.to_owned(),
+                    generation: host.generation,
+                    wake: crate::remote::Wake::Allowed,
+                    withdrawn: Arc::default(),
+                }) as Arc<dyn hide_node_link::device::SignIn>
+            });
+        Ok(DeviceSwitchSource {
+            ssh_alias: ssh_alias.clone(),
+            helper_root: registration
+                .host_consent
+                .as_ref()
+                .map(|consent| consent.helper_root.clone())
+                .unwrap_or_else(|| self.host_helper_root()),
+            sign_in,
+        })
     }
 
     /// The switch of `device_id` as its row draws it.

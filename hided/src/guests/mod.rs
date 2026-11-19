@@ -222,12 +222,36 @@ pub enum HelperFolder {
 }
 
 impl Guests {
-    /// The paired machine that took the device helper's folder over, as
-    /// the record in that folder says.
+    /// The paired machine that took the device helper's folder over, with
+    /// the helper root, as the record in that folder says.
+    fn helper_taken(&self) -> Option<(PeerKey, PathBuf)> {
+        let taken = layout::HelperGuest::read(&layout::device_node_state(&self.home))?;
+        let key = PeerKey::from_hex(&taken.key).ok()?;
+        taken.root.is_absolute().then_some((key, taken.root))
+    }
+
+    /// The paired machine that took the device helper's folder over.
     pub fn helper_holder(&self) -> Option<PeerKey> {
-        std::fs::read_to_string(layout::device_node_guest(&self.home))
-            .ok()
-            .and_then(|key| PeerKey::from_hex(key.trim()).ok())
+        self.helper_taken().map(|(key, _)| key)
+    }
+
+    /// The helper root `spelled` names on this account (`~/` is its home),
+    /// when a device helper was installed there: a folder with a build of
+    /// Hide's in it. Any other folder is not one a guest may name as its
+    /// install root.
+    fn helper_root(&self, spelled: &str) -> Option<PathBuf> {
+        let root = layout::expand_home(spelled, &self.home);
+        let built = std::fs::read_dir(&root).ok()?.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(build::is_id)
+                && entry
+                    .path()
+                    .join(format!("hided{}", std::env::consts::EXE_SUFFIX))
+                    .is_file()
+        });
+        (root.is_absolute() && built).then_some(root)
     }
 
     /// Gives `guest` the device helper's folder when no other paired
@@ -236,17 +260,31 @@ impl Guests {
     /// machine still holds a grant here; the record of one that does not,
     /// and has nothing running here, is a pairing that never finished and
     /// is replaced. Blocking.
-    pub fn take_helper(&self, guest: &PeerKey, paired: impl Fn(&PeerKey) -> bool) -> HelperFolder {
-        match self.helper_for(guest, paired) {
+    pub fn take_helper(
+        &self,
+        guest: &PeerKey,
+        root: &str,
+        paired: impl Fn(&PeerKey) -> bool,
+    ) -> HelperFolder {
+        match self.helper_for(guest, root, paired) {
             // Free: nobody holds it, and `guest` runs nothing here yet.
             HelperFolder::Kept if !self.runs_here(guest) => {}
             found => return found,
         }
-        match atomic::write_file(
-            &layout::device_node_guest(&self.home),
-            guest.to_hex().as_bytes(),
-            Access::Private,
-        ) {
+        let Some(root) = self.helper_root(root) else {
+            return HelperFolder::Absent;
+        };
+        let taken = layout::HelperGuest {
+            key: guest.to_hex(),
+            root,
+        };
+        match serde_json::to_vec(&taken).map_err(io::Error::other).and_then(|bytes| {
+            atomic::write_file(
+                &layout::device_node_guest(&self.home),
+                &bytes,
+                Access::Private,
+            )
+        }) {
             Ok(_) => {
                 record("guests.helper_taken", guest, json!({}));
                 HelperFolder::Taken
@@ -272,9 +310,14 @@ impl Guests {
     /// now, and nothing changes: [`HelperFolder::Kept`] for a folder it
     /// does not hold, which it may take unless its node already ran here
     /// from a folder of its own. Blocking.
-    pub fn helper_for(&self, guest: &PeerKey, paired: impl Fn(&PeerKey) -> bool) -> HelperFolder {
+    pub fn helper_for(
+        &self,
+        guest: &PeerKey,
+        root: &str,
+        paired: impl Fn(&PeerKey) -> bool,
+    ) -> HelperFolder {
         let folder = layout::device_node_state(&self.home);
-        if !layout::pane_records(&folder).is_dir() {
+        if !layout::pane_records(&folder).is_dir() || self.helper_root(root).is_none() {
             return HelperFolder::Absent;
         }
         match self.helper_holder() {
@@ -296,10 +339,12 @@ impl Guests {
     /// one place that chooses, so the node, its builds and their removal
     /// agree.
     fn place(&self, guest: &PeerKey) -> Place {
-        if self.helper_holder().as_ref() == Some(guest) {
+        if let Some((holder, root)) = self.helper_taken()
+            && holder == *guest
+        {
             return Place {
                 node: layout::device_node_state(&self.home),
-                install: layout::helper_root(&self.home),
+                install: root,
                 helper: true,
             };
         }
