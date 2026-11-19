@@ -17,6 +17,7 @@ import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { testBrowserArgs } from "../../web/e2e/browser-launch.cjs";
 import { chooseExpand, countSent, enterWorkspace, enterWorkspaceWithLane, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
+import { agentPane } from "../../web/e2e/agent-pane";
 import { fitWindow, focusPage, hostLog, launchShell, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
@@ -197,8 +198,7 @@ async function backgroundTab(label: string): Promise<{ tab: string; pane: string
   });
 }
 
-/** A `hide` command run in `pane`, with its exit status and what it printed. */
-async function paneOutput(args: string[], pane = fixture.panes[0]): Promise<{ status: number; stdout: string }> {
+async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
   // The pane is the one an agent runs in, whichever the operator is in: the command must not take the keyboard from it.
   const name = `desktop-cli-${++cliSequence}`;
   const result = await dumpOnFailure("pane command", async () => {
@@ -216,11 +216,6 @@ async function paneOutput(args: string[], pane = fixture.panes[0]): Promise<{ st
     argv: [path.resolve("..", "target", "debug", fixtureExecutable("hide")), ...args],
     stdout: true,
   }));
-  return { status: result.status, stdout: result.stdout };
-}
-
-async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
-  const result = await paneOutput(args, pane);
   return { status: result.status, ...(JSON.parse(result.stdout.trim().split("\n").at(-1) || "{}") as Record<string, unknown>) };
 }
 
@@ -288,6 +283,17 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   const page = await shellPage(app);
   await enterWorkspaceWithLane(page, "fixture");
   const { tab: other, pane: otherPane } = await backgroundTab("Other tab");
+  // A plain shell's open lands on the desk in front; an agent's lands on none.
+  const agent = await agentPane(fixture, run.env.HIDE_STATE_DIR!, otherPane);
+  const asAgent = async (args: string[]) => {
+    const { status, out } = await agent(args);
+    return { status, ...(JSON.parse(out.trim().split("\n").at(-1) || "{}") as Record<string, unknown>) } as Record<string, unknown> & { status: number };
+  };
+  await withControl(stack.daemon, async (control) => {
+    await focusTab(control, fixture, fixture.tab);
+    await focusPane(control, fixture.panes[0]!);
+  });
+  await expect(page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`)).toHaveAttribute("aria-selected", "true");
   const url = `${origin}/a.html`;
   const form = `${origin}/form.html`;
   const opened = await openLoaded(url, { status: 0, ok: true, page: { state: "loaded" } });
@@ -299,7 +305,7 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
 
   // The other tab's agent opens a page: it loads with no slot and the
   // operator's desk, tab and page stay as they were.
-  const background = await cliFromPane(["browser", "open", form, "--wait"], otherPane);
+  const background = await asAgent(["browser", "open", form, "--wait"]);
   expect(background).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
   const f = (background.result as { view_id: string }).view_id;
   await expect(tab(page, "Form")).toHaveCount(0);
@@ -311,13 +317,13 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   expect(await mark(original.id, "[window.marker, document.getElementById('q').value]")).toEqual(["A", "A 한글 입력"]);
 
   // Its agent reads and drives it there.
-  const shot = await paneOutput(["browser", "snapshot", f], otherPane);
-  expect(shot.status, shot.stdout).toBe(0);
-  const refOf = (line: RegExp) => shot.stdout.split("\n").find((row) => line.test(row))?.trim().split(" ")[0];
+  const shot = await agent(["browser", "snapshot", f]);
+  expect(shot.status, shot.out).toBe(0);
+  const refOf = (line: RegExp) => shot.out.split("\n").find((row) => line.test(row))?.trim().split(" ")[0];
   const name = refOf(/textbox "Name"/), send = refOf(/button "Send"/);
-  expect([name, send], shot.stdout).toEqual([expect.stringMatching(/^@\d+$/), expect.stringMatching(/^@\d+$/)]);
-  expect(await cliFromPane(["browser", "fill", f, name!, "한글 이름"], otherPane)).toMatchObject({ status: 0, ok: true });
-  expect(await cliFromPane(["browser", "click", f, send!], otherPane)).toMatchObject({ status: 0, ok: true });
+  expect([name, send], shot.out).toEqual([expect.stringMatching(/^@\d+$/), expect.stringMatching(/^@\d+$/)]);
+  expect(await asAgent(["browser", "fill", f, name!, "한글 이름"])).toMatchObject({ status: 0, ok: true });
+  expect(await asAgent(["browser", "click", f, send!])).toMatchObject({ status: 0, ok: true });
   expect(await inPage(form, "document.getElementById('out').textContent")).toBe("sent: 한글 이름");
   await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
 
@@ -331,7 +337,7 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   }
   await page.locator(`[data-agent-tab-bar] [data-tab="${other}"]`).click();
   await expect(page.locator(`[data-agent-tab-bar] [data-tab="${other}"]`)).toHaveAttribute("aria-selected", "true");
-  expect(await cliFromPane(["view", "select", f], otherPane)).toMatchObject({ status: 0, ok: true });
+  expect(await asAgent(["view", "select", f])).toMatchObject({ status: 0, ok: true });
   await showDocuments(page);
   await shownAndSelected(page, form, f);
   expect((await viewOf(form)).id).toBe(offDesk.id);
