@@ -107,6 +107,9 @@ pub enum NodeStop {
     FolderRefused,
     /// It crashed more often than the host starts it again.
     Crashed,
+    /// The host already has as many other guests at work as it carries at
+    /// once ([`crate::launch::MAX_GUEST_NODES`]).
+    HostFull,
     #[serde(other)]
     Other,
 }

@@ -689,6 +689,18 @@ pub fn guest_install_root(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::INSTALL_SIDE)
 }
 
+/// The name of the installation whose builds sit under `root`, which its
+/// hook entries carry and its panes name: a guest's own kind for a guest's
+/// install root ([`guest_install_root`]), whose entries act in its own
+/// panes alone, and a helper root's for every other folder.
+pub fn install_of_root(root: &Path) -> String {
+    if hide_peer_protocol::launch::is_install_root(root) {
+        hide_agent_hooks::route::install_of_guest_root(root)
+    } else {
+        hide_agent_hooks::route::install_of_root(root)
+    }
+}
+
 /// One build of a guest, named by the first 16 hex characters of its
 /// digest.
 pub fn guest_build(state_dir: &Path, guest: &PeerKey, build: &str) -> PathBuf {
@@ -848,6 +860,38 @@ mod tests {
             peer_inbox(state, &key),
             state.join("peers").join("inbox").join("abababababababab")
         );
+    }
+
+    /// A guest's install root names a guest's installation, the kind whose
+    /// entries act in its own panes alone, spelled as the peer contract
+    /// spells it for the host's build that takes them out; a helper root,
+    /// and a folder that only looks alike, name a helper root's.
+    #[test]
+    fn only_a_guest_s_install_root_names_a_guest_s_installation() {
+        use hide_agent_hooks::route;
+        use hide_peer_protocol::launch;
+        assert_eq!(route::GUEST_INSTALL_PREFIX, launch::HOOKS_INSTALL_PREFIX);
+        let state = Path::new("/home/hide/state");
+        let root = guest_install_root(state, &PeerKey::from_bytes([0xab; 32]));
+        assert_eq!(
+            install_of_root(&root),
+            format!("{}{}", launch::HOOKS_INSTALL_PREFIX, root.display())
+        );
+        for other in [
+            helper_root(Path::new("/home/hide")),
+            state.join("g").join("abababababababab"),
+            state.join("g").join("abababababababab").join("n"),
+            state.join("g").join("not-a-key").join("i"),
+            state.join("x").join("abababababababab").join("i"),
+            PathBuf::from("i"),
+        ] {
+            assert_eq!(
+                install_of_root(&other),
+                route::install_of_root(&other),
+                "{}",
+                other.display()
+            );
+        }
     }
 
     #[cfg(unix)]

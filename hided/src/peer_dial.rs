@@ -360,6 +360,9 @@ fn stopped(reason: NodeStop, detail: Option<String>) -> EstablishError {
             InstallStop::Refused,
             format!("That machine does not have this Hide's build and did not take it. {detail}"),
         ),
+        NodeStop::HostFull => EstablishError::Unsupported(format!(
+            "That machine already runs as many other machines' work as it carries at once; end one's work there first. {detail}"
+        )),
         NodeStop::Crashed => EstablishError::Helper(format!(
             "This Hide's node there crashed too often and is left stopped. {detail}"
         )),

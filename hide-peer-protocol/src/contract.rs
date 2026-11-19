@@ -417,7 +417,7 @@ pub fn shape() -> Value {
         "management": {
             "messages": messages(&Manage::TYPES, &manage_messages()),
             "node_stops": names!(
-                NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, Other
+                NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, HostFull, Other
             ),
             "release_fields": fields(&sample_release()),
         },
@@ -455,6 +455,7 @@ pub fn shape() -> Value {
             },
             "install": {
                 "name_prefix": launch::INSTALL_PREFIX,
+                "hooks_name_prefix": launch::HOOKS_INSTALL_PREFIX,
                 "build_chars": 16,
             },
             "sockets": {
@@ -485,6 +486,7 @@ pub fn shape() -> Value {
                     "folder_held": launch::EXIT_FOLDER_HELD,
                 },
                 "limits": {
+                    "guest_nodes": launch::MAX_GUEST_NODES,
                     "idle_end_secs": launch::IDLE_END_SECS,
                     "end_now_waits_secs": launch::END_NOW_WAITS_SECS,
                     "folder_held_retry_secs": launch::FOLDER_HELD_RETRY_SECS,

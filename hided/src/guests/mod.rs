@@ -138,6 +138,15 @@ struct Hosted {
     removed: Arc<AtomicBool>,
 }
 
+impl Hosted {
+    /// Whether the guest is at work here: its node runs, or a pane of it
+    /// is left. That long its hook entries are on this account
+    /// ([`Guests::unhook_if_idle`]).
+    fn at_work(&self) -> bool {
+        !self.tap.panes().is_empty() || !self.node.stopped_by(Instant::now())
+    }
+}
+
 /// What this service was told so far.
 #[derive(Default)]
 struct Told {
@@ -168,6 +177,9 @@ pub struct Guests {
     /// Held while a guest is being taken off: the two ways it is said
     /// (the grant list, the operator's "end it") come on two threads.
     leaving: Mutex<()>,
+    /// One guest's node is started at a time, so counting the guests at
+    /// work and the start that adds one are a single step.
+    starting: Mutex<()>,
     /// None in a test of the node's launch alone, where no screen draws a
     /// guest's panes.
     screens: Option<Screens>,
@@ -200,6 +212,7 @@ impl Guests {
             hosted: Mutex::new(HashMap::new()),
             told: Mutex::default(),
             leaving: Mutex::default(),
+            starting: Mutex::default(),
             screens,
             runtime: Handle::current(),
         })
@@ -870,8 +883,37 @@ impl Guests {
         // this machine before is back.
         let guests = Arc::clone(self);
         let _ = tokio::task::spawn_blocking(move || guests.back(&guest)).await;
-        node.start(program);
+        self.start_within_the_cap(&guest, &node, program)?;
         Ok(node)
+    }
+
+    /// Starts `node`, the node of `guest`, unless as many other guests are
+    /// at work here as this machine carries at once
+    /// ([`launch::MAX_GUEST_NODES`], D-77 (7)). A guest already at work is
+    /// never refused its own node: a restart or a newer build of it adds no
+    /// guest.
+    fn start_within_the_cap(
+        &self,
+        guest: &PeerKey,
+        node: &Arc<GuestNode>,
+        program: PathBuf,
+    ) -> Result<(), Refusal> {
+        let _one = lock(&self.starting);
+        let others = lock(&self.hosted)
+            .iter()
+            .filter(|(key, known)| *key != guest && known.at_work())
+            .count();
+        if others >= launch::MAX_GUEST_NODES {
+            return Err((
+                NodeStop::HostFull,
+                format!(
+                    "{} other machines' work runs here, as many as this machine carries at once",
+                    launch::MAX_GUEST_NODES
+                ),
+            ));
+        }
+        node.start(program);
+        Ok(())
     }
 
     /// One guest's management stream: its asks for its node, and where the
@@ -1539,6 +1581,62 @@ mod tests {
         assert_eq!(refused(3, "mini"), None);
     }
 
+    /// D-77 (7): a host has at most [`launch::MAX_GUEST_NODES`] guests at
+    /// work at once. The guest past that is told the host is full, a guest
+    /// already at work is never one more, and a place opens when a guest's
+    /// work ends.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_guest_past_the_cap_is_told_the_host_is_full_until_anothers_work_ends() {
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let programs = tempfile::tempdir().unwrap();
+        stand_in::programs(programs.path());
+        let packages =
+            HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE);
+        let build = packages
+            .guest_build(std::env::consts::OS, std::env::consts::ARCH)
+            .unwrap_or_else(|error| panic!("the stand-in build is whole: {error}"))
+            .id()
+            .to_owned();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            packages,
+            None,
+        );
+        let start = |guest: u8| {
+            let (guests, build) = (Arc::clone(&guests), build.clone());
+            async move {
+                guests
+                    .start(key(guest), &format!("device-{guest}"), build)
+                    .await
+                    .map(|_| ())
+                    .map_err(|(reason, detail)| (reason, detail.contains("as many")))
+            }
+        };
+        let last = u8::try_from(launch::MAX_GUEST_NODES).unwrap();
+        for guest in 1..=last {
+            assert_eq!(start(guest).await, Ok(()), "guest {guest}");
+        }
+        assert_eq!(start(last + 1).await, Err((NodeStop::HostFull, true)));
+        assert!(guests.node(&key(last + 1)).unwrap().running().is_none());
+        assert_eq!(start(1).await, Ok(()), "a guest at work asks again");
+
+        let first = guests.node(&key(1)).unwrap();
+        first.end(EndMode::Now);
+        until("the first guest's node to end", || {
+            first.stopped_by(Instant::now())
+        })
+        .await;
+        assert_eq!(
+            start(last + 1).await,
+            Ok(()),
+            "the place is the next guest's"
+        );
+        assert_eq!(start(1).await, Err((NodeStop::HostFull, true)));
+    }
+
     /// What an earlier run of this daemon left of `guest`: its folder, its
     /// build (a stand-in node), the build its node ran from and the one
     /// pane it had.
@@ -1606,7 +1704,7 @@ mod tests {
 
     /// The name the hook entries of `guest`'s installation carry.
     fn guest_install(state: &Path, guest: &PeerKey) -> String {
-        hide_agent_hooks::route::install_of_root(&layout::guest_install_root(state, guest))
+        layout::install_of_root(&layout::guest_install_root(state, guest))
     }
 
     /// Whether this account's Claude Code settings carry entries of the

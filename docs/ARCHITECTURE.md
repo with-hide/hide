@@ -3275,11 +3275,36 @@ After its own restart the daemon lists each guest's panes again from the file an
 ### A guest's hook entries
 
 A guest's agents report to the guest's core through hook entries of the guest's own installation in the host account's agent settings (PRD D-77 (4), (5); [agent-hooks.md](agent-hooks.md#more-than-one-hide-on-an-account)).
-The guest's node writes them: it runs from the guest's install root (`<state>/g/<key>/i/<build>/hided`), names its installation by that root, and answers its core's kit requests as a device's node does, over a target that keeps to the hook entries and plugin files (`KitPlace::Guest`, `hide_host::kit::run_guest`, `hide_kit::guest_target`); a node that runs from anywhere else installs nothing.
+The guest's node writes them: it runs from the guest's install root (`<state>/g/<key>/i/<build>/hided`), names its installation by that root (`guest-root:<install root>`, `hide_kit::layout::install_of_root`), and answers its core's kit requests as a device's node does, over a target that keeps to the hook entries and plugin files (`KitPlace::Guest`, `hide_host::kit::run_guest`, `hide_kit::guest_target`); a node that runs from anywhere else installs nothing.
 The entries name `<install root>/current`, which the pass points at the build that runs, so a guest's next build needs no rewrite, and a guest's panes name that installation and its own `hide` (`HIDE_INSTALL`, `HIDE_INSTALL_CLI`).
 The account's `hide` command, its `PATH`, its skills and its login agents stay the host's own Hide's.
 The host's Hide takes the entries out, by Hide's marker and that installation's name (`Guests::unhook`, `hide_kit::remove_guest`): when the guest's node has stopped and no pane of the guest is left, when the guest is taken off the machine, and at the daemon's start for what a node that ended without it left.
-So the entries are there while the guest's node runs, which is while the guest is connected or has a pane here, and each costs every agent event on the account one helper start that exits at once in another installation's pane.
+So the entries are there while the guest's node runs, which is while the guest is connected or has a pane here, not only while it has an agent's pane: an agent reads its settings when it starts, so the entries have to be there before a guest's first pane is, and the node cannot tell an agent's pane from a shell's.
+What that costs is one start of the guest's helper at every agent event on the account, the host's own agents' among them: anywhere but in a pane that names the guest's installation the helper reads its environment and arguments and ends, with no file or socket touched (`hide_agent_hooks::route::foreign_pane`).
+[What a guest may take](#what-a-guest-may-take) has what a start takes and the number of guests it allows.
+
+### What a guest may take
+
+Every bound on a guest's work is a count, and this is the whole list (PRD D-77 (7)).
+Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more per pane, and a pane's holder 7 to 16 MB, in a debug build.
+
+| What | Cap | At the cap | Named in |
+| --- | --- | --- | --- |
+| Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 8 | the next guest's node is not started and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::start_within_the_cap` |
+| Guests a host keeps a place for | 32 | those with no node and no pane are dropped, and past that a guest is refused | `hide_peer::limits::MAX_GRANTS`, `Guests::node_for` |
+| Panes of one guest, each in one holder | 256 | the node starts no holder past it, and the host lists none | `hide_kit::panes::HOLDER_CAP`, `hide_core::guest_panes::MAX_PANES` |
+| Streams on one connection | 72, with a cap for each kind | a stream past it is refused | `hide_peer::limits::MAX_STREAMS` |
+| Output a node keeps waiting for a slow host, on the tap | 4 MiB | what waits is dropped and each pane is drawn whole again | `tap::CAP_BYTES` |
+| Letters a node keeps while its core is away | 4,096 events and 8 MiB | the sender is refused `outbox_full`; nothing is dropped | `event::BOX_MAX_EVENTS`, `event::BOX_MAX_BYTES` |
+| Events a node hands the host before the guest's stream takes them | 64 | the node's output is left unread, which holds its next event in its box | `guests/node.rs`, `EVENTS_WAITING` |
+| Crashes of a node the host starts again | 5 in 600 s | the node is left stopped and the guest's device shows the reason with a retry | `launch::CRASHES`, `launch::CRASH_WINDOW_SECS` |
+| Restarts of a node's own service for a lost holder | 1 in 600 s | the host never restarts for it | `launch::HOLDER_LOST_RESTART_SECS` |
+| Builds of one guest a host keeps | 2 | the oldest goes when a node says it is ready | `launch::BUILDS_KEPT` |
+
+The first row is set by the hook entries.
+A guest at work adds one helper start to every agent event on the host's account, and eight guests are to add no more than a quarter of a second to one event on the slowest system Hide supports.
+On a Mac a start took about 5 ms in a release build.
+The `windows check` lane prints what it takes there on every run (`windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each`), started as Claude Code starts a hook, with no shell, and as Codex does, through PowerShell, beside what PowerShell alone takes.
 
 ### A guest taken off the host
 

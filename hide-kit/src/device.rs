@@ -20,7 +20,7 @@ pub fn device_target(root: &Path, home: &Path, cli_dir: &Path, stop: Arc<AtomicB
         .map(PathBuf::from);
     KitTarget {
         home: home.to_path_buf(),
-        install: hide_agent_hooks::route::install_of_root(root),
+        install: crate::layout::install_of_root(root),
         kit_dir: root.join(CURRENT),
         cli_dir: cli_dir.to_path_buf(),
         // The old layout's root too, so its `hide` link is re-pointed rather
@@ -48,7 +48,7 @@ pub fn guest_target(root: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTarge
     let login_shell = crate::agents::login_shell();
     KitTarget {
         home: home.to_path_buf(),
-        install: hide_agent_hooks::route::install_of_root(root),
+        install: crate::layout::install_of_root(root),
         kit_dir: root.join(CURRENT),
         // Named for the part's row alone: nothing is written there.
         cli_dir: home.join(".local").join("bin"),
@@ -72,7 +72,7 @@ pub fn guest_target(root: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTarge
 pub fn remove_guest(root: &Path, home: &Path) -> crate::RemoveReport {
     crate::remove(&KitTarget {
         home: home.to_path_buf(),
-        install: hide_agent_hooks::route::install_of_root(root),
+        install: crate::layout::install_of_root(root),
         kit_dir: root.join(CURRENT),
         cli_dir: home.join(".local").join("bin"),
         owned_roots: vec![root.to_path_buf()],

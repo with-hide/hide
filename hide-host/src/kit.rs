@@ -358,7 +358,7 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
     }
     let (root, _) = build_layout(executable)?;
     Some(PaneInstall {
-        id: hide_agent_hooks::route::install_of_root(&root),
+        id: hide_kit::layout::install_of_root(&root),
         cli: root.join(hide_kit::CURRENT).join(cli),
         path_first: hide_kit::current::path_folder(&root),
     })
