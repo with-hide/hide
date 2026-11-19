@@ -120,6 +120,17 @@ fn path_of(fixture: &Fixture, agent: &str) -> PathBuf {
         .fold(fixture.home().to_path_buf(), |path, name| path.join(name))
 }
 
+/// The place the item's `column` cell speaks of.
+fn cell_place(report: &StoreReport, id: &str, column: &str) -> String {
+    report
+        .items
+        .iter()
+        .find(|item| item.id == id)
+        .and_then(|item| item.cells.iter().find(|cell| cell.column == column))
+        .and_then(|cell| cell.place.clone())
+        .unwrap_or_else(|| panic!("no place on {id}'s {column} cell"))
+}
+
 /// The place a report lists `agent`'s copy of `name` at, which the screen
 /// sends back to take that copy over.
 fn listed_place(report: &StoreReport, name: &str, agent: &str) -> String {
@@ -517,7 +528,9 @@ fn a_server_of_the_same_name_the_operator_put_in_is_left_alone_until_taken_over(
 
     // Taking omp's copy over makes it the item for every agent, its key
     // with it, and the store's own copy goes to the undo list.
-    let place = format!("mcp:omp:{}", path_of(&fixture, "omp").display());
+    // The cell names the place holding omp's own server, which a take-over
+    // sends back.
+    let place = cell_place(&report, "mcp:github", "omp");
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
@@ -1056,4 +1069,49 @@ fn removing_the_machine_takes_hides_servers_and_their_keys_out() {
     }
     assert!(held(&fixture, "opencode", "theirs").is_some());
     assert!(!crate::layout::store_dir(fixture.home()).exists());
+}
+
+#[test]
+fn a_store_whose_secret_is_gone_or_unreadable_is_kept_and_no_agent_file_changes() {
+    for damage in ["gone", "garbage"] {
+        let fixture = mcp_agents();
+        add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+        let dir = crate::layout::store_dir(fixture.home());
+        let secret = dir.join(crate::mcp_keys::SECRET_FILE);
+        if damage == "gone" {
+            std::fs::remove_file(&secret).unwrap();
+        } else {
+            hide_platform::fs::atomic::write_file(
+                &secret,
+                b"not a secret",
+                hide_platform::fs::Access::Private,
+            )
+            .unwrap();
+        }
+        let files = || -> Vec<String> {
+            FILES
+                .iter()
+                .map(|(agent, _)| std::fs::read_to_string(path_of(&fixture, agent)).unwrap())
+                .collect()
+        };
+        let before = files();
+
+        // A pass refuses rather than make a new secret, which would read
+        // every server Hide wrote as the operator's.
+        let refused = crate::apply_store(&fixture.target, Vec::new());
+        assert!(refused.refused.is_some(), "{damage}");
+        assert_eq!(secret.exists(), damage == "garbage");
+
+        let report = remove(&fixture.target);
+        assert!(
+            report
+                .agents
+                .iter()
+                .any(|(_, outcome)| matches!(outcome, crate::RemoveOutcome::Failed { .. })),
+            "{damage}: {:?}",
+            report.agents
+        );
+        assert!(dir.join("store.json").exists(), "{damage}");
+        assert_eq!(files(), before, "{damage}");
+    }
 }

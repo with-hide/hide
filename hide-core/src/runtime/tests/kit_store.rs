@@ -35,6 +35,7 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
         state,
         reason: None,
         changed_at_unix_ms,
+        place: None,
     };
     StoreReport {
         columns: [(

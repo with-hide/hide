@@ -732,6 +732,13 @@ pub struct Cell {
     /// When the column's copy last changed (B17).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_at_unix_ms: Option<u64>,
+    /// The key of the place the state speaks of, which a change names:
+    /// the one holding the operator's own copy of a hand-written cell
+    /// (what [`StoreChange::Adopt`] takes over), the one that failed or
+    /// waits, otherwise the first the column governs. `None` for a column
+    /// with no place on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
 }
 
 /// One item's row.
@@ -1185,9 +1192,9 @@ fn run(
         Err(reason) => return refused(reason),
     };
     let before = store.clone();
-    let secret = match crate::mcp_keys::secret(&dir, mode == Mode::Apply && dir.is_dir()) {
+    let secret = match store_secret(&dir, &store, mode == Mode::Apply && dir.is_dir()) {
         Ok(secret) => secret,
-        Err(error) => return refused(error.to_string()),
+        Err(reason) => return refused(reason),
     };
     let ctx = Ctx {
         target,
@@ -1285,6 +1292,30 @@ fn sole_originals<'a>(
         .collect()
 }
 
+/// The store's secret, made when `make` and the record holds no key
+/// fingerprint yet. One the record's fingerprints need that is gone or
+/// cannot be read refuses the pass: a new secret, or none, would read every
+/// MCP entry Hide wrote with keys as the operator's, and Hide would never
+/// take them out.
+fn store_secret(
+    dir: &Path,
+    store: &StoreRecord,
+    make: bool,
+) -> Result<Option<crate::mcp_keys::KeysSecret>, String> {
+    let keyed = store
+        .written
+        .values()
+        .any(|place| place.entries.values().any(|written| written.keys.is_some()));
+    match crate::mcp_keys::secret(dir, make && !keyed) {
+        Ok(None) if keyed => Err(format!(
+            "{} is gone, so Hide cannot tell the MCP servers it wrote from ones changed by hand; the store is left as it is",
+            dir.join(crate::mcp_keys::SECRET_FILE).display()
+        )),
+        Ok(secret) => Ok(secret),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// Takes the copies Hide put into every place out, leaves or writes back a
 /// copy of each item whose only original the store holds where the
 /// operator had it, puts each folder a take-over set aside back, then
@@ -1302,9 +1333,15 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         Ok(store) => store,
         Err(reason) => return vec![("store".to_owned(), RemoveOutcome::Failed { reason })],
     };
-    // Without its secret, no copy whose keys Hide recorded reads as Hide's,
-    // so none is taken out.
-    let secret = crate::mcp_keys::secret(&dir, false).ok().flatten();
+    // Without its secret no copy whose keys Hide recorded reads as Hide's,
+    // so the store stays rather than leave them in the agents' files.
+    let secret = match store_secret(&dir, &store, false) {
+        Ok(secret) => secret,
+        Err(reason) => {
+            log("store.secret_unreadable", None, &reason);
+            return vec![("store".to_owned(), RemoveOutcome::Failed { reason })];
+        }
+    };
     let mut outcomes = Vec::new();
     let mut failed = false;
     let originals = sole_originals(&dir, &store);
@@ -2512,11 +2549,14 @@ fn item_report(
                 .iter()
                 .filter(|(place, _)| place.governed_by(&column.id))
                 .collect();
-            let (state, reason) = cell_state(ctx, item, applier, column, &mine);
+            let (state, reason, about) = cell_state(ctx, item, applier, column, &mine);
             Cell {
                 column: column.id.clone(),
                 state,
                 reason,
+                place: about
+                    .or_else(|| mine.first().map(|(place, _)| *place))
+                    .map(|place| place.key.clone()),
                 changed_at_unix_ms: store
                     .changed
                     .get(&item.id)
@@ -2546,18 +2586,23 @@ fn item_report(
     }
 }
 
-fn cell_state(
+/// A cell's state, why, and the place that state speaks of when it is one
+/// of the column's places in particular.
+fn cell_state<'p>(
     ctx: &Ctx<'_>,
     item: &StoreItem,
     applier: &dyn Applier,
     column: &Column,
-    places: &[&(&Place, Result<Held, String>)],
-) -> (CellState, Option<String>) {
+    places: &[&(&'p Place, Result<Held, String>)],
+) -> (CellState, Option<String>, Option<&'p Place>) {
+    let failed = places
+        .iter()
+        .find_map(|(place, held)| held.as_ref().err().map(|reason| (*place, reason.clone())));
     if let Err(reason) = applier.supports(item, column) {
-        return (CellState::Unsupported, Some(reason));
+        return (CellState::Unsupported, Some(reason), None);
     }
     if !column.agents.iter().any(|agent| ctx.enabled(agent)) {
-        return (CellState::AgentOff, None);
+        return (CellState::AgentOff, None, None);
     }
     if !item.on_for(&column.id) {
         let still: Vec<&Place> = places
@@ -2574,8 +2619,8 @@ fn cell_state(
             .map(String::as_str)
             .collect();
         // A copy Hide could not take out is still read: the cell is not off.
-        return match places.iter().find_map(|(_, held)| held.as_ref().err()) {
-            Some(reason) => (CellState::Failed, Some(reason.clone())),
+        return match failed {
+            Some((place, reason)) => (CellState::Failed, Some(reason), Some(place)),
             None if !still.is_empty() && !keeping.is_empty() => (
                 CellState::Off,
                 Some(format!(
@@ -2583,16 +2628,18 @@ fn cell_state(
                     keeping.into_iter().collect::<Vec<_>>().join(", "),
                     item.kind.code()
                 )),
+                still.first().copied(),
             ),
             None if !still.is_empty() => (
                 CellState::Failed,
                 Some("Hide's copy is still in place; the next pass takes it out".to_owned()),
+                still.first().copied(),
             ),
-            None => (CellState::Off, None),
+            None => (CellState::Off, None, None),
         };
     }
-    if let Some(reason) = places.iter().find_map(|(_, held)| held.as_ref().err()) {
-        return (CellState::Failed, Some(reason.clone()));
+    if let Some((place, reason)) = failed {
+        return (CellState::Failed, Some(reason), Some(place));
     }
     if let Some((place, _)) = places
         .iter()
@@ -2606,6 +2653,7 @@ fn cell_state(
                 item.kind.code(),
                 item.name
             )),
+            Some(*place),
         );
     }
     if !column
@@ -2616,21 +2664,22 @@ fn cell_state(
         return (
             CellState::Waiting,
             Some("none of its agents is found on this machine".to_owned()),
+            None,
         );
     }
     if let Some((place, _)) = places.iter().find(|(place, _)| place.blocked.is_some()) {
-        return (CellState::Waiting, place.blocked.clone());
+        return (CellState::Waiting, place.blocked.clone(), Some(*place));
     }
-    if places
+    match places
         .iter()
-        .all(|(_, held)| matches!(held, Ok(Held::Current)))
+        .find(|(_, held)| !matches!(held, Ok(Held::Current)))
     {
-        (CellState::On, None)
-    } else {
-        (
+        None => (CellState::On, None, None),
+        Some((place, _)) => (
             CellState::Failed,
             Some("the copy is not in place yet; the next pass tries again".to_owned()),
-        )
+            Some(*place),
+        ),
     }
 }
 
