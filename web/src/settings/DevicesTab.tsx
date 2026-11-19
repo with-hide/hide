@@ -19,7 +19,7 @@ import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./Core
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PairedRows } from "./PairingRows";
-import { ownWindow, pairedMachines } from "../pairing";
+import { listedDevices, ownWindow, pairedMachines } from "../pairing";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -57,7 +57,9 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const localHost = rows.find((device) => device.kind !== "remote")?.host ?? null;
   const localRoot = localHost?.helper_root ?? null;
   const localCliDir = localHost?.cli_dir ?? null;
-  const remoteRows = rows.filter((device) => device.kind === "remote");
+  // A paired machine's row is its pairing's; its device has none of its own.
+  const listed = listedDevices(rows);
+  const remoteRows = listed.filter((device) => device.kind === "remote");
   const paired = useShellStore((s) => pairedMachines(s.rest).length);
   // Adding a machine is this computer's own window's to do (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
@@ -120,7 +122,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       >
         {/* The Hides this computer is paired with stand in the same list as its SSH devices (B24). */}
         <PairedRows actions={actions} />
-        {rows.map((device) => (
+        {listed.map((device) => (
           <DeviceRow
             key={device.id}
             device={device}

@@ -110,7 +110,17 @@ const NONE: readonly Peer[] = [];
  */
 export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
   const devices = rest?.navigator?.devices ?? [];
-  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.id === peer.device_id));
+  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
+}
+
+/**
+ * The devices Settings lists as rows of their own: every device but a paired
+ * machine's (`Device.peer_key`), whose one row there is its pairing's
+ * (`PeerRow`: directions, pause, remove). That device still serves the rail
+ * and the panes.
+ */
+export function listedDevices<T extends { peer_key?: string | null }>(devices: readonly T[]): T[] {
+  return devices.filter((device) => device.peer_key == null);
 }
 
 /**

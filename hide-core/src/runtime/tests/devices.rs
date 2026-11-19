@@ -1173,6 +1173,11 @@ fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
     assert_eq!(origin_of(&runtime, "windows-pc"), Some(peer.clone()));
     let registration = runtime.device_registration("windows-pc").unwrap();
     assert_eq!(registration.label, "Windows PC");
+    // Its row names the pairing it is, so Settings lists the machine once.
+    assert_eq!(
+        device(&runtime, "windows-pc").peer_key,
+        Some("ab".repeat(32))
+    );
     assert!(
         registration.host_consent.is_some(),
         "pairing is the consent its node runs under"

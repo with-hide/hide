@@ -1049,6 +1049,10 @@ pub struct DeviceSnapshot {
     /// SSH alias, connection test or helper consent here (PRD
     /// core-host-node-remote-core D-04).
     pub dials_in: bool,
+    /// The connection key of the paired machine this device is (PRD
+    /// device-connect-iroh D-72): the machine has one row in Settings, its
+    /// pairing's, and this device serves its rail tile and its panes.
+    pub peer_key: Option<String>,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
