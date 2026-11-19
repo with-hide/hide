@@ -5,8 +5,11 @@
 // the interface language and hands it to the desktop host, which drops it
 // while a Hide window has the keyboard. A click opens that agent's pane, and
 // the newest View it has to look at, as pressing its row does; an agent the
-// operator has seen takes its notification back. The app icon
-// counts root agents in each notification group whose switch is on.
+// operator has seen takes its notification back. A notice a machine this
+// computer may open handed over, because someone is here and no one is
+// there (PRD device-connect-iroh D-60), is worded the same way and a click
+// selects that machine's tile. The app icon counts root agents in each
+// notification group whose switch is on.
 
 import { useEffect } from "react";
 import type { Actions } from "./actions";
@@ -18,6 +21,9 @@ import { hostBridge } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
+
+/** How hided tags a notice another machine handed over: `peer:<connection id>|<that machine's tag>`. */
+const PEER_TAG_PREFIX = "peer:";
 
 type Listener = (notice: AgentNotice) => void;
 const listeners = new Set<Listener>();
@@ -108,8 +114,15 @@ export function useAgentNotifications(actions: Actions) {
     if (!bridge) return undefined;
     return bridge.onNotificationOpen((id) => {
       if (!id.startsWith(AGENT_NOTICE_PREFIX)) return;
-      // The tag is `<device id>|<pane id>`; the pane id names the agent wherever it runs.
       const tag = id.slice(AGENT_NOTICE_PREFIX.length);
+      // Another machine's work opens in that machine's tile, as pressing its row does (D-50).
+      if (tag.startsWith(PEER_TAG_PREFIX)) {
+        const key = tag.slice(PEER_TAG_PREFIX.length, tag.indexOf("|"));
+        const machine = useShellStore.getState().rest?.navigator?.peers?.find((peer) => peer.key === key);
+        if (machine) actions.focusDevice(machine.device_id);
+        return;
+      }
+      // The tag is `<device id>|<pane id>`; the pane id names the agent wherever it runs.
       const paneId = tag.slice(tag.indexOf("|") + 1);
       if (paneId) actions.openListedAgent(paneId);
     });
