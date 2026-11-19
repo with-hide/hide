@@ -1,0 +1,66 @@
+// The pure rules behind switching a helper device to the connection of the
+// Hide on its machine (PRD device-connect-iroh B35, B36, B41, B69): which
+// device offers it, what its steps and its failure read as, and how many
+// terminals a later computer's switch would close. hided runs the switch and
+// the core draws its step on the device (`Device.switch`); this only words
+// them, so each rule is tested without a browser.
+
+import type { MessageKey } from "./i18n/catalogs";
+import { catalogWorkspaces, type Device, type DeviceSwitch, type SnapshotRest } from "./snapshot";
+
+/**
+ * A helper device this core dials over SSH: the one the switch is offered
+ * on. A paired machine's device is switched already, a node that dials in
+ * was never a helper, and a WSL distribution is reached another way.
+ */
+export function switchOffered(device: Device): boolean {
+  return device.kind === "remote" && device.dials_in !== true && device.peer_key == null && device.ssh_alias != null && device.wsl_distro == null;
+}
+
+/** The steps a switch shows, in order; the last is where the device's row becomes its machine's. */
+export const SWITCH_STEPS = ["checking", "installing", "connecting"] as const;
+
+export type SwitchStep = (typeof SWITCH_STEPS)[number];
+
+/** The step a running switch is on; null once it failed or while none runs. */
+export function switchStep(state: DeviceSwitch | null | undefined): SwitchStep | null {
+  return state == null || state.state === "failed" ? null : state.state;
+}
+
+export const SWITCH_STEP_KEY: Record<SwitchStep | "done", MessageKey> = {
+  checking: "devices.switch.checking",
+  installing: "devices.switch.installing",
+  connecting: "devices.switch.connecting",
+  done: "devices.switch.done",
+};
+
+/** Why a switch stopped, in one line (B41); a code this build has no words for reads as the plain failure. */
+export function switchFailureKey(reason: string | null | undefined): MessageKey {
+  switch (reason) {
+    case "ssh_not_reached":
+      return "devices.switch.failed.notReached";
+    case "ssh_update_there":
+      return "pairing.ssh.updateThere";
+    case "ssh_hide_not_running":
+      return "pairing.ssh.notRunning";
+    case "switch_not_connected":
+      return "devices.switch.failed.notConnected";
+    case "device_already_connected":
+      return "devices.switch.failed.already";
+    case "device_limit":
+      return "pairing.failed.full";
+    case "peer_unavailable":
+      return "pairing.refused.unavailable";
+    default:
+      return "devices.switch.failed.other";
+  }
+}
+
+/**
+ * How many terminals the core runs on a device, as it counts them for each
+ * of the device's projects (`Workspace.removal`): what a switch that takes a
+ * folder of its own closes (B69).
+ */
+export function deviceTerminalCount(rest: SnapshotRest | null | undefined, deviceId: string): number {
+  return catalogWorkspaces(rest ?? null).filter((workspace) => workspace.device_id === deviceId).reduce((sum, workspace) => sum + (workspace.removal?.pane_count ?? 0), 0);
+}

@@ -65,8 +65,10 @@ it("says nothing about a healthy kit on a device row, and names the device by al
   expect(mini.querySelector("[data-machine-kit], [data-kit-part], [data-kit-problem], [data-kit-reinstall], [data-device-host]")).toBeNull();
   // The old rows named the hide command, the hook files and the helper: none of it is on the row.
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
-  // Test and the menu are the only controls a healthy device row carries.
-  expect(mini.querySelectorAll("button")).toHaveLength(2);
+  // Test, the switch to the new connection and the menu are the only controls a healthy helper device row carries.
+  expect(mini.querySelectorAll("button")).toHaveLength(3);
+  expect(q('[data-device-old-link="mini"]')?.textContent).toBe("·old connection");
+  expect(q('[data-device-switch="mini"]')?.textContent).toBe("Switch");
   expect(q('[data-device-test="mini"]')).not.toBeNull();
   expect(q('[data-device-menu="mini"]')?.getAttribute("aria-label")).toBe("More actions for Mac mini");
   await unmount();

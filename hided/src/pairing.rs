@@ -803,7 +803,14 @@ impl Pairing {
                 if !lock(&self.switching).insert(device.clone()) {
                     return Err("switch_running");
                 }
-                let answer = self.switch(&service, &peers, &device, own_folder).await;
+                // The window that pressed reads which device its answer is for.
+                let answer = self
+                    .switch(&service, &peers, &device, own_folder)
+                    .await
+                    .map(|mut answer| {
+                        answer["device_id"] = json!(device);
+                        answer
+                    });
                 lock(&self.switching).remove(&device);
                 match &answer {
                     // The operator is asked something first: no step shows.
@@ -1074,7 +1081,7 @@ impl Pairing {
                 paired.key == host && paired.machine.opens == Some(PeerOpens::Active)
             });
             if active {
-                return Ok(json!({ "switch": "done", "device_id": device, "folder": folder }));
+                return Ok(json!({ "switch": "done", "folder": folder }));
             }
             if Instant::now() >= over || self.shutdown.has_ended() {
                 return Err("switch_not_connected");

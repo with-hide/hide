@@ -2188,7 +2188,17 @@ export type Device = {
   dials_in?: boolean;
   /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
   peer_key?: string | null;
+  /** Where the switch of this helper device to its machine's own Hide stands (`DeviceSnapshot::switch`); absent while none runs or failed. */
+  switch?: DeviceSwitch | null;
 };
+
+/**
+ * A helper device's switch to the connection of the Hide on its machine
+ * (`contracts/snapshot-wire-enums.json`: `device_switch_state`). `reason` is
+ * the code of why a `failed` one stopped; the device is the helper's until
+ * the switch lands, so a failed one changed nothing.
+ */
+export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed"; reason?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does
