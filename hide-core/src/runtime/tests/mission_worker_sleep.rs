@@ -289,19 +289,15 @@ fn a_request_wakes_a_sleeping_agent_and_a_report_waits() {
 /// A request nobody takes in wakes its recipient once: after the agent
 /// sleeps again it waits as a letter to an awake agent does, so a sleep and
 /// a wake cannot follow each other for the same letter, while a new request
-/// still wakes it. A request whose bell rang before the sleep wakes no one.
+/// still wakes it. A request a prompt hook took before the sleep wakes no one.
 #[test]
-fn a_request_wakes_its_recipient_once_and_a_rung_one_not_at_all() {
+fn a_request_wakes_its_recipient_once_and_a_taken_one_not_at_all() {
     let mut runtime = sleepers(&[WORKER]);
-    let rung = letter(&mut runtime, WORKER, "request");
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    ledger
-        .letters
-        .iter_mut()
-        .find(|letter| letter.id == rung)
-        .unwrap()
-        .bell_sent = true;
-    runtime.publish_delivery(Arc::new(ledger), true);
+    let taken = letter(&mut runtime, WORKER, "request");
+    edit_letter(&mut runtime, &taken, |letter| {
+        letter.bell_sent = true;
+        letter.handed = true;
+    });
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
     letter(&mut runtime, WORKER, "request");
@@ -581,20 +577,17 @@ fn pressure(runtime: &mut Runtime, level: MemoryPressure, now: u64) {
     );
 }
 
-/// with-hide/hide#2627: a worker a `request` woke stays awake under memory
-/// pressure until the letter reaches it, though the conversation it resumed
-/// ended long before its sleep. In order: the wake, a pressure minute, a
-/// later one while the doorbell still holds the letter, then the doorbell.
-/// Once the bell is typed, the next pressure minute takes the worker.
-#[test]
-fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it() {
-    const MINUTE: u64 = 60 * 1000;
+const MINUTE: u64 = 60 * 1000;
+
+/// A worker asleep in its pane that a `request` woke, back with the
+/// conversation it resumed, whose last reply came 51 minutes before the wake
+/// (with-hide/hide#2627): the runtime, the letter's id and when it came back.
+fn woken_worker() -> (Runtime, String, u64) {
     let mut runtime = sleepers(&[WORKER]);
     let id = letter(&mut runtime, WORKER, "request");
     assert!(runtime.drive_letter_wakes());
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
     runtime.ingest_agent_wake(WORKER, WakeMode::Resume, WakeOutcome::Started);
-    // The resumed conversation's last reply came 51 minutes before the wake.
     let mut back = session("w-order:t1", Some("idle"));
     let worker = back
         .agents
@@ -609,18 +602,37 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
     show(&mut runtime, back);
     let woke = unix_milliseconds();
     assert_eq!(phase(&runtime, WORKER), None, "the worker is back");
-    let tick = |runtime: &mut Runtime, at: u64| {
-        pressure(runtime, MemoryPressure::Warning, at);
-        runtime.tick_agent_sleep(at);
-        phase(runtime, WORKER)
-    };
+    (runtime, id, woke)
+}
+
+/// The minute decision at `at` under memory pressure, and the worker's sleep
+/// phase after it.
+fn pressure_minute(runtime: &mut Runtime, at: u64) -> Option<SleepPhase> {
+    pressure(runtime, MemoryPressure::Warning, at);
+    runtime.tick_agent_sleep(at);
+    phase(runtime, WORKER)
+}
+
+/// with-hide/hide#2627: a worker a `request` woke stays awake under memory
+/// pressure until the letter reaches it, though the conversation it resumed
+/// ended long before its sleep. In order: the wake, a pressure minute, a
+/// later one while the doorbell still holds the letter, then the doorbell.
+/// Once its prompt hook takes the bell, the next pressure minute takes the
+/// worker, and the letter it took wakes it no more.
+#[test]
+fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it() {
+    let (mut runtime, id, woke) = woken_worker();
 
     // The pressure minute, ten seconds after the wake: its idle time starts
     // at the wake, and a letter waits for it. Either keeps it awake here;
     // the next minute checks the letter alone, and the clock alone is
     // `agent_sleep`'s tests' (`the_idle_clock_of_an_agent_that_came_back_starts_at_its_wake`,
     // `a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again`).
-    assert_eq!(tick(&mut runtime, woke + 10_000), None, "ten seconds on");
+    assert_eq!(
+        pressure_minute(&mut runtime, woke + 10_000),
+        None,
+        "ten seconds on"
+    );
     // Half an hour on, its session read has not settled the resumed turn,
     // so the doorbell still holds the letter; the letter alone keeps it awake.
     let held = woke + 31 * MINUTE;
@@ -637,7 +649,11 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
             .err(),
         Some(crate::delivery::doorbell::Hold::SessionUnread)
     );
-    assert_eq!(tick(&mut runtime, held), None, "a letter waits for it");
+    assert_eq!(
+        pressure_minute(&mut runtime, held),
+        None,
+        "a letter waits for it"
+    );
 
     // The doorbell: the read settles the turn, and the pane takes the bell.
     runtime
@@ -653,13 +669,53 @@ fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it(
         "the worker's pane takes the letter's bell"
     );
 
-    // The bell is typed into the conversation: nothing holds the worker but
-    // its idle time.
-    edit_letter(&mut runtime, &id, |letter| letter.bell_sent = true);
+    // The bell is typed and its prompt hook takes the letter: nothing holds
+    // the worker but its idle time.
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(held + MINUTE / 2);
+        letter.handed = true;
+    });
     assert_eq!(
-        tick(&mut runtime, held + MINUTE),
+        pressure_minute(&mut runtime, held + MINUTE),
         Some(SleepPhase::Ending),
         "the next pressure minute takes it"
+    );
+    assert!(runtime.ingest_agent_sleep_end(WORKER, Ok(9)));
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the letter it took wakes it no more"
+    );
+}
+
+/// A bell typed into the pane can go to a screen of the agent's own and
+/// never reach its conversation: once a later sleep takes the worker, a
+/// letter whose bell was typed but not taken wakes it, as one never rung
+/// does, so the doorbell rings it again.
+#[test]
+fn a_letter_whose_bell_was_typed_but_not_taken_wakes_its_recipient_after_a_later_sleep() {
+    let (mut runtime, woke_for, woke) = woken_worker();
+    edit_letter(&mut runtime, &woke_for, |letter| letter.handed = true);
+    // A request while it is awake: its bell is typed, and a screen takes it.
+    let id = letter(&mut runtime, WORKER, "request");
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(woke + MINUTE);
+    });
+    assert_eq!(
+        pressure_minute(&mut runtime, woke + 31 * MINUTE),
+        Some(SleepPhase::Ending),
+        "the bell ended the hold, and pressure takes it"
+    );
+    assert!(runtime.ingest_agent_sleep_end(WORKER, Ok(9)));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Waking),
+        "the letter its pane did not take wakes it"
     );
 }
 
@@ -734,9 +790,20 @@ fn a_bell_for_an_older_letter_ends_the_hold_of_the_letters_it_names() {
         crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap()).holds(&worker)
     };
     assert!(holds(&runtime), "both letters wait");
+    // A bell for another session in the pane, or for another pane, names
+    // nothing waiting for this one.
     edit_letter(&mut runtime, &report, |letter| {
         letter.bell_sent = true;
         letter.bell_typed_at_unix_ms = Some(queued);
+        letter.recipient.session = Some("an-earlier-session".into());
+    });
+    assert!(holds(&runtime), "a bell for another session");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.recipient = actor(LEAD);
+    });
+    assert!(holds(&runtime), "a bell for another pane");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.recipient = actor(WORKER);
     });
     assert!(!holds(&runtime), "the report's bell names the request");
     edit_letter(&mut runtime, &report, |letter| {
