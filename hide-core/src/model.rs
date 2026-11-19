@@ -11490,7 +11490,6 @@ mod wire_enum_tests {
             RunState::Succeeded,
             RunState::Failed,
             RunState::Stopped,
-            RunState::Skipped,
         ];
         for variant in states {
             match variant {
@@ -11498,8 +11497,7 @@ mod wire_enum_tests {
                 | RunState::Running
                 | RunState::Succeeded
                 | RunState::Failed
-                | RunState::Stopped
-                | RunState::Skipped => {}
+                | RunState::Stopped => {}
             }
         }
         assert_wire(&contract, "automation_run_state", &states);
