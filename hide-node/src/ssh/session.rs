@@ -542,13 +542,12 @@ impl SshTarget {
 
 /// A connection to another machine through the system `ssh`, its start
 /// script waiting for steps: the connection a node keeps to its core's
-/// machine, and a core move's to the machine on the other side (PRD
-/// system-ssh-device-link B33). One sign-in, then steps one at a time, until
+/// machine (PRD system-ssh-device-link B33). One sign-in, then steps one at a time, until
 /// the session is dropped, which ends its `ssh`, or [`Self::attach`] hands
 /// its pipes to the attach role.
 ///
-/// Its questions go to the screen that started it (the node window's strip,
-/// the core move dialog) when the operator's own press started it
+/// Its questions go to the screen that started it (the node window's
+/// strip) when the operator's own press started it
 /// (`Wake::Allowed`); otherwise a question, an unknown server key or a
 /// check in the browser ends the sign-in as `sign_in_needed`, as an attempt
 /// Hide made by itself does (D-06), and keys, the agent and Tailscale SSH

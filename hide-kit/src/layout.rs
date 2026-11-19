@@ -414,25 +414,17 @@ pub fn worktree_facts(state_dir: &Path) -> PathBuf {
 }
 
 /// Where this machine's core runs when it is not here: present only on a
-/// node whose core a move placed on another machine; its owner is the
-/// daemon's start (`hided::placement`).
+/// machine whose core was moved to another one before 1.2.0, until the two
+/// are split; its owner is the daemon's start (`hided::placement`).
 pub fn core_placement(state_dir: &Path) -> PathBuf {
     state_dir.join("core-placement.json")
 }
 
-/// The record of a core move this machine drives, written before each step
-/// that cannot be undone; its owner is the move driver
-/// (`hided::core_move::journal`).
+/// The record a build before 1.2.0 kept of a core move this machine drove;
+/// no build writes it now, and a start reads only whether the move it names
+/// finished (`hided::moved_core`).
 pub fn core_move_journal(state_dir: &Path) -> PathBuf {
     state_dir.join("core-move.json")
-}
-
-/// The forward moves this machine gave up while their other machine had
-/// not said whether they committed, each kept until that machine has no
-/// core of it; its owner is the daemon's supervisor
-/// (`hided::core_move::abandoned`).
-pub fn core_move_abandoned(state_dir: &Path) -> PathBuf {
-    state_dir.join("core-move-abandoned.json")
 }
 
 /// The marker that the core on `state_dir` is to keep running: while it
@@ -451,15 +443,16 @@ pub fn core_root(home: &Path) -> PathBuf {
     hide_home(home).join("core")
 }
 
-/// The record on a machine taking or giving the core in a move: a core
-/// waiting for its first link, active, stopped for the move, or retired;
-/// its owner is `hided core-move` (`hided::core_move::handover`).
+/// The record a build before 1.2.0 kept on a machine taking or giving the
+/// core while a move ran, removed when the move finished; no build writes it
+/// now, and one still there is a move that never finished
+/// (`hided::moved_core`).
 pub fn core_handover(state_dir: &Path) -> PathBuf {
     state_dir.join("core-handover.json")
 }
 
 /// The login item that runs the core on `state_dir` (`hided::login_item`),
-/// a paired machine's or one a move placed here: one per state folder, so a
+/// a paired machine's or one a move before 1.2.0 placed here: one per state folder, so a
 /// folder other than the account's default never takes the default's item.
 pub fn core_login_item(home: &Path, state_dir: &Path) -> String {
     const LABEL: &str = "dev.withhide.core";
@@ -479,18 +472,8 @@ fn hex_prefix(digest: &[u8]) -> String {
         .collect()
 }
 
-/// Copies a move makes of this machine's brain state, one folder per move.
-pub fn move_staging(state_dir: &Path) -> PathBuf {
-    state_dir.join("move-staging")
-}
-
-/// Where the machine taking the core receives a move's copy.
-pub fn move_incoming(state_dir: &Path) -> PathBuf {
-    state_dir.join("move-incoming")
-}
-
-/// The brain state a machine held before its core moved away, the latest
-/// move's only.
+/// The brain state a machine held before its core moved away in a build
+/// before 1.2.0: kept as that build left it, and read by nothing.
 pub fn moved_out(state_dir: &Path) -> PathBuf {
     state_dir.join("moved-out")
 }

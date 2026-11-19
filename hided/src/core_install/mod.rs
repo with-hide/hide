@@ -1,13 +1,10 @@
 //! What puts a core on a machine and starts it there, whoever asks: the
 //! login item or fixture process that runs it (`starter`), the flags of
-//! the commands run on that machine (`flags`), what the machine says about
-//! itself first (`checks`), and the one owned `ssh` those commands and
-//! their files go over (`remote`). A core move drives these (`core_move`),
-//! and so do a core's update over SSH (`core_update`) and the start of a
-//! Hide on a machine reached over SSH (PRD device-connect-iroh D-46); none
-//! of them reads a move's journal, its handover or its dialog.
+//! the commands run on that machine (`flags`), and the one owned `ssh`
+//! those commands and their files go over (`remote`). A core's update over
+//! SSH (`core_update`) and the start of a Hide on a machine reached over
+//! SSH drive these (PRD device-connect-iroh D-46).
 
-pub mod checks;
 pub mod flags;
 pub mod remote;
 pub mod starter;

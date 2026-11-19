@@ -1926,36 +1926,8 @@ fn a_node_s_worktree_with_no_pane_keeps_its_id_from_before_the_move_and_folds_wh
         )],
     );
 
-    // The MacBook's own project and checkout as its core named them, and the
-    // ids the move gave them when the MacBook became a node of the mini.
-    let own_project = crate::workspace::workspace_id_for_path(Path::new(&repo.root));
-    let before = crate::workspace::checkout_id_for_path(&own_project, Path::new(&repo.linked));
-    let change = crate::node_migration::OwnerChange {
-        old_owner: "macbook".to_owned(),
-        old_owner_as: NODE.to_owned(),
-        new_owner: "mini".to_owned(),
-        new_owner_was: "mini-device".to_owned(),
-        old_owner_registration: crate::model::DeviceRegistration {
-            id: NODE.to_owned(),
-            label: "MacBook".to_owned(),
-            origin: crate::model::LinkOrigin::Inbound,
-            host_consent: None,
-        },
-        old_owner_engine_socket: "/tmp/macbook-engine.sock".to_owned(),
-        new_owner_engine_socket: "/tmp/mini-engine.sock".to_owned(),
-    };
-    let moved = crate::node_migration::id_table(
-        &change,
-        [crate::node_migration::KnownProject {
-            id: &own_project,
-            device_id: "macbook",
-            path: &repo.root,
-            root: Path::new(&repo.root),
-            checkouts: vec![(before.as_str(), repo.linked.as_str())],
-        }],
-    )
-    .checkouts[&before]
-        .clone();
+    // The MacBook's checkout by the id it has as a node of the mini.
+    let moved = crate::device_catalog::checkout_id(NODE, &repo.linked);
 
     {
         let mut runtime = shared.lock().unwrap();

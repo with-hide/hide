@@ -181,23 +181,6 @@ impl Runtime {
         }
         (count >= MAX_INBOUND_NODES).then_some("nodes_full")
     }
-
-    /// The nodes that dialed this core and are connected now, in the order
-    /// they were first registered: the machines the operator works at.
-    pub(crate) fn linked_nodes(&self) -> Vec<String> {
-        self.snapshot
-            .ui_state
-            .device_registrations
-            .iter()
-            .filter(|registration| registration.origin == LinkOrigin::Inbound)
-            .filter(|registration| {
-                self.snapshot.status.remote.iter().any(|status| {
-                    status.target_id == registration.id && status.state == "connected"
-                })
-            })
-            .map(|registration| registration.id.clone())
-            .collect()
-    }
 }
 
 /// The link of another machine, as its readers and agent sleep ask it: a

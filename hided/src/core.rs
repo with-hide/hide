@@ -34,11 +34,6 @@ use crate::terminal_hub::TerminalHub;
 
 pub type SnapshotReply = hide_core::SnapshotDeltaPayload;
 
-type MoveSourceAnswer =
-    Result<(hide_core::MoveSource, serde_json::Value), hide_core::MoveSourceRefusal>;
-type ReleaseSourceAnswer =
-    Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
-
 /// What a hook's answer is read from: Memory's scope or why there is none,
 /// and the open questions' when the hook asks at a prompt.
 pub type HookScope = (
@@ -256,14 +251,6 @@ enum Command {
     InboundRefusal {
         node: String,
         reply: Sender<Option<String>>,
-    },
-    ReleaseSource {
-        node: String,
-        reply: Sender<ReleaseSourceAnswer>,
-    },
-    MoveSource {
-        device: String,
-        reply: Sender<MoveSourceAnswer>,
     },
     DeviceSwitchSource {
         device: String,
@@ -1165,20 +1152,6 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the device connection reply".to_owned())
     }
 
-    /// What a move of the core to `device` is made from, and the device's
-    /// label records (PRD core-host-node-move B4).
-    pub fn release_source(&self, node: &str) -> Result<ReleaseSourceAnswer, String> {
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::ReleaseSource {
-                node: node.to_owned(),
-                reply,
-            })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        rx.recv()
-            .map_err(|_| "core owner thread dropped the release source".to_owned())
-    }
-
     /// What `device`'s switch to its machine's own connection starts from;
     /// see `Core::device_switch_source`.
     pub fn device_switch_source(
@@ -1193,18 +1166,6 @@ impl CoreHandle {
             })
             .map_err(|_| "hide_unavailable")?;
         rx.recv().map_err(|_| "hide_unavailable")?
-    }
-
-    pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::MoveSource {
-                device: device.to_owned(),
-                reply,
-            })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        rx.recv()
-            .map_err(|_| "core owner thread dropped the move source".to_owned())
     }
 
     /// Why a node dialing this core would be refused, before its link is
@@ -1923,14 +1884,8 @@ fn owner_loop(
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
             }
-            Command::MoveSource { device, reply } => {
-                let _ = reply.send(core.move_source(&device));
-            }
             Command::DeviceSwitchSource { device, reply } => {
                 let _ = reply.send(core.device_switch_source(&device));
-            }
-            Command::ReleaseSource { node, reply } => {
-                let _ = reply.send(core.release_source(&node));
             }
             Command::InboundNode {
                 node,

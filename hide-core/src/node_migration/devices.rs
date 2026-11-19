@@ -7,8 +7,8 @@
 //! (`mini`), and every key naming the device carries that id: its projects'
 //! digests, its panes' addresses, its letters, its Project Memory, its
 //! engine folder. This renames each such registration once, at the start,
-//! before the core reads the folder, through the same `KEYS` table a core
-//! move maps (`reown`), so the device keeps its projects, letters and
+//! before the core reads the folder, through the `KEYS` table
+//! (`id_map`), so the device keeps its projects, letters and
 //! Memory cards under its machine id.
 //!
 //! The id is the machine id the device's consent bound
@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::reown::{self, Change, IdTable};
+use super::id_map::{self, Change, IdTable};
 use super::{
     BACKUP_DIR, Backup, COMPOSER_MARKS, CORE_STATE, DELIVERY_LEDGER, HOOK_FACTS, KEYS, LABELS,
     LINKS, LOCAL_ISSUES, MISSIONS, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
@@ -91,7 +91,7 @@ struct Journal {
     projects: Vec<(String, String)>,
 }
 
-/// The renaming as `reown`'s mapper reads it.
+/// The renaming as `id_map` reads it.
 struct Renames<'a>(&'a BTreeMap<String, String>);
 
 impl Change for Renames<'_> {
@@ -541,20 +541,20 @@ fn rename_store(
     named: &[String],
 ) -> Result<(), String> {
     let change = Renames(renames);
-    let map = |moves: Moves, text: &str| reown::map_id(&change, ids, moves, text);
+    let map = |moves: Moves, text: &str| id_map::map_id(&change, ids, moves, text);
     for (_, pattern, _, moves) in KEYS.iter().filter(|(listed, ..)| *listed == file) {
-        reown::apply_pattern(value, pattern, *moves, &map)
+        id_map::apply_pattern(value, pattern, *moves, &map)
             .map_err(|reason| format!("{pattern}: {reason}"))?;
     }
     match file {
         CORE_STATE => {
-            for (_, devices) in reown::OWN_PATHS {
-                reown::apply_pattern(value, &format!("/{devices}/{{key}}"), Moves::Device, &map)?;
+            for (_, devices) in id_map::OWN_PATHS {
+                id_map::apply_pattern(value, &format!("/{devices}/{{key}}"), Moves::Device, &map)?;
             }
-            reown::map_project_settings(value, &|device| change.device(device))?;
+            id_map::map_project_settings(value, &|device| change.device(device))?;
             name_registrations(value, renames, named)?;
         }
-        WORKSPACE_VIEWS => reown::map_views(value, &map),
+        WORKSPACE_VIEWS => id_map::map_views(value, &map),
         LABELS => {
             for section in ["devices", "moved"] {
                 rename_keys(value, section, |key| {
@@ -565,16 +565,16 @@ fn rename_store(
         }
         DELIVERY_LEDGER => {
             // A device's agents are scoped to their device's engine by its id.
-            reown::apply_pattern(value, "/agents/*/host_scope", Moves::Device, &map)?;
-            reown::apply_pattern(value, "/spawns/*/machine", Moves::Device, &map)?;
+            id_map::apply_pattern(value, "/agents/*/host_scope", Moves::Device, &map)?;
+            id_map::apply_pattern(value, "/spawns/*/machine", Moves::Device, &map)?;
         }
         LOCAL_ISSUES => {
-            reown::apply_pattern(value, "/devices/{key}", Moves::Device, &map)?;
+            id_map::apply_pattern(value, "/devices/{key}", Moves::Device, &map)?;
         }
         _ => {}
     }
     for from in renames.keys() {
-        if let Some(place) = reown::still_naming_id(value, from, true, "") {
+        if let Some(place) = id_map::still_naming_id(value, from, true, "") {
             return Err(format!(
                 "{place} still names {from} after the renaming; no row of the key table covers it"
             ));

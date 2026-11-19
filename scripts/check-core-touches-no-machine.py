@@ -64,12 +64,11 @@ BANNED = [
 # Each entry is the number of machine touches the file has and why.
 STORES = {
     "hide-core/src/persistence.rs": (
-        13,
+        12,
         "the core's UI state file, including durable directory/write receipts "
         "with the durable writer's own access type, the state folder's identity "
         "that keeps its directory receipt once per folder, and explicit "
-        "write-error variants before sleeping-session effects, and a moved copy "
-        "of it read to name what this build cannot read",
+        "write-error variants before sleeping-session effects",
     ),
     "hide-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
     "hide-core/src/delivery/ledger.rs": (
@@ -141,29 +140,12 @@ STORES = {
         "written, before any link exists (PRD core-host-node D-10), including "
         "listing the split mission folder's bodies and index for rewriting",
     ),
-    "hide-core/src/node_migration/copy.rs": (
-        61,
-        "copies, places and sets aside the core's own stores for a move of "
-        "the core (PRD core-host-node-move), run by the hided whose state "
-        "folder holds them while no core runs on it; the retired "
-        "session-search store moves read-only, kept for its retention "
-        "settings (PRD overview-device-tasks D-20), and a global instruction "
-        "kept through a link moves as the text the core reads through it",
-    ),
     "hide-core/src/node_migration/devices.rs": (
         10,
         "renames a dialed device an earlier build registered under its SSH "
         "alias to its machine id in the core's own stores and its engine "
         "folder, once, where they were written, before the core starts on "
         "them, resuming from its journal beside them",
-    ),
-    "hide-core/src/node_migration/reown.rs": (
-        4,
-        "converts a moved copy of the core's own link and Project "
-        "Memory stores to the receiving node's ids, before a core starts on "
-        "it, and carries "
-        "the retired session-search store's retention to them (PRD "
-        "overview-device-tasks D-20)",
     ),
     "hide-core/src/memory_hook.rs": (
         1,

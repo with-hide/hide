@@ -1,7 +1,7 @@
 //! The account's login item that runs the core on a state folder: a paired
-//! machine's (PRD device-connect-iroh D-41, B30; `always_on` decides when)
-//! or one a move placed here (PRD core-host-node-move B9, D-25, amendment
-//! 8). The item runs `hided core-login --state-dir <dir>` from a build's
+//! machine's (PRD device-connect-iroh D-41, B30; `always_on` decides when),
+//! or one a core move before 1.2.0 placed here, which its updates keep. The
+//! item runs `hided core-login --state-dir <dir>` from a build's
 //! version folder in its install root, at the account's login and again
 //! after any exit while the folder's keep-alive marker exists; the start
 //! ends at once without the marker (`at_login`), so `hide stop`, which
@@ -78,13 +78,7 @@ fn put_in(
         );
     }
     let label = hide_kit::layout::core_login_item(home, state_dir);
-    let mut environment = item_environment(home)?;
-    // A core a move placed here stays up with no window: its nodes and
-    // phones are its clients. A paired machine's core keeps itself up while
-    // it is paired (`always_on`).
-    if crate::core_move::handover::read(state_dir)?.is_some() {
-        environment.push(("HIDE_KEEP_ALIVE".to_owned(), "1".to_owned()));
-    }
+    let environment = item_environment(home)?;
     let environment: Vec<(&str, &str)> = environment
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -222,20 +216,6 @@ pub fn exited_at_start(
             .flatten()?;
         Some(format!("the core exited at its start: exit code {code}"))
     }
-}
-
-/// What the core's login item runs it with: the account's home and the
-/// state folder. A move's checks of the account's logins run with it too
-/// (`core_install::checks`).
-pub fn core_environment(home: &Path, state_dir: &Path) -> Result<Vec<(String, String)>, String> {
-    let environment = vec![
-        ("HOME".to_owned(), home.to_string_lossy().into_owned()),
-        (
-            "HIDE_STATE_DIR".to_owned(),
-            state_dir.to_string_lossy().into_owned(),
-        ),
-    ];
-    Ok(environment)
 }
 
 /// Removes the login item of the core on `state_dir` and its marker, which

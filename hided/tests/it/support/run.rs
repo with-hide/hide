@@ -55,7 +55,7 @@ pub fn finish(run: &mut impl Run, journey: Result<()>) -> Result<()> {
 /// Removes every native program under a kept run's `root`, leaving its logs,
 /// records and scripts. The programs are copies of the build (staged,
 /// stripped, installed in each account's helper and bin folders), about
-/// 0.9 GB per core-move run, so a lane whose journeys failed one after
+/// 0.9 GB per run, so a lane whose journeys failed one after
 /// another filled the runner's disk and failed the rest with it (issue
 /// hide-private#120). Links are removed, never followed.
 pub fn shed_programs(root: &Path) -> Result<()> {

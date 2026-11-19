@@ -148,7 +148,6 @@ fn backoff(attempt: u32) -> Result<Duration, Error> {
 pub async fn supervise(mobile: Arc<Mobile>) {
     let mut changes = mobile.relay_change.subscribe();
     let mut stopping = mobile.stopping.subscribe();
-    let mut open = mobile.config.open.clone();
     let mut attempt = 0;
     let mut peers = JoinSet::new();
     loop {
@@ -159,7 +158,6 @@ pub async fn supervise(mobile: Arc<Mobile>) {
         if !mobile.relay_desired() {
             tokio::select! {
                 _ = changes.changed() => {},
-                _ = open.changed(), if open.has_changed().is_ok() => {},
                 _ = stopping.changed() => break,
             }
             attempt = 0;
@@ -183,7 +181,6 @@ pub async fn supervise(mobile: Arc<Mobile>) {
             biased;
             _ = stopping.changed() => None,
             _ = changes.changed() => None,
-            _ = open.changed(), if open.has_changed().is_ok() => None,
             result = connect(&mobile, keys, &mut peers) => Some(result),
         };
         // Cancellation drops the WebSocket before aborting all its phone owners.
@@ -221,7 +218,6 @@ pub async fn supervise(mobile: Arc<Mobile>) {
         tokio::select! {
             _ = tokio::time::sleep(delay) => {},
             _ = changes.changed() => { attempt = 0; },
-            _ = open.changed(), if open.has_changed().is_ok() => { attempt = 0; },
             _ = stopping.changed() => break,
         }
     }

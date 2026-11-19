@@ -19,7 +19,6 @@ pub mod cli;
 pub mod cli_contract;
 pub mod core;
 pub mod core_install;
-pub mod core_move;
 pub mod core_update;
 pub mod delivery_cli;
 pub mod demand;
@@ -38,6 +37,7 @@ pub mod login_item;
 pub mod mission_cli;
 mod mission_show;
 pub mod mobile;
+pub mod moved_core;
 pub mod node_browser;
 pub mod node_cli;
 pub mod node_daemon;
@@ -114,7 +114,7 @@ pub(crate) fn host_name() -> Option<String> {
 }
 
 /// A name for this start of the core role, drawn fresh each time, so a page
-/// that outlived it (a move, a rollback, an update) never applies a delta
+/// that outlived it (an update, a change of the process's role) never applies a delta
 /// over state another core numbered.
 fn core_instance() -> String {
     let mut instance = [0_u8; 8];
@@ -170,8 +170,6 @@ pub struct RunningDaemon {
     /// layout and state saves are on disk before another daemon can start,
     /// and before whoever owns the state folder can remove it.
     core: Arc<CoreHandle>,
-    /// Closed while this core runs on a move's copy that has not committed.
-    pub move_gate: Arc<core_move::gate::MoveGate>,
     /// Told when a Herdr save's import is asked for: the supervisor starts
     /// the core role again, which imports it before the engine opens (PRD
     /// engine-bundle-4-herdr-removal D-7).
@@ -324,9 +322,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "the core runs on another machine: this state folder starts the node role".to_owned(),
         );
     }
-    // A core on a move's copy waits for the move's own link; a folder whose
-    // core left it in a move starts none (PRD core-host-node-move B8).
-    let move_gate = core_move::gate::MoveGate::for_start(&env.state_dir)?;
     // Stored state from before node ids is converted once, before the core
     // reads it; a store that cannot be converted stops the start and names
     // the file (PRD core-host-node B2).
@@ -467,15 +462,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .display()
                 .to_string(),
         ),
-        // A core on a move's copy acts on nothing outside this machine
-        // until the move's link commits it (PRD core-host-node-move
-        // amendment 3).
-        effects_held: !move_gate.is_open(),
+        effects_held: false,
         machine_name: host_name(),
         windows_drives: hide_host::serve::windows_drives(),
         account_state_folder: env.account_state_folder,
     };
-    let effects_held = options.effects_held;
     let boundary = Arc::new(boundary::Boundary::for_node(&env.home, node)?);
     // Each device link's pane traffic goes here from the start; answered
     // once the server's state exists, below.
@@ -505,22 +496,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         Some(Arc::clone(&peer_dial) as Arc<dyn hide_node::ssh::host::peer::PeerDial>),
     )?);
     seat.starting("core.services");
-    if effects_held {
-        let mut open = move_gate.subscribe();
-        let core = Arc::clone(&core);
-        tokio::spawn(async move {
-            if open.wait_for(|open| *open).await.is_ok()
-                && let Ok(Err(message)) =
-                    tokio::task::spawn_blocking(move || core.release_effects()).await
-            {
-                hide_core::diagnostic!(serde_json::json!({
-                    "component": "core_move",
-                    "kind": "effects.release_failed",
-                    "message": message,
-                }));
-            }
-        });
-    }
     // After the core installed the diagnostic log beside its state.
     #[cfg(unix)]
     state_move::log_left_behind(env.legacy_state_dir.as_deref(), &env.state_dir);
@@ -585,7 +560,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         core: Arc::clone(&core),
         input_gate: core.input_gate()?,
         start_demand: Arc::clone(&start_demand),
-        open: move_gate.subscribe(),
+        network: true,
         desktop: Arc::clone(&desktop_notices),
         boundary: Arc::clone(&boundary),
         roots: Arc::clone(&roots),
@@ -701,7 +676,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         renderer_transitions: Arc::new(Mutex::new(())),
         shutdown: shutdown.clone(),
         role_ended: role_ended.subscribe(),
-        move_gate: Arc::clone(&move_gate),
         ui_dir: if server::has_embedded_ui() {
             None
         } else {
@@ -775,8 +749,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 as Arc<dyn hide_node::terminal::device::DeviceSink>,
             grants: Arc::clone(&relay_grants),
             attaching: attach::Attaching::default(),
-            move_gate: Arc::clone(&move_gate),
-            moves: Arc::clone(&seat.moves),
         }),
         shutdown.clone(),
     ));
@@ -818,7 +790,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         mobile,
         peers,
         core,
-        move_gate,
         role_ended,
         import_restart,
         own: None,

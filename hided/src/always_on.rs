@@ -43,8 +43,6 @@ pub enum Outcome {
     Removed,
     /// Not paired, and no item.
     Nothing,
-    /// A move placed this core here, and its own item is the move's.
-    Moved,
     /// This system, or this fixture HOME, keeps no login items.
     Unsupported { reason: String },
 }
@@ -75,9 +73,6 @@ pub fn reconcile(
     asker: &Asker<'_>,
     install: impl FnOnce(&Path) -> Result<PathBuf, String>,
 ) -> Result<Outcome, String> {
-    if crate::core_move::handover::read(state_dir)?.is_some() {
-        return Ok(Outcome::Moved);
-    }
     let paired = paired(state_dir)?;
     if let Err(error) = agents.supported() {
         return Ok(if paired {

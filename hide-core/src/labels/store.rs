@@ -600,12 +600,6 @@ struct LabelsFile {
     /// local records of the whole file with it.
     #[serde(default, skip_serializing)]
     devices: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
-    /// Another machine's records a core move carried here (PRD
-    /// core-host-node-move B4): taken into memory for that machine's worker
-    /// once, and never written again, so they stay memory-only as every
-    /// device's do.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    moved: BTreeMap<String, BTreeMap<String, PaneRecord>>,
 }
 
 /// The daemon's one `labels.json`, shared by the worker of every engine
@@ -744,19 +738,6 @@ impl LabelStore {
                 "over_cap": dropped,
             }));
         }
-        let moved = file.moved.len();
-        targets.extend(
-            file.moved
-                .into_iter()
-                .filter(|(target, _)| target.starts_with(&super::device_target(""))),
-        );
-        if moved > 0 {
-            crate::diagnostic!(json!({
-                "component": "labels",
-                "kind": "store.moved_in",
-                "targets": moved,
-            }));
-        }
         for record in targets.values_mut().flat_map(BTreeMap::values_mut) {
             record.upgrade_v3();
         }
@@ -771,7 +752,6 @@ impl LabelStore {
                 version: SCHEMA_VERSION,
                 targets,
                 devices: BTreeMap::new(),
-                moved: BTreeMap::new(),
             })),
             saver: Mutex::new(None),
         };
@@ -790,7 +770,6 @@ impl LabelStore {
                 version: SCHEMA_VERSION,
                 targets: BTreeMap::new(),
                 devices: BTreeMap::new(),
-                moved: BTreeMap::new(),
             })),
             saver: Mutex::new(None),
         }
@@ -804,12 +783,6 @@ impl LabelStore {
     /// A worker's starting records.
     pub(crate) fn target(&self, key: &str) -> BTreeMap<String, PaneRecord> {
         self.lock().targets.get(key).cloned().unwrap_or_default()
-    }
-
-    /// A target's records as `labels.json` stores them, for a core move to
-    /// carry the records only memory holds (PRD core-host-node-move Q18).
-    pub(crate) fn export(&self, key: &str) -> Result<serde_json::Value, String> {
-        serde_json::to_value(self.target(key)).map_err(|error| error.to_string())
     }
 
     /// Replaces a worker's records. This machine's records reach disk; a

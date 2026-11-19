@@ -1319,7 +1319,6 @@ fn serve_link(
             label: identity.label.clone(),
             build: identity.build.clone(),
             release: identity.release.clone(),
-            move_intent: placement.move_intent.clone(),
         }),
     )
     .map_err(LinkFailure::Transport)?;

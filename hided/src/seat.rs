@@ -49,8 +49,6 @@ enum Mounts {
 pub struct Seat {
     pub port: u16,
     pub token: String,
-    /// A move of the core, which outlives the role that took its request.
-    pub moves: Arc<crate::core_move::control::MoveControl>,
     /// The process's stop request, which outlives its roles as the seat
     /// does; never announced on a seat a caller other than the process's
     /// supervisor holds.
@@ -106,7 +104,6 @@ impl Mounted {
 pub struct SeatParts {
     pub port: u16,
     pub token: String,
-    pub moves: Arc<crate::core_move::control::MoveControl>,
     mounted: Arc<Mounted>,
 }
 
@@ -198,7 +195,6 @@ impl Seat {
         Ok(Self {
             port,
             token,
-            moves: Arc::default(),
             stop,
             mounted,
             stopping,
@@ -224,7 +220,6 @@ impl Seat {
         SeatParts {
             port: self.port,
             token: self.token.clone(),
-            moves: Arc::clone(&self.moves),
             mounted: Arc::clone(&self.mounted),
         }
     }

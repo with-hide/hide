@@ -1,5 +1,5 @@
 //! Files to and from another machine over a [`super::session::Session`]'s
-//! start script, for the core move's copies (`hided`'s `core_move`).
+//! start script (`hided`'s `core_install::remote`).
 //!
 //! A file goes whole or not at all on either side: the bytes land beside
 //! the final name, are checked against the SHA-256 the sending side stated,

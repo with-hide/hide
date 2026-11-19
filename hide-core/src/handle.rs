@@ -1312,49 +1312,6 @@ impl Core {
         lock_recover(&self.runtime).device_switch_source(device)
     }
 
-    /// What a move of the core to `device` is made from (PRD
-    /// core-host-node-move B4), with the device's label records, which memory
-    /// holds (bar their marks), in the form `labels.json` stores them.
-    pub fn move_source(
-        &self,
-        device: &str,
-    ) -> Result<(crate::MoveSource, serde_json::Value), crate::MoveSourceRefusal> {
-        if !check_owner_thread(self, "move_source") {
-            return Err(crate::MoveSourceRefusal::NotReady);
-        }
-        let source = lock_recover(&self.runtime).move_source(device)?;
-        // A core whose label services never started holds no records.
-        let labels = match &self.labels {
-            Some(labels) => labels
-                .store
-                .export(&crate::labels::device_target(device))
-                .map_err(crate::MoveSourceRefusal::Unstorable)?,
-            None => serde_json::Value::Object(serde_json::Map::new()),
-        };
-        Ok((source, labels))
-    }
-
-    /// What a move of the core back to the node that dialed it is made
-    /// from (PRD core-host-node-move B6), with that node's label records,
-    /// which memory holds (bar their marks), in the form `labels.json` stores them.
-    pub fn release_source(
-        &self,
-        node: &str,
-    ) -> Result<(crate::ReleaseSource, serde_json::Value), crate::MoveSourceRefusal> {
-        if !check_owner_thread(self, "release_source") {
-            return Err(crate::MoveSourceRefusal::NotReady);
-        }
-        let source = lock_recover(&self.runtime).release_source(node)?;
-        let labels = match &self.labels {
-            Some(labels) => labels
-                .store
-                .export(&crate::labels::device_target(node))
-                .map_err(crate::MoveSourceRefusal::Unstorable)?,
-            None => serde_json::Value::Object(serde_json::Map::new()),
-        };
-        Ok((source, labels))
-    }
-
     /// Takes the link a node that dialed this core brought (PRD
     /// core-host-node-remote-core D-04, D-10), registering the node on its
     /// first link; the refusal is the reason the node is told.

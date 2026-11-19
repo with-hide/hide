@@ -346,47 +346,6 @@ fn a_node_s_agents_are_reached_only_through_its_link() {
     );
 }
 
-/// The machines the operator works at are the nodes that dialed this core
-/// and are connected now: a node still connecting is not one, and neither
-/// is a device this core dials (D-18).
-#[test]
-fn only_a_connected_node_that_dialed_in_is_a_linked_machine() {
-    let shared = shared_runtime();
-    let (link, _release) = held_link();
-    shared
-        .lock()
-        .unwrap()
-        .accept_inbound_node(NODE, "MacBook", link)
-        .expect("the link");
-    assert!(shared.lock().unwrap().linked_nodes().is_empty());
-    let event = serde_json::json!({
-        "schema_version": SCHEMA_VERSION,
-        "kind": "register_device",
-        "payload": {"label": "studio", "ssh_alias": "studio"},
-    });
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&serde_json::to_vec(&event).unwrap());
-    let mut runtime = shared.lock().unwrap();
-    let row = runtime
-        .snapshot
-        .status
-        .remote
-        .iter()
-        .find(|row| row.target_id == NODE)
-        .cloned()
-        .expect("the node's status row");
-    runtime.snapshot.status.remote.clear();
-    for target in [NODE, "studio"] {
-        let mut row = row.clone();
-        row.target_id = target.to_owned();
-        row.state = "connected".to_owned();
-        runtime.snapshot.status.remote.push(row);
-    }
-    assert_eq!(runtime.linked_nodes(), vec![NODE.to_owned()]);
-}
-
 /// L11: the nodes that dial this core are capped, so a node whose identity
 /// keeps changing cannot grow the device list without end; a node already
 /// registered is still taken, and the label a node gives is shown as plain,

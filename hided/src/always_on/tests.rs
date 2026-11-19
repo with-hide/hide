@@ -249,22 +249,6 @@ fn an_item_the_system_dropped_is_loaded_again() {
     assert!(machine.loaded());
 }
 
-/// A core a move placed here keeps the move's own item, paired or not.
-#[cfg(unix)]
-#[test]
-fn a_moved_core_s_item_is_the_move_s() {
-    use crate::core_move::handover::{Handover, HandoverState, hold};
-    let machine = Machine::new();
-    hold(&machine.state)
-        .unwrap()
-        .write(&Handover::new("i1", "m", "c", HandoverState::Active))
-        .unwrap();
-    let installs = std::cell::Cell::new(0);
-    machine.pair();
-    assert_eq!(machine.reconcile(false, &installs), Outcome::Moved);
-    assert_eq!(installs.get(), 0);
-}
-
 /// A system with no login items puts nothing in; a paired machine there is
 /// told why.
 #[test]

@@ -32,7 +32,6 @@ mod checks_wait;
 mod clone;
 mod closed_registrations;
 mod control_lane;
-pub(crate) mod core_move;
 pub(crate) mod delivery;
 mod desk;
 mod detail;

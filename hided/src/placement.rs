@@ -35,11 +35,6 @@ pub struct Placement {
     /// account's default.
     #[serde(default)]
     pub state_dir: Option<String>,
-    /// The move that placed the core there, until it committed: the node's
-    /// links name it, and the core's first link with it commits the move
-    /// (PRD core-host-node-move amendment 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub move_intent: Option<String>,
     /// The operator ended the link from this machine's window (PRD
     /// core-host-node-move B16): the node dials nothing until they
     /// reconnect, across restarts.
@@ -48,9 +43,8 @@ pub struct Placement {
 }
 
 /// Every change this process makes to a record already there: the node's
-/// update of its core rewrites the program, the move's commit clears its
-/// intent, and the operator's disconnect sets its flag, each reading the
-/// record as the others left it.
+/// update of its core rewrites the program and the operator's disconnect
+/// sets its flag, each reading the record as the other left it.
 static CHANGES: Mutex<()> = Mutex::new(());
 
 /// Changes the record `state_dir` holds with `change`, after any change
@@ -195,7 +189,6 @@ mod tests {
                 node: "core-node".to_owned(),
                 program: "/opt/hided".to_owned(),
                 state_dir: Some("/tmp/c".to_owned()),
-                move_intent: None,
                 disconnected: false,
             }))
         );

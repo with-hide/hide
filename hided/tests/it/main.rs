@@ -11,7 +11,6 @@ mod browser_control;
 mod closed_stdout;
 mod connect_build;
 mod connect_stop;
-mod core_move_checks;
 mod device_own_engine;
 mod guest_node;
 mod handshake;
