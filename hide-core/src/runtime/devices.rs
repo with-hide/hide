@@ -397,6 +397,7 @@ impl Runtime {
         self.remote_device_tests.remove(device_id);
         if matches!(why, Retiring::Removed) {
             self.device_switches.remove(device_id);
+            self.device_needs.remove(device_id);
         }
         match why {
             Retiring::Removed => self
@@ -740,12 +741,14 @@ impl Runtime {
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
             let switch = switches.get(&device.id).cloned();
+            let needs = self.device_needs.get(&device.id).cloned();
             if device.state != state
                 || device.message != message
                 || device.problem != problem
                 || device.sign_in != sign_in
                 || device.test != test
                 || device.switch != switch
+                || device.needs != needs
             {
                 device.state = state.to_owned();
                 device.message = message;
@@ -753,6 +756,7 @@ impl Runtime {
                 device.sign_in = sign_in;
                 device.test = test;
                 device.switch = switch;
+                device.needs = needs;
                 changed = true;
             }
         }

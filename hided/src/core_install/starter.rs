@@ -58,9 +58,11 @@ impl CoreStarter {
                 home.display()
             ));
         }
+        // The system's items only for the account's own home: any other
+        // HOME has none, and its start says so (`UserAgents::of_home`).
         Ok(Self::LoginItem {
             home: home.to_path_buf(),
-            agents: hide_platform::user_agents::UserAgents::current(),
+            agents: hide_platform::user_agents::UserAgents::of_home(home),
         })
     }
 

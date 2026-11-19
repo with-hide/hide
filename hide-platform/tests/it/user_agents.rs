@@ -1,6 +1,6 @@
 #[cfg(unix)]
 use hide_platform::user_agents::Login;
-use hide_platform::user_agents::{LoginAgent, UserAgents, account_home};
+use hide_platform::user_agents::{LoginAgent, NOT_THE_ACCOUNT_HOME, UserAgents, account_home};
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -14,8 +14,9 @@ fn the_account_home_is_an_absolute_path() {
 
 /// A system with no login agents answers each question that needs one
 /// `Unsupported` with its reason, holds no agent to read, unload, remove or
-/// forget, and runs nothing: a fixture HOME's kit gets this on every system.
-fn has_no_login_agents(agents: &UserAgents) {
+/// forget, and runs nothing: a HOME that is not the account's own gets this
+/// on every system. `reason` is why it has none.
+fn has_no_login_agents(agents: &UserAgents, reason: &str) {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path();
     let stop = AtomicBool::new(false);
@@ -31,31 +32,19 @@ fn has_no_login_agents(agents: &UserAgents) {
         environment: &[],
         log: &home.join("agent.log"),
     };
-    unsupported(agents.supported(), "this system has no login agents");
-    unsupported(
-        agents.login(home, &stop).map(drop),
-        "this system has no login agents",
-    );
+    unsupported(agents.supported(), reason);
+    unsupported(agents.login(home, &stop).map(drop), reason);
     unsupported(
         agents.sleeps_on_power(home, &stop).map(drop),
         "this system has no power settings to read",
     );
     unsupported(
         agents.install(&agent, &home.join("marker"), home, &stop),
-        "this system has no login agents",
+        reason,
     );
-    unsupported(
-        agents.linger(home, &stop).map(drop),
-        "this system has no login agents",
-    );
-    unsupported(
-        agents.start_once(&agent, home, home, &stop),
-        "this system has no login agents",
-    );
-    unsupported(
-        agents.start("example.agent", home, &stop),
-        "this system has no login agents",
-    );
+    unsupported(agents.linger(home, &stop).map(drop), reason);
+    unsupported(agents.start_once(&agent, home, home, &stop), reason);
+    unsupported(agents.start("example.agent", home, &stop), reason);
     assert_eq!(
         agents.last_exit("example.agent", home, &stop).unwrap(),
         None
@@ -70,7 +59,28 @@ fn has_no_login_agents(agents: &UserAgents) {
 
 #[test]
 fn none_has_no_login_agents() {
-    has_no_login_agents(&UserAgents::none());
+    has_no_login_agents(&UserAgents::none(), "this system has no login agents");
+}
+
+/// The system's login agents are the account's whatever HOME says, so only
+/// a program whose HOME is the account's own home gets them: any other
+/// HOME, a test's or an isolated run's, has none and says why.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+#[test]
+fn only_the_accounts_own_home_has_the_systems_login_agents() {
+    let own = account_home().unwrap();
+    UserAgents::of_home(&own).supported().unwrap();
+    // The same folder spelled another way is still the account's.
+    UserAgents::of_home(&own.join(".")).supported().unwrap();
+
+    let other = tempfile::tempdir().unwrap();
+    has_no_login_agents(&UserAgents::of_home(other.path()), NOT_THE_ACCOUNT_HOME);
+    // A folder inside the account's home is not its home, nor is one that
+    // is not there.
+    has_no_login_agents(
+        &UserAgents::of_home(&own.join("no-such-folder-of-hide")),
+        NOT_THE_ACCOUNT_HOME,
+    );
 }
 
 /// Each desktop system keeps login agents: launchd, systemd's user manager,

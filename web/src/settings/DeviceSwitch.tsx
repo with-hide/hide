@@ -6,12 +6,12 @@
 // screen draw the same parts; the core owns where a switch stands
 // (`Device.switch`) and hided what a press is answered (`pairingResult`).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Status } from "../components/settings-rows";
+import { Note, Status } from "../components/settings-rows";
 import { deviceTerminalCount, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep } from "../deviceSwitch";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
@@ -20,6 +20,8 @@ import { ownWindow } from "../pairing";
 import { machineName, windowDeviceId } from "../screenMachine";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
+import { FixCommand } from "./FixCommand";
 
 /**
  * One press: hided switches the device, and answers this window if it has to
@@ -77,6 +79,25 @@ export function DeviceSwitchLine({ device, actions, className }: { device: Devic
 }
 
 /**
+ * What the Hide that a switch started on a machine still needs to stay
+ * reachable with no one there (B30), under that machine's row: automatic
+ * login on a Mac, or on Linux the command an administrator runs, with Copy.
+ * Nothing for a machine that needs nothing.
+ */
+export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const needs = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.id === deviceId)?.needs ?? null);
+  if (needs === null) return null;
+  if (needs.kind === "auto_login") return <Note tone="warn" data-device-needs={`${deviceId}:auto_login`}>{t("devices.needs.autoLogin")}</Note>;
+  return (
+    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-needs={`${deviceId}:linger`}>
+      <Note tone="warn">{t("devices.needs.linger")}</Note>
+      {needs.command ? <FixCommand command={needs.command} what="linger command" actions={actions} /> : null}
+    </div>
+  );
+}
+
+/**
  * The strip over a helper device's screen (B35): the offer with its button,
  * then the switch's steps or its failure. Only this computer's own window
  * draws it, since no other screen may switch a device (B52).
@@ -111,6 +132,7 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
  */
 export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  useSwitchAfterAdd(actions);
   const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && (s.pairingResult.switch === "held" || s.pairingResult.switch === "install_needed") ? s.pairingResult : null));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const count = useShellStore((s) => (answer?.device_id ? deviceTerminalCount(s.rest, answer.device_id) : 0));
@@ -170,6 +192,26 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+/**
+ * A device just added over SSH goes on to the new connection (B41): once its
+ * helper is connected its switch is asked, once. A machine whose own Hide
+ * runs is then connected as a Hide; one with none answers with what would be
+ * installed there, which the operator allows or leaves.
+ */
+function useSwitchAfterAdd(actions: Actions) {
+  const alias = useUiStore((s) => s.switchAfterAdd);
+  const ownScreen = useShellStore((s) => ownWindow(s.pairing));
+  const ready = useShellStore((s) => {
+    const device = alias === null ? undefined : s.rest?.navigator?.devices?.find((row) => row.ssh_alias === alias);
+    return device && switchOffered(device) && device.state === "ready" && device.host?.state === "ready" && !device.switch ? device.id : null;
+  });
+  useEffect(() => {
+    if (alias === null || ready === null || !ownScreen) return;
+    useUiStore.getState().setSwitchAfterAdd(null);
+    askSwitch(actions, ready);
+  }, [actions, alias, ready, ownScreen]);
 }
 
 /** What is put on a machine that runs no Hide of its own; linger is Linux's alone. */

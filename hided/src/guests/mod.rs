@@ -50,6 +50,16 @@ const END_WITHIN: Duration = Duration::from_secs(launch::END_NOW_WAITS_SECS + 1)
 /// How long a node that said it is ready is given to take its link.
 const LINK_WITHIN: Duration = Duration::from_secs(5);
 
+/// Connects to an endpoint of a guest's node, waiting `within` for a node
+/// that is slow to take it. The wait bounds the connect alone: the stream
+/// is one this daemon keeps for as long as the node and the guest do, so
+/// the deadline a bounded connect leaves on its stream is taken off.
+fn connect_to_node(endpoint: &Path, within: Duration) -> io::Result<LocalStream> {
+    let stream = LocalStream::connect_until(endpoint, Instant::now() + within)?;
+    stream.clear_deadline();
+    Ok(stream)
+}
+
 /// The bytes carried in one step between a guest and its node.
 const CARRY: usize = 64 * 1024;
 
@@ -922,8 +932,10 @@ impl Guests {
                 &error,
             )
         })?;
-        let dir = layout::guest_dir(&self.state_dir, guest);
-        private::create_dir_all(&dir)
+        // The guest's folder and, in it, what this daemon alone keeps of the
+        // guest: the build its node runs from and its pane list are written
+        // there from the node's first start.
+        private::create_dir_all(&layout::guest_host_side(&self.state_dir, guest))
             .map_err(|error| refused("the guest's folder could not be made", &error))?;
         let key = layout::guest_key(&self.state_dir, guest);
         match std::fs::read_to_string(&key) {
@@ -1356,7 +1368,7 @@ fn carry(stream: Stream, endpoint: &Path, runtime: &Handle) -> io::Result<()> {
     let Stream {
         mut send, mut recv, ..
     } = stream;
-    let node = LocalStream::connect_until(endpoint, Instant::now() + LINK_WITHIN)?;
+    let node = connect_to_node(endpoint, LINK_WITHIN)?;
     let mut to_node = node.duplicate();
     let mut from_node = node;
     let closer = from_node.shutdown_handle();
@@ -1488,6 +1500,32 @@ mod tests {
     use super::*;
     use crate::peer_host::Link;
     use crate::peer_host::fixture::{Machine, paired, short_root, within};
+
+    /// A stream to a guest's node is kept for as long as the node runs: the
+    /// wait its connect was given is over long before the link and the tap
+    /// are, and a bounded connect leaves that wait on every later read and
+    /// write of its stream.
+    #[test]
+    fn a_stream_to_a_node_is_kept_past_the_wait_its_connect_was_given() {
+        use std::io::{Read, Write};
+        let root = short_root();
+        let endpoint = root.path().join("link");
+        let listener = hide_platform::ipc::LocalListener::bind(&endpoint).unwrap();
+        let wait = Duration::from_millis(200);
+        let asked = Instant::now();
+        let mut ours = connect_to_node(&endpoint, wait).unwrap();
+        let mut theirs = listener.accept().unwrap();
+        while asked.elapsed() <= wait {
+            std::thread::park_timeout(wait); // wait-ok: the connect's own wait to be over on the clock
+        }
+        let mut read = [0u8; 4];
+        theirs.write_all(b"late").unwrap();
+        ours.read_exact(&mut read).unwrap();
+        assert_eq!(&read, b"late");
+        ours.write_all(b"back").unwrap();
+        theirs.read_exact(&mut read).unwrap();
+        assert_eq!(&read, b"back");
+    }
 
     /// A host that takes guests, and one guest paired to it and connected.
     struct Pair {
@@ -2230,6 +2268,15 @@ mod tests {
                 build: "9.9.9".to_owned()
             }
         );
+        // What this daemon's next start runs the guest's node from (B16) is
+        // saved at the node's first start.
+        until("the node's build to be remembered", || {
+            std::fs::read(layout::guest_node_record(state, &guest))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<NodeRecord>(&bytes).ok())
+                .is_some_and(|record| record.build_id == build.id())
+        })
+        .await;
 
         let mut link = pair.link.open(StreamKind::NodeLink).await.unwrap();
         link.send.write_all(b"hello").await.unwrap();

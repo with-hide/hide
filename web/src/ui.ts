@@ -359,6 +359,8 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
+  /** The SSH alias a device was just added by: once that device connects, its switch to the new connection is asked once and this is cleared (PRD device-connect-iroh B41). */
+  switchAfterAdd: string | null;
   pendingClose: PendingClose | null;
   /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
   pendingArchive: { paneId: string } | null;
@@ -441,7 +443,7 @@ type UiStore = {
   /** Opens Settings on Devices with the Add device dialog in front. */
   openAddDevice: () => void;
   clearAddDeviceRequest: () => void;
-  /** Opens Settings › Devices with the move dialog at its give-up confirm, from the window's strip. */
+  setSwitchAfterAdd: (alias: string | null) => void;
   setPendingClose: (pending: PendingClose | null) => void;
   setPendingArchive: (pending: { paneId: string } | null) => void;
   setPendingViewsClose: (pending: PendingViewsClose | null) => void;
@@ -527,6 +529,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  switchAfterAdd: null,
   pendingClose: null,
   pendingArchive: null,
   pendingViewsClose: null,
@@ -612,6 +615,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  setSwitchAfterAdd: (switchAfterAdd) => set({ switchAfterAdd }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
   setPendingArchive: (pendingArchive) => set({ pendingArchive }),
   setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),

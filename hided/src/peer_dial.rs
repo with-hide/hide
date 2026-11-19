@@ -41,6 +41,11 @@ use crate::peer_inbox::{self, Events};
 /// is kept by the pairing, which dials it again by itself.
 const CONNECTED_WITHIN: Duration = Duration::from_secs(10);
 
+/// How long a machine just connected has to say the grant it gives: one
+/// frame after its hello. A machine that gives none says so too, so only
+/// one that never says waits this long.
+const GRANT_TOLD_WITHIN: Duration = Duration::from_secs(5);
+
 /// How long the host has to say which platform it is.
 const PLATFORM_WITHIN: Duration = Duration::from_secs(30);
 
@@ -150,8 +155,11 @@ impl Dialer {
                 error,
             )
         })?;
+        // Heard from before the link is read, so the grant its machine
+        // tells is not missed between the two.
+        let told = peers.events();
         let link = connected(&peers, &key).await?;
-        if link.granted() != GrantState::Active {
+        if granted(&link, &key, told).await != GrantState::Active {
             return Err(EstablishError::Stopped(
                 "That machine has not opened itself to this one, or paused it".to_owned(),
             ));
@@ -322,6 +330,29 @@ async fn connected(peers: &HostPeers, key: &PeerKey) -> Result<Link, EstablishEr
             "That machine is not connected; it connects by itself when it is reachable".to_owned(),
         )),
     }
+}
+
+/// The grant `link`'s machine gives this one, once that machine said it. A
+/// link starts with none and hears the grant in a frame after the hello,
+/// so a dial made as the connection comes up, as this daemon's start makes
+/// it, can be ahead of that frame: it waits for the frame rather than read
+/// a machine that opened itself as one that did not.
+async fn granted(
+    link: &Link,
+    key: &PeerKey,
+    mut told: tokio::sync::broadcast::Receiver<PeerEvent>,
+) -> GrantState {
+    let _ = tokio::time::timeout(GRANT_TOLD_WITHIN, async {
+        while link.granted() == GrantState::None {
+            match told.recv().await {
+                Ok(PeerEvent::Granted { key: of, .. }) if of == *key => break,
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+    .await;
+    link.granted()
 }
 
 async fn ask(management: &mut Stream, message: &Manage) -> Result<(), EstablishError> {

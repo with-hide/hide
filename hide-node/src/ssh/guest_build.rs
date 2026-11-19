@@ -19,7 +19,7 @@ use super::{EstablishError, HELPER_NAME, HelperPackages, Payload, device_program
 
 /// The file in a build's folder that says every file of the build is there,
 /// holding the build's name.
-const MARKER: &str = ".build";
+pub const MARKER: &str = ".build";
 
 /// A build read whole for one platform.
 pub struct GuestBuild {

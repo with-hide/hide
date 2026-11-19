@@ -43,7 +43,8 @@ pub enum Outcome {
     Removed,
     /// Not paired, and no item.
     Nothing,
-    /// This system, or this fixture HOME, keeps no login items.
+    /// Paired, and no login item is kept: this system has none, or HOME is
+    /// not the account's own home ([`agents_for`]). `reason` says which.
     Unsupported { reason: String },
 }
 
@@ -131,14 +132,13 @@ pub fn reconcile(
     }
 }
 
-/// The account's login items for `home`: none in a fixture HOME, so no test
-/// reaches the account's real ones.
+/// The account's login items for `home`: the system's only when `home` is
+/// the account's own home as the system names it, and none for any other
+/// HOME (`UserAgents::of_home`). The system's items are the account's
+/// whatever HOME says, so a test's HOME, or an isolated candidate's, would
+/// otherwise load its core into the account's real ones.
 pub fn agents_for(home: &Path) -> UserAgents {
-    if crate::env::fixture_home(home) {
-        UserAgents::none()
-    } else {
-        UserAgents::current()
-    }
+    UserAgents::of_home(home)
 }
 
 /// This build, put in a version folder of `root` from the package beside
@@ -204,6 +204,18 @@ impl Follower {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 match outcome {
                     Ok(Outcome::Kept | Outcome::Nothing) => *last = None,
+                    // Why a paired machine keeps no item holds as a failure
+                    // does, and is logged once.
+                    Ok(Outcome::Unsupported { reason }) => {
+                        if last.as_deref() != Some(reason.as_str()) {
+                            hide_core::diagnostic!(json!({
+                                "component": "always_on",
+                                "kind": "always_on.declined",
+                                "reason": reason,
+                            }));
+                            *last = Some(reason);
+                        }
+                    }
                     Ok(outcome) => {
                         *last = None;
                         hide_core::diagnostic!(json!({

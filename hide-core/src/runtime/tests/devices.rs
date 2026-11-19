@@ -1300,10 +1300,27 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     assert_eq!(switch.reason.as_deref(), Some("ssh_not_reached"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
 
-    // Paired, and not confirmed yet: still the helper's.
+    // Paired, and not confirmed yet: still the helper's. The switch started
+    // a Hide there, which said what it still needs (B30); one spelled as no
+    // row can draw it is not taken.
     let mut connecting = step("connecting");
     connecting["key"] = serde_json::json!(key);
+    let mut unspelled = connecting.clone();
+    unspelled["needs"] = serde_json::json!({"kind": "linger"});
+    dispatch(&mut runtime, "device_switch", unspelled);
+    assert_eq!(
+        device(&runtime, "build-box-id")
+            .switch
+            .as_ref()
+            .map(|switch| switch.state),
+        Some(DeviceSwitchState::Failed),
+        "a step that names a linger without its command was taken"
+    );
+    connecting["needs"] = serde_json::json!({
+        "kind": "linger", "command": "sudo loginctl enable-linger hy",
+    });
     dispatch(&mut runtime, "device_switch", connecting.clone());
+    assert_eq!(device(&runtime, "build-box-id").needs, None);
     dispatch(&mut runtime, "peer_machines", machines("confirming"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
     assert_eq!(
@@ -1332,6 +1349,15 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
     assert_eq!((row.ssh_alias.as_deref(), &row.switch), (None, &None));
+    // What that machine's Hide still needs is on the row from then on.
+    let needs = row.needs.clone().expect("what the machine's Hide needs");
+    assert_eq!(
+        (needs.kind, needs.command.as_deref()),
+        (
+            crate::model::DeviceNeeds::Linger,
+            Some("sudo loginctl enable-linger hy")
+        )
+    );
     // Saved as it is, and read back the same.
     let stored = serde_json::to_value(&switched).unwrap();
     assert_eq!(stored["peer_switched"], true);

@@ -809,6 +809,13 @@ impl Pairing {
                 own_folder,
                 install,
             } => {
+                // The device as the core knows it: a terminal may name it
+                // by its alias.
+                let (core, named) = (Arc::clone(&self.core), device);
+                let source = tokio::task::spawn_blocking(move || core.device_switch_source(&named))
+                    .await
+                    .map_err(|_| "hide_unavailable")??;
+                let device = source.device_id.clone();
                 // One switch of a device at a time: a second press while
                 // the first runs changes nothing.
                 if !lock(&self.switching).insert(device.clone()) {
@@ -816,7 +823,7 @@ impl Pairing {
                 }
                 // The window that pressed reads which device its answer is for.
                 let answer = self
-                    .switch(&service, &peers, &device, own_folder, install)
+                    .switch(&service, &peers, source, own_folder, install)
                     .await
                     .map(|mut answer| {
                         answer["device_id"] = json!(device);
@@ -1026,14 +1033,11 @@ impl Pairing {
         self: &Arc<Self>,
         service: &Service,
         peers: &HostPeers,
-        device: &str,
+        source: hide_core::DeviceSwitchSource,
         own_folder: bool,
         install: bool,
     ) -> Result<Value, &'static str> {
-        let (core, row) = (Arc::clone(&self.core), device.to_owned());
-        let source = tokio::task::spawn_blocking(move || core.device_switch_source(&row))
-            .await
-            .map_err(|_| "hide_unavailable")??;
+        let device = source.device_id.as_str();
         let alias = source.ssh_alias.as_str();
         self.switch_step(device, "checking", json!({})).await;
         let request = self.ssh_request(alias)?;
@@ -1061,14 +1065,18 @@ impl Pairing {
                 })
             })
             .await??;
-        let (paired, folder) = match switched {
+        let (paired, folder, needs) = match switched {
             pairing_ssh::Switched::HeldBy(by) => {
                 return Ok(json!({ "switch": "held", "by": by }));
             }
             pairing_ssh::Switched::InstallNeeded { system } => {
                 return Ok(json!({ "switch": "install_needed", "system": system }));
             }
-            pairing_ssh::Switched::Paired { paired, folder } => (paired, folder),
+            pairing_ssh::Switched::Paired {
+                paired,
+                folder,
+                needs,
+            } => (paired, folder, needs),
         };
         // The machine the device is: the one that just answered, or the
         // one this machine is paired with already under the device's id.
@@ -1081,8 +1089,13 @@ impl Pairing {
                 .map(|paired| paired.key)
                 .ok_or("device_unknown")?,
         };
-        self.switch_step(device, "connecting", json!({ "key": host.to_hex() }))
-            .await;
+        // What the Hide started there still needs goes with the step, and
+        // onto the device's row once it is that machine's (B30).
+        let mut connecting = json!({ "key": host.to_hex() });
+        if let Some(needs) = &needs {
+            connecting["needs"] = needs.payload();
+        }
+        self.switch_step(device, "connecting", connecting).await;
         if let Some(paired) = paired {
             match service.adopt(paired.accepted, paired.first) {
                 // Adopted before, by a switch that stopped after it.

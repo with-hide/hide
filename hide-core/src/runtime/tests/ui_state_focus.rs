@@ -67,6 +67,7 @@ fn fixture() -> Runtime {
         dials_in: false,
         peer_key: None,
         switch: None,
+        needs: None,
     });
     runtime.set_front_device(Some(crate::node::TEST_NODE.to_owned()));
     runtime.snapshot.navigator.focused_workspace_id = Some("workspace-a".to_owned());

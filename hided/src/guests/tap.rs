@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hide_core::guest_panes::{MAX_PANES, pane_is_listed};
 use hide_node::terminal::OutputSink;
@@ -195,7 +195,7 @@ impl GuestTap {
     }
 
     fn read(&self, endpoint: &Path) {
-        let mut stream = match LocalStream::connect_until(endpoint, Instant::now() + TAP_WITHIN) {
+        let mut stream = match super::connect_to_node(endpoint, TAP_WITHIN) {
             Ok(stream) => stream,
             Err(error) => {
                 self.record(

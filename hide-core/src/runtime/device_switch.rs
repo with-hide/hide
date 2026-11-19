@@ -26,11 +26,17 @@ pub(super) struct DeviceSwitch {
     /// The connection key of the machine the device is, known from the
     /// pairing on: the grant that becomes active under it takes the device.
     key: Option<String>,
+    /// What the Hide this switch started on the machine still needs, which
+    /// the device's row says once it is that machine's.
+    needs: Option<crate::model::DeviceNeedsSnapshot>,
 }
 
 /// What a helper device is switched from: how the core reaches it, and
 /// where its helper is.
 pub struct DeviceSwitchSource {
+    /// The device's id, which the one who asked may have named by its
+    /// alias.
+    pub device_id: String,
     pub ssh_alias: String,
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
@@ -49,6 +55,10 @@ pub(super) struct DeviceSwitchPayload {
     /// With `failed`: why, as a code.
     #[serde(default)]
     pub(super) reason: Option<String>,
+    /// With `connecting`: what the Hide this switch started there still
+    /// needs to stay reachable (B30).
+    #[serde(default)]
+    pub(super) needs: Option<crate::model::DeviceNeedsSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -76,22 +86,38 @@ impl DeviceSwitchPayload {
                     .bytes()
                     .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
         });
-        key_spelled && reason_plain && (self.step != SwitchStep::Connecting || self.key.is_some())
+        let needs_spelled = self
+            .needs
+            .as_ref()
+            .is_none_or(crate::model::DeviceNeedsSnapshot::valid);
+        key_spelled
+            && reason_plain
+            && needs_spelled
+            && (self.step != SwitchStep::Connecting || self.key.is_some())
     }
 }
 
 impl Runtime {
-    /// What hided switches `device_id` from, or the code of why it is not
-    /// a device that can be switched: only a device the core dials over
-    /// SSH under its machine's own id, which the paired machine's device
-    /// then has too.
+    /// What hided switches `device` from, or the code of why it is not a
+    /// device that can be switched: only a device the core dials over SSH
+    /// under its machine's own id, which the paired machine's device then
+    /// has too. `device` is its id, or the SSH alias it is dialed by, which
+    /// is what a terminal knows of a device it has just added.
     pub(crate) fn device_switch_source(
         &self,
-        device_id: &str,
+        device: &str,
     ) -> Result<DeviceSwitchSource, &'static str> {
         let registration = self
-            .device_registration(device_id)
+            .device_registration(device)
+            .or_else(|| {
+                self.snapshot
+                    .ui_state
+                    .device_registrations
+                    .iter()
+                    .find(|registration| registration.origin.ssh_alias() == Some(device))
+            })
             .ok_or("device_unknown")?;
+        let device_id = registration.id.as_str();
         let LinkOrigin::Dialed {
             ssh_alias,
             naming: crate::model::DeviceNaming::Named,
@@ -117,6 +143,7 @@ impl Runtime {
                 }) as Arc<dyn hide_node_link::device::SignIn>
             });
         Ok(DeviceSwitchSource {
+            device_id: device_id.to_owned(),
             ssh_alias: ssh_alias.clone(),
             helper_root: registration
                 .host_consent
@@ -180,6 +207,9 @@ impl Runtime {
                     .reason
                     .filter(|_| payload.step == SwitchStep::Failed),
                 key: key.clone(),
+                needs: payload
+                    .needs
+                    .filter(|_| payload.step == SwitchStep::Connecting),
             },
         );
         // A machine that was paired before the switch was asked for is
@@ -234,7 +264,13 @@ impl Runtime {
             switched: true,
         };
         let registration = registration.clone();
-        self.device_switches.remove(device_id);
+        if let Some(needs) = self
+            .device_switches
+            .remove(device_id)
+            .and_then(|switch| switch.needs)
+        {
+            self.device_needs.insert(device_id.to_owned(), needs);
+        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         let focused_device = self.look.front().map(str::to_owned);

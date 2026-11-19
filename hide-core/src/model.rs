@@ -1057,6 +1057,50 @@ pub struct DeviceSnapshot {
     /// (PRD device-connect-iroh B36, B41); `None` when none was asked for
     /// or it finished.
     pub switch: Option<DeviceSwitchSnapshot>,
+    /// What the Hide this core started on the device's machine over SSH
+    /// still needs from the operator to stay reachable (PRD
+    /// device-connect-iroh B30), as that machine said when it was started;
+    /// kept while this core runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<DeviceNeedsSnapshot>,
+}
+
+/// What a machine's Hide, started over SSH, needs to stay reachable with no
+/// one at it (PRD device-connect-iroh B30).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeviceNeedsSnapshot {
+    pub kind: DeviceNeeds,
+    /// With `linger`: the command an administrator runs on that machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl DeviceNeedsSnapshot {
+    /// Whether it is spelled as a row can draw it: a linger with its one
+    /// command line, an automatic login with none.
+    pub(crate) fn valid(&self) -> bool {
+        match (self.kind, self.command.as_deref()) {
+            (DeviceNeeds::AutoLogin, None) => true,
+            (DeviceNeeds::Linger, Some(command)) => {
+                !command.is_empty()
+                    && command.len() <= 256
+                    && !command.chars().any(char::is_control)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `contracts/snapshot-wire-enums.json`: `device_needs`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceNeeds {
+    /// A Mac's core starts at a login: after a restart it is back only
+    /// once someone logs in, or with automatic login on.
+    AutoLogin,
+    /// Linux: the core ends with the account's last session until an
+    /// administrator turns linger on.
+    Linger,
 }
 
 /// A helper device's switch to the connection of the Hide on its machine,
