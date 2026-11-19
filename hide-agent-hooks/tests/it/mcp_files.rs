@@ -302,6 +302,86 @@ fn each_agent_gets_hides_server_in_its_own_shape_and_keeps_the_rest_of_its_file(
 }
 
 #[test]
+fn an_entry_set_aside_and_put_back_is_what_the_file_held_with_every_field() {
+    for agent in agents() {
+        let home = tempfile::tempdir().unwrap();
+        let file = default_file(&agent, home.path());
+        let path = home.path().join(agent.file);
+        write(&path, agent.original);
+        let before = servers(&agent, &path);
+
+        // A field the reader leaves out (Antigravity's `disabled`, Grok's
+        // `enabled`) means writing the server back would lose it.
+        let found = mcp::entry(&file, "mine").unwrap().unwrap();
+        assert_eq!(
+            found.whole,
+            !matches!(agent.kind, "antigravity" | "grok"),
+            "{}",
+            agent.kind
+        );
+
+        // An entry that cannot be kept stays where it is.
+        let refused = mcp::set_aside(&file, "mine", |_, _| Err("no room".to_owned()));
+        assert!(refused.unwrap_err().message().contains("no room"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            agent.original,
+            "{}",
+            agent.kind
+        );
+
+        let mut kept = None;
+        let taken = mcp::set_aside(&file, "mine", |entry, read| {
+            assert_eq!(read.unwrap().0.name, "mine");
+            kept = Some(entry.clone());
+            Ok(())
+        })
+        .unwrap();
+        assert!(taken, "{}", agent.kind);
+        let kept = kept.unwrap();
+        assert!(!format!("{kept:?}").contains("my-tool"));
+        assert!(
+            !servers(&agent, &path).contains_key("mine"),
+            "{}",
+            agent.kind
+        );
+
+        assert!(
+            mcp::put_back(&file, "mine", &kept).unwrap(),
+            "{}",
+            agent.kind
+        );
+        assert_eq!(servers(&agent, &path), before, "{}", agent.kind);
+        // Put back already: true again, and no byte changes.
+        let back = std::fs::read(&path).unwrap();
+        assert!(
+            mcp::put_back(&file, "mine", &kept).unwrap(),
+            "{}",
+            agent.kind
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), back, "{}", agent.kind);
+
+        // Another entry of the name now is left alone.
+        let other = Server {
+            name: "mine".to_owned(),
+            reach: Reach::Local {
+                command: "other-tool".to_owned(),
+                args: Vec::new(),
+                env: Vec::new(),
+            },
+        };
+        mcp::write(&file, &other, &Keys::new()).unwrap();
+        let replaced = std::fs::read(&path).unwrap();
+        assert!(
+            !mcp::put_back(&file, "mine", &kept).unwrap(),
+            "{}",
+            agent.kind
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), replaced, "{}", agent.kind);
+    }
+}
+
+#[test]
 fn writing_the_same_server_again_changes_no_byte_and_a_new_key_rewrites_it() {
     for agent in agents() {
         let home = tempfile::tempdir().unwrap();

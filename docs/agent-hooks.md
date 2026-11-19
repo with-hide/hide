@@ -624,6 +624,9 @@ Writing the same server again changes no byte (B27).
 
 Whose an entry is, is the store's record: for each file, the entries Hide wrote with the digest of each (`Server::digest`), the server's name, how it is reached and the names of its variables and headers, never a value.
 An entry with no record, or whose digest no longer matches, is the operator's: Hide neither writes over it nor takes it out, and the cell says it is already there and offers to take it in (B22, D-16).
+An entry is whole only while every field it holds is one its shape's reader reads (`Found::whole`): a `timeout`, an `enabled` or `disabled` switch or a tool list is a field Hide's copy leaves out, so an entry holding one is never Hide's to replace or take out, even when its server is the same.
+Taking a name over moves each copy that differs, or is not whole, out of its file into the undo list (`hide_agent_hooks::mcp::set_aside`): the entry as the file spelled it, every field kept, goes into the copy's `keys.json` before the file is rewritten, so an entry that cannot be kept stays where it is, and Hide's copy goes in its place.
+A machine leaving Hide puts each such entry back as it was (`put_back`), unless the file holds another entry of that name by then, and leaves an entry taken over where it was, since Hide did not put it there (B21, B30).
 Codex's `config.toml` was a file only Codex wrote (its trust of Hide's hooks and of worktrees goes through `codex app-server`); Hide now writes its own `[mcp_servers.<name>]` tables there and nothing else.
 
 ### MCP keys
@@ -631,6 +634,7 @@ Codex's `config.toml` was a file only Codex wrote (its trust of Hide's hooks and
 A variable's or header's value, an API key or anything the operator typed there, is kept in `keys.json` in the store's folder of the item it belongs to (`hide_kit::mcp_keys`), owner-only on every system (0600 on macOS and Linux, an access list naming only the account on Windows), and a key file anyone else could read or change is refused rather than read (B10, D-11).
 The file goes where its item's folder goes: a delete moves it to the undo list with the item and a restore brings it back, so the agents' files lose the server at once while Hide alone keeps the key, and a permanent delete removes it (B18, D-39).
 Two items of one name, one in the store and one in the undo list, therefore never share a key.
+A copy set aside from an agent's file keeps that entry's text in the same file, since it holds the entry's keys, until it is put back or the folder's keys are next written.
 It is the only place Hide keeps a key: the store's record, its report, the snapshot and the logs carry a server with the names of its keys and never a value, and a key reaches an agent's file only when the converter writes it.
 A value travels only from the screen to a machine's store, inside the change that carries it (`ReadMcp`'s paste, `AddMcp` and `SetMcp`'s keys), and from one machine's store to another's inside a copy (`Receive`), each as `hide_kit::store::Sealed`, which prints as `••••`; a change's outcome, `status.store_answer` and every log line hold it emptied (`StoreChange::redacted`).
 What a paste gave stays staged in the store's folder, owner-only, for an hour or until four newer pastes, and the screen learns only which keys it gave.

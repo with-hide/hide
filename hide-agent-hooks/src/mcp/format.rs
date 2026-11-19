@@ -324,6 +324,28 @@ fn server_of(
     ))
 }
 
+/// Whether the shape's reader reads the field `key` of an entry.
+fn reads(shape: &Shape, key: &str) -> bool {
+    shape.kind.as_ref().is_some_and(|kinds| kinds.key == key)
+        || key == "command"
+        || (!shape.command_list && key == "args")
+        || [shape.env, shape.url, shape.headers].contains(&key)
+}
+
+/// Whether `entry` holds only fields the reader reads ([`super::Found::whole`]).
+pub(super) fn json_whole(shape: &Shape, entry: &Value) -> bool {
+    entry
+        .as_object()
+        .is_some_and(|entry| entry.keys().all(|key| reads(shape, key)))
+}
+
+/// [`json_whole`] for a TOML entry.
+pub(super) fn toml_whole(shape: &Shape, entry: &Item) -> bool {
+    entry
+        .as_table_like()
+        .is_some_and(|entry| entry.iter().all(|(key, _)| reads(shape, key)))
+}
+
 pub(super) fn json_entry(shape: &Shape, server: &Server, keys: &Keys) -> Result<Value, KeyRefusal> {
     let mut entry = Map::new();
     for (key, field) in fields(shape, server, keys)? {

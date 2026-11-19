@@ -4,6 +4,10 @@
 //! to, and handed to `hide_agent_hooks::mcp` only when an agent's file is
 //! written.
 //!
+//! A server set aside from an agent's file when the operator took its name
+//! over (B21) keeps the entry as the file spelled it in the same file, since
+//! that holds its keys too; the next write of the folder's keys drops it.
+//!
 //! The file lives and goes with its item's folder: a delete moves the folder
 //! to the undo list and a restore moves it back, so the keys come back with
 //! the item, and a permanent delete removes the folder with them (D-39). Two
@@ -23,7 +27,7 @@ use std::fmt;
 use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
-use hide_agent_hooks::mcp::{Keys, Secret};
+use hide_agent_hooks::mcp::{Keys, Secret, SetAside};
 use serde::{Deserialize, Serialize};
 
 /// The key file's name in an item's folder.
@@ -78,6 +82,9 @@ struct File {
     schema: u32,
     /// The values by variable or header name.
     keys: BTreeMap<String, String>,
+    /// The agent's entry this copy was set aside from, for putting it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    set_aside: Option<SetAside>,
 }
 
 /// The keys kept in the item folder `folder`; none when it holds no key
@@ -90,9 +97,24 @@ pub fn read(folder: &Path) -> Result<Keys, KeyFileError> {
         .collect())
 }
 
+/// The agent's entry kept in the item folder `folder` when it was set aside.
+pub fn set_aside_of(folder: &Path) -> Result<Option<SetAside>, KeyFileError> {
+    Ok(read_file(&folder.join(FILE))?.set_aside)
+}
+
+/// Keeps `keys` and the agent's entry `entry` they were read from in the
+/// item folder `folder`.
+pub fn keep_set_aside(folder: &Path, keys: &Keys, entry: &SetAside) -> Result<(), KeyFileError> {
+    save(folder, keys, Some(entry.clone()))
+}
+
 /// Replaces the keys kept in the item folder `folder` with `keys`; an empty
 /// `keys` takes the file out. The file is written only when it changes.
 pub fn write(folder: &Path, keys: &Keys) -> Result<(), KeyFileError> {
+    save(folder, keys, None)
+}
+
+fn save(folder: &Path, keys: &Keys, set_aside: Option<SetAside>) -> Result<(), KeyFileError> {
     if keys.len() > MAX_KEYS_PER_ITEM {
         return Err(KeyFileError::TooLarge {
             what: "the number of keys",
@@ -123,10 +145,10 @@ pub fn write(folder: &Path, keys: &Keys) -> Result<(), KeyFileError> {
         .collect();
     // A file Hide cannot read as its own is refused before it is replaced.
     let current = read_file(&path)?;
-    if current.keys == plain {
+    if current.keys == plain && current.set_aside.is_none() && set_aside.is_none() {
         return Ok(());
     }
-    if plain.is_empty() {
+    if plain.is_empty() && set_aside.is_none() {
         return match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
@@ -136,6 +158,7 @@ pub fn write(folder: &Path, keys: &Keys) -> Result<(), KeyFileError> {
     let bytes = serde_json::to_vec(&File {
         schema: SCHEMA,
         keys: plain,
+        set_aside,
     })
     .map_err(|_| KeyFileError::Unreadable { path: path.clone() })?;
     if bytes.len() as u64 > MAX_FILE_BYTES {

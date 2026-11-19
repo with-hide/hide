@@ -383,7 +383,7 @@ fn join(places: &mut Vec<Place>, place: Place) {
 
 /// The real folder `path` names, links on the way followed as the agents
 /// that read it follow them; the parts not there yet are spelled as given.
-fn real_folder(path: &Path) -> PathBuf {
+pub(super) fn real_folder(path: &Path) -> PathBuf {
     let mut there = path;
     let mut rest = Vec::new();
     loop {

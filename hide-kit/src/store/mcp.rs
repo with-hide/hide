@@ -252,7 +252,7 @@ fn entry_of(found: &mcp::Found) -> Entry {
             .as_ref()
             .map_or_else(|| "unreadable".to_owned(), |(server, _)| server.digest()),
         link: None,
-        whole: found.server.is_some(),
+        whole: found.whole && found.server.is_some(),
     }
 }
 
@@ -295,7 +295,7 @@ impl Applier for McpApplier {
                 &mut places,
                 ctx,
                 adapter,
-                file.path().to_path_buf(),
+                super::skill::real_folder(file.path()),
                 Vec::new(),
                 blocked,
             );
@@ -417,20 +417,42 @@ impl Applier for McpApplier {
         ))
     }
 
-    fn set_aside(
-        &self,
-        _place: &Place,
-        _name: &str,
-        _into: &Path,
-    ) -> Result<ItemBody, StoreRefusal> {
-        Err(StoreRefusal::new(
-            StoreRefusalCause::Unsupported,
-            "Hide cannot set an MCP server aside yet",
-        ))
+    /// Takes the agent's entry out of its file whole, every field it holds
+    /// kept with its keys in the undo list's folder, so putting it back
+    /// gives the file what it had (B21, B30).
+    fn set_aside(&self, place: &Place, name: &str, into: &Path) -> Result<ItemBody, StoreRefusal> {
+        let file = file_of(place).map_err(failed)?;
+        let mut server = None;
+        let taken = mcp::set_aside(&file, name, |entry, readout| {
+            let (read, keys) =
+                readout.ok_or_else(|| "Hide cannot read it as a server".to_owned())?;
+            crate::mcp_keys::keep_set_aside(into, keys, entry)
+                .map_err(|error| error.to_string())?;
+            server = Some(read.clone());
+            Ok(())
+        })
+        .map_err(|failure| failed(failure.message()))?;
+        match server {
+            Some(server) if taken => Ok(ItemBody::Mcp(McpBody { server })),
+            _ => Err(not_found(format!(
+                "{} holds no server {name}",
+                place.path.display()
+            ))),
+        }
     }
 
-    fn put_back(&self, _place: &Place, _name: &str, _from: &Path) -> Result<bool, String> {
-        Err("Hide cannot put an MCP server back yet".to_owned())
+    fn put_back(&self, place: &Place, name: &str, from: &Path) -> Result<bool, String> {
+        let file = file_of(place)?;
+        let entry = crate::mcp_keys::set_aside_of(from)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("{} holds no server Hide set aside", from.display()))?;
+        if !mcp::put_back(&file, name, &entry).map_err(|failure| failure.message())? {
+            return Ok(false);
+        }
+        // Back in the agent's file; the copy and its keys go.
+        std::fs::remove_dir_all(from)
+            .map_err(|error| format!("{} could not be removed: {error}", from.display()))?;
+        Ok(true)
     }
 
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {

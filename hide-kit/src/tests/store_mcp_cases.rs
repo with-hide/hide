@@ -645,6 +645,81 @@ fn a_copy_carries_the_server_and_its_key_and_a_new_key_alone_reaches_the_other_m
 }
 
 #[test]
+fn a_take_over_sets_each_other_copy_aside_whole_and_a_machine_leaving_puts_it_back() {
+    let fixture = mcp_agents();
+    let chosen = "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"docker\",\n      \"args\": [\"run\", \"-i\", \"ghcr.io/github/github-mcp-server\"],\n      \"env\": {\"GITHUB_TOKEN\": \"ghp_theirs\"}\n    }\n  }\n}\n";
+    write(&path_of(&fixture, "claude-code"), chosen);
+    // Another server of the name, with a field Hide's copy leaves out.
+    write(
+        &path_of(&fixture, "codex"),
+        "model = \"gpt-5\"\n\n[mcp_servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"@modelcontextprotocol/server-github\"]\nenv = { GITHUB_TOKEN = \"ghp_codex\" }\nstartup_timeout_sec = 30\n",
+    );
+    // The chosen server itself, with a switch Hide's copy leaves out.
+    write(
+        &path_of(&fixture, "grok"),
+        "[mcp_servers.github]\ncommand = \"docker\"\nargs = [\"run\", \"-i\", \"ghcr.io/github/github-mcp-server\"]\nenv = { GITHUB_TOKEN = \"ghp_theirs\" }\nenabled = false\n",
+    );
+
+    let place = format!(
+        "mcp:claude-code:{}",
+        path_of(&fixture, "claude-code").display()
+    );
+    let report = store(
+        &fixture,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "github".to_owned(),
+            from: Some(place),
+        }],
+    );
+    assert_eq!(cells(&report, "mcp:github"), every(CellState::On));
+    for (agent, _) in FILES {
+        let entry = held(&fixture, agent, "github").unwrap();
+        assert_eq!(key_of(&entry, "GITHUB_TOKEN"), "ghp_theirs", "{agent}");
+    }
+    let codex = std::fs::read_to_string(path_of(&fixture, "codex")).unwrap();
+    assert!(codex.contains("model = \"gpt-5\""));
+    assert!(!codex.contains("startup_timeout_sec"));
+    assert!(
+        !std::fs::read_to_string(path_of(&fixture, "grok"))
+            .unwrap()
+            .contains("enabled")
+    );
+    // Both set-aside copies wait in the undo list, keys and all.
+    assert_eq!(report.trash.len(), 2, "{:#?}", report.trash);
+    assert!(
+        report
+            .trash
+            .iter()
+            .all(|kept| matches!(&kept.cause, TrashCause::Replaced { .. }))
+    );
+
+    remove(&fixture.target);
+
+    let codex = std::fs::read_to_string(path_of(&fixture, "codex")).unwrap();
+    assert!(codex.contains("startup_timeout_sec = 30"), "{codex}");
+    assert_eq!(
+        key_of(&held(&fixture, "codex", "github").unwrap(), "GITHUB_TOKEN"),
+        "ghp_codex"
+    );
+    assert!(
+        std::fs::read_to_string(path_of(&fixture, "grok"))
+            .unwrap()
+            .contains("enabled = false")
+    );
+    // The copy taken over where it was is the operator's and stays; the
+    // copies Hide wrote go.
+    assert_eq!(
+        std::fs::read_to_string(path_of(&fixture, "claude-code")).unwrap(),
+        chosen
+    );
+    for agent in ["opencode", "pi", "omp", "antigravity"] {
+        assert!(held(&fixture, agent, "github").is_none(), "{agent}");
+    }
+    assert!(!crate::layout::store_dir(fixture.home()).exists());
+}
+
+#[test]
 fn removing_the_machine_takes_hides_servers_and_their_keys_out() {
     let fixture = mcp_agents();
     add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);

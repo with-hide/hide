@@ -420,6 +420,10 @@ pub struct Found {
     /// The server and its keys, `None` for an entry Hide cannot read in
     /// the file's shape.
     pub server: Option<(Server, Keys)>,
+    /// Nothing in it is a field the shape's reader leaves out (a timeout,
+    /// an `enabled` switch, a tool list): only then does writing the server
+    /// back lose nothing of it.
+    pub whole: bool,
 }
 
 /// Every entry of `file`, in the tables the agent reads (B19); none when
@@ -430,7 +434,11 @@ pub fn entries(file: &McpFile) -> Result<Vec<Found>, InstallFailure> {
     Ok(document
         .entries(shape, &file.path)?
         .into_iter()
-        .map(|(_, name, server)| Found { name, server })
+        .map(|(_, name, server, whole)| Found {
+            name,
+            server,
+            whole,
+        })
         .collect())
 }
 
@@ -511,6 +519,82 @@ pub fn remove(file: &McpFile, name: &str) -> Result<bool, InstallFailure> {
     Ok(true)
 }
 
+/// An entry taken out of an agent's file whole, spelled as the file spelled
+/// it, for [`put_back`]. Its text holds the entry's keys, so it prints none
+/// and is kept only in a private file.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetAside {
+    /// Each table that held it, by its place among the shape's tables, with
+    /// the entry's text in the file's syntax.
+    entries: Vec<(usize, String)>,
+}
+
+impl fmt::Debug for SetAside {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "SetAside({} entries)", self.entries.len())
+    }
+}
+
+/// The key a TOML entry's text is kept under.
+const SET_ASIDE_KEY: &str = "entry";
+
+/// Takes the entry `name` out of every table of `file` that holds it, as the
+/// file spelled it, every field kept. `keep` gets it, with what the first
+/// table's entry says, before the file is rewritten, so an entry it cannot
+/// keep stays where it is. False when there is no entry `name`.
+pub fn set_aside(
+    file: &McpFile,
+    name: &str,
+    keep: impl FnOnce(&SetAside, Option<&(Server, Keys)>) -> Result<(), String>,
+) -> Result<bool, InstallFailure> {
+    let shape = shape(file.format);
+    if !file.path.exists() {
+        return Ok(false);
+    }
+    let _agent = agent_lock(file)?;
+    let mut document = Document::read(shape, &file.path)?;
+    let found = document.find(shape, &file.path, name)?;
+    let Some((_, readout)) = found.first() else {
+        return Ok(false);
+    };
+    let mut entries = Vec::new();
+    for (table, _) in &found {
+        entries.push((*table, document.text(shape, &file.path, *table, name)?));
+    }
+    let set_aside = SetAside { entries };
+    keep(&set_aside, readout.as_ref()).map_err(|detail| InstallFailure::Refused {
+        path: file.path.display().to_string(),
+        detail: format!("{name} stays there: {detail}"),
+    })?;
+    for (table, _) in &found {
+        document.remove(shape, &file.path, *table, name)?;
+    }
+    document.write(&file.path)?;
+    Ok(true)
+}
+
+/// Puts what [`set_aside`] took back into `file` as it was. True when it is
+/// there now, put back or found back already; false, with nothing written,
+/// when the file holds another entry `name`.
+pub fn put_back(file: &McpFile, name: &str, set_aside: &SetAside) -> Result<bool, InstallFailure> {
+    let shape = shape(file.format);
+    let _agent = agent_lock(file)?;
+    let mut document = Document::read(shape, &file.path)?;
+    let found = document.find(shape, &file.path, name)?;
+    if !found.is_empty() {
+        let now = found
+            .iter()
+            .map(|(table, _)| Ok((*table, document.text(shape, &file.path, *table, name)?)))
+            .collect::<Result<Vec<_>, InstallFailure>>()?;
+        return Ok(now == set_aside.entries);
+    }
+    for (table, text) in &set_aside.entries {
+        document.put(shape, &file.path, *table, name, text)?;
+    }
+    document.write(&file.path)?;
+    Ok(true)
+}
+
 /// The lock the agent itself takes before it rewrites the file, held across
 /// Hide's read and write: Claude Code's on its global config, which it
 /// rewrites while it runs (`crate::folder_trust`). The other agents write
@@ -586,7 +670,7 @@ impl Document {
         &self,
         shape: &Shape,
         path: &Path,
-    ) -> Result<Vec<(usize, String, Readout)>, InstallFailure> {
+    ) -> Result<Vec<(usize, String, Readout, bool)>, InstallFailure> {
         let mut entries = Vec::new();
         for (table, keys) in Self::tables(shape) {
             match self {
@@ -602,6 +686,7 @@ impl Document {
                             table,
                             name.clone(),
                             format::json_server(shape, name, entry),
+                            format::json_whole(shape, entry),
                         ));
                     }
                 }
@@ -617,6 +702,7 @@ impl Document {
                             table,
                             name.to_owned(),
                             format::toml_server(shape, name, entry),
+                            format::toml_whole(shape, entry),
                         ));
                     }
                 }
@@ -635,9 +721,106 @@ impl Document {
         Ok(self
             .entries(shape, path)?
             .into_iter()
-            .filter(|(_, each, _)| each == name)
-            .map(|(table, _, server)| (table, server))
+            .filter(|(_, each, _, _)| each == name)
+            .map(|(table, _, server, _)| (table, server))
             .collect())
+    }
+
+    /// The keys of the shape's table `table`.
+    fn table_keys(shape: &Shape, table: usize) -> &'static [&'static str] {
+        Self::tables(shape)
+            .find(|(index, _)| *index == table)
+            .map(|(_, keys)| keys)
+            .expect("a table the entries came from")
+    }
+
+    /// The text of the entry `name` in `table`, in the file's syntax.
+    fn text(
+        &self,
+        shape: &Shape,
+        path: &Path,
+        table: usize,
+        name: &str,
+    ) -> Result<String, InstallFailure> {
+        let keys = Self::table_keys(shape, table);
+        let missing = || shape_failure(path, format!("{name} went while Hide read it"));
+        match self {
+            Self::Json(document) => {
+                let entry = json_table(document, keys, path)?
+                    .and_then(|servers| servers.get(name))
+                    .ok_or_else(missing)?;
+                Ok(entry.to_string())
+            }
+            Self::Toml(document) => {
+                let mut entry = toml_table(document.document.as_item(), keys, path)?
+                    .and_then(|servers| servers.get(name))
+                    .ok_or_else(missing)?
+                    .clone();
+                unplaced(&mut entry);
+                let mut kept = toml_edit::DocumentMut::new();
+                kept.insert(SET_ASIDE_KEY, entry);
+                Ok(kept.to_string())
+            }
+        }
+    }
+
+    /// Puts the entry `text` [`Document::text`] read back as `name` in
+    /// `table`.
+    fn put(
+        &mut self,
+        shape: &Shape,
+        path: &Path,
+        table: usize,
+        name: &str,
+        text: &str,
+    ) -> Result<(), InstallFailure> {
+        let keys = Self::table_keys(shape, table);
+        let unreadable = |detail: String| {
+            shape_failure(
+                path,
+                format!("the {name} Hide set aside cannot be read: {detail}"),
+            )
+        };
+        match self {
+            Self::Json(document) => {
+                let entry: Value =
+                    serde_json::from_str(text).map_err(|error| unreadable(error.to_string()))?;
+                json_table_mut(document, keys, path, true)?
+                    .expect("a table made when missing")
+                    .insert(name.to_owned(), entry);
+            }
+            Self::Toml(document) => {
+                let mut kept: toml_edit::DocumentMut =
+                    text.parse().map_err(|error: toml_edit::TomlError| {
+                        unreadable(error.message().to_owned())
+                    })?;
+                let mut entry = kept
+                    .remove(SET_ASIDE_KEY)
+                    .ok_or_else(|| unreadable("it is empty".to_owned()))?;
+                unplaced(&mut entry);
+                match toml_item_mut(document.document.as_item_mut(), keys, path, true)?
+                    .expect("a table made when missing")
+                {
+                    Item::Value(toml_edit::Value::InlineTable(servers)) => {
+                        let entry = match entry {
+                            Item::Table(entry) => {
+                                toml_edit::Value::InlineTable(entry.into_inline_table())
+                            }
+                            Item::Value(entry) => entry,
+                            _ => return Err(unreadable("it is not a table".to_owned())),
+                        };
+                        servers.insert(name, entry);
+                    }
+                    servers => {
+                        servers
+                            .as_table_like_mut()
+                            .expect("a table checked on the way")
+                            .insert(name, entry);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn remove(
@@ -647,10 +830,7 @@ impl Document {
         table: usize,
         name: &str,
     ) -> Result<(), InstallFailure> {
-        let keys = Self::tables(shape)
-            .find(|(index, _)| *index == table)
-            .map(|(_, keys)| keys)
-            .expect("a table the entries came from");
+        let keys = Self::table_keys(shape, table);
         match self {
             Self::Json(document) => {
                 if let Some(servers) = json_table_mut(document, keys, path, false)? {
@@ -704,6 +884,17 @@ impl Document {
             _ => unreachable!("an entry is rendered in its file's syntax"),
         }
         Ok(())
+    }
+}
+
+/// Drops where `item`'s tables sat in the file they came from, so they are
+/// written where they are put rather than at that place of another file.
+fn unplaced(item: &mut Item) {
+    if let Item::Table(table) = item {
+        table.set_position(None);
+        for (_, inner) in table.iter_mut() {
+            unplaced(inner);
+        }
     }
 }
 
