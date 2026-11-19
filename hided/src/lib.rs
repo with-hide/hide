@@ -50,6 +50,7 @@ pub mod profile_cli;
 mod project_open;
 
 pub mod guest_node;
+pub mod guests;
 mod hook_request;
 pub mod node_panes;
 pub mod node_role;
@@ -577,6 +578,21 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // Each stream kind's owner hands its handler in here, before the
     // endpoint opens. The start is not held for the endpoint: a machine
     // whose network is down still starts, and the reason is in the log.
+    //
+    // Other machines' work here: each guest's node runs from that guest's
+    // build, and a guest of this build runs from the programs beside this
+    // one.
+    guests::Guests::new(
+        env.state_dir.clone(),
+        env.home.clone(),
+        hide_node::ssh::host::HelperPackages::new(
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+            cli::RELEASE,
+        ),
+    )
+    .serve(&peers, shutdown.clone());
     {
         let peers = Arc::clone(&peers);
         tokio::spawn(async move {
