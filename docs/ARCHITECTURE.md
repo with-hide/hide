@@ -3286,7 +3286,7 @@ Of a guest's builds the host keeps the one that runs and the one before it; the 
 
 A pane of a guest's node reaches the guest's core through the pane service of the node's link, which lives only as long as a link does.
 While no link is served, the same `hide` asks the node itself on `away.sock` in the node's folder (`hided/src/guest_node/away.rs`), bound for the node's whole life: one line each way, both ends the guest's own build.
-A letter (`hide request send`) from a caller this machine's kernel finds in the pane it names is kept in the node's box and answered `queued`; every other command needs the core's judgement and is answered `owner_offline` at once, and so is a credential the pane asks for with no link (`workspace_cli::bootstrap`).
+A letter (`hide request send`) from a caller this machine's kernel finds in the pane it names is kept in the node's box, with that pane's terminal, and answered `queued`; every other command needs the core's judgement and is answered `owner_offline` at once, and so is a credential the pane asks for with no link (`workspace_cli::bootstrap`).
 
 The box is `box.jsonl` and `acked` in the node's folder (`hided/src/guest_node/event_box.rs`), in the format `hide_peer_protocol::event` names because two builds of one guest read it: the node that wrote it and the one that replaces it.
 An event is appended and synced before its sender is answered, numbered from 1 with no gaps in a box named once; an event of the same kind and key that is still kept is the same event, so a send tried again adds nothing.
@@ -3299,8 +3299,10 @@ The guest records each event durably (`hide_peer::inbox`), acknowledges it, and 
 A core whose place the box cannot follow (it names another box, or a place the box dropped or never reached) gets what is kept in a box started fresh, numbered from 1, and the product's own keys make a repeat nothing.
 One management stream per guest is open at a time: a new link ends the earlier stream on both machines before it opens the next (`Held`).
 
-This build keeps one kind of event, `letter`, and applies it as the command the pane would have run had the core been there (`hided/src/peer_inbox.rs`): the pane's own context and agent, and the letter's intent, which makes a second apply the same letter.
-The core knows a pane only once the node's link brought it back, so a letter waits up to 60 s for that and is then logged as unappliable: its pane, or the agent in it, is gone.
+This build keeps one kind of event, `letter`, and applies it as the command its sender would have run had the core been there (`hided/src/peer_inbox.rs`), under the letter's intent, which makes a second apply the same letter.
+The node proves the sender when the letter is written (`hide_host::panes::prove_caller`, the check a pane's credential gets) and records the terminal it ran in, which names one life of one pane; which agent that is, is the core's own knowledge (`Runtime::prepare_kept_letter`): the agent it observes in that terminal, else the one it last registered there.
+So a letter is applied as its agent whether or not the pane still runs, and a worker's report written before the host closed its pane reaches its parent; nothing of the caller is checked again when it applies (`Authority::proven`, `Proven::WhenWritten`), because that was settled when it was written.
+A letter is given up, and logged as unappliable, only when what it names is gone: its recipient, or a sender the core registered in no terminal and whose pane it does not find within 60 s of the link's return; a core that cannot write a letter just then is asked again for that long.
 A pane's end and an agent's completion are not events: they reach the core as the node's state when its link is read again, which is the same however often it is read.
 
 ### Moving the core

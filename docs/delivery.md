@@ -84,7 +84,7 @@ Use a new intent for a new letter, including the same text for another recipient
 The envelope identifies the sender and letter kind; it is not a session-level authority or anti-forgery proof.
 The current first-line format is `Hide letter <id> from <name> (<agent>) [<kind>]`, with independent writer and transcript-reader examples in [delivery-envelope.json](../contracts/delivery-envelope.json).
 
-A pane of another Hide's work on this machine, while that Hide is not connected, has no core to ask: `hide request send` there is kept by the pane's node and answers `{"queued": true, "intent": …}` (the `queued` answer of the contract), and the letter is recorded with its id once that Hide is back, under the same intent.
+A pane of another Hide's work on this machine, while that Hide is not connected, has no core to ask: `hide request send` there is kept by the pane's node and answers `{"queued": true, "intent": …}` (the `queued` answer of the contract), and the letter is recorded with its id once that Hide is back, under the same intent, as its sender's whether or not the sender's pane still runs then.
 A full box refuses the send `outbox_full`, a box the node could not write `outbox_unavailable`, and every other command there answers `owner_offline` at once; the contract's `away` section lists the three with their next actions ([ARCHITECTURE.md](ARCHITECTURE.md#a-guest-nodes-events-while-its-core-is-away)).
 
 ### Who may read a letter

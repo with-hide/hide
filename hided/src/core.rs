@@ -67,6 +67,15 @@ enum Command {
         command: Box<hide_core::delivery::Command>,
         reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
     },
+    /// A letter a guest's node kept while this core was away
+    /// (`crate::peer_inbox`).
+    KeptLetterPrepare {
+        device_id: String,
+        pane_id: String,
+        terminal_id: String,
+        command: Box<hide_core::delivery::Command>,
+        reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
+    },
     MemoryPrepare {
         device_id: String,
         pane_id: String,
@@ -416,6 +425,30 @@ impl CoreHandle {
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
                 hint,
+                command: Box::new(command),
+                reply,
+            })
+            .map_err(|_| "delivery_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "delivery_unavailable".to_owned())?
+    }
+
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Core::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: hide_core::delivery::Command,
+    ) -> Result<hide_core::delivery::worker::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::KeptLetterPrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                terminal_id: terminal.to_owned(),
                 command: Box::new(command),
                 reply,
             })
@@ -1787,6 +1820,20 @@ fn owner_loop(
                 let _ = reply.send(core.project_open_receipt(&request_id));
             }
 
+            Command::KeptLetterPrepare {
+                device_id,
+                pane_id,
+                terminal_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_kept_letter(
+                    &device_id,
+                    &pane_id,
+                    &terminal_id,
+                    *command,
+                ));
+            }
             Command::DeliveryPrepare {
                 device_id,
                 pane_id,

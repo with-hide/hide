@@ -5,8 +5,14 @@
 //! once this core names its place ([`crate::peer_dial`]); each event is
 //! recorded durably and acknowledged before it comes here
 //! (`hide_peer::inbox`). An event is a letter a pane's agent sent: it is
-//! run as the command that pane would have run had this core been there,
+//! run as the command that agent would have run had this core been there,
 //! and the letter's intent makes a second run the same letter.
+//!
+//! The node proved the terminal the letter was written in, and which agent
+//! that is, is this core's knowledge (`Runtime::prepare_kept_letter`): the
+//! letter is applied as that agent whether or not its pane still runs. An
+//! event is given up only when what it names is gone: its recipient, or a
+//! sender this core never knew.
 //!
 //! A pane's end and an agent's completion are not events of this build:
 //! they reach the core as the node's state when its link is read again,
@@ -15,17 +21,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use hide_core::address;
-use hide_core::workspace_control::Query;
 use hide_peer::inbox::Applied;
 use hide_peer::protocol::event::Event;
 use serde::Deserialize;
 
 use crate::core::CoreHandle;
 
-/// How long a recorded event waits for the core to have read the host's
-/// panes again: a letter is its pane's agent's, and that agent is known
-/// only once the node's link has brought its panes back.
+/// How long a recorded event waits for what it needs of the core: the
+/// host's panes read again, for a letter of an agent the core registered
+/// nowhere, or the core's letters, while they cannot be written.
 pub const PANES_WITHIN: Duration = Duration::from_secs(60);
 /// How often the core is asked again meanwhile.
 pub const LOOK_AGAIN: Duration = Duration::from_millis(250);
@@ -34,9 +38,9 @@ const LETTER_WITHIN: Duration = Duration::from_secs(5);
 
 /// What takes the events of this core's node on the machine `device`.
 pub trait Events: Send + Sync {
-    /// Applies one event. An event whose target the core does not know
-    /// yet is answered [`Applied::Later`] and tried again, until `last`
-    /// says its wait is over: then the target is gone.
+    /// Applies one event. An event the core cannot apply yet is answered
+    /// [`Applied::Later`] and tried again, until `last` says its wait is
+    /// over.
     fn apply(&self, device: &str, event: &Event, last: bool) -> Applied;
 }
 
@@ -45,15 +49,22 @@ pub trait Events: Send + Sync {
 struct Letter {
     /// The pane that sent it, as the node names it.
     pane: String,
+    /// The terminal the node proved its sender ran in.
+    terminal: String,
     command: hide_core::delivery::Command,
 }
 
-enum Refused {
-    /// The core does not know the pane or its agent, which it may not
-    /// have read yet.
-    PaneUnknown(String),
-    /// The core answered the letter itself.
-    Final(String),
+/// Whether the core may answer otherwise when asked again: it does not
+/// know the sender yet, or cannot write a letter now.
+fn passes(code: &str) -> bool {
+    matches!(
+        code,
+        "sender_unknown"
+            | "delivery_unavailable"
+            | "ledger_unavailable"
+            | "capacity"
+            | "delivery_timeout"
+    )
 }
 
 pub struct Letters {
@@ -65,32 +76,17 @@ impl Letters {
         Self { core }
     }
 
-    /// Runs `letter` as the pane's own command, or says why not.
-    fn send(&self, device: &str, letter: &Letter) -> Result<(), Refused> {
-        let pane = address::scoped_pane_id(device, &letter.pane);
-        // The core knows the pane, and the agent in it, only once the
-        // node's link has brought the host's panes back.
-        let unknown = |reason: String| Refused::PaneUnknown(reason);
-        let context = self
-            .core
-            .workspace_query(device, &pane, Query::Info)
-            .map_err(|refusal| unknown(refusal.reason.to_owned()))?
-            .context;
+    /// Runs `letter` as its sender's own command, or says why not.
+    fn send(&self, device: &str, letter: &Letter) -> Result<(), String> {
         self.core
-            .prepare_delivery(
-                &context.device_id,
-                &pane,
-                &context,
-                None,
+            .prepare_kept_letter(
+                device,
+                &letter.pane,
+                &letter.terminal,
                 letter.command.clone(),
-            )
-            .map_err(|code| match code.as_str() {
-                "agent_pane_required" | "caller_context_changed" => unknown(code),
-                _ => Refused::Final(code),
-            })?
+            )?
             .run(LETTER_WITHIN)
             .map(drop)
-            .map_err(Refused::Final)
     }
 }
 
@@ -103,16 +99,10 @@ impl Events for Letters {
             Ok(letter) => letter,
             Err(error) => return Applied::Unappliable(format!("unreadable letter: {error}")),
         };
-        if !matches!(letter.command, hide_core::delivery::Command::Send { .. }) {
-            return Applied::Unappliable("a kept letter is a send".to_owned());
-        }
         match self.send(device, &letter) {
             Ok(()) => Applied::Done,
-            Err(Refused::Final(code)) => Applied::Unappliable(code),
-            // Past the wait the pane, or its agent, is gone: the letter
-            // has no one to be from.
-            Err(Refused::PaneUnknown(reason)) if last => Applied::Unappliable(reason),
-            Err(Refused::PaneUnknown(_)) => Applied::Later,
+            Err(code) if passes(&code) && !last => Applied::Later,
+            Err(code) => Applied::Unappliable(code),
         }
     }
 }

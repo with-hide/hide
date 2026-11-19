@@ -5,8 +5,9 @@
 //! link, which lives only as long as a link does. With no link nothing
 //! answers there, so the same `hide` asks here instead, on an endpoint in
 //! the node's folder that is bound for the node's whole life: a letter it
-//! sends is kept in the node's box and answered `queued`, and anything
-//! that needs the core's judgement is answered `owner_offline` at once.
+//! sends is kept in the node's box, with the terminal the node proved its
+//! sender runs in, and answered `queued`, and anything that needs the
+//! core's judgement is answered `owner_offline` at once.
 //!
 //! Both ends are this guest's own build, one line each way; the host's
 //! build never reads the endpoint.
@@ -95,16 +96,19 @@ fn answer(stream: &LocalStream, panes: &PaneSlot, events: Option<&Arc<EventBox>>
         return refused(OWNER_OFFLINE);
     };
     // A letter is kept only for the pane this machine's kernel says the
-    // caller runs in.
-    if let Err(reason) = stream
+    // caller runs in, and it names that pane's terminal: one life of one
+    // pane, by which the guest's core knows the agent it registered there
+    // whether or not the pane still runs when the letter arrives.
+    let identity = match stream
         .peer_pid()
         .ok()
         .and_then(|pid| i32::try_from(pid).ok())
         .ok_or("caller_unavailable")
         .and_then(|peer| hide_host::panes::prove_caller(panes, &ask.pane_id, peer))
     {
-        return refused(reason);
-    }
+        Ok(identity) => identity,
+        Err(reason) => return refused(reason),
+    };
     let Some(events) = events else {
         return refused(OUTBOX_UNAVAILABLE);
     };
@@ -113,7 +117,7 @@ fn answer(stream: &LocalStream, panes: &PaneSlot, events: Option<&Arc<EventBox>>
         // A letter is one per sender and intent.
         &format!("{}/{intent}", ask.pane_id),
         super::now_unix_ms(),
-        json!({"pane": ask.pane_id, "command": command}),
+        json!({"pane": ask.pane_id, "terminal": identity.terminal_id, "command": command}),
     );
     match kept {
         Ok(()) => json!({"ok": true, "result": {"queued": true, "intent": intent}}),

@@ -4506,6 +4506,7 @@ impl Runtime {
                                 caller: authority.caller.clone(),
                                 context: authority.context.clone(),
                                 also_reads: Vec::new(),
+                                proven: crate::delivery::worker::Proven::Now,
                             },
                             actor.clone(),
                             Some(wake.target.clone()),
