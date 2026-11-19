@@ -85,7 +85,7 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
 
     // B6: every N minutes reads back as itself.
     await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="every_minutes"]'));
-    await expect(page.locator("[data-automation-preview]")).toContainText("30분마다");
+    await expect(page.locator("[data-automation-preview]")).toContainText("Every 30 minutes");
 
     // B7: a cron that runs closer than five minutes and a week with no day are refused under the schedule, and nothing can be made.
     await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="cron"]'));
@@ -206,10 +206,7 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
   }
 });
 
-// Pending: the core holds a finished run's terminal open after the run view stops showing it (no
-// `automation.terminal_closed` within 60 s), and answers an opening while that close is pending without
-// opening anything, so the press never reaches the conversation. Enabled once the core closes it.
-test.fixme("a finished run whose terminal the core closed opens its conversation again in the screen", async ({ page }) => {
+test("a finished run whose terminal the core closed opens its conversation again in the screen", async ({ page }) => {
   const stack = await start(page, "automations-reopen");
   try {
     const id = await add(page, stack.daemon, { name: "야간 점검", task: "의존성 점검", agent: { kind: "claude" }, run_now: true });
