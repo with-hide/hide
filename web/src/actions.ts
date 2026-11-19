@@ -91,7 +91,7 @@ import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { focusedPaneOf, useShellStore } from "./store";
-import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
+import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -2050,6 +2050,47 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * The sidebar's `자동화` row (PRD automations B1, D-01): the automation
+     * screen on its table, whatever the center showed, as the `미션` row opens
+     * the mission screen.
+     */
+    openAutomations() {
+      ui().setAutomations(AUTOMATION_ENTRY);
+      ui().setScreen({ kind: "automations" });
+    },
+
+    /**
+     * One automation on the automation screen, with the run whose terminal
+     * the detail shows, if any (B11, B15-B17): the sidebar's row, a Needs You
+     * line or a run agent's row brings it, whatever the center showed.
+     */
+    openAutomation(id: string, run: number | null = null) {
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      state.setAutomations({ selected: id, run, form: null });
+      if (state.screen?.kind !== "automations") state.setScreen({ kind: "automations" });
+    },
+
+    /**
+     * A press on an automation whose result the snapshot shows (PRD
+     * automations B11, B16, B17, B19, B23, B25, B27): `automation_run`,
+     * `automation_pause`, `automation_resume`, `automation_remove`,
+     * `automation_seen`, `automation_run_stop`, `automation_run_open` and
+     * `automation_run_viewing`, each the core's `Call` of that name. A refusal
+     * is the core's to log; the screen draws what the section then says.
+     */
+    automation(kind: "run" | "pause" | "resume" | "remove" | "seen", id: string) {
+      dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id } });
+    },
+    automationRun(kind: "run_stop" | "run_open", id: string, run: number) {
+      dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id, run } });
+    },
+    /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
+    automationRunViewing(id: string, run: number, on: boolean) {
+      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on } });
+    },
+
+    /**
      * A mission's map as a card in the lane's 보기 slot, under the same rules
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
      * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
@@ -3505,7 +3546,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openViewAt(deviceId: string, checkoutPath: string, displayId: string) {
       const front = frontViewWorkspace();
       const state = ui();
-      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && front?.device_id === deviceId && front.path === checkoutPath) {
+      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && state.screen?.kind !== "automations" && front?.device_id === deviceId && front.path === checkoutPath) {
         showDocuments();
         focusView(displayId, true);
         return;

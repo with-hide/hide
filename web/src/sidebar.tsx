@@ -112,6 +112,10 @@ export function Sidebar({ actions }: { actions: Actions }) {
   const operatorMissionsCount = useMissionTurnCount();
   const missionsCount = tool ? 0 : operatorMissionsCount;
   const missionsChord = useShellStore((s) => commandLabel("open_missions", s.rest?.ui_state));
+  const automationsSelected = useUiStore((s) => !s.overviewOpen && s.screen?.kind === "automations");
+  // The runs no one has looked at yet (B1); a tool's cell keeps the operator's numbers off its screen (B41).
+  const operatorAutomationsCount = useShellStore((s) => s.automations?.unseen ?? 0);
+  const automationsCount = tool ? 0 : operatorAutomationsCount;
   const storedWidth = useShellStore((s) => s.rest?.ui_state?.sidebar_width ?? null);
   const columns = useSidebarColumns();
   // A drag draws the nav alone at the width under the pointer, over the
@@ -167,6 +171,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
             compact={(preview ?? storedWidth ?? tokenPx("--size-sidebar-ideal")) < tokenPx("--size-sidebar-ideal")}
             overview={{ selected: overviewSelected, count: overviewCount, chord: overviewChord || null, onOpen: () => actions.openOverviewEntry() }}
             missions={{ selected: missionsSelected, count: missionsCount, chord: missionsChord || null, onOpen: () => actions.openMissions() }}
+            automations={{ selected: automationsSelected, count: automationsCount, onOpen: () => actions.openAutomations() }}
             addProject={{ chord: commandLabel("new_workspace") || null, onOpen: () => actions.openAddProject() }}
             searchChord={commandLabel("search") || null}
             onSearch={() => actions.openSearch()}
