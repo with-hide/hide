@@ -29,9 +29,13 @@
 //! - [`ShutdownHandle::shutdown`] called from another thread ends a read
 //!   that is blocked, with `Ok(0)`, and a write a peer that stopped reading
 //!   holds, with an error; later reads return `Ok(0)` and later writes fail
-//!   with `BrokenPipe`. On Unix a peer's read blocked on the other end hears
-//!   the shutdown as its end of stream, after the bytes already sent; on
-//!   Windows the peer hears the end when the handle closes.
+//!   with `BrokenPipe`. A peer's read blocked on the other end hears the
+//!   shutdown as its end of stream, after the bytes already sent, whichever
+//!   handles on the shut end are still held. A Unix socket's `shutdown(2)`
+//!   does that; a Windows pipe has no such call, so the shutdown closes its
+//!   end's handle once no read or write of this process is inside it
+//!   (#2655). What the peer's writes do afterwards differs by system and is
+//!   not promised.
 //! - [`LocalListener::bind`] fails with `AddrInUse` while another listener
 //!   lives at the path, whether or not its queue is full (#403), and replaces
 //!   what a dead one left behind. A listener is alive while it holds a lock
@@ -342,6 +346,8 @@ impl Write for LocalStream {
 
 #[cfg(windows)]
 impl std::os::windows::io::AsRawHandle for LocalStream {
+    /// The pipe's handle, null once the stream was shut down, which closes
+    /// it.
     fn as_raw_handle(&self) -> std::os::windows::io::RawHandle {
         sys::raw_handle(&self.shared.raw)
     }
@@ -363,7 +369,8 @@ impl fmt::Debug for ShutdownHandle {
 impl ShutdownHandle {
     /// A read blocked on the stream returns `Ok(0)` and a blocked write
     /// fails; later reads return `Ok(0)` and later writes fail with
-    /// `BrokenPipe`. Idempotent.
+    /// `BrokenPipe`. The other end reads what was already sent and then its
+    /// end of stream. Idempotent.
     pub fn shutdown(&self) {
         sys::shutdown(&self.shared);
     }
@@ -1240,7 +1247,10 @@ mod sys {
     /// the original end is closed, so the peer's next write fails with "the
     /// pipe is being closed" and the instance taken waits for ever.
     pub(super) struct Pipe {
-        handle: OwnedHandle,
+        /// The end's handle, until a shutdown or the drop closes it. A read
+        /// or write copies its value out and does not hold the lock while it
+        /// waits: [`enter`] is what keeps the handle open under it.
+        handle: Mutex<Option<OwnedHandle>>,
         /// The listener's end, which asks for the client's pid.
         server: bool,
         /// Whether anything was written, which the peer may not have read.
@@ -1250,10 +1260,56 @@ mod sys {
     impl Pipe {
         fn new(handle: OwnedHandle, server: bool) -> Self {
             Self {
-                handle,
+                handle: Mutex::new(Some(handle)),
                 server,
                 written: AtomicBool::new(false),
             }
+        }
+
+        fn held(&self) -> std::sync::MutexGuard<'_, Option<OwnedHandle>> {
+            self.handle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
+        /// The handle's value, null once the end is closed.
+        fn raw(&self) -> HANDLE {
+            self.held()
+                .as_ref()
+                .map_or(std::ptr::null_mut(), |handle| handle.as_raw_handle())
+        }
+
+        /// Cancels every read and write pending on the end, under the
+        /// handle's lock so the cancel never names a handle already closed.
+        fn cancel(&self) {
+            if let Some(handle) = self.held().as_ref() {
+                // SAFETY: the handle is open while the lock is held; a null
+                // overlapped pointer cancels every pending request on it.
+                let _ = unsafe { CancelIoEx(handle.as_raw_handle(), std::ptr::null()) };
+            }
+        }
+
+        /// Closes the end, which is what tells the peer it ended: its reads
+        /// take what was already sent and then end.
+        /// Closing throws away what this end wrote and the peer has not read
+        /// yet, so an end that wrote is kept open by a thread of its own
+        /// until the peer has read it all or gone (`FlushFileBuffers`), as
+        /// `interprocess` does. The answer a listener writes just before it
+        /// drops the stream is how the pane bootstrap replies.
+        fn close(&self) {
+            let Some(handle) = self.held().take() else {
+                return;
+            };
+            if !self.written.load(Ordering::Relaxed) {
+                return;
+            }
+            // A thread that cannot start drops the handle, which closes it.
+            let _ = std::thread::Builder::new()
+                .name("hide-ipc-linger".to_owned())
+                .spawn(move || {
+                    // SAFETY: the handle is open for the whole call.
+                    unsafe { FlushFileBuffers(handle.as_raw_handle()) };
+                });
         }
 
         /// One read or write, overlapped as the handle was opened, waited for
@@ -1264,7 +1320,7 @@ mod sys {
         /// Every exit waits until the operation has ended, since until then
         /// the system may still use the caller's buffer.
         fn io(
-            &self,
+            handle: HANDLE,
             timeout: Option<Duration>,
             start: impl FnOnce(HANDLE, *mut OVERLAPPED) -> i32,
         ) -> io::Result<Moved> {
@@ -1279,7 +1335,6 @@ mod sys {
                         cell.get_or_init(|| made)
                     }
                 };
-                let handle = self.handle.as_raw_handle();
                 let deadline = timeout.map(|timeout| Instant::now() + timeout);
                 // SAFETY: an all-zero OVERLAPPED is valid; only the event is set.
                 let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
@@ -1355,11 +1410,10 @@ mod sys {
             })
         }
 
-        fn peer_pid(&self) -> io::Result<u32> {
+        fn peer_pid(&self, handle: HANDLE) -> io::Result<u32> {
             let mut pid = 0_u32;
-            let handle = self.handle.as_raw_handle();
-            // SAFETY: the handle is open while `self` is borrowed and the out
-            // pointer refers to a live local.
+            // SAFETY: the caller is inside the handle, which keeps it open,
+            // and the out pointer refers to a live local.
             let answered = unsafe {
                 if self.server {
                     GetNamedPipeClientProcessId(handle, &mut pid)
@@ -1415,48 +1469,38 @@ mod sys {
         Ok(transferred as usize)
     }
 
-    /// Closing an end throws away what it wrote and the peer has not read
-    /// yet, so an end that wrote is kept open by a thread of its own until
-    /// the peer has read it all or gone (`FlushFileBuffers`), as
-    /// `interprocess` does. The answer a listener writes just before it drops
-    /// the stream is how the pane bootstrap replies.
+    /// An end nobody shut down closes with its last handle.
     impl Drop for Pipe {
         fn drop(&mut self) {
-            if !*self.written.get_mut() {
-                return;
-            }
-            let Ok(kept) = self.handle.try_clone() else {
-                return;
-            };
-            let _ = std::thread::Builder::new()
-                .name("hide-ipc-linger".to_owned())
-                .spawn(move || {
-                    // SAFETY: the handle is open for the whole call.
-                    unsafe { FlushFileBuffers(kept.as_raw_handle()) };
-                });
-        }
-    }
-
-    impl Read for &Pipe {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
-            let data = buffer.as_mut_ptr();
-            // SAFETY: the buffer outlives the operation, which `io` waits for.
-            self.io(None, |handle, overlapped| unsafe {
-                ReadFile(handle, data, length, std::ptr::null_mut(), overlapped)
-            })
-            .map(|read| read.count)
+            self.close();
         }
     }
 
     impl Pipe {
+        /// Reads into `buffer` through `handle`, the caller's hold inside
+        /// this end.
+        fn read(handle: HANDLE, buffer: &mut [u8]) -> io::Result<usize> {
+            let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+            let data = buffer.as_mut_ptr();
+            // SAFETY: the buffer outlives the operation, which `io` waits for.
+            Self::io(handle, None, |handle, overlapped| unsafe {
+                ReadFile(handle, data, length, std::ptr::null_mut(), overlapped)
+            })
+            .map(|read| read.count)
+        }
+
         /// Writes from `buffer`, waiting at most `timeout` for the peer to
         /// take the bytes.
-        fn write_within(&self, buffer: &[u8], timeout: Option<Duration>) -> io::Result<Moved> {
+        fn write_within(
+            &self,
+            handle: HANDLE,
+            buffer: &[u8],
+            timeout: Option<Duration>,
+        ) -> io::Result<Moved> {
             let length = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
             let data = buffer.as_ptr();
             // SAFETY: the buffer outlives the operation, which `io` waits for.
-            let written = self.io(timeout, |handle, overlapped| unsafe {
+            let written = Self::io(handle, timeout, |handle, overlapped| unsafe {
                 WriteFile(handle, data, length, std::ptr::null_mut(), overlapped)
             })?;
             self.written.store(true, Ordering::Relaxed);
@@ -1482,17 +1526,65 @@ mod sys {
     /// How long `shutdown` keeps cancelling a read or write still starting.
     const SHUTDOWN_ATTEMPTS: u32 = 200;
 
-    /// `cancelled` ends the stream; `blocked` counts reads and writes parked
-    /// inside the system call, so a `shutdown` that raced one cancels again
-    /// until it has left.
+    /// `cancelled` ends the stream; `inside` counts the calls that hold the
+    /// end's handle (a read, a write, a look at what waits, the peer's pid),
+    /// so a `shutdown` that raced one cancels again until it has left, and
+    /// the handle is closed only once none is left.
     #[derive(Default)]
     pub(super) struct Stop {
         cancelled: AtomicBool,
-        blocked: std::sync::atomic::AtomicUsize,
+        inside: std::sync::atomic::AtomicUsize,
+    }
+
+    /// One call's hold inside the end's handle, which stays open until the
+    /// hold is dropped.
+    struct Inside<'a> {
+        shared: &'a Shared,
+        handle: HANDLE,
+    }
+
+    impl Drop for Inside<'_> {
+        fn drop(&mut self) {
+            leave(self.shared);
+        }
+    }
+
+    /// Enters the end's handle for one call; none once the stream was shut
+    /// down. The count goes up before the cancel is read, and a shutdown
+    /// sets the cancel before it reads the count, so either this call sees
+    /// the cancel and never touches the handle, or the shutdown sees the
+    /// call and leaves the handle open until it has left.
+    fn enter(shared: &Shared) -> Option<Inside<'_>> {
+        let stop = &shared.stop;
+        stop.inside.fetch_add(1, Ordering::SeqCst);
+        if stop.cancelled.load(Ordering::SeqCst) {
+            leave(shared);
+            return None;
+        }
+        Some(Inside {
+            shared,
+            handle: shared.raw.raw(),
+        })
+    }
+
+    fn leave(shared: &Shared) {
+        let stop = &shared.stop;
+        if stop.inside.fetch_sub(1, Ordering::SeqCst) == 1 && stop.cancelled.load(Ordering::SeqCst)
+        {
+            close_if_idle(shared);
+        }
+    }
+
+    /// Closes a shut end's handle once no call is inside it: the last call
+    /// to leave does, or the shutdown itself when none was inside.
+    fn close_if_idle(shared: &Shared) {
+        if shared.stop.inside.load(Ordering::SeqCst) == 0 {
+            shared.raw.close();
+        }
     }
 
     pub(super) fn raw_handle(raw: &RawStream) -> *mut c_void {
-        raw.handle.as_raw_handle()
+        raw.raw()
     }
 
     pub(super) fn set_read_timeout(_: &Shared, _: Option<Duration>) -> io::Result<()> {
@@ -1507,14 +1599,14 @@ mod sys {
     }
 
     /// Bytes waiting in the pipe, or `None` once the peer is gone.
-    fn available(raw: &RawStream) -> io::Result<Option<u32>> {
+    fn available(handle: HANDLE) -> io::Result<Option<u32>> {
         let mut waiting = 0_u32;
-        // SAFETY: the handle is open for as long as `raw` is borrowed and the
-        // out pointer refers to a live local; the buffers are null with
+        // SAFETY: the caller is inside the handle, which keeps it open, and
+        // the out pointer refers to a live local; the buffers are null with
         // length zero, which is how a peek asks for the byte count only.
         let peeked = unsafe {
             PeekNamedPipe(
-                raw_handle(raw),
+                handle,
                 std::ptr::null_mut(),
                 0,
                 std::ptr::null_mut(),
@@ -1553,27 +1645,30 @@ mod sys {
         buffer: &mut [u8],
     ) -> io::Result<usize> {
         let stop = &shared.stop;
-        let mut raw = &shared.raw;
         let Some(timeout) = timeout else {
-            stop.blocked.fetch_add(1, Ordering::SeqCst);
-            let result = if stop.cancelled.load(Ordering::SeqCst) {
-                Ok(0)
-            } else {
-                raw.read(buffer)
+            let Some(inside) = enter(shared) else {
+                return Ok(0);
             };
-            stop.blocked.fetch_sub(1, Ordering::SeqCst);
+            let result = Pipe::read(inside.handle, buffer);
+            drop(inside);
             return settle(stop, result);
         };
         let deadline = Instant::now() + timeout;
         let mut pause = FIRST_PAUSE;
         loop {
-            if stop.cancelled.load(Ordering::SeqCst) {
-                return Ok(0);
-            }
-            match available(raw)? {
-                None => return Ok(0),
-                Some(0) => {}
-                Some(_) => return settle(stop, raw.read(buffer)),
+            {
+                let Some(inside) = enter(shared) else {
+                    return Ok(0);
+                };
+                match available(inside.handle)? {
+                    None => return Ok(0),
+                    Some(0) => {}
+                    Some(_) => {
+                        let result = Pipe::read(inside.handle, buffer);
+                        drop(inside);
+                        return settle(stop, result);
+                    }
+                }
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -1590,15 +1685,13 @@ mod sys {
         buffer: &[u8],
     ) -> io::Result<Moved> {
         let stop = &shared.stop;
-        // Counted before the cancel check, as a read is, so a shutdown that
+        // Entered before the cancel is read, as a read is, so a shutdown that
         // lands between the check and the write cancels it again.
-        stop.blocked.fetch_add(1, Ordering::SeqCst);
-        let result = if stop.cancelled.load(Ordering::SeqCst) {
-            Err(io::ErrorKind::BrokenPipe.into())
-        } else {
-            shared.raw.write_within(buffer, timeout)
+        let Some(inside) = enter(shared) else {
+            return Err(io::ErrorKind::BrokenPipe.into());
         };
-        stop.blocked.fetch_sub(1, Ordering::SeqCst);
+        let result = shared.raw.write_within(inside.handle, buffer, timeout);
+        drop(inside);
         result.map_err(|error| {
             if stop.cancelled.load(Ordering::SeqCst) {
                 io::ErrorKind::BrokenPipe.into()
@@ -1608,24 +1701,32 @@ mod sys {
         })
     }
 
+    /// Ends this end's reads and writes, then closes its handle, which is
+    /// how the peer hears the end: a pipe has no call that ends a stream for
+    /// the other side while this side's handle stays open. A call the cancel
+    /// has not freed within the attempts closes the handle when it leaves.
     #[allow(clippy::disallowed_methods)] // a production wait: shutdown retries the pipe cancel until the blocked reader or writer has left, one millisecond apart
     pub(super) fn shutdown(shared: &Shared) {
         let stop = &shared.stop;
         stop.cancelled.store(true, Ordering::SeqCst);
-        let handle = raw_handle(&shared.raw);
         for _ in 0..SHUTDOWN_ATTEMPTS {
-            // SAFETY: the handle is open while `shared` is borrowed; a null
-            // overlapped pointer cancels every pending request on it.
-            let _ = unsafe { CancelIoEx(handle, std::ptr::null()) };
-            if stop.blocked.load(Ordering::SeqCst) == 0 {
+            shared.raw.cancel();
+            if stop.inside.load(Ordering::SeqCst) == 0 {
                 break;
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+        close_if_idle(shared);
     }
 
     pub(super) fn peer_pid(shared: &Shared) -> io::Result<u32> {
-        shared.raw.peer_pid()
+        let Some(inside) = enter(shared) else {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "the stream was shut down",
+            ));
+        };
+        shared.raw.peer_pid(inside.handle)
     }
 
     /// Every pipe is created with an access list that admits only the

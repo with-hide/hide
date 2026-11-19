@@ -963,8 +963,9 @@ fn shutdown_from_another_thread_frees_a_blocked_read() {
 /// that missed it then misses its own end's shutdown too, while a wait in
 /// `poll` hears both, so a read waits for its socket in `poll` first. The
 /// rounds are what this needs: a lost end shows only now and then. Unix
-/// only: a Windows shutdown cancels this end's own reads and writes, and its
-/// peer hears the end when the handle closes.
+/// only: the rounds hunt a socket's lost wakeup, and a pair on Windows costs
+/// a listener each; what a shutdown promises the peer on all three systems is
+/// `a_shutdown_reaches_the_peer_while_the_shut_end_is_still_held`'s.
 ///
 /// The rounds run in an exact-test subprocess the test owns and bounds: a
 /// read that missed its end cannot be woken from inside its process, so a
@@ -1036,6 +1037,46 @@ fn a_shutdown_ends_the_peers_blocked_read_every_time() {
         wake.shutdown();
         reader.join().unwrap();
         assert_eq!(heard, Ok(sent), "round {round}");
+    }
+}
+
+/// A shutdown of one end reaches the other on every system, while the shut
+/// end's stream, a duplicate of it and its shutdown handle are all still
+/// held (#2655): the peer's read takes the bytes already sent and then its
+/// end of stream. A Unix socket has `shutdown(2)` for this; a Windows pipe
+/// tells its peer only by closing, so there the shutdown closes the end's
+/// handle under the handles that share it. What the peer's writes do after
+/// that is not promised: macOS goes on taking them.
+#[test]
+fn a_shutdown_reaches_the_peer_while_the_shut_end_is_still_held() {
+    for sent in [0_usize, 1, 4096, 200_000] {
+        let (left, right) = LocalStream::pair().unwrap();
+        let held = left.duplicate();
+        let handle = left.shutdown_handle();
+        let (done, finished) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let mut right = right;
+            let mut buffer = [0_u8; 4096];
+            let mut read = 0;
+            let end = loop {
+                match right.read(&mut buffer) {
+                    Ok(0) => break Ok(read),
+                    Ok(count) => read += count,
+                    Err(error) => break Err(error.kind()),
+                }
+            };
+            let _ = done.send(end);
+        });
+        let mut writing = left.duplicate();
+        writing.write_all(&vec![7_u8; sent]).unwrap();
+        handle.shutdown();
+        let heard = finished
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap_or_else(|_| panic!("{sent} bytes: the peer never heard the shutdown"));
+        assert_eq!(heard, Ok(sent), "{sent} bytes");
+        reader.join().unwrap();
+        // Held until here: the end reached the peer without their drop.
+        drop((left, held, writing, handle));
     }
 }
 
