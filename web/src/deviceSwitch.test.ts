@@ -2,20 +2,29 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
-import { deviceTerminalCount, SWITCH_STEPS, switchFailureKey, switchOffered, switchStep } from "./deviceSwitch";
+import { deviceTerminalCount, installParts, SWITCH_STEPS, switchFailureKey, switchOffered, switchStep } from "./deviceSwitch";
 import type { Device, DeviceSwitch, SnapshotRest } from "./snapshot";
 
 const device = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id: "mini", label: "Mac mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini", agent_count: 0, test: null, ...over });
 
 describe("which device offers the switch (B35)", () => {
-  it("is a helper device the core dials over SSH, and no other", () => {
+  it("is a helper device the core dials, over SSH or into a WSL distribution, and no other", () => {
     expect(switchOffered(device())).toBe(true);
     // Not connected now: the press itself says whether SSH reaches it.
     expect(switchOffered(device({ state: "unavailable" }))).toBe(true);
     expect(switchOffered(device({ peer_key: "a".repeat(64) }))).toBe(false);
     expect(switchOffered(device({ dials_in: true }))).toBe(false);
-    expect(switchOffered(device({ ssh_alias: null, wsl_distro: "Ubuntu" }))).toBe(false);
+    expect(switchOffered(device({ ssh_alias: null, wsl_distro: "Ubuntu" }))).toBe(true);
+    // A distribution that was switched is its own Hide's device.
+    expect(switchOffered(device({ ssh_alias: null, wsl_distro: null, peer_key: "a".repeat(64) }))).toBe(false);
     expect(switchOffered(device({ id: "local", kind: "local", ssh_alias: null }))).toBe(false);
+  });
+
+  it("names linger for a Linux machine reached over SSH only (B36)", () => {
+    expect(installParts("linux", false)).toEqual(["core", "autostart", "linger"]);
+    expect(installParts("macos", false)).toEqual(["core", "autostart"]);
+    expect(installParts("linux", true)).toEqual(["core", "autostart"]);
+    expect(installParts(undefined, false)).toEqual(["core", "autostart"]);
   });
 });
 
@@ -29,6 +38,7 @@ describe("what a switch reads as (B36, B41)", () => {
 
   it("words the reasons the operator can act on, and any other as the plain failure", () => {
     expect(switchFailureKey("ssh_not_reached")).toBe("devices.switch.failed.notReached");
+    expect(switchFailureKey("wsl_not_reached")).toBe("devices.switch.failed.wslNotReached");
     expect(switchFailureKey("ssh_update_there")).toBe("pairing.ssh.updateThere");
     expect(switchFailureKey("ssh_hide_not_running")).toBe("pairing.ssh.notRunning");
     expect(switchFailureKey("switch_not_connected")).toBe("devices.switch.failed.notConnected");

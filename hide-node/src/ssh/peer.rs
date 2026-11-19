@@ -16,6 +16,7 @@ use hide_node_link::call_as;
 use hide_node_link::device::{
     Attempt, Cancel, CapabilityReport, DeviceTransport, DialedTransport, EstablishError,
     Established, HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, Upload,
+    Wake,
 };
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION};
 use serde_json::json;
@@ -28,13 +29,16 @@ pub trait PeerDial: Send + Sync {
     /// core's node, from the build `packages` holds for that machine's
     /// platform, and opens the node's link. `device` is the id the core
     /// knows that machine's panes under, which what the node reports of
-    /// them beside its link is applied to. Blocking and bounded; a raised
-    /// `cancel` ends it at its next wait.
+    /// them beside its link is applied to. `wake` says whether the attempt
+    /// may start a machine that is off, which only a WSL distribution of
+    /// this PC can be (PRD device-connect-iroh B43). Blocking and bounded;
+    /// a raised `cancel` ends it at its next wait.
     fn open(
         &self,
         key: &str,
         device: &str,
         packages: &HelperPackages,
+        wake: Wake,
         cancel: &Cancel,
     ) -> Result<Opened, EstablishError>;
 }
@@ -152,7 +156,10 @@ impl DialedTransport for PeerDevice {
         attempt: Attempt,
     ) -> Result<Established, EstablishError> {
         let Attempt {
-            cancel, on_close, ..
+            wake,
+            cancel,
+            on_close,
+            ..
         } = attempt;
         let since = Instant::now();
         let target = self.target();
@@ -161,7 +168,7 @@ impl DialedTransport for PeerDevice {
         stage("node");
         let opened = self
             .dial
-            .open(&self.key, &self.node, &self.packages, &cancel)?;
+            .open(&self.key, &self.node, &self.packages, wake, &cancel)?;
         if cancel.is_cancelled() {
             (opened.close)();
             return Err(ended());

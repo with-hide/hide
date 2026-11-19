@@ -2,7 +2,8 @@
 //! (PRD device-connect-iroh D-49, B35, B36, B41).
 //!
 //! The steps run in hided, which reaches the machine over the device's SSH
-//! login, has a Hide put there when it has none and pairs the two. The
+//! login, or through `wsl.exe` when the device is a WSL distribution of
+//! this PC (D-27), has a Hide put there when it has none and pairs the two. The
 //! core hears each step as a `device_switch` event, sent by the daemon
 //! only: it draws the step on the device's row and, once the paired
 //! machine's grant is active, changes the registration's link in place.
@@ -37,7 +38,7 @@ pub struct DeviceSwitchSource {
     /// The device's id, which the one who asked may have named by its
     /// alias.
     pub device_id: String,
-    pub ssh_alias: String,
+    pub reach: SwitchReach,
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
     pub helper_root: String,
@@ -45,8 +46,20 @@ pub struct DeviceSwitchSource {
     /// spells them, which its machine's own Hide lists from then on (PRD
     /// device-connect-iroh D-48); at most [`SWITCHED_PROJECTS`].
     pub projects: Vec<String>,
-    /// Where the questions of the switch's SSH login go: the device's row.
-    pub sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
+}
+
+/// How hided reaches the machine a helper device is.
+pub enum SwitchReach {
+    /// Over the SSH alias the device is dialed by.
+    Ssh {
+        alias: String,
+        /// Where the questions of the switch's SSH login go: the device's
+        /// row.
+        sign_in: Option<Arc<dyn hide_node_link::device::SignIn>>,
+    },
+    /// Through `wsl.exe`, into this PC's distribution of that name; it asks
+    /// nothing.
+    Wsl { distro: String },
 }
 
 /// The most projects a switch hands the device's machine, which is as many
@@ -110,8 +123,9 @@ impl Runtime {
     /// What hided switches `device` from, or the code of why it is not a
     /// device that can be switched: only a device the core dials over SSH
     /// under its machine's own id, which the paired machine's device then
-    /// has too. `device` is its id, or the SSH alias it is dialed by, which
-    /// is what a terminal knows of a device it has just added.
+    /// has too, or a WSL distribution of this PC. `device` is its id, or
+    /// the SSH alias or the distribution it is dialed by, which is what a
+    /// terminal knows of a device it has just added.
     pub(crate) fn device_switch_source(
         &self,
         device: &str,
@@ -123,16 +137,20 @@ impl Runtime {
                     .ui_state
                     .device_registrations
                     .iter()
-                    .find(|registration| registration.origin.ssh_alias() == Some(device))
+                    .find(|registration| {
+                        registration.origin.ssh_alias() == Some(device)
+                            || registration.origin.wsl_distro() == Some(device)
+                    })
             })
             .ok_or("device_unknown")?;
         let device_id = registration.id.as_str();
-        let LinkOrigin::Dialed {
-            ssh_alias,
-            naming: crate::model::DeviceNaming::Named,
-        } = &registration.origin
-        else {
-            return Err("switch_unsupported");
+        let ssh_alias = match &registration.origin {
+            LinkOrigin::Dialed {
+                ssh_alias,
+                naming: crate::model::DeviceNaming::Named,
+            } => Some(ssh_alias),
+            LinkOrigin::Wsl { .. } => None,
+            _ => return Err("switch_unsupported"),
         };
         // The operator's press on the device's row started the switch, so
         // its login asks there, as the device's own connection attempts do
@@ -151,9 +169,19 @@ impl Runtime {
                     withdrawn: Arc::default(),
                 }) as Arc<dyn hide_node_link::device::SignIn>
             });
+        let reach = match (ssh_alias, registration.origin.wsl_distro()) {
+            (Some(alias), _) => SwitchReach::Ssh {
+                alias: alias.clone(),
+                sign_in,
+            },
+            (None, Some(distro)) => SwitchReach::Wsl {
+                distro: distro.to_owned(),
+            },
+            (None, None) => return Err("switch_unsupported"),
+        };
         Ok(DeviceSwitchSource {
             device_id: device_id.to_owned(),
-            ssh_alias: ssh_alias.clone(),
+            reach,
             helper_root: registration
                 .host_consent
                 .as_ref()
@@ -168,7 +196,6 @@ impl Runtime {
                 .map(|project| project.path.clone())
                 .take(SWITCHED_PROJECTS)
                 .collect(),
-            sign_in,
         })
     }
 

@@ -9,12 +9,24 @@ import type { MessageKey } from "./i18n/catalogs";
 import { catalogWorkspaces, type Device, type DeviceSwitch, type SnapshotRest } from "./snapshot";
 
 /**
- * A helper device this core dials over SSH: the one the switch is offered
- * on. A paired machine's device is switched already, a node that dials in
- * was never a helper, and a WSL distribution is reached another way.
+ * A helper device this core dials, over SSH or into a WSL distribution of
+ * this PC: the one the switch is offered on. A paired machine's device is
+ * switched already, and a node that dials in was never a helper.
  */
 export function switchOffered(device: Device): boolean {
-  return device.kind === "remote" && device.dials_in !== true && device.peer_key == null && device.ssh_alias != null && device.wsl_distro == null;
+  return device.kind === "remote" && device.dials_in !== true && device.peer_key == null && (device.ssh_alias != null || device.wsl_distro != null);
+}
+
+/** What is put on a machine that runs no Hide of its own. */
+export type InstallPart = "core" | "autostart" | "linger";
+
+/**
+ * What a switch says it installs: linger is what keeps a Linux account's
+ * programs running after its SSH login ends, so a WSL distribution, which
+ * no SSH login reaches, is told of none.
+ */
+export function installParts(system: string | null | undefined, wsl: boolean): InstallPart[] {
+  return system === "linux" && !wsl ? ["core", "autostart", "linger"] : ["core", "autostart"];
 }
 
 /** The steps a switch shows, in order; the last is where the device's row becomes its machine's. */
@@ -39,6 +51,8 @@ export function switchFailureKey(reason: string | null | undefined): MessageKey 
   switch (reason) {
     case "ssh_not_reached":
       return "devices.switch.failed.notReached";
+    case "wsl_not_reached":
+      return "devices.switch.failed.wslNotReached";
     case "ssh_update_there":
       return "pairing.ssh.updateThere";
     case "ssh_hide_not_running":

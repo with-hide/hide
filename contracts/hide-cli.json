@@ -5568,6 +5568,8 @@
                 "ssh_not_reached",
                 "ssh_update_there",
                 "ssh_hide_not_running",
+                "wsl_not_reached",
+                "wsl_unavailable",
                 "device_already_connected"
             ],
             "repeats_at_most": null,
@@ -5583,6 +5585,20 @@
             "refusals": [
                 "hide_unavailable",
                 "request_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [],
+            "arguments": [],
+            "command": "device carry",
+            "options": [],
+            "refusals": [
+                "device_from_pane",
+                "hide_unavailable",
+                "request_timeout",
+                "peer_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7576,7 +7592,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:014fadff8fb04cb89622b8fe9bfe424b0a12a994cddf499a70ae20784050ac97",
+    "digest": "sha256:6bde758949bcb2b6d5a4b505b985c1da42668471dbe34671492aec04c84875c2",
     "envelopes": {
         "access": {
             "answer": "value",

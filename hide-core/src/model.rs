@@ -1065,8 +1065,8 @@ pub struct DeviceSnapshot {
     pub needs: Option<DeviceNeedsSnapshot>,
 }
 
-/// What a machine's Hide, started over SSH, needs to stay reachable with no
-/// one at it (PRD device-connect-iroh B30).
+/// What a machine's Hide, reached over SSH or `wsl.exe`, needs to stay
+/// reachable with no one at it (PRD device-connect-iroh B30, B43).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeviceNeedsSnapshot {
     pub kind: DeviceNeeds,
@@ -1077,10 +1077,11 @@ pub struct DeviceNeedsSnapshot {
 
 impl DeviceNeedsSnapshot {
     /// Whether it is spelled as a row can draw it: a linger with its one
-    /// command line, an automatic login with none.
+    /// command line, an automatic login or an opened distribution with
+    /// none.
     pub(crate) fn valid(&self) -> bool {
         match (self.kind, self.command.as_deref()) {
-            (DeviceNeeds::AutoLogin, None) => true,
+            (DeviceNeeds::AutoLogin | DeviceNeeds::OpenDistribution, None) => true,
             (DeviceNeeds::Linger, Some(command)) => {
                 !command.is_empty()
                     && command.len() <= 256
@@ -1101,6 +1102,10 @@ pub enum DeviceNeeds {
     /// Linux: the core ends with the account's last session until an
     /// administrator turns linger on.
     Linger,
+    /// A WSL distribution with no systemd: its core lives while the
+    /// distribution runs, so after Windows restarts it is back only once
+    /// the operator opens the distribution.
+    OpenDistribution,
 }
 
 /// A helper device's switch to the connection of the Hide on its machine,

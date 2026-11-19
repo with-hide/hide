@@ -35,7 +35,6 @@ use hide_peer::protocol::{Candidate, PathKind, PeerKey, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Host, KnownState, StoreError, Via};
 use hide_peer::words::WordList;
 use hide_peer::{PeerEvent, PeerTransport, RelayState};
-use hide_peer_iroh::IrohTransport;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{OnceCell, Semaphore, watch};
@@ -45,9 +44,10 @@ use crate::core::CoreHandle;
 use crate::ending::Ending;
 use crate::guests::HelperFolder;
 use crate::pairing_ssh;
+use crate::pairing_wsl;
 use crate::peer_host::{HostPeers, Incoming, Link, PeerHost};
 
-type Service = Pairings<IrohTransport>;
+type Service = Pairings<crate::peer_host::Transport>;
 
 /// How long a share a terminal holds lives after the terminal last asked
 /// for its status: a closed terminal ends its offer (security spec 3.4).
@@ -150,6 +150,23 @@ pub enum Ask {
     PairSsh {
         alias: String,
     },
+    /// [`Ask::LookSsh`] for a WSL distribution of this PC, asked through
+    /// `wsl.exe` (D-27); it may start a distribution that is off, which the
+    /// operator's choice of it in Add device allows (B43).
+    LookWsl {
+        distro: String,
+    },
+    /// [`Ask::PairSsh`] for a WSL distribution of this PC (security spec
+    /// 17): its own Hide saves a pending grant, this PC confirms it over
+    /// the connection `wsl.exe` carries, and nothing is installed there.
+    PairWsl {
+        distro: String,
+    },
+    /// The stream this ask came on becomes the carrier of a connection to
+    /// this machine's core: what `hide device carry` asks, run by the PC
+    /// of the distribution this core runs in (D-27, D-62). Answered by
+    /// [`Pairing::carrier`], never as a value.
+    Carry,
     /// Switches the helper device this machine dials as `alias` to the
     /// connection of the Hide on its machine (D-49, B36): that Hide is
     /// paired over the device's SSH login and, once the connection is
@@ -198,6 +215,9 @@ impl Ask {
             | Self::Address { .. }
             | Self::LookSsh { .. }
             | Self::PairSsh { .. }
+            | Self::LookWsl { .. }
+            | Self::PairWsl { .. }
+            | Self::Carry
             | Self::Switch { .. }
             | Self::AcceptSsh { .. } => true,
             Self::Status { .. }
@@ -288,6 +308,10 @@ pub fn next_action(code: &str) -> &'static str {
             "ssh did not sign in without asking: check ssh <alias> in a terminal, or add the machine by a link it shares"
         }
         "ssh_busy" => "Other SSH checks are still running; try again in a moment",
+        "wsl_not_reached" => {
+            "WSL did not run Hide in that distribution: open the distribution once in a terminal, then try again"
+        }
+        "wsl_unavailable" => "This computer has no WSL to reach a distribution through",
         "switch_not_connected" => {
             "The two machines were paired and the new connection did not open in time; the device is used as before. Try the switch again"
         }
@@ -296,7 +320,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Hide could not be started on that machine; the device is used as before. Try the switch again, or open Hide there"
         }
         "switch_unsupported" => {
-            "Only a device this Hide dials over SSH and has connected to once can be switched"
+            "Only a device this Hide dials over SSH and has connected to once, or a WSL distribution of this PC, can be switched"
         }
         "device_own" => "That is this machine itself",
         _ => "Retry; the reason is in Hide's diagnostic log",
@@ -383,6 +407,12 @@ const SWITCH_CONNECTS_WITHIN: Duration = Duration::from_secs(90);
 
 /// The most requests remembered; the oldest is dropped first.
 const SSH_REQUESTS: usize = 16;
+
+/// The name a distribution's pairing request is kept under beside the SSH
+/// aliases': no alias holds a space.
+fn wsl_request_key(distro: &str) -> String {
+    format!("wsl {distro}")
+}
 
 struct SshRequest {
     alias: String,
@@ -741,6 +771,16 @@ impl Pairing {
                 .await?;
             return Ok(json!({ "alias": alias, "looked": looked }));
         }
+        if let Ask::LookWsl { distro } = &ask {
+            let (carriers, reach) = (self.wsl()?, self.ssh.clone());
+            let target = distro.clone();
+            let looked = self
+                .wsl_call(distro, move || {
+                    pairing_wsl::look(carriers.access(), &reach, &target)
+                })
+                .await?;
+            return Ok(json!({ "distro": distro, "looked": looked }));
+        }
         // Sharing this machine, joining another and either side of an SSH
         // pairing open the endpoint (D-83). Nothing else does: with no
         // endpoint there is no machine to act on and no ask to answer.
@@ -748,6 +788,7 @@ impl Pairing {
             Ask::Share { .. }
             | Ask::Join { .. }
             | Ask::PairSsh { .. }
+            | Ask::PairWsl { .. }
             | Ask::Switch { .. }
             | Ask::AcceptSsh { .. } => self.service().await?,
             Ask::EndShare | Ask::DismissJoin => match self.service.get() {
@@ -779,7 +820,41 @@ impl Pairing {
             }
         };
         match ask {
-            Ask::Status { .. } | Ask::LookSsh { .. } => unreachable!("answered above"),
+            Ask::Status { .. } | Ask::LookSsh { .. } | Ask::LookWsl { .. } => {
+                unreachable!("answered above")
+            }
+            // A carrier is a stream, which only the bootstrap socket hands
+            // over (`Pairing::carrier`); asked as a value it is no request.
+            Ask::Carry => Err("invalid_request"),
+            Ask::PairWsl { distro } => {
+                let carriers = self.wsl()?;
+                let requested = wsl_request_key(&distro);
+                let request = self.ssh_request(&requested)?;
+                let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
+                let target = distro.clone();
+                let asked = Arc::clone(&carriers);
+                let paired = self
+                    .wsl_call(&distro, move || {
+                        pairing_wsl::accept(asked.access(), &reach, &target, &request, &me, &key)
+                    })
+                    .await??;
+                let answer = json!({
+                    "device_id": paired.accepted.device,
+                    "name": paired.accepted.name,
+                });
+                // The operator pressed: the dial that confirms the pairing
+                // may start the distribution again if it went off meanwhile.
+                carriers.may_wake(&distro);
+                service
+                    .adopt(paired.accepted, paired.first)
+                    .map_err(|error| match error {
+                        AcceptError::Invalid => "device_own",
+                        AcceptError::Already => "device_already_connected",
+                        AcceptError::Store(error) => store(error),
+                    })?;
+                lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
+                Ok(answer)
+            }
             Ask::PairSsh { alias } => {
                 let request = self.ssh_request(&alias)?;
                 let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
@@ -1038,35 +1113,58 @@ impl Pairing {
         install: bool,
     ) -> Result<Value, &'static str> {
         let device = source.device_id.as_str();
-        let alias = source.ssh_alias.as_str();
         self.switch_step(device, "checking", json!({})).await;
-        let request = self.ssh_request(alias)?;
+        // The request a switch runs under is its channel's own, so one
+        // that stopped midway is asked again as the same request.
+        let requested = match &source.reach {
+            hide_core::SwitchReach::Ssh { alias, .. } => alias.clone(),
+            hide_core::SwitchReach::Wsl { distro } => wsl_request_key(distro),
+        };
+        let request = self.ssh_request(&requested)?;
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
-        let target = alias.to_owned();
-        let (helper_root, press) = (source.helper_root.clone(), source.sign_in.clone());
+        let helper_root = source.helper_root.clone();
         let projects = source.projects.clone();
-        // The install's step is told from the thread that runs ssh.
+        // The install's step is told from the thread that runs the login.
         let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
         let installed = device.to_owned();
         let installing = move || {
             runtime.block_on(steps.switch_step(&installed, "installing", json!({})));
         };
-        let switched = self
-            .ssh_dial(alias, move || {
-                pairing_ssh::switch(&pairing_ssh::Switch {
-                    reach: &reach,
-                    alias: &target,
-                    request: &request,
-                    me: &me,
-                    key: &key,
-                    helper_root: (!own_folder).then_some(helper_root.as_str()),
-                    projects: &projects,
-                    press,
-                    install,
-                    installing: &installing,
-                })
+        // What one switch asks, whichever channel carries it.
+        let asked = move |run: &dyn Fn(
+            &pairing_ssh::Switch<'_>,
+        ) -> Result<pairing_ssh::Switched, &'static str>| {
+            run(&pairing_ssh::Switch {
+                reach: &reach,
+                request: &request,
+                me: &me,
+                key: &key,
+                helper_root: (!own_folder).then_some(helper_root.as_str()),
+                projects: &projects,
+                install,
+                installing: &installing,
             })
-            .await??;
+        };
+        let switched = match &source.reach {
+            hide_core::SwitchReach::Ssh { alias, sign_in } => {
+                let (target, press) = (alias.clone(), sign_in.clone());
+                self.ssh_dial(alias, move || {
+                    asked(&|switch| pairing_ssh::switch(&target, press.clone(), switch))
+                })
+                .await??
+            }
+            hide_core::SwitchReach::Wsl { distro } => {
+                let carriers = self.wsl()?;
+                // The operator's press: the distribution may be started
+                // for the switch and for the dial that follows it (B43).
+                carriers.may_wake(distro);
+                let target = distro.clone();
+                self.wsl_call(distro, move || {
+                    asked(&|switch| pairing_wsl::switch(carriers.access(), &target, switch))
+                })
+                .await??
+            }
+        };
         let (paired, folder, needs) = match switched {
             pairing_ssh::Switched::HeldBy(by) => {
                 return Ok(json!({ "switch": "held", "by": by }));
@@ -1081,13 +1179,22 @@ impl Pairing {
             } => (paired, folder, needs),
         };
         // The machine the device is: the one that just answered, or the
-        // one this machine is paired with already under the device's id.
+        // one this machine is paired with already, under the device's id
+        // or, for a distribution, by the name this PC reaches it by (its
+        // own Hide names itself by an id of its own).
+        let known_as = |paired: &Paired| match &source.reach {
+            hide_core::SwitchReach::Ssh { .. } => paired.machine.device_id == device,
+            hide_core::SwitchReach::Wsl { distro } => peers.host(&paired.key).is_some_and(|host| {
+                host.candidates
+                    .contains(&Candidate::Wsl(distro.to_owned()))
+            }),
+        };
         let host = match &paired {
             Some(paired) => paired.accepted.key,
             None => self
                 .paired(peers)
                 .into_iter()
-                .find(|paired| paired.machine.device_id == device && paired.machine.opens.is_some())
+                .find(|paired| known_as(paired) && paired.machine.opens.is_some())
                 .map(|paired| paired.key)
                 .ok_or("device_unknown")?,
         };
@@ -1106,7 +1213,7 @@ impl Pairing {
                 Err(AcceptError::Store(StoreError::Full)) => return Err("device_limit"),
                 Err(AcceptError::Store(_)) => return Err("device_not_saved"),
             }
-            lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
+            lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
         }
         // The connection confirms the grant; the core takes the device
         // over the moment it is active.
@@ -1191,6 +1298,29 @@ impl Pairing {
         if !pairing_ssh::valid_alias(alias) {
             return Err("invalid_request");
         }
+        self.login_step(step, "ssh_not_reached").await
+    }
+
+    /// Runs one `wsl.exe` step for `distro` off the runtime, counted with
+    /// the `ssh` steps; the step's `wsl.exe` ends with it.
+    async fn wsl_call<T: Send + 'static>(
+        &self,
+        distro: &str,
+        step: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, &'static str> {
+        if !hide_platform::wsl::valid_distribution_name(distro) {
+            return Err("invalid_request");
+        }
+        self.login_step(step, "wsl_not_reached").await
+    }
+
+    /// One step that runs a login's program, off the runtime; an ask past
+    /// [`SSH_DIALS`] of them is refused, not queued.
+    async fn login_step<T: Send + 'static>(
+        &self,
+        step: impl FnOnce() -> T + Send + 'static,
+        lost: &'static str,
+    ) -> Result<T, &'static str> {
         let dial = Arc::clone(&self.ssh_dials)
             .try_acquire_owned()
             .map_err(|_| "ssh_busy")?;
@@ -1199,7 +1329,24 @@ impl Pairing {
             step()
         })
         .await
-        .map_err(|_| "ssh_not_reached")
+        .map_err(|_| lost)
+    }
+
+    /// What reaches this PC's WSL distributions; refused on a machine that
+    /// reaches none.
+    fn wsl(&self) -> Result<Arc<pairing_wsl::Carriers>, &'static str> {
+        self.host.wsl().cloned().ok_or("wsl_unavailable")
+    }
+
+    /// The endpoint a carrier that arrived on the bootstrap socket is
+    /// handed to (`Ask::Carry`): opened for it, as for either side of a
+    /// pairing, and only for the operator's own account outside a pane.
+    pub async fn carrier(self: &Arc<Self>, caller: Caller) -> Result<HostPeers, &'static str> {
+        if caller != Caller::Operator {
+            return Err("device_from_pane");
+        }
+        self.service().await?;
+        self.host.peers().ok_or("peer_unavailable")
     }
 
     /// The request `alias`'s pairing runs under: the one it ran under in

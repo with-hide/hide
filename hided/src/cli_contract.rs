@@ -1037,6 +1037,8 @@ pub const COMMANDS: &[Spec] = &[
             "ssh_not_reached",
             "ssh_update_there",
             "ssh_hide_not_running",
+            "wsl_not_reached",
+            "wsl_unavailable",
             "device_already_connected",
         ],
     },
@@ -1053,6 +1055,25 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["device_looked"],
         refusals: &["hide_unavailable", "request_timeout"],
+    },
+    // What the PC of a WSL distribution runs in it through wsl.exe: this
+    // command's input and output become the carrier of the connection to
+    // this account's core. It answers nothing: what it writes is the
+    // connection's bytes, and a refusal is the code it ends with.
+    Spec {
+        words: &["device", "carry"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &[],
+        refusals: &[
+            "device_from_pane",
+            "hide_unavailable",
+            "request_timeout",
+            "peer_unavailable",
+        ],
     },
     // What a machine pairing over SSH or wsl.exe runs on its target, with
     // the request it made: the target saves a grant that opens nothing

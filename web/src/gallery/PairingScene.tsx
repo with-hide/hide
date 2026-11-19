@@ -52,19 +52,22 @@ const LOCAL: Device = { agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: nu
 
 const helper = (id: string, label: string, over: Partial<Device> = {}): Device => ({ ...LOCAL, id, label, kind: "remote", state: "ready", ssh_alias: id, ...over });
 
-/** One helper device per state its switch can be in (B35, B36, B41). */
+/** One helper device per state its switch can be in (B35, B36, B41), over SSH and as a WSL distribution of this PC (D-27). */
 const HELPERS: Device[] = [
   helper("build-box", "build-box"),
   helper("mac-mini", "Mac mini", { switch: { state: "connecting" } }),
   helper("windows-pc", "Windows PC", { switch: { state: "failed", reason: "ssh_not_reached" } }),
+  helper("wsl-ubuntu", "WSL Ubuntu", { ssh_alias: null, wsl_distro: "Ubuntu" }),
+  helper("wsl-debian", "WSL Debian", { ssh_alias: null, wsl_distro: "Debian", switch: { state: "failed", reason: "wsl_not_reached" } }),
 ];
 
-/** Two machines a switch started a Hide on, each with what that Hide still needs (B30); the first one's switch landed in this window (D-48). */
+/** Machines a switch landed on, each with what its Hide still needs (B30), the last a WSL distribution with no systemd (B43); the first one's switch landed in this window (D-48). */
 const LANDED: Device[] = [
   helper("build-box", "build-box", { ssh_alias: null, peer_key: key("i"), needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } }),
   helper("mac-mini", "Mac mini", { ssh_alias: null, peer_key: key("b"), needs: { kind: "auto_login" } }),
+  helper("wsl-ubuntu", "WSL Ubuntu", { ssh_alias: null, peer_key: key("j"), needs: { kind: "open_distribution" } }),
 ];
-const LANDED_PEERS: Peer[] = [peer("i", "build-box", { opens: "active" }), peer("b", "Mac mini", { opens: "active" })];
+const LANDED_PEERS: Peer[] = [peer("i", "build-box", { opens: "active" }), peer("b", "Mac mini", { opens: "active" }), peer("j", "WSL Ubuntu", { opens: "active" })];
 
 /** This computer runs three terminals on the Windows PC, which a switch with a folder of its own closes (B69). */
 const HELPER_PROJECTS = [{ id: "bot", device_id: "windows-pc", removal: { pane_count: 3, running_agent_count: 0 }, checkouts: [] }];

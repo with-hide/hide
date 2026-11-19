@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
 import type { Device, SshHost, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
 import type { DispatchFn } from "../ws";
 import { AddDevice } from "./AddDevice";
 
@@ -257,10 +258,14 @@ it("keeps a refused Add enabled with its reason after the core clears last_error
 // PRD wsl-device B4: this PC's WSL distributions sit beside the Hosts under the same consent, the
 // default one first; one is added by its name alone and takes the name the core gives it (D-20).
 it("lists this PC's WSL distributions first and adds one under the core's name with the same consent (B4)", async () => {
-  const { events, q, unmount } = await mount(hosts([host("lab")], { wsl: [distro("Debian"), distro("Ubuntu", { default: true })] }));
+  const { events, q, answer, unmount } = await mount(hosts([host("lab")], { wsl: [distro("Debian"), distro("Ubuntu", { default: true })] }));
   const rows = [...document.querySelectorAll("[data-wsl-distro], [data-ssh-host]")].map((row) => row.getAttribute("data-wsl-distro") ?? row.getAttribute("data-ssh-host"));
   expect(rows).toEqual(["Ubuntu", "Debian", "lab"]);
   await act(async () => { q('[data-wsl-distro="Ubuntu"] [role="radio"]')?.click(); });
+  // Choosing it is the one look, through wsl.exe; Add waits for its answer.
+  expect(sent(events, "pairing_look_wsl").map((event) => event.payload.distro)).toEqual(["Ubuntu"]);
+  expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
+  await answer("look_wsl", { ok: true, distro: "Ubuntu", looked: { state: "absent" } });
   const name = q("[data-device-label]") as HTMLInputElement;
   expect(name.value).toBe("WSL Ubuntu");
   expect(name.hasAttribute("disabled")).toBe(true);
@@ -271,6 +276,29 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
   expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true });
+  // It goes on to the new connection once its helper is connected (B41).
+  expect(useUiStore.getState().switchAfterAdd).toBe("wsl:Ubuntu");
+  useUiStore.getState().setSwitchAfterAdd(null);
+  await unmount();
+});
+
+// PRD device-connect-iroh D-27, B43: a distribution that runs its own Hide is connected to as a
+// Hide through wsl.exe, and nothing is installed in it.
+it("connects to a distribution whose own Hide runs, and installs nothing there (D-27)", async () => {
+  const { events, q, answer, paired, unmount } = await mount(hosts([], { wsl: [distro("Ubuntu", { default: true })] }));
+  await act(async () => { q('[data-wsl-distro="Ubuntu"] [role="radio"]')?.click(); });
+  await answer("look_wsl", { ok: true, distro: "Ubuntu", looked: { state: "ready" } });
+  expect(q('[data-ssh-look="ready"]')?.textContent).toContain("Hide is already there · this only connects");
+  expect(q("[data-device-label]")).toBeNull();
+  await act(async () => { q('[data-add-device="connect"]')?.click(); });
+  expect(sent(events, "pairing_pair_wsl").map((event) => event.payload.distro)).toEqual(["Ubuntu"]);
+  expect(sent(events, "register_device")).toHaveLength(0);
+  // WSL could not run in it: one line says so, and nothing was added.
+  await answer("pair_wsl", { ok: false, reason: "wsl_not_reached" });
+  expect(q('[data-ssh-pair-refused="wsl_not_reached"]')?.textContent).toBe("WSL could not open this distribution");
+  await act(async () => { q('[data-add-device="connect"]')?.click(); });
+  await answer("pair_wsl", { ok: true, device_id: "distro-machine", name: "Ubuntu" });
+  expect(paired).toHaveBeenCalledTimes(1);
   await unmount();
 });
 

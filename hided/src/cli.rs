@@ -2065,6 +2065,12 @@ fn connect(env: &Env) -> Result<Healthy, ConnectError> {
     Ok(healthy)
 }
 
+/// Whether this state folder's daemon runs now, started here when it did
+/// not: [`connect`] for a caller that prints nothing of it.
+pub(crate) fn core_started(env: &Env) -> bool {
+    connect(env).is_ok()
+}
+
 /// A daemon and the `/health` it answered when it was found or started: its
 /// role and node are read from that answer, never asked for again.
 type Healthy = (DaemonState, serde_json::Value);

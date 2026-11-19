@@ -341,6 +341,55 @@ pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Val
     serde_json::from_str(&line).map_err(|_| "hide_unavailable".to_owned())
 }
 
+/// Asks this state folder's daemon to take the stream the ask is made on as
+/// the carrier of a connection to its core (`pairing::Ask::Carry`), and
+/// answers that stream: every byte after the daemon's answer line is the
+/// carrier's. The answer is read a byte at a time, so nothing of the
+/// carrier is taken with it.
+pub fn carrier(env: &Env) -> Result<LocalStream, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
+    let request = serde_json::to_value(PaneRequest {
+        pane_id: env.pane_id.clone().unwrap_or_default(),
+        nonce: hex::encode(nonce),
+        one_shot: false,
+        hook: None,
+        install: None,
+        access: None,
+        device: Some(serde_json::json!({ "verb": "carry" })),
+    })
+    .map_err(|_| "reference_unavailable".to_owned())?;
+    let mut stream = connect_bootstrap(&env.state_dir)?;
+    stream
+        .set_read_timeout(Some(PAIRING_TIMEOUT))
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while line.len() < CARRY_ANSWER_LIMIT {
+        match stream.read(&mut byte) {
+            Ok(1) if byte[0] == b'\n' => break,
+            Ok(1) => line.push(byte[0]),
+            Ok(_) => return Err("hide_unavailable".to_owned()),
+            Err(_) => return Err("request_timeout".to_owned()),
+        }
+    }
+    let answer: Value = serde_json::from_slice(&line).map_err(|_| "hide_unavailable".to_owned())?;
+    if answer["ok"] != true {
+        return Err(answer["reason"]
+            .as_str()
+            .unwrap_or("hide_unavailable")
+            .to_owned());
+    }
+    stream
+        .set_read_timeout(None)
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    Ok(stream)
+}
+
+/// The longest answer to a carry: `ok`, or a refusal with its next action.
+const CARRY_ANSWER_LIMIT: usize = 1024;
+
 fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;

@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Button } from "../components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Note, Status } from "../components/settings-rows";
-import { deviceTerminalCount, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep } from "../deviceSwitch";
+import { deviceTerminalCount, installParts, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep, type InstallPart } from "../deviceSwitch";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
@@ -20,6 +20,7 @@ import { ownWindow } from "../pairing";
 import { machineName, windowDeviceId } from "../screenMachine";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
+import { chosenDistro } from "../sshHosts";
 import { useUiStore } from "../ui";
 import { FixCommand } from "./FixCommand";
 
@@ -79,9 +80,10 @@ export function DeviceSwitchLine({ device, actions, className }: { device: Devic
 }
 
 /**
- * What the Hide that a switch started on a machine still needs to stay
- * reachable with no one there (B30), under that machine's row: automatic
- * login on a Mac, or on Linux the command an administrator runs, with Copy.
+ * What the Hide on a switched machine still needs to stay reachable with
+ * no one there (B30, B43), under that machine's row: automatic login on a
+ * Mac, on Linux the command an administrator runs, with Copy, or a WSL
+ * distribution with no systemd being opened again after Windows restarts.
  * Nothing for a machine that needs nothing.
  */
 export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actions: Actions }) {
@@ -89,6 +91,7 @@ export function DeviceNeedsLine({ deviceId, actions }: { deviceId: string; actio
   const needs = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.id === deviceId)?.needs ?? null);
   if (needs === null) return null;
   if (needs.kind === "auto_login") return <Note tone="warn" data-device-needs={`${deviceId}:auto_login`}>{t("devices.needs.autoLogin")}</Note>;
+  if (needs.kind === "open_distribution") return <Note tone="warn" data-device-needs={`${deviceId}:open_distribution`}>{t("devices.needs.openDistribution")}</Note>;
   return (
     <div className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-needs={`${deviceId}:linger`}>
       <Note tone="warn">{t("devices.needs.linger")}</Note>
@@ -158,7 +161,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const close = () => setClosed(answer.request_id ?? null);
   const name = machineName(devices, deviceId, t);
   if (answer.switch === "install_needed") {
-    const parts: InstallPart[] = answer.system === "linux" ? ["core", "autostart", "linger"] : ["core", "autostart"];
+    const parts = installParts(answer.system, devices?.find((row) => row.id === deviceId)?.wsl_distro != null);
     return (
       <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
         <DialogContent data-device-switch-install={deviceId}>
@@ -226,16 +229,19 @@ function useSwitchLanded() {
 }
 
 /**
- * A device just added over SSH goes on to the new connection (B41): once its
- * helper is connected its switch is asked, once. A machine whose own Hide
- * runs is then connected as a Hide; one with none answers with what would be
- * installed there, which the operator allows or leaves.
+ * A device just added over SSH or as a WSL distribution goes on to the new
+ * connection (B41): once its helper is connected its switch is asked, once.
+ * A machine whose own Hide runs is then connected as a Hide; one with none
+ * answers with what would be installed there, which the operator allows or
+ * leaves. `switchAfterAdd` is what Add device's list chose: a Host's alias,
+ * or a distribution's value.
  */
 function useSwitchAfterAdd(actions: Actions) {
   const alias = useUiStore((s) => s.switchAfterAdd);
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const ready = useShellStore((s) => {
-    const device = alias === null ? undefined : s.rest?.navigator?.devices?.find((row) => row.ssh_alias === alias);
+    const distro = alias === null ? null : chosenDistro(alias);
+    const device = alias === null ? undefined : s.rest?.navigator?.devices?.find((row) => (distro !== null ? row.wsl_distro === distro : row.ssh_alias === alias));
     return device && switchOffered(device) && device.state === "ready" && device.host?.state === "ready" && !device.switch ? device.id : null;
   });
   useEffect(() => {
@@ -244,9 +250,6 @@ function useSwitchAfterAdd(actions: Actions) {
     askSwitch(actions, ready);
   }, [actions, alias, ready, ownScreen]);
 }
-
-/** What is put on a machine that runs no Hide of its own; linger is Linux's alone. */
-type InstallPart = "core" | "autostart" | "linger";
 
 const INSTALL_PART_KEY = {
   core: "devices.switch.install.core",

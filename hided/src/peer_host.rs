@@ -28,16 +28,20 @@ use hide_peer::peers::{Config, Peers};
 use hide_peer::protocol::{Candidate, StreamKind};
 use hide_peer::store::{Grant, GrantStatus, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerTransport};
+use hide_peer::pipe::{Beside, Either, PipeConn, PipeTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
 use tokio::sync::{OnceCell, mpsc};
 
 use crate::ending::Ending;
 
-/// The transport's connection, and `hide_peer`'s types over it: what every
-/// handler and every dialer in this daemon names.
-pub type Conn = IrohConn;
-pub type HostPeers = Peers<IrohTransport>;
+/// The transport, its connection, and `hide_peer`'s types over them: what
+/// every handler and every dialer in this daemon names. A machine's
+/// connections are iroh's, and beside them the one pipe between a WSL
+/// distribution and its PC (D-27).
+pub type Transport = Beside<IrohTransport>;
+pub type Conn = Either<IrohConn, PipeConn>;
+pub type HostPeers = Peers<Transport>;
 pub type Link = hide_peer::Link<Conn>;
 pub type Stream = hide_peer::PeerStream<Conn>;
 pub type Incoming = hide_peer::peers::Incoming<Conn>;
@@ -58,6 +62,10 @@ pub struct Settings {
     /// `HIDE_PEER_DIRECT`: bind this one address and use no relay and no
     /// local network search. `None` is the product's endpoint.
     pub direct: Option<SocketAddr>,
+    /// What makes the carriers to this PC's WSL distributions; none on a
+    /// machine that reaches no WSL, which then only takes the carriers its
+    /// own PC makes.
+    pub wsl: Option<Arc<crate::pairing_wsl::Carriers>>,
 }
 
 impl Settings {
@@ -213,6 +221,12 @@ impl PeerHost {
             .map_err(io::Error::other)?
     }
 
+    /// What makes the carriers to this PC's WSL distributions, on a machine
+    /// that reaches WSL.
+    pub fn wsl(&self) -> Option<&Arc<crate::pairing_wsl::Carriers>> {
+        self.settings.wsl.as_ref()
+    }
+
     /// The open endpoint's connections; `None` while it is not open.
     pub fn peers(&self) -> Option<HostPeers> {
         self.opened.get().cloned()
@@ -280,8 +294,34 @@ impl PeerHost {
             }
             opened => opened?,
         };
+        // The same machine key on both: one machine, whatever carries it.
+        let pipe_key = MachineKey::from_secret(&key.secret());
+        let pipe = match &self.settings.wsl {
+            Some(carriers) => {
+                let carriers = Arc::clone(carriers);
+                PipeTransport::dialing(pipe_key, move |to| {
+                    let carriers = Arc::clone(&carriers);
+                    let distro = hide_peer::pipe::distribution(to).map(str::to_owned);
+                    async move {
+                        let distro = distro.ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "the address names no distribution",
+                            )
+                        })?;
+                        // `wsl.exe` is asked and started off the runtime; a
+                        // dial given up meanwhile drops the carrier it gets,
+                        // which ends its child.
+                        tokio::task::spawn_blocking(move || carriers.carrier(&distro))
+                            .await
+                            .map_err(io::Error::other)?
+                    }
+                })
+            }
+            None => PipeTransport::accepting(pipe_key),
+        };
         let (peers, incoming) = Peers::start(
-            transport,
+            Beside::new(transport, pipe),
             Config {
                 state_dir: &self.settings.state_dir,
                 build: &self.settings.build,
@@ -373,6 +413,7 @@ pub(crate) mod fixture {
                     device: name.to_owned(),
                     release: false,
                     direct: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
+                    wsl: None,
                 },
                 shutdown.clone(),
             );

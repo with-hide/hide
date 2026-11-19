@@ -47,6 +47,7 @@ mod outside_open;
 pub mod page_forward;
 pub mod pairing;
 pub mod pairing_ssh;
+pub mod pairing_wsl;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
@@ -592,6 +593,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         browser_control: Arc::clone(&browser_control),
     });
     seat.starting("core.peers");
+    // How another account's `hide` is reached, over SSH or `wsl.exe`.
+    let reach = pairing_ssh::Reach {
+        home: env.home.clone(),
+        command_folder: env.host_cli_dir.clone(),
+    };
     let peers = peer_host::PeerHost::new(
         peer_host::Settings {
             state_dir: env.state_dir.clone(),
@@ -599,6 +605,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             device: peer_device.clone(),
             release: build_order::Release::of_this_build().is_official(),
             direct: env.peer_direct,
+            // This PC's WSL distributions run Hides it connects to through
+            // `wsl.exe` (D-27); there is no WSL to reach on any other
+            // system.
+            wsl: hide_node::ssh::host::wsl::WslAccess::of_this_pc()
+                .map(|access| pairing_wsl::Carriers::new(access, reach.clone())),
         },
         shutdown.clone(),
     );
@@ -643,10 +654,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .unwrap_or_else(|| peer_device.clone()),
             device: peer_device,
         },
-        pairing_ssh::Reach {
-            home: env.home.clone(),
-            command_folder: env.host_cli_dir.clone(),
-        },
+        reach,
         shutdown.clone(),
     );
     pairing.follow_guests(Arc::clone(&guests));

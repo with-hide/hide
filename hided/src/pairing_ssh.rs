@@ -15,12 +15,17 @@
 //! the agent and Tailscale SSH still sign in. A helper device's switch
 //! ([`switch`]) is the operator's press on that device's row, so its one
 //! login asks there as the device's own connection does (D-45).
+//!
+//! The same two commands and the same switch run in a WSL distribution of
+//! this PC through `wsl.exe` (`crate::pairing_wsl`, D-27): what differs is
+//! the channel that carries them ([`Login`]), never what is asked or how an
+//! answer reads.
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use hide_node::ssh::session::{SessionError, SshTarget};
+use hide_node::ssh::session::{Ran, SshTarget};
 use hide_node::ssh::upstream::Upstream;
 use hide_peer::pairing::{Accepted, Me};
 use hide_peer::protocol::{Candidate, PeerKey};
@@ -80,6 +85,74 @@ pub fn valid_alias(alias: &str) -> bool {
             .any(|character| character.is_whitespace() || character.is_control())
 }
 
+/// The channel a target's account is reached on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Channel {
+    Ssh,
+    /// `wsl.exe`, into a distribution of this PC.
+    Wsl,
+}
+
+impl Channel {
+    /// The code of "this channel did not reach the account".
+    fn not_reached(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh_not_reached",
+            Self::Wsl => "wsl_not_reached",
+        }
+    }
+}
+
+/// An account on a target that a channel already signed in to runs this
+/// machine's commands in: an SSH session, or `wsl.exe` into a distribution.
+pub trait Login {
+    fn channel(&self) -> Channel;
+
+    /// What the diagnostic log names the target by.
+    fn name(&self) -> &str;
+
+    /// The system the account runs on, as `std::env::consts::OS` spells it.
+    fn system(&self) -> Result<String, String>;
+
+    /// Runs `argv` there to its end and answers its exit code and at most
+    /// `cap` bytes of what it printed.
+    fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, String>;
+
+    /// The addresses to try before the ones the target named (`own`): what
+    /// this channel knows of where the target is.
+    fn first(&self, own: &[Candidate]) -> Vec<Candidate>;
+}
+
+/// The SSH session `upstream` signs in, as a [`Login`].
+struct Ssh<'a>(&'a Upstream);
+
+impl Login for Ssh<'_> {
+    fn channel(&self) -> Channel {
+        Channel::Ssh
+    }
+
+    fn name(&self) -> &str {
+        self.0.alias()
+    }
+
+    fn system(&self) -> Result<String, String> {
+        self.0.system().map_err(|error| error.to_string())
+    }
+
+    fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, String> {
+        self.0
+            .run(argv, cap, within)
+            .map_err(|error| error.to_string())
+    }
+
+    fn first(&self, own: &[Candidate]) -> Vec<Candidate> {
+        self.0
+            .direct_host()
+            .map(|host| login_addresses(&host, own))
+            .unwrap_or_default()
+    }
+}
+
 /// The words that start the target's `hide` in a run step. A folder under
 /// the account's home is read from that account's own `HOME` on a POSIX
 /// system; a Windows session starts in the profile folder, which a path
@@ -126,19 +199,24 @@ fn said(status: i32, stdout: &[u8]) -> Said {
     }
 }
 
-/// Runs `hide device <words>` on the target, on `upstream`'s session.
-fn run(upstream: &Upstream, reach: &Reach, words: &[&str]) -> Result<Said, SessionError> {
+/// Runs `hide device <words>` on the target, on `login`.
+fn run(login: &dyn Login, reach: &Reach, words: &[&str]) -> Result<Said, String> {
     let mut device = vec!["device"];
     device.extend(words);
-    run_hide(upstream, reach, &device)
+    run_hide(login, reach, &device)
 }
 
-/// Runs `hide <words>` on the target, on `upstream`'s session.
-fn run_hide(upstream: &Upstream, reach: &Reach, words: &[&str]) -> Result<Said, SessionError> {
-    let system = upstream.system()?;
-    let mut argv = program(reach, &system);
+/// The words that run `hide <words>` in an account of `system`.
+pub(crate) fn hide_argv(reach: &Reach, system: &str, words: &[&str]) -> Vec<String> {
+    let mut argv = program(reach, system);
     argv.extend(words.iter().map(|word| (*word).to_owned()));
-    let ran = upstream.run(&argv, ANSWER_CAP, ANSWER_WITHIN)?;
+    argv
+}
+
+/// Runs `hide <words>` on the target, on `login`.
+fn run_hide(login: &dyn Login, reach: &Reach, words: &[&str]) -> Result<Said, String> {
+    let argv = hide_argv(reach, &login.system()?, words);
+    let ran = login.run(&argv, ANSWER_CAP, ANSWER_WITHIN)?;
     Ok(said(ran.status, &ran.stdout))
 }
 
@@ -148,15 +226,12 @@ fn run_hide(upstream: &Upstream, reach: &Reach, words: &[&str]) -> Result<Said, 
 /// state folder, and that core keeps itself running from a login item once
 /// it is paired (`always_on`). What it printed is its own window's to
 /// read, and is dropped.
-fn start_core(upstream: &Upstream, reach: &Reach, alias: &str) -> Result<(), &'static str> {
-    match run_hide(upstream, reach, &["connect"]) {
+pub(crate) fn start_core(login: &dyn Login, reach: &Reach) -> Result<(), &'static str> {
+    match run_hide(login, reach, &["connect"]) {
         Ok(Said::Answer(answer)) if answer["ok"] == true => Ok(()),
         Ok(Said::NoProgram) => Err("ssh_hide_absent"),
         Ok(_) => Err("ssh_core_not_started"),
-        Err(error) => {
-            log(alias, "start", &error);
-            Err("ssh_not_reached")
-        }
+        Err(error) => Err(not_reached(login, "start", &error)),
     }
 }
 
@@ -183,15 +258,20 @@ fn look_of(said: Said) -> Looked {
 /// as long as ssh takes to sign in and the target to answer.
 pub fn look(reach: &Reach, alias: &str) -> Looked {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let looked = match run(&upstream, reach, &["look-ssh"]) {
-        Ok(said) => look_of(said),
-        Err(error) => {
-            log(alias, "look", &error);
-            Looked::NotReached
-        }
-    };
+    let looked = look_on(&Ssh(&upstream), reach);
     upstream.close();
     looked
+}
+
+/// [`look`], on a login.
+pub(crate) fn look_on(login: &dyn Login, reach: &Reach) -> Looked {
+    match run(login, reach, &["look-ssh"]) {
+        Ok(said) => look_of(said),
+        Err(error) => {
+            not_reached(login, "look", &error);
+            Looked::NotReached
+        }
+    }
 }
 
 /// What the target answered to a pairing, and the addresses of the SSH
@@ -212,23 +292,32 @@ pub fn accept(
     key: &PeerKey,
 ) -> Result<Paired, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
+    let paired = pair_on(&Ssh(&upstream), reach, request, me, key);
+    upstream.close();
+    paired
+}
+
+/// [`accept`], on a login.
+pub(crate) fn pair_on(
+    login: &dyn Login,
+    reach: &Reach,
+    request: &str,
+    me: &Me,
+    key: &PeerKey,
+) -> Result<Paired, &'static str> {
     let asked = Accept {
-        alias,
         request,
         me,
         key,
         helper: None,
         projects: &[],
     };
-    let answer = accept_on(&upstream, reach, &asked);
-    let login = upstream.direct_host();
-    upstream.close();
-    paired(&answer?["accepted"], login).ok_or("ssh_update_there")
+    let answer = accept_on(login, reach, &asked)?;
+    paired(login, &answer["accepted"]).ok_or("ssh_update_there")
 }
 
-/// What one `accept-ssh` asks of the target `alias` names.
+/// What one `accept-ssh` asks of a target.
 struct Accept<'a> {
-    alias: &'a str,
     request: &'a str,
     me: &'a Me,
     key: &'a PeerKey,
@@ -240,14 +329,14 @@ struct Accept<'a> {
     projects: &'a [String],
 }
 
-/// Runs the target's `accept-ssh` on `upstream`'s session and answers the
-/// value it printed.
+/// Runs the target's `accept-ssh` on `login` and answers the value it
+/// printed.
 fn accept_on(
-    upstream: &Upstream,
+    login: &dyn Login,
     reach: &Reach,
     asked: &Accept<'_>,
 ) -> Result<Value, &'static str> {
-    let (alias, me) = (asked.alias, asked.me);
+    let me = asked.me;
     let key = asked.key.to_hex();
     let mut words = vec![
         "accept-ssh",
@@ -266,14 +355,15 @@ fn accept_on(
     for project in asked.projects {
         words.extend(["--project", project.as_str()]);
     }
-    let mut answer = match run(upstream, reach, &words) {
+    // The target records which channel its grant was asked over.
+    if login.channel() == Channel::Wsl {
+        words.push("--wsl");
+    }
+    let mut answer = match run(login, reach, &words) {
         Ok(Said::Answer(answer)) => answer,
         Ok(Said::NoProgram) => return Err("ssh_hide_absent"),
         Ok(Said::Unread) => return Err("ssh_update_there"),
-        Err(error) => {
-            log(alias, "accept", &error);
-            return Err("ssh_not_reached");
-        }
+        Err(error) => return Err(not_reached(login, "accept", &error)),
     };
     if answer["ok"] != true {
         return Err(match answer["error"]["code"].as_str() {
@@ -287,13 +377,11 @@ fn accept_on(
     Ok(answer["value"].take())
 }
 
-/// The pairing a target's answer carries, with the addresses its SSH login
-/// reached.
-fn paired(accepted: &Value, login: Option<String>) -> Option<Paired> {
+/// The pairing a target's answer carries, with the addresses its login
+/// knows the target by.
+fn paired(login: &dyn Login, accepted: &Value) -> Option<Paired> {
     let accepted: Accepted = serde_json::from_value(accepted.clone()).ok()?;
-    let first = login
-        .map(|host| login_addresses(&host, &accepted.candidates))
-        .unwrap_or_default();
+    let first = login.first(&accepted.candidates);
     Some(Paired { accepted, first })
 }
 
@@ -321,6 +409,10 @@ pub enum Needs {
     /// Linux: the account may not turn linger on itself, so the core ends
     /// with its last session until an administrator runs `command`.
     Linger { command: String },
+    /// A WSL distribution with no systemd: nothing there starts its core,
+    /// which lives while the distribution runs, so after Windows restarts
+    /// the operator opens the distribution again (B43).
+    OpenDistribution,
 }
 
 impl Needs {
@@ -331,26 +423,51 @@ impl Needs {
             Self::Linger { command } => {
                 serde_json::json!({ "kind": "linger", "command": command })
             }
+            Self::OpenDistribution => serde_json::json!({ "kind": "open_distribution" }),
         }
     }
 }
 
-/// What the Hide just started on the target needs: read from the system it
-/// runs on, and on Linux from its own `hide always-on linger`, which turns
-/// linger on when the account may. A target that does not answer needs
-/// nothing this machine can name; the switch goes on either way.
-fn needs_of(upstream: &Upstream, reach: &Reach, alias: &str) -> Option<Needs> {
-    match upstream.system().ok()?.as_str() {
+/// What the target's Hide needs. A WSL distribution with no systemd says
+/// so whoever started its Hide, since nothing there starts it again. For a
+/// Hide this switch `started` the rest is read from the system it runs on,
+/// and on Linux from its own `hide always-on linger`, which turns linger
+/// on when the account may. A target that does not answer needs nothing
+/// this machine can name; the switch goes on either way.
+fn needs_of(login: &dyn Login, reach: &Reach, started: bool) -> Option<Needs> {
+    if login.channel() == Channel::Wsl && !runs_systemd(login) {
+        return Some(Needs::OpenDistribution);
+    }
+    if !started {
+        return None;
+    }
+    match login.system().ok()?.as_str() {
         "macos" => Some(Needs::AutoLogin),
-        "linux" => match run_hide(upstream, reach, &["always-on", "linger", "--json"]) {
+        "linux" => match run_hide(login, reach, &["always-on", "linger", "--json"]) {
             Ok(Said::Answer(answer)) => linger_needs(&answer),
             Ok(_) => None,
             Err(error) => {
-                log(alias, "linger", &error);
+                not_reached(login, "linger", &error);
                 None
             }
         },
         _ => None,
+    }
+}
+
+/// Whether the target was started by systemd, by the folder systemd itself
+/// names as the sign of it (`sd_booted`). A target that does not answer is
+/// read as one that was: the line a missing systemd shows is said only of
+/// a distribution known to have none.
+fn runs_systemd(login: &dyn Login) -> bool {
+    let argv = ["test", "-d", "/run/systemd/system"].map(str::to_owned);
+    // `test` prints nothing; the cap is the least a run may be given.
+    match login.run(&argv, 1, ANSWER_WITHIN) {
+        Ok(ran) => ran.status == 0,
+        Err(error) => {
+            not_reached(login, "systemd", &error);
+            true
+        }
     }
 }
 
@@ -385,10 +502,9 @@ pub enum Switched {
     InstallNeeded { system: String },
 }
 
-/// One switch of the helper device this machine dials as `alias`.
+/// One switch of a helper device this machine dials.
 pub struct Switch<'a> {
     pub reach: &'a Reach,
-    pub alias: &'a str,
     pub request: &'a str,
     pub me: &'a Me,
     pub key: &'a PeerKey,
@@ -399,8 +515,6 @@ pub struct Switch<'a> {
     /// The folders this machine registered as projects on the device,
     /// which the machine's own Hide lists from then on (D-48).
     pub projects: &'a [String],
-    /// Where the login's questions go: the device's row.
-    pub press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
     /// The operator allowed a Hide to be started on a target that runs
     /// none of its own (D-45); without it such a target is only named.
     pub install: bool,
@@ -408,54 +522,51 @@ pub struct Switch<'a> {
     pub installing: &'a (dyn Fn() + Sync),
 }
 
-/// Looks at the target and pairs with the Hide it runs, over one SSH login
-/// that may ask the operator on the device's row. A refusal is its reason
-/// code, and nothing was saved on either machine.
-pub fn switch(switch: &Switch<'_>) -> Result<Switched, &'static str> {
-    let upstream = Upstream::new(SshTarget::new(&switch.reach.home, switch.alias));
-    upstream.may_ask(switch.press.clone());
-    let done = switch_on(&upstream, switch);
+/// Looks at the target `alias` names and pairs with the Hide it runs, over
+/// one SSH login whose questions go to `press`, the device's row. A refusal
+/// is its reason code, and nothing was saved on either machine.
+pub fn switch(
+    alias: &str,
+    press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
+    switch: &Switch<'_>,
+) -> Result<Switched, &'static str> {
+    let upstream = Upstream::new(SshTarget::new(&switch.reach.home, alias));
+    upstream.may_ask(press);
+    let done = switch_on(&Ssh(&upstream), switch);
     upstream.close();
     done
 }
 
-fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'static str> {
-    let looked = match run(upstream, switch.reach, &["look-ssh"]) {
-        Ok(said) => look_of(said),
-        Err(error) => {
-            log(switch.alias, "look", &error);
-            return Err("ssh_not_reached");
-        }
-    };
+/// [`switch`], on a login.
+pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switched, &'static str> {
+    let unreached = login.channel().not_reached();
     let mut started = false;
-    match looked {
+    match look_on(login, switch.reach) {
         Looked::Ready => {}
         Looked::Absent if switch.install => {
             (switch.installing)();
-            start_core(upstream, switch.reach, switch.alias)?;
+            start_core(login, switch.reach)?;
             // The core that was started answers for the account now.
-            match run(upstream, switch.reach, &["look-ssh"]).map(look_of) {
-                Ok(Looked::Ready) => started = true,
-                Ok(_) => return Err("ssh_core_not_started"),
-                Err(error) => {
-                    log(switch.alias, "look", &error);
-                    return Err("ssh_not_reached");
-                }
+            match look_on(login, switch.reach) {
+                Looked::Ready => started = true,
+                Looked::NotReached => return Err(unreached),
+                _ => return Err("ssh_core_not_started"),
             }
         }
         Looked::Absent => {
-            let system = upstream.system().map_err(|_| "ssh_not_reached")?;
+            let system = login
+                .system()
+                .map_err(|error| not_reached(login, "system", &error))?;
             return Ok(Switched::InstallNeeded { system });
         }
         Looked::UpdateThere => return Err("ssh_update_there"),
         Looked::NotRunning { .. } => return Err("ssh_hide_not_running"),
-        Looked::NotReached => return Err("ssh_not_reached"),
+        Looked::NotReached => return Err(unreached),
     }
     let accepted = accept_on(
-        upstream,
+        login,
         switch.reach,
         &Accept {
-            alias: switch.alias,
             request: switch.request,
             me: switch.me,
             key: switch.key,
@@ -494,18 +605,16 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
         hide_core::diagnostic!(serde_json::json!({
             "component": "pairing",
             "kind": "ssh.projects_left_out",
-            "alias": switch.alias,
+            "alias": login.name(),
             "asked": switch.projects.len(),
             "listed": listed,
         }));
     }
     let paired = match &answer["accepted"] {
         Value::Null if switch.helper_root.is_some() => None,
-        accepted => Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?),
+        accepted => Some(paired(login, accepted).ok_or("ssh_update_there")?),
     };
-    let needs = started
-        .then(|| needs_of(upstream, switch.reach, switch.alias))
-        .flatten();
+    let needs = needs_of(login, switch.reach, started);
     Ok(Switched::Paired {
         paired,
         folder,
@@ -532,14 +641,20 @@ fn login_addresses(host: &str, own: &[Candidate]) -> Vec<Candidate> {
         .collect()
 }
 
-fn log(alias: &str, step: &str, error: &SessionError) {
+/// Records that `login` did not carry `step`, and answers the code of it.
+fn not_reached(login: &dyn Login, step: &str, error: &str) -> &'static str {
+    let channel = login.channel();
     hide_core::diagnostic!(serde_json::json!({
         "component": "pairing",
-        "kind": "ssh.not_reached",
+        "kind": match channel {
+            Channel::Ssh => "ssh.not_reached",
+            Channel::Wsl => "wsl.not_reached",
+        },
         "step": step,
-        "alias": alias,
-        "reason": error.to_string(),
+        "alias": login.name(),
+        "reason": error,
     }));
+    channel.not_reached()
 }
 
 #[cfg(test)]
@@ -620,6 +735,10 @@ mod tests {
             None
         );
         assert_eq!(Needs::AutoLogin.payload(), json!({"kind": "auto_login"}));
+        assert_eq!(
+            Needs::OpenDistribution.payload(),
+            json!({"kind": "open_distribution"})
+        );
     }
 
     /// The command folder is spelled for the system that runs it, from the

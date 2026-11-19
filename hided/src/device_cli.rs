@@ -120,6 +120,11 @@ pub enum Verb {
         /// lists too (D-48).
         projects: Vec<String>,
     },
+    /// What the PC of a WSL distribution runs in it through `wsl.exe` to
+    /// reach its core (D-27): this command's input and output become the
+    /// carrier of the connection between the two; not a command a person
+    /// types.
+    Carry,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -252,6 +257,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             own_folder,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
+        (Some("carry"), []) if name.is_none() && !json => Verb::Carry,
         (Some("accept-ssh"), []) => match (request, key, device, name) {
             (Some(request), Some(key), Some(device), Some(name)) => Verb::AcceptSsh {
                 request,
@@ -275,6 +281,11 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
 }
 
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
+    // A carrier's output is the connection's bytes: nothing else is ever
+    // printed there, and a refusal is the code this command ends with.
+    if cli.verb == Verb::Carry {
+        return carry(env);
+    }
     let (code, message, device) = match answer(env, cli) {
         Ok(Printed::Done) => return Ok(()),
         Ok(Printed::Value(value, lines)) => {
@@ -456,6 +467,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             };
             Ok(Printed::Value(answer, lines))
         }
+        Verb::Carry => unreachable!("run answers it before anything is printed"),
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
             let look = |core: bool| json!({"system": std::env::consts::OS, "core": core});
@@ -530,6 +542,60 @@ fn add_projects(env: &Env, projects: &[String]) -> usize {
         }
     }
     added
+}
+
+/// Joins this command's input and output to this account's core, as the
+/// carrier of the connection the caller's core makes to it (D-27). It ends
+/// when either end closes.
+///
+/// A core this account ran before and that is not running is started
+/// first, as a login starts it: a distribution with no systemd has nothing
+/// else that does, so its core lives while the distribution runs. An
+/// account that never ran a core is left as it is.
+fn carry(env: &Env) -> Result<(), String> {
+    use std::io::Read as _;
+    if env.pane_id.is_some() || env.access.is_some() {
+        return Err("device_from_pane".to_owned());
+    }
+    let stream = match crate::workspace_cli::carrier(env) {
+        Ok(stream) => stream,
+        Err(code)
+            if code == "hide_unavailable"
+                && hide_kit::layout::daemon_lock(&env.state_dir).exists()
+                && crate::cli::core_started(env) =>
+        {
+            crate::workspace_cli::carrier(env)?
+        }
+        Err(code) => return Err(code),
+    };
+    let mut to_core = stream.duplicate();
+    let end = stream.shutdown_handle();
+    // The caller's bytes to the core. When the caller's end closes the
+    // core's is ended, which ends the other direction below.
+    std::thread::Builder::new()
+        .name("carry-in".to_owned())
+        .spawn(move || {
+            let _ = std::io::copy(&mut std::io::stdin().lock(), &mut to_core);
+            end.shutdown();
+        })
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    let mut from_core = stream;
+    let mut output = std::io::stdout().lock();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        match from_core.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let written = output.write_all(&buffer[..read]);
+                if written.and_then(|()| output.flush()).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    // The thread that still waits for the caller's input ends with this
+    // process.
+    Ok(())
 }
 
 enum Refused {

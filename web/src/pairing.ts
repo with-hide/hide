@@ -47,7 +47,7 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh" | "switch";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh" | "look_wsl" | "pair_wsl" | "switch";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
@@ -264,6 +264,8 @@ export function refusalKey(reason: string | null | undefined): MessageKey | null
       return "pairing.ssh.notRunning";
     case "ssh_not_reached":
       return "pairing.ssh.notReached";
+    case "wsl_not_reached":
+      return "devices.switch.failed.wslNotReached";
     default:
       return null;
   }

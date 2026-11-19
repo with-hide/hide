@@ -99,11 +99,11 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
   const actions = useMemo(
     () =>
       createActions((event) => {
-        // The chosen Host answers the dialog's one question: its own Hide, or none there.
-        if (event.kind === "pairing_look_ssh") {
-          const { alias, request_id } = event.payload as { alias: string; request_id: string };
+        // The chosen Host or distribution answers the dialog's one question: its own Hide, or none there.
+        if (event.kind === "pairing_look_ssh" || event.kind === "pairing_look_wsl") {
+          const { request_id } = event.payload as { request_id: string };
           const looked: SshLook = (look === null ? undefined : LOOKS[look]) ?? { state: "absent" };
-          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: "look_ssh", ok: true, request_id, alias, looked } }));
+          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: event.kind.slice("pairing_".length), ok: true, request_id, looked } }));
         }
         return true;
       }),
