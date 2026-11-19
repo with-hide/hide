@@ -99,6 +99,8 @@ mod inbound;
 mod issues;
 #[path = "tests/key_routing.rs"]
 mod key_routing;
+#[path = "tests/kit_store.rs"]
+mod kit_store;
 #[path = "tests/labels.rs"]
 mod labels;
 #[path = "tests/launch_choice.rs"]

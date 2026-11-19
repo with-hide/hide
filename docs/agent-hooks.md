@@ -887,7 +887,7 @@ What some lines take on:
 
 ### What the kit puts down
 
-Two pieces are written per agent into the agent's own files, and nothing else:
+Two pieces of Hide's own are written per agent into the agent's own files; the skills the operator adds to the store go into the same skill folders beside them ([The operator's skills from the store](#the-operators-skills-from-the-store)):
 
 - The skill stubs Hide puts down (`hide_kit::agents::SKILLS`), each as `<name>/SKILL.md` in the folder the agent reads, plain copies written by every pass into every folder: `hide`, the guide to Hide, `hide-mission` v3, proposing a mission before complex work, following the operator’s answer, sending an explicit mission request or `/hide-mission` straight to `hide mission help`, and leaving small work with the current agent without asking, and `hide-issue` v1, which points at `hide issue help` (`hided/assets/issue/help.md`): search `with-hide/hide` first, collect the raw error, versions, steps and `Logs/core.jsonl` lines into the bug form's sections under 6,000 characters (the public repository closes longer reports), strip private paths and tokens, add no root cause or fix, show the operator the report and run `gh issue create --repo with-hide/hide` only after their yes, falling back to the form's URL when `gh` is missing; a test pins the template's headings to the labels of `.github/ISSUE_TEMPLATE/bug.yml`; `hide` v10 carries the same session-start table; a further stub is one more entry of that array, and the observe, write and remove passes read the array.
   Each is a few lines that point at the CLI's own guide, `hide guide` or `hide mission help`, so it stays right as that guide changes; the `hide` guide sends browser work to `hide browser help`, so there is no separate browser skill, and it names `hide mission help` too, so an agent that did not pick the Conductor's skill still finds it.
@@ -936,6 +936,16 @@ What Claude Code's hook never does inside another agent's session is take or con
 `hide_agent_hooks::runtime::ForeignOrigin` finds such a session by what its agent sets for the processes it starts: `CURSOR_VERSION` for Cursor, `OPENCODE` or `OPENCODE_PID` for OpenCode, and `GROK_HOOK_EVENT` or `GROK_SESSION_ID` for Grok (for letters; only `GROK_HOOK_EVENT` silences the hook).
 `hide-agent-hooks/tests/it/letter_origin.rs` runs the built helper beside a stand-in `hide` that answers `inbox` with one letter and records its calls, once outside and once inside each of them.
 On Windows active command hooks run through PowerShell, so Hide writes that form for Grok ([Installing](#installing)); retired Cursor layouts are read only for cleanup.
+
+### The operator's skills from the store
+
+The skills the operator adds in Settings go from the store (`~/.hide/store`, [ARCHITECTURE.md: The store of skills and MCP items](ARCHITECTURE.md#the-store-of-skills-and-mcp-items)) into the same folders as Hide's stubs, one folder per skill with its `SKILL.md` and every other file of it, and into the same folder of each profile account.
+They are switched per folder, not per agent: the `claude` switch is `~/.claude/skills` and each Claude profile's folder, the shared switch is `~/.agents/skills`, which Codex, Grok, OpenCode, Pi and omp read, and the `antigravity` switch is `~/.gemini/config/skills`; Grok and omp also read `~/.claude/skills`, so a skill on in both folders reaches them from both, which they each list once ([What the kit puts down](#what-the-kit-puts-down)).
+When one folder is a link to another, such as `~/.agents/skills` to `~/.claude/skills`, the two are one place, which holds a skill while either switch is on.
+A store copy carries no marker line: it is Hide's because the store's record names it with the digest of its files, so a copy the operator edited, or one they cloned a repository into, is theirs from then on and Hide leaves it, and a folder of the same name the operator put there is never replaced or removed until they take it over.
+A take-over keeps the operator's folder where it is when Hide's copy is the same, and moves it whole into the undo list otherwise; a machine leaving Hide puts a moved one back and leaves a copy of a taken-over skill where it was, written back from the store when a switch had taken it out.
+A skill on is written while any agent that reads its folder is on; with every such agent switched off in Settings › Agents its cell reads `agent_off` and nothing is written there.
+Hide's own stubs are written by the kit alone and never shown in the store, and the store never writes a folder named after one of them.
 
 ### Grok's own hooks
 

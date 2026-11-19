@@ -60,6 +60,7 @@ mod human_turn;
 mod inbound;
 mod issues;
 mod kit;
+mod kit_store;
 mod ledger_walk;
 pub(crate) mod links;
 mod look;
@@ -144,6 +145,7 @@ pub use hosts::WorkspaceRemoteRoute;
 pub(crate) use hosts::device_links;
 pub(crate) use inbound::InboundLink;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead};
+pub(crate) use kit_store::{StoreAnswered, StoreJob};
 pub use snapshot_delta::serialize_snapshot_delta;
 
 use agent_areas::AgentLayoutPayload;
@@ -1482,6 +1484,9 @@ pub struct Runtime {
     /// The kit call each device's helper runs next, merged across requests,
     /// keyed by device id.
     device_kit_pending: BTreeMap<String, KitJob>,
+    /// Each machine's store work, schedule and new-session marks
+    /// (`runtime/kit_store.rs`).
+    stores: kit_store::Stores,
     /// The passes spawns asked of each machine's kit before starting an
     /// agent there, by device id (`runtime/start_hook.rs`); one entry per
     /// machine, dropped with the device's kit work.
@@ -2523,6 +2528,7 @@ impl Runtime {
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
+            stores: kit_store::Stores::default(),
             start_passes: BTreeMap::new(),
             device_first_run_choice: BTreeMap::new(),
             device_kit_running: BTreeSet::new(),
