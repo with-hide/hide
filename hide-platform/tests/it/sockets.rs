@@ -41,7 +41,7 @@ fn an_abort_from_another_thread_ends_a_blocked_read() {
         .recv_timeout(Duration::from_secs(10))
         .expect("the reading thread never started");
     // Only the last step, from the signal into the read, is left to time.
-    thread::sleep(Duration::from_millis(300));
+    thread::sleep(Duration::from_millis(300)); // wait-ok: the reading thread is inside its blocking read
     let started = Instant::now();
     hide_platform::sockets::abort(&held);
     let ended = finished

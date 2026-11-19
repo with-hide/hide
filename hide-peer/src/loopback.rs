@@ -420,9 +420,13 @@ mod tests {
             guest.dial(&to).await,
             Err(TransportError::Unreachable(_))
         ));
-        // The silent ones are given up in time, and the next dial is taken.
-        tokio::time::sleep(limits::HELLO_WITHIN + Duration::from_secs(1)).await;
-        assert_eq!(host.admitting.available_permits(), limits::MAX_ADMITTING);
+        // The silent ones are given up in time, and the next dial is taken:
+        // the test's clock is moved past the bound, and every place comes
+        // back.
+        tokio::time::advance(limits::HELLO_WITHIN + Duration::from_secs(1)).await;
+        while host.admitting.available_permits() < limits::MAX_ADMITTING {
+            tokio::task::yield_now().await;
+        }
         guest.dial(&to).await.unwrap();
         assert_eq!(accepting.await.unwrap().unwrap().peer(), guest.key());
     }
