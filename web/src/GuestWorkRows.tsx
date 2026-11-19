@@ -117,7 +117,7 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
             className="min-h-(--size-control-lg) items-start gap-sm rounded-sm px-sm py-xs text-caption text-subtle-foreground hover:text-foreground"
             onClick={() => actions.focusDevice(deviceId)}
           >
-            <span className="flex h-(--line-height-caption) shrink-0 items-center gap-xs">
+            <span className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs">
               <StatusMark mark={markOf(row.mark)} read={row.read === true} />
               <AgentMark kind={row.agent_kind} />
             </span>
