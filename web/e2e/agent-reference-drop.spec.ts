@@ -103,6 +103,11 @@ test("a pane's @ is an item of its pane menu, lists the other agents and types t
     await page.keyboard.press("Escape");
     await expect(list).toHaveCount(0);
     await expect(more).toBeFocused();
+    // A press on another pane closes it and leaves the keyboard where the press landed.
+    await openMention();
+    await page.locator(`[data-pane-view="${agent}"] [data-terminal-host]`).click({ position: { x: 20, y: 200 } });
+    await expect(list).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${agent}"] .xterm-helper-textarea`)).toBeFocused();
 
     await openMention();
     await expect(list.locator(`[data-pane-mention-choice="${agent}"]`)).toBeVisible();

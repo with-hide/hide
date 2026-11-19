@@ -3,6 +3,7 @@ import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentReference, mentionCandidates } from "./agentReference";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "./components/ui/command";
+import { useReturnFocus } from "./components/ui/layer";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
 import { allAgents } from "./paneAgents";
@@ -15,18 +16,19 @@ import { focusTerminal, typeReference } from "./terminals";
  * one chosen typed into this pane's prompt as its reference, with no Enter,
  * so the operator only adds what to say. The list opens under `anchor`, the
  * menu's `…` button, and is read when it opens; choosing hands the keyboard
- * to this pane's terminal, and Escape back to the `…`.
+ * to this pane's terminal, and Escape back to the `…`; a press elsewhere
+ * keeps the keyboard where it landed (`useReturnFocus`).
  */
 export function PaneMention({ paneId, actions, open, setOpen, anchor }: { paneId: string; actions: Actions; open: boolean; setOpen: (open: boolean) => void; anchor: ReactNode }) {
   const { t } = useInterfaceTranslation();
   // A closed @ reads nothing from the store, so it adds no work to the header's renders.
   const agents = useShellStore((state) => (open ? allAgents(state.agents, state.rest?.status?.remote) : null));
   const rest = useShellStore((state) => (open ? state.rest : null));
-  const chosen = useRef(false);
   const anchorBox = useRef<HTMLSpanElement>(null);
   const candidates = agents ? mentionCandidates(rest, agents, paneId) : [];
+  // The list has no trigger of its own: the keyboard goes back to the `…` it opened under.
+  const returnFocus = useReturnFocus(open, { target: () => anchorBox.current?.querySelector("button") ?? null });
   const choose = (reference: string) => {
-    chosen.current = true;
     setOpen(false);
     actions.focusPane(paneId);
     focusTerminal(paneId);
@@ -40,14 +42,7 @@ export function PaneMention({ paneId, actions, open, setOpen, anchor }: { paneId
         align="end"
         className="w-(--size-pr-popover) p-none"
         data-pane-mention-list={paneId}
-        onOpenAutoFocus={() => {
-          chosen.current = false;
-        }}
-        onCloseAutoFocus={(event) => {
-          // The list has no trigger of its own: Escape hands the keyboard to the `…` it opened under.
-          event.preventDefault();
-          if (!chosen.current) anchorBox.current?.querySelector("button")?.focus();
-        }}
+        onCloseAutoFocus={returnFocus}
       >
         <Command>
           <CommandInput placeholder={t("panes.mention.search")} autoFocus />
