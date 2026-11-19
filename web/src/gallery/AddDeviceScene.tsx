@@ -7,6 +7,9 @@
 // operator (PRD system-ssh-device-link B4-B14) and stopped in each of the
 // three failure states, sign in, server key and cannot connect, on a Mac, or
 // with `system=windows` on the PC.
+// `look=ready|update_there|not_running|sign_in` is what a chosen SSH Host's
+// own Hide answers the dialog (PRD device-connect-iroh B7): choose `studio`
+// and its one line is drawn, with `Connect` where the two can pair.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -14,6 +17,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary, useInterfaceTranslation } from "../i18n/client";
 import { AddDevice } from "../settings/AddDevice";
 import { DevicesTab } from "../settings/DevicesTab";
+import type { SshLook } from "../pairing";
 import type { Device, DeviceHost, DeviceProblem, DeviceSignIn, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
@@ -75,6 +79,14 @@ const FAILURES: Device[] = [
   failed("mac-mini", "hide_updated"),
 ];
 
+/** What a chosen Host's own Hide answers, by the scene's `look`. */
+const LOOKS: Record<string, SshLook> = {
+  ready: { state: "ready", system: "macos" },
+  update_there: { state: "update_there", system: "windows" },
+  not_running: { state: "not_running", system: "linux" },
+  sign_in: { state: "not_running", system: "macos" },
+};
+
 export function AddDeviceScene({ params }: { params: URLSearchParams }) {
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const lang = params.get("lang") ?? "ko";
@@ -82,7 +94,20 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
   const view = params.get("view") ?? "add";
   if (view !== "add" && view !== "devices" && view !== "sign-in" && view !== "failures") throw new Error(`Unknown add device view ${view}`);
   const windows = params.get("system") === "windows";
-  const actions = useMemo(() => createActions(() => true), []);
+  const look = params.get("look");
+  if (look !== null && !(look in LOOKS)) throw new Error(`Unknown add device look ${look}`);
+  const actions = useMemo(
+    () =>
+      createActions((event) => {
+        // The chosen Host's own Hide answers the dialog's one question.
+        if (event.kind === "pairing_look_ssh" && look !== null) {
+          const { alias, request_id } = event.payload as { alias: string; request_id: string };
+          queueMicrotask(() => useShellStore.setState({ pairingResult: { verb: "look_ssh", ok: true, request_id, alias, looked: LOOKS[look] } }));
+        }
+        return true;
+      }),
+    [look],
+  );
   useLayoutEffect(() => {
     const ssh = view === "sign-in" ? SIGN_IN : view === "failures" ? FAILURES : null;
     const local = windows ? DEVICES[0]! : MAC;
