@@ -758,7 +758,7 @@ On Windows, remove hide from Settings > Apps.
 That removes the app, its Start menu entry and its Apps entry, stops `hided`, and removes a paired machine's login item and its builds; Windows then asks once for permission to remove Hide's firewall rules, and a declined prompt leaves them in the `Hide` rule group until you remove it in Windows Defender Firewall; the panes' holders and the agents in them keep running, so no work is ended without you.
 Close the panes in Hide before you uninstall, or end the `hide-holder.exe` processes yourself when you are done with them.
 Then delete `%USERPROFILE%\.hide\runtime`, `%USERPROFILE%\.local\bin\hide.cmd` and, if an earlier build left one, the `.hide-kit` junction beside it (the junction itself, not the directory it leads to), and the `HKCU\Software\Classes\CLSID` key whose default value is `Electron Notification Activator` and whose `LocalServer32` names hide's `hide.exe`.
-On Linux, run `hide stop`, then `sudo apt remove hide` or `sudo dnf remove hide`, which also disables every account's `dev.withhide.core` user unit and removes its marker and `~/.hide/core`, and remove `~/.local/bin/hide`.
+On Linux, run `hide stop`, then `sudo apt remove hide` or `sudo dnf remove hide`, which also stops each local account's `dev.withhide.core` user unit and, running as that account, removes the unit, its marker and `~/.hide/core`, and remove `~/.local/bin/hide`; an account from a directory service (LDAP, SSSD) runs `hide stop && hide always-on remove` first.
 On every system the agents' pieces and `~/.hide` remain until you delete them.
 
 ### Earlier builds and the transition
