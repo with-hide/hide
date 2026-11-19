@@ -11,6 +11,7 @@ mod dial;
 mod grants;
 mod pairing;
 mod pairings;
+mod pipe;
 mod raw;
 
 use std::future::Future;

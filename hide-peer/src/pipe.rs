@@ -628,6 +628,9 @@ mod tests {
         assert_eq!(near.read(&mut [0_u8; 1]).unwrap(), 0);
 
         // The time is the table's; the test only shortens the wait for it.
+        // Each proof's task runs once first, so its wait started before the
+        // clock is moved.
+        tokio::task::yield_now().await;
         tokio::time::pause();
         tokio::time::advance(limits::HELLO_WITHIN + Duration::from_secs(1)).await;
         tokio::time::resume();
