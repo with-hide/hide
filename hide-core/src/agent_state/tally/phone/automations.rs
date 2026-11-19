@@ -63,6 +63,9 @@ pub struct PhoneAutomation {
     /// A run goes now: [지금 실행] is off (B19).
     pub running: bool,
     pub unseen: usize,
+    /// What the runs its records keep spent together (B39).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_spend: Option<crate::automations::RecentSpend>,
     /// Newest first.
     pub records: Vec<PhoneRecord>,
     /// Older records the phone does not list.
@@ -102,6 +105,9 @@ pub struct PhoneRun {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub seen: bool,
+    /// What its conversation spent (B39); absent until the ledger read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend: Option<crate::automations::Spend>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -172,6 +178,7 @@ fn phone_automation(automation: &AutomationSnapshot) -> PhoneAutomation {
         paused: automation.paused,
         running: automation.running,
         unseen: automation.unseen,
+        recent_spend: automation.recent_spend,
         records: automation
             .records
             .iter()
@@ -220,6 +227,7 @@ fn phone_run(run: &RunSnapshot) -> PhoneRun {
         attempt: run.attempt,
         reason: run.reason.clone(),
         seen: run.seen,
+        spend: run.spend,
     }
 }
 
@@ -249,6 +257,7 @@ mod tests {
             conversation_missing: false,
             branch: Some("secret-branch".into()),
             seen: false,
+            spend: None,
         })
     }
 
@@ -275,6 +284,7 @@ mod tests {
             paused: None,
             running: false,
             unseen: 1,
+            recent_spend: None,
             records: (0..records as u64).rev().map(run).collect(),
         }
     }
@@ -385,5 +395,31 @@ mod tests {
             PhoneAutomations::project(None, &["a".into()]),
             PhoneAutomations::default()
         );
+    }
+
+    /// B39: the phone's run rows and automation carry what the runs spent,
+    /// as the core read it.
+    #[test]
+    fn the_phone_gets_what_each_run_spent() {
+        let spend = crate::automations::Spend {
+            tokens: 12_300,
+            micro_usd: 420_000,
+            unpriced: false,
+        };
+        let mut item = automation("a", 2);
+        if let RecordSnapshot::Run(run) = &mut item.records[0] {
+            run.spend = Some(spend);
+        }
+        item.recent_spend = Some(crate::automations::RecentSpend { spend, runs: 1 });
+        let phone =
+            serde_json::to_value(PhoneAutomations::project(Some(&section(vec![item])), &[]))
+                .unwrap();
+        let item = &phone["items"][0];
+        assert_eq!(
+            item["records"][0]["spend"],
+            json!({"tokens": 12_300, "micro_usd": 420_000, "unpriced": false})
+        );
+        assert_eq!(item["records"][1].get("spend"), None);
+        assert_eq!(item["recent_spend"]["runs"], 1);
     }
 }
