@@ -9,10 +9,12 @@
 //! over the connection. Nothing is installed: a target with no Hide of its
 //! own is answered as such.
 //!
-//! A dial here asks nobody. A login that needs a password, a passphrase, a
-//! code, an unknown host key or a key touch ends as not reached, and the
-//! operator pairs by a link instead (B7): keys, the agent and Tailscale SSH
-//! still sign in.
+//! A look or a pairing the Add dialog starts asks nobody. A login that needs
+//! a password, a passphrase, a code, an unknown host key or a key touch
+//! ends as not reached, and the operator pairs by a link instead (B7): keys,
+//! the agent and Tailscale SSH still sign in. A helper device's switch
+//! ([`switch`]) is the operator's press on that device's row, so its one
+//! login asks there as the device's own connection does (D-45).
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
@@ -186,25 +188,40 @@ pub fn accept(
     key: &PeerKey,
 ) -> Result<Paired, &'static str> {
     let upstream = Upstream::new(SshTarget::new(&reach.home, alias));
-    let key = key.to_hex();
-    let ran = run(
-        &upstream,
-        reach,
-        &[
-            "accept-ssh",
-            "--request",
-            request,
-            "--key",
-            &key,
-            "--device",
-            &me.device,
-            "--name",
-            &me.name,
-        ],
-    );
+    let answer = accept_on(&upstream, reach, alias, request, me, key, false);
     let login = upstream.direct_host();
     upstream.close();
-    let answer = match ran {
+    paired(&answer?["accepted"], login).ok_or("ssh_update_there")
+}
+
+/// Runs the target's `accept-ssh` on `upstream`'s session and answers the
+/// value it printed. With `helper` it also asks for the folder of the
+/// device helper this machine dialed there (D-49).
+fn accept_on(
+    upstream: &Upstream,
+    reach: &Reach,
+    alias: &str,
+    request: &str,
+    me: &Me,
+    key: &PeerKey,
+    helper: bool,
+) -> Result<Value, &'static str> {
+    let key = key.to_hex();
+    let mut words = vec![
+        "accept-ssh",
+        "--request",
+        request,
+        "--key",
+        &key,
+        "--device",
+        &me.device,
+        "--name",
+        &me.name,
+    ];
+    if helper {
+        words.push("--helper");
+    }
+    let mut answer = match run(upstream, reach, &words) {
         Ok(Said::Answer(answer)) => answer,
         Ok(Said::NoProgram) => return Err("ssh_hide_absent"),
         Ok(Said::Unread) => return Err("ssh_update_there"),
@@ -222,12 +239,131 @@ pub fn accept(
             _ => "ssh_update_there",
         });
     }
-    let accepted: Accepted = serde_json::from_value(answer["value"]["accepted"].clone())
-        .map_err(|_| "ssh_update_there")?;
+    Ok(answer["value"].take())
+}
+
+/// The pairing a target's answer carries, with the addresses its SSH login
+/// reached.
+fn paired(accepted: &Value, login: Option<String>) -> Option<Paired> {
+    let accepted: Accepted = serde_json::from_value(accepted.clone()).ok()?;
     let first = login
         .map(|host| login_addresses(&host, &accepted.candidates))
         .unwrap_or_default();
-    Ok(Paired { accepted, first })
+    Some(Paired { accepted, first })
+}
+
+/// What became of the folder of the device helper this machine dialed on
+/// the target (D-49).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Folder {
+    /// This machine's node goes on in it: its terminals continue.
+    Taken,
+    /// The target has no helper folder.
+    Absent,
+    /// This machine's work there has a folder of its own.
+    Kept,
+}
+
+/// How far a helper device's switch got on the SSH login alone.
+pub enum Switched {
+    /// The target's Hide saved a grant for this machine, or holds one
+    /// already (`paired` is none): the connection confirms it.
+    Paired {
+        paired: Option<Paired>,
+        folder: Folder,
+    },
+    /// Another machine took the helper's folder first, named as the target
+    /// knows it: nothing was saved, and the operator is asked before this
+    /// machine's terminals there are given up (D-75).
+    HeldBy(String),
+    /// The target has no Hide of its own: one is installed only when the
+    /// operator allows it (D-45).
+    InstallNeeded { system: String },
+}
+
+/// One switch of the helper device this machine dials as `alias`.
+pub struct Switch<'a> {
+    pub reach: &'a Reach,
+    pub alias: &'a str,
+    pub request: &'a str,
+    pub me: &'a Me,
+    pub key: &'a PeerKey,
+    /// Whether this machine asks for the helper's folder: not after its
+    /// operator agreed to go on without it (D-75).
+    pub take_folder: bool,
+    /// Where the login's questions go: the device's row.
+    pub press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
+}
+
+/// Looks at the target and pairs with the Hide it runs, over one SSH login
+/// that may ask the operator on the device's row. A refusal is its reason
+/// code, and nothing was saved on either machine.
+pub fn switch(switch: &Switch<'_>) -> Result<Switched, &'static str> {
+    let upstream = Upstream::new(SshTarget::new(&switch.reach.home, switch.alias));
+    upstream.may_ask(switch.press.clone());
+    let done = switch_on(&upstream, switch);
+    upstream.close();
+    done
+}
+
+fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'static str> {
+    let looked = match run(upstream, switch.reach, &["look-ssh"]) {
+        Ok(said) => look_of(said),
+        Err(error) => {
+            log(switch.alias, "look", &error);
+            return Err("ssh_not_reached");
+        }
+    };
+    match looked {
+        Looked::Ready => {}
+        Looked::Absent => {
+            let system = upstream.system().map_err(|_| "ssh_not_reached")?;
+            return Ok(Switched::InstallNeeded { system });
+        }
+        Looked::UpdateThere => return Err("ssh_update_there"),
+        Looked::NotRunning { .. } => return Err("ssh_hide_not_running"),
+        Looked::NotReached => return Err("ssh_not_reached"),
+    }
+    let accepted = accept_on(
+        upstream,
+        switch.reach,
+        switch.alias,
+        switch.request,
+        switch.me,
+        switch.key,
+        switch.take_folder,
+    );
+    let answer = match accepted {
+        // Paired already, and going on without the helper's folder: there
+        // is nothing to save on the target.
+        Err("device_already_connected") if !switch.take_folder => {
+            return Ok(Switched::Paired {
+                paired: None,
+                folder: Folder::Kept,
+            });
+        }
+        answer => answer?,
+    };
+    let folder = match answer["helper"].as_str() {
+        Some("held") => {
+            let by = answer["by"].as_str().unwrap_or_default().to_owned();
+            return Ok(Switched::HeldBy(by));
+        }
+        Some("taken") => Folder::Taken,
+        Some("absent") => Folder::Absent,
+        Some("kept") => Folder::Kept,
+        // Asked for no folder, and so told of none.
+        None if !switch.take_folder => Folder::Kept,
+        _ => return Err("ssh_update_there"),
+    };
+    let paired = match &answer["accepted"] {
+        Value::Null if switch.take_folder => None,
+        accepted => {
+            Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?)
+        }
+    };
+    Ok(Switched::Paired { paired, folder })
 }
 
 /// The addresses the SSH login reached, at the port the target's endpoint

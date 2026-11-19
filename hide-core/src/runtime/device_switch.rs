@@ -70,6 +70,26 @@ impl DeviceSwitchPayload {
 }
 
 impl Runtime {
+    /// Where the questions of a switch's SSH login go: the device's row,
+    /// as those of its own connection attempts do (D-45). The operator's
+    /// press on that row started the switch, so it may ask. None for a
+    /// device that never had a connection attempt, whose row has nowhere
+    /// to put a question: its login then asks nobody.
+    pub(crate) fn device_switch_sign_in(
+        &self,
+        device_id: &str,
+    ) -> Option<Arc<dyn hide_node_link::device::SignIn>> {
+        let context = self.worker_context.clone()?;
+        let host = self.device_hosts.get(device_id)?;
+        Some(Arc::new(super::device_sign_in::RowSignIn {
+            context,
+            device_id: device_id.to_owned(),
+            generation: host.generation,
+            wake: crate::remote::Wake::Allowed,
+            withdrawn: Arc::default(),
+        }))
+    }
+
     /// The switch of `device_id` as its row draws it.
     pub(super) fn device_switch_snapshot(&self, device_id: &str) -> Option<DeviceSwitchSnapshot> {
         self.device_switches

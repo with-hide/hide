@@ -265,6 +265,10 @@ enum Command {
         device: String,
         reply: Sender<MoveSourceAnswer>,
     },
+    DeviceSwitchSignIn {
+        device: String,
+        reply: Sender<Option<Arc<dyn hide_node_link::device::SignIn>>>,
+    },
     InboundNode {
         node: String,
         label: String,
@@ -1175,6 +1179,22 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the release source".to_owned())
     }
 
+    /// Where the SSH login of `device`'s switch asks the operator: the
+    /// device's row; none when the core has no such row to ask on.
+    pub fn device_switch_sign_in(
+        &self,
+        device: &str,
+    ) -> Option<Arc<dyn hide_node_link::device::SignIn>> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::DeviceSwitchSignIn {
+                device: device.to_owned(),
+                reply,
+            })
+            .ok()?;
+        rx.recv().ok().flatten()
+    }
+
     pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -1905,6 +1925,9 @@ fn owner_loop(
             }
             Command::MoveSource { device, reply } => {
                 let _ = reply.send(core.move_source(&device));
+            }
+            Command::DeviceSwitchSignIn { device, reply } => {
+                let _ = reply.send(core.device_switch_sign_in(&device));
             }
             Command::ReleaseSource { node, reply } => {
                 let _ = reply.send(core.release_source(&node));
