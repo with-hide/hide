@@ -3162,6 +3162,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
     },
 
+    /**
+     * ◧ on a pane's head or in its menus (PRD lane-desk-pair-view B18, B20,
+     * B26): the pane beside its tab's desk, or, pressed on the pane already
+     * there, the tab's own layout back. The core decides what the desk puts
+     * in front and refuses a pane with nothing to show.
+     */
+    togglePairView(paneId: string) {
+      const pair = workspaceViewOf(rest())?.tray.pair;
+      dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
+    },
+
     /** ⌘= / ⌘- / ⌘0 scale whichever surface is showing: an image or PDF
      * zooms when its display holds the keyboard, the document's text when an
      * editor tab owns the canvas, else the focused terminal pane's. */
