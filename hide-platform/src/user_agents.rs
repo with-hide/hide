@@ -305,7 +305,7 @@ pub fn account_home() -> io::Result<PathBuf> {
         account_record(|record| PathBuf::from(std::ffi::OsStr::from_bytes(record.home)))
     }
     #[cfg(windows)]
-    crate::host::home_dir()
+    crate::fs::private::current_user_profile()
 }
 
 /// The account's login name from the user database.

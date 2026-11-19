@@ -55,21 +55,36 @@ pub const JOURNEY_CLI_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// The file that declares a HOME a test fixture's ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = ".hide-e2e-device-home";
 
-/// Whether `home` is a test fixture's: under `/tmp`, carrying
-/// [`FIXTURE_HOME_MARKER`], and not the account's own. Nothing run for a
-/// fixture HOME may reach the account's real launchd domain, which
-/// `gui/<uid>` is whatever HOME says.
+/// Whether `home` is a test fixture's: in the system's temporary folder
+/// (`/tmp` on Unix, the account's own `AppData\Local\Temp` on Windows),
+/// carrying [`FIXTURE_HOME_MARKER`], and not the account's own. Nothing run
+/// for a fixture HOME may reach the account's real login items, which
+/// belong to the account whatever HOME says.
 pub fn fixture_home(home: &Path) -> bool {
     let Ok(home) = hide_platform::fs::identity::canonical(home) else {
         return false;
     };
-    let temporary = ["/tmp", "/private/tmp"]
-        .iter()
-        .any(|root| home.starts_with(root));
-    let own = hide_platform::user_agents::account_home()
+    let Ok(own) = hide_platform::user_agents::account_home()
         .and_then(|own| hide_platform::fs::identity::canonical(&own))
-        .is_ok_and(|own| own == home);
-    temporary && !own && home.join(FIXTURE_HOME_MARKER).is_file()
+    else {
+        return false;
+    };
+    let temporary = temporary_roots(&own)
+        .iter()
+        .filter_map(|root| hide_platform::fs::identity::canonical(root).ok())
+        .any(|root| home.starts_with(&root) && home != root);
+    temporary && own != home && home.join(FIXTURE_HOME_MARKER).is_file()
+}
+
+/// The folders a fixture HOME may be made in, for an account whose own home
+/// is `own`: read from the account, never from a variable a test sets.
+fn temporary_roots(own: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![own.join("AppData").join("Local").join("Temp")]
+    } else {
+        let _ = own;
+        vec![PathBuf::from("/tmp"), PathBuf::from("/private/tmp")]
+    }
 }
 
 /// The state folder builds before this layout used by default; moved once to
@@ -818,14 +833,17 @@ mod tests {
         assert!(!runtime_root(home).starts_with(holders_root(home)));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn only_a_marked_home_under_tmp_is_a_fixture_home() {
-        let marked = tempfile::tempdir_in("/tmp").unwrap();
+    fn only_a_marked_home_in_the_temporary_folder_is_a_fixture_home() {
+        let own = hide_platform::user_agents::account_home().unwrap();
+        let temporary = &temporary_roots(&own)[0];
+        let marked = tempfile::tempdir_in(temporary).unwrap();
         std::fs::write(marked.path().join(FIXTURE_HOME_MARKER), "").unwrap();
-        let unmarked = tempfile::tempdir_in("/tmp").unwrap();
+        let unmarked = tempfile::tempdir_in(temporary).unwrap();
         assert!(fixture_home(marked.path()));
         assert!(!fixture_home(unmarked.path()));
+        // The temporary folder itself is never one, marked or not.
+        assert!(!fixture_home(temporary));
     }
 
     /// A fixture HOME's kit has no login agents, so nothing it unloads or

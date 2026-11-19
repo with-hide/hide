@@ -210,31 +210,31 @@ pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
         key: HIDE_BUILD_VERSION_OVERRIDE,
         required: false,
-        format: "a version such as 0.4.2; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "a version such as 0.4.2; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A link's hello carries the version this build was packaged with (HIDE_VERSION at build time)",
     },
     EnvKey {
         key: HIDE_BUILD_ORDER_OVERRIDE,
         required: false,
-        format: "a commit count; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "a commit count; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A link's hello carries the build order this build was packaged with (HIDE_BUILD_ORDER at build time, 0 when no package numbered it)",
     },
     EnvKey {
         key: HIDE_CORE_STARTER,
         required: false,
-        format: "`fixture`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "`fixture`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move starts the core on the machine taking it through the account's login item (launchd); a fixture HOME with `fixture` starts it as a detached process instead, and a fixture HOME without it is refused, so no test reaches launchd",
     },
     EnvKey {
         key: HIDE_FIXTURE_CORE_STOP,
         required: false,
-        format: "`hang`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "`hang`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "The core role stops when asked; a fixture HOME with `hang` makes that stop never return, so the process ends itself past its bound",
     },
     EnvKey {
         key: HIDE_PREFLIGHT_PROGRAMS,
         required: false,
-        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move's checks on the machine taking the core run the account's `gh`, /bin/launchctl and /usr/bin/pmset; a fixture HOME names stand-ins, so a test passes or fails each check without the machine's own GitHub login, session and power settings, and a fixture HOME without it is refused rather than reaching the account's launchd",
     },
     EnvKey {
