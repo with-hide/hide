@@ -898,6 +898,13 @@ pub enum KitPlace {
     /// removes no build, since the core update keeps the one it may go back
     /// to (`kit::adopt_build`).
     Build { root: PathBuf, version: String },
+    /// A guest's node, run from that guest's install root on another
+    /// machine's account (PRD device-connect-iroh D-77 (2), (4)): the kit
+    /// installs the hook entries and the agents' pieces from
+    /// `<root>/current`, which it points at this build, and nothing else of
+    /// the account (`hide_kit::guest_target`). The host's Hide places and
+    /// removes the builds.
+    Guest { root: PathBuf, version: String },
     /// The resources folder of the desktop package the node runs from
     /// (`hide_kit::bundled_kit_dir`).
     Bundled(PathBuf),

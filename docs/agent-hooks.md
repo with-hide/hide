@@ -1315,6 +1315,8 @@ Each installation's kit writes its own entries and acts only in its own panes, s
 Every entry carries its installation (`--install-b64`), and OpenCode's, Pi's and omp's plugin files carry it in their names: the app's keep the names earlier builds wrote, and another installation's add a 16-hex mark (`route::mark`).
 A pass judges, installs and takes out only its own entries: those that name its installation, those an earlier build wrote without naming one, which read as an older version and are replaced, and those whose helper is gone.
 A device helper's first pass takes out the plugin files its earlier build wrote under the app's names.
+A third kind is another machine's work on this account, a guest's (PRD device-connect-iroh D-77 (4), [ARCHITECTURE.md](ARCHITECTURE.md#a-guests-hook-entries)): its builds sit under that guest's install root in the host's state folder, so it is named `root:<install root>` like a helper root's, and its kit keeps the hook entries and plugin files and nothing else (`hide_kit::guest_target`, `KitTarget::hooks_only`).
+It takes no `hide` command or `PATH` link, writes and removes no skill, which every Hide of the account shares, and retires no old layout; the host's Hide takes its entries out by that name when nothing of the guest runs on the machine (`hide_kit::remove_guest`).
 Codex trusts an exact command, so each installation's pass trusts its own entries.
 
 A pane holder's pane names the installation that started it (`HIDE_INSTALL`) and that installation's own `hide` (`HIDE_INSTALL_CLI`, the `hide` in its `current` for a helper root, which a Windows device pane also finds first on its `PATH`).

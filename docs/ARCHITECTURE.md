@@ -3270,6 +3270,15 @@ The node keeps a session on every pane its holders' records say may run, so the 
 After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
 `hide pane send` types text and Enter into a guest's pane through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
 
+### A guest's hook entries
+
+A guest's agents report to the guest's core through hook entries of the guest's own installation in the host account's agent settings (PRD D-77 (4), (5); [agent-hooks.md](agent-hooks.md#more-than-one-hide-on-an-account)).
+The guest's node writes them: it runs from the guest's install root (`<state>/g/<key>/i/<build>/hided`), names its installation by that root, and answers its core's kit requests as a device's node does, over a target that keeps to the hook entries and plugin files (`KitPlace::Guest`, `hide_host::kit::run_guest`, `hide_kit::guest_target`); a node that runs from anywhere else installs nothing.
+The entries name `<install root>/current`, which the pass points at the build that runs, so a guest's next build needs no rewrite, and a guest's panes name that installation and its own `hide` (`HIDE_INSTALL`, `HIDE_INSTALL_CLI`).
+The account's `hide` command, its `PATH`, its skills and its login agents stay the host's own Hide's.
+The host's Hide takes the entries out, by Hide's marker and that installation's name (`Guests::unhook`, `hide_kit::remove_guest`): when the guest's node has stopped and no pane of the guest is left, when the guest is taken off the machine, and at the daemon's start for what a node that ended without it left.
+So the entries are there while the guest's node runs, which is while the guest is connected or has a pane here, and each costs every agent event on the account one helper start that exits at once in another installation's pane.
+
 ### A guest taken off the host
 
 A guest's work on this machine follows its grant.

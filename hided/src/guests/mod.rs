@@ -270,7 +270,9 @@ impl Guests {
             Box::new(move || {
                 if let Some(guests) = guests.upgrade() {
                     guests.tell_core();
-                    // The last pane of a guest that was taken off ended.
+                    // The last pane of a guest whose node is gone ended,
+                    // and, of one that was taken off, the guest with it.
+                    guests.unhook_if_idle(&listed);
                     guests.forget_if_done(&listed);
                 }
             }),
@@ -329,9 +331,13 @@ impl Guests {
                     Phase::Starting => following.detach(),
                     Phase::Stopped { .. } => {
                         following.detach();
-                        // The node of a guest that was taken off ended.
+                        // The node ended: with no pane left its hook
+                        // entries go, and a guest that was taken off with it.
                         if let Some(guests) = guests.upgrade() {
-                            tokio::task::spawn_blocking(move || guests.forget_if_done(&followed));
+                            tokio::task::spawn_blocking(move || {
+                                guests.unhook_if_idle(&followed);
+                                guests.forget_if_done(&followed);
+                            });
                         }
                     }
                 }
@@ -369,6 +375,9 @@ impl Guests {
             if has_panes && removed.as_deref().map(str::trim).ok() != Some(END_NOW) {
                 self.start_remembered(&guest, &node);
             }
+            // What a node that ended without this daemon left on the
+            // account.
+            self.unhook_if_idle(&guest);
             record("guests.resumed", &guest, json!({"panes": has_panes}));
         }
         self.tell_core();
@@ -479,6 +488,7 @@ impl Guests {
             if !granted.contains(&guest) {
                 let hosted = lock(&self.hosted);
                 if !hosted.contains_key(&guest) {
+                    self.unhook(&guest);
                     self.remove_folder(&guest);
                 }
             }
@@ -580,7 +590,9 @@ impl Guests {
             }
             let dropped = hosted.remove(guest);
             // Under the lock: a guest that is paired again makes its
-            // folder only after this one is gone.
+            // folder, and its node its hook entries, only after these are
+            // gone.
+            self.unhook(guest);
             self.remove_folder(guest);
             dropped
         };
@@ -592,6 +604,59 @@ impl Guests {
         }
         record("guests.forgotten", guest, json!({}));
         self.tell_core();
+    }
+
+    /// Takes the hook entries of `guest`'s installation off this account
+    /// once nothing of the guest runs here: its node stopped and it has no
+    /// pane (D-77 (4)). A guest that comes back has them written again by
+    /// its node, which its core asks as it asks any device's kit. Blocking.
+    fn unhook_if_idle(&self, guest: &PeerKey) {
+        let idle = self.known(guest).is_none_or(|known| {
+            known.tap.panes().is_empty() && known.node.stopped_by(Instant::now())
+        });
+        if idle {
+            self.unhook(guest);
+        }
+    }
+
+    /// Takes what `guest`'s installation wrote into the account's agent
+    /// settings: the entries that carry Hide's marker and that
+    /// installation's name, its agent pieces and its record (D-77 (5)). The
+    /// guest's node wrote them from the guest's own build; this build knows
+    /// them by the name alone, which is the install root's
+    /// (`hide_kit::remove_guest`), and leaves the account's `hide` command,
+    /// its skills and every other installation's entries. Blocking.
+    fn unhook(&self, guest: &PeerKey) {
+        let root = layout::guest_install_root(&self.state_dir, guest);
+        let report = hide_kit::remove_guest(&root, &self.home);
+        let outcomes = report
+            .components
+            .iter()
+            .map(|(id, outcome)| (id.code().to_owned(), outcome))
+            .chain(
+                report
+                    .agents
+                    .iter()
+                    .map(|(piece, outcome)| (piece.clone(), outcome)),
+            );
+        let mut removed = Vec::new();
+        let mut failed = Vec::new();
+        for (piece, outcome) in outcomes {
+            match outcome {
+                hide_kit::RemoveOutcome::Removed => removed.push(piece),
+                hide_kit::RemoveOutcome::Failed { reason } => {
+                    failed.push(json!({"piece": piece, "reason": reason}));
+                }
+                hide_kit::RemoveOutcome::Absent | hide_kit::RemoveOutcome::Kept { .. } => {}
+            }
+        }
+        if !removed.is_empty() || !failed.is_empty() {
+            record(
+                "guests.hooks_removed",
+                guest,
+                json!({"removed": removed, "failed": failed}),
+            );
+        }
     }
 
     fn remove_folder(&self, guest: &PeerKey) {
@@ -1521,6 +1586,40 @@ mod tests {
             })
             .unwrap(),
         );
+        // The hook entries the guest's node wrote into this account's
+        // Claude Code settings, beside another Hide's.
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        for install in [guest_install(state, guest), "app".to_owned()] {
+            // An entry whose helper is gone is no installation's any more.
+            let helper = home.join("helper");
+            std::fs::write(&helper, b"").unwrap();
+            hide_agent_hooks::install::install(
+                hide_agent_hooks::AgentRuntime::ClaudeCode,
+                home,
+                hide_agent_hooks::route::HookTarget::new(&helper, state)
+                    .and_then(|target| target.of_install(&install))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    /// The name the hook entries of `guest`'s installation carry.
+    fn guest_install(state: &Path, guest: &PeerKey) -> String {
+        hide_agent_hooks::route::install_of_root(&layout::guest_install_root(state, guest))
+    }
+
+    /// Whether this account's Claude Code settings carry entries of the
+    /// installation `install`.
+    fn hooked(home: &Path, install: &str) -> bool {
+        !matches!(
+            hide_agent_hooks::install::status(
+                hide_agent_hooks::AgentRuntime::ClaudeCode,
+                home,
+                Some(install),
+            ),
+            hide_agent_hooks::HookStatus::NotInstalled
+        )
     }
 
     /// Waits for `state` without a timed pause: it is looked at again each
@@ -1595,6 +1694,8 @@ mod tests {
         until("the guest to be marked as taken off", || removed.exists()).await;
         assert_eq!(guests.panes().len(), 1, "its pane stays on this screen");
         assert!(guests.node(&guest).unwrap().running().is_some());
+        // Its agents still run here, so its hook entries stay.
+        assert!(hooked(home.path(), &guest_install(state.path(), &guest)));
 
         // The operator ends its work: the node is told to end every pane
         // now, with the guest away. The pane ends, then the node, and then
@@ -1610,6 +1711,9 @@ mod tests {
         until("the guest's folder to go", || !folder.exists()).await;
         assert!(guests.node(&guest).is_none());
         assert!(guests.panes().is_empty());
+        // Its hook entries went with it, and no other Hide's did.
+        assert!(!hooked(home.path(), &guest_install(state.path(), &guest)));
+        assert!(hooked(home.path(), "app"));
     }
 
     /// A removal that was ending a guest's work when this daemon stopped

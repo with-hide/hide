@@ -279,6 +279,17 @@ pub fn run(dir: &str) -> ! {
     }
 
     let worktree_facts = hide_kit::layout::worktree_facts(&dir);
+    // A node that runs from its guest's install root keeps that
+    // installation's hook entries on this account, which its core asks for
+    // as it asks any device's kit (D-77 (4)); a copy anywhere else, a
+    // development build among them, installs nothing.
+    let kit = match (&install_root, program.parent().and_then(Path::file_name)) {
+        (Some(root), Some(version)) => KitPlace::Guest {
+            root: root.clone(),
+            version: version.to_string_lossy().into_owned(),
+        },
+        _ => KitPlace::Standalone,
+    };
     for stream in next {
         let session = life.begin(stream.shutdown_handle());
         record("guest_node.link_started", json!({"session": session}));
@@ -294,7 +305,7 @@ pub fn run(dir: &str) -> ! {
                 opened_roots: None,
                 browser: None,
                 worktree_facts: Some(worktree_facts.clone()),
-                kit: KitPlace::Standalone,
+                kit: kit.clone(),
                 panes: Some(slot.clone()),
             },
         );
