@@ -128,6 +128,25 @@ test("the policy's relay journal retention is not shorter than what the deploy k
   assert.equal((privacy.match(/최대 7일/g) ?? []).length, 1);
 });
 
+test("the device relay section states what the deploy bundle runs, in each language", () => {
+  const caddy = repoFile("deploy/relay/Caddyfile");
+  assert.match(caddy, /^device-relay\.withhide\.dev \{$/m, "the bundle serves the host name the page names");
+  const unit = repoFile("deploy/relay/hide-iroh-relay.service");
+  assert.match(unit, /^StandardOutput=null$/m, "the relay's own output is discarded");
+  assert.match(unit, /^StandardError=null$/m);
+  const cap = repoFile("deploy/relay/iroh-relay-meter.py").match(/^CAP_BYTES = (\d+) \* 10\*\*9$/m);
+  assert.ok(cap, "the meter's cap is written in GB");
+  const alerts = repoFile("deploy/relay/fluent-bit.conf").match(/Regex event \^\((.*)\)\$/)[1].split("|");
+  assert.equal(alerts.length, 6, "the page counts six forwarded alerts");
+  for (const [id, gb, six] of [["en", `${cap[1]} GB`, "Six kinds of alert only"], ["ko", `${cap[1]} GB`, "여섯 가지뿐"]]) {
+    const body = section(privacy, id);
+    assert.match(body, /<h4>3\.4 [^<]+<\/h4>/, `${id}: section 3.4 describes the device relay`);
+    assert.ok(body.includes("<code>device-relay.withhide.dev</code>"), `${id}: names the device relay's host`);
+    assert.ok(body.includes(gb), `${id}: states the monthly cap`);
+    assert.ok(body.includes(six), `${id}: counts the forwarded alerts`);
+  }
+});
+
 test("the policy names what Google sees through FCM and that the relay passes the token, in each language", () => {
   // The Android app's notifications go through Google's FCM; the Play data safety form declares the same facts (mobile/store/android/play-forms.md).
   const claims = {

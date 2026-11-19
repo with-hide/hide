@@ -30,7 +30,6 @@ ed25519-dalek = { version = "3", features = ["pem", "rand_core", "serde"] }
 fastrand = { version = "2" }
 flate2 = { version = "1" }
 form_urlencoded = { version = "1" }
-futures-sink = { version = "0.3" }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3", default-features = false, features = ["std"] }
 hashbrown = { version = "0.17" }
 http = { version = "1" }
@@ -51,11 +50,9 @@ serde_core = { version = "1", features = ["alloc", "rc"] }
 serde_json = { version = "1", features = ["alloc", "float_roundtrip", "preserve_order", "raw_value"] }
 signature = { version = "3", default-features = false, features = ["alloc", "rand_core"] }
 simd-adler32 = { version = "0.3" }
-slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new"] }
 subtle = { version = "2", features = ["const-generics"] }
-sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "test-util"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-util = { version = "0.7", features = ["codec", "io-util", "rt"] }
@@ -96,7 +93,8 @@ getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-f
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "tls12", "webpki-tokio"] }
 hyper-util = { version = "0.1", default-features = false, features = ["client-proxy"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
-tokio = { version = "1", default-features = false, features = ["io-std", "test-util"] }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+tokio = { version = "1", default-features = false, features = ["io-std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 
@@ -112,7 +110,8 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 log = { version = "0.4", default-features = false, features = ["std"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
-tokio = { version = "1", default-features = false, features = ["io-std", "test-util"] }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+tokio = { version = "1", default-features = false, features = ["io-std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
@@ -126,7 +125,8 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 log = { version = "0.4", default-features = false, features = ["std"] }
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
-tokio = { version = "1", default-features = false, features = ["io-std", "test-util"] }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+tokio = { version = "1", default-features = false, features = ["io-std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 zerocopy = { version = "0.8", default-features = false, features = ["derive", "simd"] }
@@ -141,7 +141,8 @@ futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng"] }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "tls12", "webpki-tokio"] }
 hyper-util = { version = "0.1", default-features = false, features = ["client-proxy"] }
-tokio = { version = "1", default-features = false, features = ["io-std", "test-util"] }
+sync_wrapper = { version = "1", default-features = false, features = ["futures"] }
+tokio = { version = "1", default-features = false, features = ["io-std"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 windows = { version = "0.62", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_EnhancedStorage", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_Rpc", "Win32_System_SystemServices", "Win32_System_Variant", "Win32_System_Wmi", "Win32_UI_Shell_PropertiesSystem"] }

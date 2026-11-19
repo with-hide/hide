@@ -10,6 +10,7 @@ mod delivery;
 mod dial;
 mod grants;
 mod pairing;
+mod pairings;
 mod raw;
 
 use std::future::Future;
@@ -21,7 +22,7 @@ use hide_peer::loopback::{LoopConn, Loopback, Net};
 use hide_peer::peers::{Config, Incoming, PeerEvent, Peers};
 use hide_peer::protocol::{PeerAddr, PeerKey, StreamKind};
 use hide_peer::store::{Host, KnownState, Via};
-use hide_peer::{MachineKey, PeerStream};
+use hide_peer::{Clock, MachineKey, PeerStream};
 use tokio::sync::{broadcast, mpsc};
 
 /// How long a state may take to be reached before the test fails. It is a
@@ -51,12 +52,23 @@ impl Machine {
     /// A machine started on a state folder that may already hold a key and
     /// records: the same machine after a restart.
     pub fn in_dir(net: &Arc<Net>, name: &'static str, dir: Arc<tempfile::TempDir>) -> Self {
+        Self::with_clock(net, name, dir, Clock::system())
+    }
+
+    /// A machine whose records are stamped by `clock`.
+    pub fn with_clock(
+        net: &Arc<Net>,
+        name: &'static str,
+        dir: Arc<tempfile::TempDir>,
+        clock: Clock,
+    ) -> Self {
         let (key, _) = MachineKey::load_or_create(&layout::machine_key(dir.path()), name).unwrap();
         let config = Config {
             state_dir: dir.path(),
             build: "1.3.0-test",
             device: name,
             release: false,
+            clock,
         };
         let (peers, incoming) = Peers::start(net.join(key), config).unwrap();
         let events = peers.events();
@@ -106,6 +118,13 @@ impl Machine {
         })
         .await
     }
+}
+
+/// A clock that follows the test runtime's time: under a paused runtime,
+/// ten minutes of a pending grant pass when the test advances them.
+pub fn runtime_clock() -> Clock {
+    let started = tokio::time::Instant::now();
+    Clock::new(move || 1_000_000 + started.elapsed().as_millis() as u64)
 }
 
 /// Makes `guest` a guest of `host` through the stores, as a finished

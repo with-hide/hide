@@ -45,6 +45,9 @@ pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
 pub const HIDE_RELAY_URL: &str = "HIDE_RELAY_URL";
 pub const RELAY_URL: &str = "wss://relay.withhide.dev/ws";
 pub const HIDE_MACHINE_ID: &str = host::MACHINE_ID_VARIABLE;
+/// Development and tests: the one address this machine's endpoint for other
+/// Hides binds, with no relay and no local network search (`peer_host`).
+pub const HIDE_PEER_DIRECT: &str = "HIDE_PEER_DIRECT";
 /// Test-only: how a core move starts the core on the machine taking it.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// Test-only: `hang` makes the core role's stop never return, so a journey
@@ -202,6 +205,12 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "Mobile connects to wss://relay.withhide.dev/ws",
     },
     EnvKey {
+        key: HIDE_PEER_DIRECT,
+        required: false,
+        format: "an IP address and UDP port such as 127.0.0.1:0, for development or tests: the endpoint other Hides connect to binds that one address and uses no relay and no local network search",
+        absent_behavior: "The endpoint binds every interface, attaches to the device relay and finds machines on the local network; it is opened only on a machine that is paired, or is sharing itself or adding a machine",
+    },
+    EnvKey {
         key: HIDE_MACHINE_ID,
         required: false,
         format: "a node id: lowercase letters, digits and '-'; only a test fixture sets it, so one host runs a node and the core it dials as two machines",
@@ -302,6 +311,9 @@ pub struct Env {
     /// The only tailscale CLI Mobile runs, when set (`HIDE_TAILSCALE_BIN`).
     pub tailscale_bin: Option<PathBuf>,
     pub relay_url: String,
+    /// The one address the endpoint for other Hides binds, with no relay
+    /// (`HIDE_PEER_DIRECT`); `None` is the product's endpoint.
+    pub peer_direct: Option<SocketAddr>,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
 }
@@ -546,6 +558,19 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         None => RELAY_URL.to_owned(),
     };
+    let peer_direct = match read(HIDE_PEER_DIRECT) {
+        None => None,
+        Some(value) => match value.parse::<SocketAddr>() {
+            Ok(address) => Some(address),
+            Err(_) => {
+                errors.push(EnvError {
+                    key: HIDE_PEER_DIRECT,
+                    kind: "invalid",
+                });
+                None
+            }
+        },
+    };
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
@@ -566,6 +591,7 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         access,
         tailscale_bin,
         relay_url,
+        peer_direct,
         search_path,
     };
     (env, errors)
@@ -929,6 +955,28 @@ mod tests {
                 .host_helper_root,
             None
         );
+    }
+
+    #[test]
+    fn the_peer_endpoint_override_is_one_address_and_port() {
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example")]).unwrap().peer_direct,
+            None
+        );
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example"), (HIDE_PEER_DIRECT, "127.0.0.1:0")])
+                .unwrap()
+                .peer_direct,
+            Some(SocketAddr::from(([127, 0, 0, 1], 0)))
+        );
+        for value in ["", "127.0.0.1", "localhost:7842", "1"] {
+            assert_eq!(
+                from_map(&[(HOME, "/Users/example"), (HIDE_PEER_DIRECT, value)]).unwrap_err()[0]
+                    .key,
+                HIDE_PEER_DIRECT,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

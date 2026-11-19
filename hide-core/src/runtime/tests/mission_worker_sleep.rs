@@ -9,8 +9,10 @@ use crate::agent_sleep::{SleepPhase, SleepRecord, WakeMode};
 use crate::agent_sleep_engine::WakeOutcome;
 use crate::coordination::AgentRecord;
 use crate::delivery::Actor;
-use crate::delivery::ledger::{Ledger, State};
+use crate::delivery::ledger::{Ledger, Letter, State};
+use crate::memory_pressure::PressureReading;
 use crate::workspace_control::Query;
+use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
 
 const CHECKOUT: &str = "/private/tmp/hide-mission-worker-sleep";
 const TABS: [&str; 2] = ["w-order:t1", "w-order:t2"];
@@ -202,6 +204,20 @@ fn phase(runtime: &Runtime, pane: &str) -> Option<SleepPhase> {
         .map(|record| record.phase)
 }
 
+/// Changes the letter `id` by `edit` and publishes the ledger as the store
+/// does.
+fn edit_letter(runtime: &mut Runtime, id: &str, edit: impl FnOnce(&mut Letter)) {
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    edit(
+        ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == id)
+            .unwrap(),
+    );
+    runtime.publish_delivery(Arc::new(ledger), true);
+}
+
 /// B1: a letter to a registered agent asleep in its pane is taken by the
 /// store, pending, by its registration id and by the pane it sleeps in,
 /// where it was refused `target_unavailable` before.
@@ -273,19 +289,15 @@ fn a_request_wakes_a_sleeping_agent_and_a_report_waits() {
 /// A request nobody takes in wakes its recipient once: after the agent
 /// sleeps again it waits as a letter to an awake agent does, so a sleep and
 /// a wake cannot follow each other for the same letter, while a new request
-/// still wakes it. A request whose bell rang before the sleep wakes no one.
+/// still wakes it. A request a prompt hook took before the sleep wakes no one.
 #[test]
-fn a_request_wakes_its_recipient_once_and_a_rung_one_not_at_all() {
+fn a_request_wakes_its_recipient_once_and_a_taken_one_not_at_all() {
     let mut runtime = sleepers(&[WORKER]);
-    let rung = letter(&mut runtime, WORKER, "request");
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    ledger
-        .letters
-        .iter_mut()
-        .find(|letter| letter.id == rung)
-        .unwrap()
-        .bell_sent = true;
-    runtime.publish_delivery(Arc::new(ledger), true);
+    let taken = letter(&mut runtime, WORKER, "request");
+    edit_letter(&mut runtime, &taken, |letter| {
+        letter.bell_sent = true;
+        letter.handed = true;
+    });
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
     letter(&mut runtime, WORKER, "request");
@@ -551,6 +563,258 @@ fn the_store_reads_a_sleeper_with_its_session() {
     assert_eq!(sleeper.since, 1_000);
 }
 
+/// The machine's memory pressure at `level`, read at `now`.
+fn pressure(runtime: &mut Runtime, level: MemoryPressure, now: u64) {
+    runtime.ingest_memory_pressure(
+        None,
+        PressureReading {
+            answer: Ok(PressureAnswer {
+                level,
+                source: PressureSource::System,
+            }),
+            read_at_unix_ms: now,
+        },
+    );
+}
+
+const MINUTE: u64 = 60 * 1000;
+
+/// A worker asleep in its pane that a `request` woke, back with the
+/// conversation it resumed, whose last reply came 51 minutes before the wake
+/// (with-hide/hide#2627): the runtime, the letter's id and when it came back.
+fn woken_worker() -> (Runtime, String, u64) {
+    let mut runtime = sleepers(&[WORKER]);
+    let id = letter(&mut runtime, WORKER, "request");
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, WakeOutcome::Started);
+    let mut back = session("w-order:t1", Some("idle"));
+    let worker = back
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+        .unwrap();
+    worker.facts = Some(crate::request_view::RowFacts {
+        native_session_id: Some(native(WORKER)),
+        last_reply_at_unix_ms: Some(unix_milliseconds() - 51 * MINUTE),
+        ..Default::default()
+    });
+    show(&mut runtime, back);
+    let woke = unix_milliseconds();
+    assert_eq!(phase(&runtime, WORKER), None, "the worker is back");
+    (runtime, id, woke)
+}
+
+/// The minute decision at `at` under memory pressure, and the worker's sleep
+/// phase after it.
+fn pressure_minute(runtime: &mut Runtime, at: u64) -> Option<SleepPhase> {
+    pressure(runtime, MemoryPressure::Warning, at);
+    runtime.tick_agent_sleep(at);
+    phase(runtime, WORKER)
+}
+
+/// with-hide/hide#2627: a worker a `request` woke stays awake under memory
+/// pressure until the letter reaches it, though the conversation it resumed
+/// ended long before its sleep. In order: the wake, a pressure minute, a
+/// later one while the doorbell still holds the letter, then the doorbell.
+/// Once its prompt hook takes the bell, the next pressure minute takes the
+/// worker, and the letter it took wakes it no more.
+#[test]
+fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it() {
+    let (mut runtime, id, woke) = woken_worker();
+
+    // The pressure minute, ten seconds after the wake: its idle time starts
+    // at the wake, and a letter waits for it. Either keeps it awake here;
+    // the next minute checks the letter alone, and the clock alone is
+    // `agent_sleep`'s tests' (`the_idle_clock_of_an_agent_that_came_back_starts_at_its_wake`,
+    // `a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again`).
+    assert_eq!(
+        pressure_minute(&mut runtime, woke + 10_000),
+        None,
+        "ten seconds on"
+    );
+    // Half an hour on, its session read has not settled the resumed turn,
+    // so the doorbell still holds the letter; the letter alone keeps it awake.
+    let held = woke + 31 * MINUTE;
+    let ledger = runtime.delivery_state().unwrap();
+    let waiting = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == id)
+        .unwrap();
+    let patience = crate::delivery::doorbell::Patience::of(waiting);
+    assert_eq!(
+        runtime
+            .delivery_bell_verdict(&actor(WORKER), patience, held)
+            .err(),
+        Some(crate::delivery::doorbell::Hold::SessionUnread)
+    );
+    assert_eq!(
+        pressure_minute(&mut runtime, held),
+        None,
+        "a letter waits for it"
+    );
+
+    // The doorbell: the read settles the turn, and the pane takes the bell.
+    runtime
+        .delivery_observations
+        .get_mut(WORKER)
+        .unwrap()
+        .reads(hide_session::turns::Waiting::Nothing);
+    assert_eq!(
+        runtime
+            .delivery_bell_verdict(&actor(WORKER), patience, held + MINUTE / 2)
+            .err(),
+        None,
+        "the worker's pane takes the letter's bell"
+    );
+
+    // The bell is typed and its prompt hook takes the letter: nothing holds
+    // the worker but its idle time.
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(held + MINUTE / 2);
+        letter.handed = true;
+    });
+    assert_eq!(
+        pressure_minute(&mut runtime, held + MINUTE),
+        Some(SleepPhase::Ending),
+        "the next pressure minute takes it"
+    );
+    assert!(runtime.ingest_agent_sleep_end(WORKER, Ok(9)));
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the letter it took wakes it no more"
+    );
+}
+
+/// A bell typed into the pane can go to a screen of the agent's own and
+/// never reach its conversation: once a later sleep takes the worker, a
+/// letter whose bell was typed but not taken wakes it, as one never rung
+/// does, so the doorbell rings it again.
+#[test]
+fn a_letter_whose_bell_was_typed_but_not_taken_wakes_its_recipient_after_a_later_sleep() {
+    let (mut runtime, woke_for, woke) = woken_worker();
+    edit_letter(&mut runtime, &woke_for, |letter| letter.handed = true);
+    // A request while it is awake: its bell is typed, and a screen takes it.
+    let id = letter(&mut runtime, WORKER, "request");
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(woke + MINUTE);
+    });
+    assert_eq!(
+        pressure_minute(&mut runtime, woke + 31 * MINUTE),
+        Some(SleepPhase::Ending),
+        "the bell ended the hold, and pressure takes it"
+    );
+    assert!(runtime.ingest_agent_sleep_end(WORKER, Ok(9)));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Waking),
+        "the letter its pane did not take wakes it"
+    );
+}
+
+/// The letters that hold their recipient awake: a pending one whose bell
+/// was not typed and that no prompt hook was handed, and none that rang, was
+/// handed over, taken in, cancelled, left undelivered or expired.
+#[test]
+fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    let id = letter(&mut runtime, WORKER, "request");
+    let worker = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == WORKER)
+        .cloned()
+        .unwrap();
+    for (state, rung, handed, holds) in [
+        (State::Pending, false, false, true),
+        (State::Pending, true, false, false),
+        (State::Pending, false, true, false),
+        (State::Delivered, false, false, false),
+        (State::Acknowledged, false, false, false),
+        (State::Cancelled, false, false, false),
+        (State::Undelivered, false, false, false),
+        (State::Expired, false, false, false),
+    ] {
+        edit_letter(&mut runtime, &id, |letter| {
+            letter.state = state;
+            letter.bell_sent = rung;
+            letter.handed = handed;
+        });
+        let waits = crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap());
+        assert_eq!(
+            waits.holds(&worker),
+            holds,
+            "{state:?}, rung {rung}, handed {handed}"
+        );
+    }
+}
+
+/// A bell at rest names every letter waiting for its recipient (` · and 1
+/// more`), and the doorbell rings only the oldest: a letter queued before
+/// another letter's bell was typed into the pane holds its recipient no
+/// more, while one queued after that bell still does.
+#[test]
+fn a_bell_for_an_older_letter_ends_the_hold_of_the_letters_it_names() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    let [report, request] = <[String; 2]>::try_from(letters_from(
+        &mut runtime,
+        &[(LEAD, WORKER, "report"), (LEAD, WORKER, "request")],
+    ))
+    .unwrap();
+    let worker = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == WORKER)
+        .cloned()
+        .unwrap();
+    let queued = runtime
+        .delivery_state()
+        .unwrap()
+        .letters
+        .iter()
+        .find(|letter| letter.id == request)
+        .unwrap()
+        .created_at_unix_ms;
+    let holds = |runtime: &Runtime| {
+        crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap()).holds(&worker)
+    };
+    assert!(holds(&runtime), "both letters wait");
+    // A bell for another session in the pane, or for another pane, names
+    // nothing waiting for this one.
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(queued);
+        letter.recipient.session = Some("an-earlier-session".into());
+    });
+    assert!(holds(&runtime), "a bell for another session");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.recipient = actor(LEAD);
+    });
+    assert!(holds(&runtime), "a bell for another pane");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.recipient = actor(WORKER);
+    });
+    assert!(!holds(&runtime), "the report's bell names the request");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.bell_typed_at_unix_ms = Some(queued - 1);
+    });
+    assert!(
+        holds(&runtime),
+        "a bell typed before the request was queued"
+    );
+}
+
 fn mission(status: &str) -> crate::missions::Mission {
     serde_json::from_value(serde_json::json!({
         "id": "mission-1", "title": "Fix the bug", "project": CHECKOUT,
@@ -620,6 +884,22 @@ fn a_finished_nodes_worker_sleeps_once() {
     );
     runtime.sleep_finished_mission_agents(unix_milliseconds());
     assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// with-hide/hide#2627: a finished node's worker that a letter waits for
+/// keeps its mark and stays awake; once the letter is taken in, the next
+/// minute puts it to sleep.
+#[test]
+fn a_finished_nodes_worker_a_letter_waits_for_sleeps_once_it_is_taken_in() {
+    let mut runtime = mission_runtime();
+    let id = letter(&mut runtime, WORKER, "request");
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "a letter waits for it");
+    assert_eq!(marks(&runtime), ["agent-2"], "it keeps its mark");
+    edit_letter(&mut runtime, &id, |letter| letter.state = State::Delivered);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
 }
 
 /// D-19: an end refused because the agent took a turn keeps the mark, and

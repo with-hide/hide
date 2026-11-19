@@ -1046,7 +1046,7 @@ The `Android app` lane of `pr.yml` runs the JVM tests and a debug build on Linux
 ## Mobile relay server
 
 Installing, updating and operating the production relay is owned by a private operations document, not this guide.
-The manual `relay-artifact.yml` producer builds only the relay from its exact protected-main dispatch SHA and retains source/run and SHA-256 evidence; it signs nothing and deploys nothing.
+The manual `relay-artifact.yml` producer builds the phone relay from its exact protected-main dispatch SHA, and the device relay below, and retains source/run and SHA-256 evidence for both; it signs nothing and deploys nothing.
 
 `bash scripts/verify-cargo.sh build -p hide-relay --bin hide-relay` builds the standalone memory-only server into `target/debug/hide-relay` (`.exe` on Windows).
 Run `target/debug/hide-relay --listen 127.0.0.1:8787` for local clients; `/ws` accepts WebSockets and `/health` answers the uptime check.
@@ -1057,3 +1057,16 @@ It reads no environment override, configuration file, database, persistent state
 Its CLI parser is `hide-relay/src/config.rs`, budget authority is `limits.rs`, and [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md) defines forwarding, proxy trust, log collection and reconnect semantics.
 Ctrl+C on every system, or SIGTERM on Unix, drains the server; the operating service manager owns restarting it.
 `bash scripts/verify-cargo.sh test-scoped -p hide-relay` starts private loopback listeners and real protocol clients and stops them on every exit path.
+
+## Device relay server
+
+The relay computers fall back to when they cannot reach each other directly is the upstream `iroh-relay` server, run as its own service beside the phone relay on the same machine and host (`deploy/relay/`), never a fork.
+`deploy/relay/iroh-relay.version` pins its version; `bash scripts/build-iroh-relay.sh` builds that crates.io release with the lock file it published into `target/iroh-relay/bin/iroh-relay`, and `relay-artifact.yml` records its version and SHA-256 in the artifact's `source.json`, which `scripts/relay-deploy.py` checks before staging.
+Move the pin with the workspace's `iroh`: `scripts/tests/test_relay_deploy.py` fails while `Cargo.lock` holds another `iroh-relay`.
+Caddy terminates TLS for `device-relay.withhide.dev` and re-encrypts to the relay's loopback HTTPS listener (`iroh-relay.toml`); the relay answers address discovery on UDP 7842 itself with the certificate Caddy obtained, read through systemd credentials.
+iroh-relay 1.4.1 does not enforce its own accept-rate settings and has no connection cap, so `iroh-relay.nft` holds both on Caddy's loopback connections, beside the per-client receive limit in `iroh-relay.toml`.
+There is no per-address cap: iroh-relay sees only Caddy's address, and port 443 is shared with the phone relay, whose per-address limit is a rate of new sockets, so a cap on open connections there could refuse phone connections behind one shared NAT.
+The connection cap is sized to the descriptors the shared Caddy may hold, two per device connection beside the phone relay's; the arithmetic sits beside the rule.
+`iroh-relay-meter.py` runs every minute and owns whether the relay runs: it adds what the relay sent to the month from the table's counters, writes an alert event at 80% of the 300 GB cap, stops the relay at the cap until the next UTC month or `iroh-relay-meter.py resume`, and starts it once Caddy holds the certificate, again when the certificate's fingerprint changes (systemd hides the relay's own copy from the meter).
+`relay-deploy.py install` starts the device relay only after the phone relay is healthy; a device relay that does not come up fails an installation, which is rolled back, but not a recovery, which keeps the phone relay running and reports it. A previous release is restored on its own inventory, so a release staged before the device relay existed can still be rolled back to.
+`scripts/tests/test_relay_deploy.py` checks those rules and the files agreeing with each other; `relay-deploy-check.yml` installs the real upstream release behind real Caddy, nftables and systemd on a Linux runner.

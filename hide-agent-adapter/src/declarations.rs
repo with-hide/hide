@@ -303,6 +303,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &["❯"],
             trailer: 0,
+            under: None,
             // A suggestion such as `Try "…"` or the next prompt it predicts,
             // which changes from screen to screen, always dim.
             empty: &[Placeholder {
@@ -410,6 +411,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::ToBlank,
             marker: &["›"],
             trailer: 0,
+            under: None,
             empty: &[Placeholder {
                 text: "Ask Codex to do anything",
                 style: Style::Dim,
@@ -515,6 +517,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             // pane on Windows is (`glyphs::prompt_arrow`).
             marker: &["❯", ">"],
             trailer: 0,
+            under: None,
             // The next prompt Grok predicts after a turn, drawn as ghost text
             // in an empty composer (`ghost_text_style`, always italic); its
             // words change from screen to screen. Typed text and the grey
@@ -635,6 +638,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             marker: &[],
             trailer: 1,
+            under: None,
             empty: &[Placeholder {
                 text: "Ask anything…",
                 style: Style::Rgb(128, 128, 128),
@@ -751,6 +755,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &[],
             trailer: 0,
+            under: None,
             empty: &[],
             // (`tests/fixtures/composer/pi-3-pasted.ansi`)
             pasted: Some(PasteMark {
@@ -860,6 +865,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::Line,
             marker: &["╰─"],
             trailer: 0,
+            under: None,
             empty: &[Placeholder {
                 text: "⇧⇥ to change thinking effort",
                 style: Style::Any,
@@ -949,17 +955,23 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        // The screen rules read agy's permission question as an
-        // approval, but its folder-trust question is unmeasured, and a bell's
-        // Enter into a dialog the rules read as `idle` would answer it; letters reach agy on
-        // its next prompt instead (PRD antigravity-first-class D-06), and
-        // while it works on a later model call of the turn, which its
+        // Rung only at rest, and only once the screen read right before the
+        // bell shows agy's empty prompt: its composer between the rules with
+        // nothing but its mode hint, and nothing under it but its status
+        // line. Every question, picker and dialog agy draws either replaces
+        // the rules (the folder-trust question, the first start) or is drawn
+        // under the composer (a permission or ask question, `/resume`,
+        // `/model`), so none reads as that prompt (`docs/delivery.md`, Safe
+        // intake and manual fallback; with-hide/hide#2580). While it works,
+        // letters reach it on a later model call of the turn, which its
         // `PreInvocation` hook runs before and Hide answers with the letters
         // due as an injected system message (`tool_letters`).
-        bell: false,
+        bell: true,
         scenes: scene_declarations::ANTIGRAVITY,
         bell_names_inbox: false,
-        bell_echo: None,
+        bell_echo: Some(BellEcho {
+            chrome: &['●', '⎿', '┃'],
+        }),
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Antigravity),
         session: Some(SessionFormat::Antigravity),
@@ -976,7 +988,19 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &[">"],
             trailer: 0,
-            empty: &[],
+            // Its status line, `? for shortcuts` and on its right the mode
+            // and the model; a picker, the shortcuts list, a question or any
+            // other row drawn there is not its empty prompt
+            // (`tests/fixtures/composer/agy-1.5.11-*`).
+            under: Some(&["? for shortcuts"]),
+            // Its mode hint, such as `Auto mode: edits & safe commands
+            // auto-approved (shift+tab to cycle)`, whose words change with
+            // the mode, in palette grey; typed text and the paste mark are
+            // drawn in the default colour.
+            empty: &[Placeholder {
+                text: "",
+                style: Style::Palette(8),
+            }],
             // (`tests/fixtures/composer/agy-3-pasted.ansi`)
             pasted: Some(PasteMark {
                 words: "[Pasted text #{n} +{count} lines]",

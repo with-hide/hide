@@ -158,14 +158,45 @@ pub struct Grants {
     record: GrantsRecord,
 }
 
+/// Whether `grant` still counts at `now_unix_ms`. A pending grant waits
+/// [`limits::PENDING_FOR`] for its confirm and counts for nothing after:
+/// this is read wherever a grant is, so an expired one holds no place and
+/// keeps no connection, whether or not a write has dropped it yet.
+fn waits(grant: &Grant, now_unix_ms: u64) -> bool {
+    grant.state != GrantStatus::Pending
+        || now_unix_ms.saturating_sub(grant.created_unix_ms)
+            < limits::PENDING_FOR.as_millis() as u64
+}
+
+/// Whether a removed grant is still remembered at `now_unix_ms`.
+fn remembered(stone: &Tombstone, now_unix_ms: u64) -> bool {
+    now_unix_ms.saturating_sub(stone.revoked_unix_ms) < limits::TOMBSTONE_FOR.as_millis() as u64
+}
+
 impl Grants {
     pub fn open(path: PathBuf) -> io::Result<Self> {
         let record = load(&path)?;
         Ok(Self { path, record })
     }
 
-    pub fn list(&self) -> &[Grant] {
-        &self.record.grants
+    /// The grants that count at `now_unix_ms`: the settled ones and the
+    /// pending ones still waiting for their confirm.
+    pub fn list(&self, now_unix_ms: u64) -> impl Iterator<Item = &Grant> {
+        self.record
+            .grants
+            .iter()
+            .filter(move |grant| waits(grant, now_unix_ms))
+    }
+
+    /// How long `key`'s pending grant still waits for its confirm, when it
+    /// has one that does.
+    pub fn pending_left(&self, key: &PeerKey, now_unix_ms: u64) -> Option<std::time::Duration> {
+        self.list(now_unix_ms)
+            .find(|grant| grant.key == *key && grant.state == GrantStatus::Pending)
+            .map(|grant| {
+                let waited = now_unix_ms.saturating_sub(grant.created_unix_ms);
+                limits::PENDING_FOR.saturating_sub(std::time::Duration::from_millis(waited))
+            })
     }
 
     /// The guest's settled grant: active or paused.
@@ -176,18 +207,21 @@ impl Grants {
             .find(|grant| grant.key == *key && grant.state != GrantStatus::Pending)
     }
 
-    /// What `key`'s streams run under now. A pending grant opens nothing,
-    /// and so does a removed one.
-    pub fn state_of(&self, key: &PeerKey) -> Change {
+    /// What `key`'s streams run under at `now_unix_ms`. A pending grant
+    /// opens nothing, and so does a removed one.
+    pub fn state_of(&self, key: &PeerKey, now_unix_ms: u64) -> Change {
         let (state, generation) = match self.current(key) {
             Some(grant) if grant.state == GrantStatus::Active => {
                 (GrantState::Active, grant.generation)
             }
             Some(_) => (GrantState::Paused, 0),
-            None if self.record.grants.iter().any(|grant| grant.key == *key) => {
-                (GrantState::Pending, 0)
-            }
-            None if self.record.tombstones.iter().any(|stone| stone.key == *key) => {
+            None if self.pending_left(key, now_unix_ms).is_some() => (GrantState::Pending, 0),
+            None if self
+                .record
+                .tombstones
+                .iter()
+                .any(|stone| stone.key == *key && remembered(stone, now_unix_ms)) =>
+            {
                 (GrantState::Revoked, 0)
             }
             None => (GrantState::None, 0),
@@ -218,7 +252,8 @@ impl Grants {
         via: Via,
         now_unix_ms: u64,
     ) -> Result<Grant, StoreError> {
-        let mut next = self.record.clone();
+        // What stopped waiting holds no place among the machines counted.
+        let mut next = self.swept(now_unix_ms);
         next.grants
             .retain(|grant| !(grant.key == key && grant.state == GrantStatus::Pending));
         // The count is of machines: a settled grant and the pending one
@@ -289,10 +324,13 @@ impl Grants {
             }
         }
         self.commit(next)?;
-        Ok((ConfirmState::Active, Some(self.state_of(key))))
+        Ok((ConfirmState::Active, Some(self.state_of(key, now_unix_ms))))
     }
 
-    fn settle(&mut self, key: &PeerKey, to: GrantStatus) -> Result<Change, StoreError> {
+    /// Moves `key`'s settled grant to `to`. `None` when it is there
+    /// already: the same request sent twice saves nothing and moves no
+    /// generation, so the streams running under the grant go on.
+    fn settle(&mut self, key: &PeerKey, to: GrantStatus) -> Result<Option<Change>, StoreError> {
         let mut next = self.record.clone();
         next.epoch += 1;
         let generation = next.epoch;
@@ -301,17 +339,31 @@ impl Grants {
             .iter_mut()
             .find(|grant| grant.key == *key && grant.state != GrantStatus::Pending)
             .ok_or(StoreError::Unknown)?;
+        if grant.state == to {
+            return Ok(None);
+        }
         grant.state = to;
         grant.generation = generation;
         self.commit(next)?;
-        Ok(self.state_of(key))
+        Ok(Some(Change {
+            key: *key,
+            state: match to {
+                GrantStatus::Active => GrantState::Active,
+                _ => GrantState::Paused,
+            },
+            generation: if to == GrantStatus::Active {
+                generation
+            } else {
+                0
+            },
+        }))
     }
 
-    pub fn pause(&mut self, key: &PeerKey) -> Result<Change, StoreError> {
+    pub fn pause(&mut self, key: &PeerKey) -> Result<Option<Change>, StoreError> {
         self.settle(key, GrantStatus::Paused)
     }
 
-    pub fn resume(&mut self, key: &PeerKey) -> Result<Change, StoreError> {
+    pub fn resume(&mut self, key: &PeerKey) -> Result<Option<Change>, StoreError> {
         self.settle(key, GrantStatus::Active)
     }
 
@@ -341,28 +393,29 @@ impl Grants {
         next.grants.retain(|grant| !matches(grant));
         trim_tombstones(&mut next.tombstones);
         self.commit(next)?;
-        Ok(Some(self.state_of(key)))
+        Ok(Some(self.state_of(key, now_unix_ms)))
     }
 
-    /// Drops pending grants and tombstones past their time. Neither moves a
-    /// generation: a pending grant never opened anything.
+    /// The record without the pending grants and tombstones past their
+    /// time.
+    fn swept(&self, now_unix_ms: u64) -> GrantsRecord {
+        let mut next = self.record.clone();
+        next.grants.retain(|grant| waits(grant, now_unix_ms));
+        next.tombstones
+            .retain(|stone| remembered(stone, now_unix_ms));
+        next
+    }
+
+    /// Drops pending grants and tombstones past their time from the file.
+    /// Neither moves a generation: a pending grant never opened anything.
+    /// Every read already leaves them out; this only stops keeping them.
     pub fn expire(&mut self, now_unix_ms: u64) -> Result<(), StoreError> {
-        let pending_for = limits::PENDING_FOR.as_millis() as u64;
-        let tombstone_for = limits::TOMBSTONE_FOR.as_millis() as u64;
-        let keeps_grant = |grant: &Grant| {
-            grant.state != GrantStatus::Pending
-                || now_unix_ms.saturating_sub(grant.created_unix_ms) < pending_for
-        };
-        let keeps_stone =
-            |stone: &Tombstone| now_unix_ms.saturating_sub(stone.revoked_unix_ms) < tombstone_for;
-        if self.record.grants.iter().all(keeps_grant)
-            && self.record.tombstones.iter().all(keeps_stone)
+        let next = self.swept(now_unix_ms);
+        if next.grants.len() == self.record.grants.len()
+            && next.tombstones.len() == self.record.tombstones.len()
         {
             return Ok(());
         }
-        let mut next = self.record.clone();
-        next.grants.retain(keeps_grant);
-        next.tombstones.retain(keeps_stone);
         self.commit(next)
     }
 }
@@ -386,6 +439,28 @@ pub enum KnownState {
     PausedByMe,
     /// This machine removed it and keeps telling the host until it answers.
     RevokePending,
+    /// The host says it holds no grant for this machine: it removed it, or
+    /// the pairing never settled there. Nothing is dialed and nothing opens
+    /// until the operator pairs again, which replaces this record, or
+    /// removes it (B4, B51).
+    Unpaired,
+}
+
+impl KnownState {
+    /// Whether this machine itself keeps its side shut, whatever the host
+    /// grants.
+    pub fn held_back(self) -> bool {
+        matches!(
+            self,
+            Self::PausedByMe | Self::RevokePending | Self::Unpaired
+        )
+    }
+
+    /// Whether the host is dialed again after a drop. A removal still has
+    /// to reach it; a pause and a pairing the host dropped do not.
+    pub fn dialed(self) -> bool {
+        !matches!(self, Self::PausedByMe | Self::Unpaired)
+    }
 }
 
 /// A host this machine is a guest of.
@@ -497,8 +572,8 @@ mod tests {
         let pending = store
             .grant_pending(key(1), "dev", "MacBook", Via::Link, 0)
             .unwrap();
-        assert_eq!(store.state_of(&key(1)).state, GrantState::Pending);
-        assert_eq!(store.state_of(&key(1)).generation, 0);
+        assert_eq!(store.state_of(&key(1), 0).state, GrantState::Pending);
+        assert_eq!(store.state_of(&key(1), 0).generation, 0);
 
         // Another machine's confirm, or a wrong id, is not this grant's.
         assert_eq!(
@@ -524,7 +599,7 @@ mod tests {
         );
 
         // What was saved is what a restart reads.
-        assert_eq!(grants(&dir).state_of(&key(1)), change);
+        assert_eq!(grants(&dir).state_of(&key(1), 0), change);
         assert!(private::is_private(&dir.path().join("peers").join("grants.json")).unwrap());
     }
 
@@ -536,16 +611,16 @@ mod tests {
             .grant_pending(key(1), "dev", "MacBook", Via::Link, 0)
             .unwrap();
         store.confirm(&key(1), &grant.id, 1).unwrap();
-        let active = store.state_of(&key(1)).generation;
+        let active = store.state_of(&key(1), 0).generation;
 
-        let paused = store.pause(&key(1)).unwrap();
+        let paused = store.pause(&key(1)).unwrap().unwrap();
         assert_eq!((paused.state, paused.generation), (GrantState::Paused, 0));
         assert_eq!(
             store.confirm(&key(1), &grant.id, 2).unwrap(),
             (ConfirmState::Paused, None)
         );
 
-        let resumed = store.resume(&key(1)).unwrap();
+        let resumed = store.resume(&key(1)).unwrap().unwrap();
         assert!(resumed.generation > active, "a generation is never reused");
 
         let removed = store.revoke(&key(1), None, 3).unwrap().unwrap();
@@ -566,23 +641,23 @@ mod tests {
             .grant_pending(key(1), "dev", "MacBook", Via::Link, 0)
             .unwrap();
         store.confirm(&key(1), &first.id, 1).unwrap();
-        let before = store.state_of(&key(1));
+        let before = store.state_of(&key(1), 0);
 
         let second = store
             .grant_pending(key(1), "dev", "MacBook", Via::Ssh, 2)
             .unwrap();
         assert_eq!(
-            store.state_of(&key(1)),
+            store.state_of(&key(1), 0),
             before,
             "the old grant holds while the new one waits"
         );
         // A late removal of the old grant by id does not take the new one.
         store.confirm(&key(1), &second.id, 3).unwrap();
         assert_eq!(store.revoke(&key(1), Some(&first.id), 4).unwrap(), None);
-        let after = store.state_of(&key(1));
+        let after = store.state_of(&key(1), 0);
         assert_eq!(after.state, GrantState::Active);
         assert!(after.generation > before.generation);
-        assert_eq!(store.list().len(), 1, "one machine, one grant");
+        assert_eq!(store.list(4).count(), 1, "one machine, one grant");
     }
 
     #[test]
@@ -597,7 +672,7 @@ mod tests {
             ConfirmState::Unknown,
             "ten minutes later the pending grant is gone"
         );
-        assert_eq!(store.state_of(&key(0)).state, GrantState::None);
+        assert_eq!(store.state_of(&key(0), 10 * MINUTE).state, GrantState::None);
 
         for byte in 1..=limits::MAX_GRANTS as u8 {
             store
@@ -615,6 +690,59 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_grant_past_its_time_counts_for_nothing_before_any_write_drops_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = grants(&dir);
+        for byte in 1..=limits::MAX_GRANTS as u8 {
+            store
+                .grant_pending(key(byte), "dev", "guest", Via::Link, 0)
+                .unwrap();
+        }
+        let late = 10 * MINUTE;
+        // One millisecond earlier each still waits, and the host is full.
+        assert_eq!(store.state_of(&key(1), late - 1).state, GrantState::Pending);
+        assert_eq!(
+            store.pending_left(&key(1), late - 1),
+            Some(std::time::Duration::from_millis(1))
+        );
+        assert_eq!(store.list(late - 1).count(), limits::MAX_GRANTS);
+        // At its time it is read as gone, with the file still holding it.
+        assert_eq!(store.state_of(&key(1), late).state, GrantState::None);
+        assert_eq!(store.pending_left(&key(1), late), None);
+        assert_eq!(store.list(late).count(), 0);
+        // And it holds no place: another machine is granted.
+        store
+            .grant_pending(key(200), "dev", "the next machine", Via::Link, late)
+            .unwrap();
+        assert_eq!(store.list(late).count(), 1);
+    }
+
+    #[test]
+    fn the_same_pause_or_resume_sent_again_saves_nothing_and_moves_no_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = grants(&dir);
+        let grant = store
+            .grant_pending(key(1), "dev", "MacBook", Via::Link, 0)
+            .unwrap();
+        store.confirm(&key(1), &grant.id, 1).unwrap();
+        let active = store.state_of(&key(1), 2);
+
+        // Resuming what is active: the streams under it go on.
+        assert_eq!(store.resume(&key(1)).unwrap(), None);
+        assert_eq!(store.state_of(&key(1), 2), active);
+
+        let paused = store.pause(&key(1)).unwrap().expect("the first pause");
+        assert_eq!(paused.state, GrantState::Paused);
+        let path = dir.path().join("peers").join("grants.json");
+        let saved = std::fs::read(&path).unwrap();
+        assert_eq!(store.pause(&key(1)).unwrap(), None);
+        assert_eq!(std::fs::read(&path).unwrap(), saved, "nothing was written");
+
+        // A grant that is not there is still an error, not "unchanged".
+        assert!(matches!(store.resume(&key(9)), Err(StoreError::Unknown)));
+    }
+
+    #[test]
     fn a_failed_save_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = grants(&dir);
@@ -622,7 +750,7 @@ mod tests {
             .grant_pending(key(1), "dev", "MacBook", Via::Link, 0)
             .unwrap();
         store.confirm(&key(1), &grant.id, 1).unwrap();
-        let before = store.state_of(&key(1));
+        let before = store.state_of(&key(1), 0);
 
         // The record's place is taken by a folder, so the replace fails.
         let path = dir.path().join("peers").join("grants.json");
@@ -631,7 +759,7 @@ mod tests {
         std::fs::write(path.join("in-the-way"), b"").unwrap();
         assert!(matches!(store.pause(&key(1)), Err(StoreError::Io(_))));
         assert_eq!(
-            store.state_of(&key(1)),
+            store.state_of(&key(1), 0),
             before,
             "memory still holds what was saved"
         );

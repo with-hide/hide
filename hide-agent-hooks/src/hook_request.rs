@@ -696,6 +696,7 @@ pub fn send(
             };
             let request = install::PaneRequest {
                 access: None,
+                device: None,
                 pane_id: caller.pane_id.unwrap_or("").to_owned(),
                 nonce: nonce.clone(),
                 one_shot,

@@ -32,6 +32,10 @@
     {
       "name": "lost",
       "number": 7
+    },
+    {
+      "name": "busy",
+      "number": 8
     }
   ],
   "event": {
@@ -64,8 +68,11 @@
   },
   "guest": {
     "folder": {
+      "builds_kept": 2,
       "guests": "g",
+      "holders": "holders",
       "host_side": "h",
+      "install_side": "i",
       "key_file": "key",
       "node_side": "n",
       "panes": "panes.json"
@@ -78,14 +85,21 @@
         "install"
       ]
     },
+    "install": {
+      "build_chars": 16,
+      "name_prefix": "guest:"
+    },
     "launch": {
       "arguments": [
         "node",
         "serve",
         "--guest"
       ],
-      "end_fields": [
-        "end"
+      "box_full_fields": [
+        "pane"
+      ],
+      "capabilities": [
+        "events"
       ],
       "end_modes": [
         "now",
@@ -95,10 +109,27 @@
         "ended": 0,
         "folder_held": 75,
         "folder_refused": 73,
+        "host_unreachable": 70,
         "unknown_word": 64
       },
-      "idle_fields": [
+      "from_node": [
+        "box_full",
+        "event",
         "idle"
+      ],
+      "limits": {
+        "crash_window_secs": 600,
+        "crashes": 5,
+        "end_now_waits_secs": 5,
+        "folder_held_retries": 10,
+        "folder_held_retry_secs": 1,
+        "holder_lost_restart_secs": 600,
+        "idle_end_secs": 60
+      },
+      "max_line_bytes": 1049600,
+      "position_fields": [
+        "outbox",
+        "seq"
       ],
       "ready": {
         "fields": [
@@ -113,7 +144,13 @@
         ],
         "version": 1,
         "within_secs": 10
-      }
+      },
+      "to_node": [
+        "ack",
+        "away",
+        "end",
+        "resume"
+      ]
     },
     "sockets": {
       "link": "link.sock",
@@ -197,9 +234,34 @@
         ],
         "since": 1
       },
+      "node_end": {
+        "fields": [
+          "mode"
+        ],
+        "since": 1
+      },
+      "node_preparing": {
+        "fields": [
+          "arch",
+          "os"
+        ],
+        "since": 1
+      },
       "node_ready": {
         "fields": [
           "build"
+        ],
+        "since": 1
+      },
+      "node_retry": {
+        "fields": [],
+        "since": 1
+      },
+      "node_start": {
+        "fields": [
+          "build",
+          "build_id",
+          "release"
         ],
         "since": 1
       },
@@ -226,6 +288,10 @@
       "folder_refused",
       "crashed",
       "other"
+    ],
+    "release_fields": [
+      "commit",
+      "order"
     ]
   },
   "pairing": {
@@ -235,6 +301,14 @@
       "unknown"
     ],
     "messages": {
+      "asking": {
+        "fields": [
+          "device",
+          "name",
+          "words"
+        ],
+        "since": 1
+      },
       "confirm": {
         "fields": [
           "grant"
@@ -269,12 +343,20 @@
           "reason"
         ],
         "since": 1
+      },
+      "request": {
+        "fields": [
+          "device",
+          "name"
+        ],
+        "since": 1
       }
     },
     "refusals": [
       "no_offer",
       "declined",
       "full",
+      "unanswered",
       "other"
     ]
   },

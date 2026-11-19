@@ -1,0 +1,38 @@
+[Unit]
+Description=Hide device relay (iroh-relay)
+# No relay runs without its connection limits.
+Requires=hide-iroh-relay-limits.service
+After=network-online.target hide-iroh-relay-limits.service hide-relay-proxy.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Not enabled on its own: hide-iroh-relay-meter.service starts and stops it,
+# by the monthly limit and by whether Caddy holds the certificate yet.
+[Service]
+DynamicUser=yes
+ExecStart=/opt/hide-relay/current/iroh-relay --config-path /opt/hide-relay/current/iroh-relay.toml
+# Caddy's certificate for device-relay.withhide.dev, copied in at start; the
+# meter restarts the relay when Caddy renews it.
+LoadCredential=tls.crt:/var/lib/hide-relay-proxy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/device-relay.withhide.dev/device-relay.withhide.dev.crt
+LoadCredential=tls.key:/var/lib/hide-relay-proxy/caddy/certificates/acme-v02.api.letsencrypt.org-directory/device-relay.withhide.dev/device-relay.withhide.dev.key
+Environment=RUST_LOG=off
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+MemoryMax=256M
+MemorySwapMax=0
+TasksMax=64
+LimitNOFILE=4096
+LimitCORE=0
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+# Endpoint ids and addresses pass through this process; nothing it prints is kept.
+StandardOutput=null
+StandardError=null

@@ -9,37 +9,22 @@
 //! and puts the item in or takes it out. The daemon runs it once at its
 //! start, and whatever changes the peer records runs it after each saved
 //! change ([`after_peer_change`]); a paired core also never ends for idle
-//! ([`paired`], `server::watch_idle`).
+//! ([`paired`], `server::watch_idle`). Paired means a finished pairing,
+//! never one still waiting (`peer_host::pairing_confirmed`).
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use hide_peer::store::{GrantStatus, Grants, Known, KnownState};
 use hide_platform::user_agents::{Linger, UserAgents};
 use serde::Serialize;
 use serde_json::json;
 
-/// Whether the folder is paired with another machine: a grant this machine
-/// gave that the guest confirmed (active or paused), or a host this machine
-/// is a confirmed guest of (active or paused here). A pending grant, a
-/// confirm not yet answered and a removal on its way count as none.
+/// Whether the folder has finished a pairing, the one answer the item
+/// follows (`peer_host::pairing_confirmed`).
 pub fn paired(state_dir: &Path) -> Result<bool, String> {
-    let grants = Grants::open(hide_kit::layout::peer_grants(state_dir))
-        .map_err(|error| error.to_string())?;
-    if grants
-        .list()
-        .iter()
-        .any(|grant| matches!(grant.state, GrantStatus::Active | GrantStatus::Paused))
-    {
-        return Ok(true);
-    }
-    let known =
-        Known::open(hide_kit::layout::peer_known(state_dir)).map_err(|error| error.to_string())?;
-    Ok(known
-        .list()
-        .iter()
-        .any(|host| matches!(host.state, KnownState::Active | KnownState::PausedByMe)))
+    crate::peer_host::pairing_confirmed(state_dir)
+        .map_err(|error| format!("the peer records: {error}"))
 }
 
 /// What [`reconcile`] found or did.

@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use hide_peer_protocol::PeerKey;
+
 /// A device's helper root unless the daemon was started with another, as a
 /// consent records it; `~` is the device account's home (D-11).
 pub const HELPER_ROOT: &str = "~/.hide/host-helper";
@@ -661,43 +663,57 @@ pub fn peer_port(state_dir: &Path) -> PathBuf {
     peers(state_dir).join("udp-port")
 }
 
-/// This machine's durable record of the events of the host named by the
-/// first 16 hex characters of its key (D-66).
-pub fn peer_inbox(state_dir: &Path, host: &str) -> PathBuf {
-    peers(state_dir).join("inbox").join(host)
+/// This machine's durable record of the events of `host` (D-66), under the
+/// first 16 hex characters of its key.
+pub fn peer_inbox(state_dir: &Path, host: &PeerKey) -> PathBuf {
+    peers(state_dir).join("inbox").join(host.short())
 }
 
-/// The folder of the guest named by the first 16 hex characters of its key
-/// (D-77): `<state>/g/<key>/`. The names are short because every endpoint
-/// the guest's node binds below it has to fit a Unix socket path; the
-/// contract (`hide_peer_protocol::launch`) states the bound and owns the
-/// names.
-pub fn guest_dir(state_dir: &Path, guest: &str) -> PathBuf {
+/// The folder of `guest` (D-77): `<state>/g/<the first 16 hex characters of
+/// its key>/`. The names are short because every endpoint the guest's node
+/// binds below it has to fit a Unix socket path; the contract
+/// (`hide_peer_protocol::launch`) states the bound and owns the names. The
+/// key is taken whole and shortened here, so no caller spells the folder's
+/// name and no other text can become a path component.
+pub fn guest_dir(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     state_dir
         .join(hide_peer_protocol::launch::GUESTS_DIR)
-        .join(guest)
+        .join(guest.short())
 }
 
 /// The file in a guest's folder that holds its whole key.
-pub fn guest_key(state_dir: &Path, guest: &str) -> PathBuf {
+pub fn guest_key(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::KEY_FILE)
 }
 
 /// What the host build alone writes for a guest.
-pub fn guest_host_side(state_dir: &Path, guest: &str) -> PathBuf {
+pub fn guest_host_side(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::HOST_SIDE)
 }
 
 /// The guest's panes as the host last saw them, so they show after the host
 /// restarts with the guest away (D-31).
-pub fn guest_panes(state_dir: &Path, guest: &str) -> PathBuf {
+pub fn guest_panes(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_host_side(state_dir, guest).join(hide_peer_protocol::panes::FILE)
 }
 
 /// The state folder of the guest's node, a process of the guest's own
 /// build. The host build never reads inside it.
-pub fn guest_node_side(state_dir: &Path, guest: &str) -> PathBuf {
+pub fn guest_node_side(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::NODE_SIDE)
+}
+
+/// The guest's install root: the builds of that guest this host keeps, each
+/// in a folder named by its digest, with the `current` its hooks run and
+/// the version folders its pane holders run from (D-77 (2)).
+pub fn guest_install_root(state_dir: &Path, guest: &PeerKey) -> PathBuf {
+    guest_dir(state_dir, guest).join(hide_peer_protocol::launch::INSTALL_SIDE)
+}
+
+/// One build of a guest, named by the first 16 hex characters of its
+/// digest.
+pub fn guest_build(state_dir: &Path, guest: &PeerKey, build: &str) -> PathBuf {
+    guest_install_root(state_dir, guest).join(build)
 }
 
 /// The folder a state folder's holders listen and log in, one socket and
@@ -831,6 +847,28 @@ mod tests {
         // other, so neither's cleanup can reach the other's folders.
         assert!(!holders_root(home).starts_with(runtime_root(home)));
         assert!(!runtime_root(home).starts_with(holders_root(home)));
+    }
+
+    #[test]
+    fn a_guest_s_folder_and_a_host_s_inbox_are_named_by_the_short_form_of_the_whole_key() {
+        let state = Path::new("state");
+        let key = PeerKey::from_bytes([0xab; 32]);
+        assert_eq!(
+            guest_node_side(state, &key),
+            state.join("g").join("abababababababab").join("n")
+        );
+        assert_eq!(
+            guest_panes(state, &key),
+            state
+                .join("g")
+                .join("abababababababab")
+                .join("h")
+                .join(hide_peer_protocol::panes::FILE)
+        );
+        assert_eq!(
+            peer_inbox(state, &key),
+            state.join("peers").join("inbox").join("abababababababab")
+        );
     }
 
     #[test]

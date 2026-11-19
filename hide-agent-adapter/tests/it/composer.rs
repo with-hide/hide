@@ -149,6 +149,94 @@ fn claude_reads_its_composer_under_a_labelled_top_rule() {
     }
 }
 
+/// Antigravity 1.5.11 in an isolated Hide at 80 columns on 2026-11-19
+/// (with-hide/hide#2580): the mode hint shift+tab cycles stands in its
+/// empty composer in palette grey, so its prompt reads empty with no mode,
+/// in accept-edits, in plan and after an interrupted turn, while typed text
+/// is drawn in the default colour; and every list or question agy opens
+/// under its composer (`/`, `?`, `/resume`, `/model`, a permission or ask
+/// question) takes the keys, so a screen showing one has no composer to
+/// type into. The trust capture's folder path is replaced with
+/// `~/projects/fixture`.
+#[test]
+fn antigravity_reads_its_mode_hint_as_empty_and_a_list_under_its_composer_as_none() {
+    let agy = AgentId::Antigravity.adapter().composer.supported().unwrap();
+    for (step, want) in [
+        ("0-empty", Ok(())),
+        ("accept-edits-hint", Ok(())),
+        ("plan-hint", Ok(())),
+        // At 50 and 40 columns agy cuts its hint with `...`, and at 40 drops
+        // the model from its status line, which stays one row.
+        ("50-columns-plan-hint", Ok(())),
+        ("40-columns-plan-hint", Ok(())),
+        ("interrupted", Ok(())),
+        ("typed", Err(Miss::PlaceholderStyle)),
+        ("slash-popup", Err(Miss::OpenUnder)),
+        ("shortcuts", Err(Miss::OpenUnder)),
+        ("session-picker", Err(Miss::OpenUnder)),
+        ("model-picker", Err(Miss::OpenUnder)),
+        // Its questions are drawn under the composer too, and the
+        // folder-trust question at start draws no rules at all.
+        ("permission", Err(Miss::OpenUnder)),
+        ("question", Err(Miss::OpenUnder)),
+        ("trust", Err(Miss::NoRule)),
+    ] {
+        let name = format!("agy-1.5.11-{step}");
+        assert_eq!(agy.explain(&screen(&name)), want, "{name}");
+    }
+    assert!(agy.holds(&screen("agy-1.5.11-typed"), "hello"));
+}
+
+/// What an agent draws under its composer is read only where it is
+/// declared. An empty composer reads empty only above exactly the declared
+/// rows, each beginning with its words; blank rows never count, and any
+/// other row, alone or beside them, is something open under it, such as a
+/// notice or a plan approval a capture never showed. A composer holding
+/// text may change those rows' words, so it only has no more of them.
+#[test]
+fn an_empty_composer_reads_empty_only_above_the_rows_its_agent_declares_under_it() {
+    let agy = AgentId::Antigravity.adapter().composer.supported().unwrap();
+    let grey = |text: &str| format!("\x1b[38;5;8m{text}\x1b[0m");
+    let rule = grey(&"─".repeat(40));
+    let prompt = format!("\x1b[38;5;12m> \x1b[0m{}", grey("Plan mode: research"));
+    let screen = |under: &str| format!("{rule}\n{prompt}\n{rule}\n{under}");
+    let status = "? for shortcuts            plan · Gemini 3.1 Pro · low";
+    assert_eq!(agy.explain(&screen(status)), Ok(()));
+    assert_eq!(agy.explain(&screen("? for shortcuts\n\n\n")), Ok(()));
+    for under in [
+        "",
+        "                           plan · Gemini 3.1 Pro · low",
+        "esc to cancel              plan · Gemini 3.1 Pro · low",
+        "Update available: run agy update",
+        "  Conversations\n? for shortcuts",
+        "? for shortcuts\n  Approve this plan?",
+    ] {
+        assert_eq!(
+            agy.explain(&screen(under)),
+            Err(Miss::OpenUnder),
+            "{under:?}"
+        );
+    }
+    assert_eq!(Miss::OpenUnder.verdict(), Verdict::NotFound);
+    // Typed text, which drops `? for shortcuts`, still reads as held.
+    let typed = |under: &str| format!("{rule}\n> hello\n{rule}\n{under}");
+    let model = "                           plan · Gemini 3.1 Pro · low";
+    assert!(agy.holds(&typed(model), "hello"));
+    assert!(!agy.holds(&typed(&format!("  Approve this plan?\n{model}")), "hello"));
+    // A grey line is the hint; the same words in the default colour were typed.
+    assert_eq!(
+        agy.explain(&format!("{rule}\n> Plan mode: research\n{rule}\n")),
+        Err(Miss::PlaceholderStyle)
+    );
+    // Claude Code declares nothing under its composer: its lines there are not read.
+    let claude = AgentId::ClaudeCode.adapter().composer.supported().unwrap();
+    let rule = "─".repeat(40);
+    assert_eq!(
+        claude.judge(&format!("{rule}\n❯ \n{rule}\none\ntwo\nthree\n")),
+        Verdict::Empty
+    );
+}
+
 /// A label is text between a space and a closing run of `─` drawn in the
 /// bottom rule's own pen; typed text that ends in `─` is the operator's.
 #[test]
@@ -295,7 +383,12 @@ fn a_screen_not_read_empty_names_the_step_that_stopped_it() {
     let grok = AgentId::Grok.adapter().composer.supported().unwrap();
     assert_eq!(grok.explain("$ ls\r\n"), Err(Miss::NoRegion));
 
-    for miss in [Miss::NoRule, Miss::NoMarker, Miss::NotPlaceholder] {
+    for miss in [
+        Miss::NoRule,
+        Miss::NoMarker,
+        Miss::OpenUnder,
+        Miss::NotPlaceholder,
+    ] {
         assert_eq!(Miss::from_code(miss.code()), Some(miss));
     }
     assert_eq!(Miss::from_code("hello"), None);

@@ -15,7 +15,7 @@ use hide_peer::peers::{Config, Incoming, PeerEvent, Peers};
 use hide_peer::protocol::hello::GrantState;
 use hide_peer::protocol::{Candidate, CloseCode, PathKind, PeerAddr, PeerKey, StreamKind};
 use hide_peer::store::{Host, KnownState, Via};
-use hide_peer::{MachineKey, PeerTransport, RelayState};
+use hide_peer::{Clock, MachineKey, PeerTransport, RelayState};
 use hide_peer_iroh::{IrohConn, IrohTransport, Options};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
@@ -61,6 +61,7 @@ impl Machine {
             build: "1.3.0-test",
             device: name,
             release: false,
+            clock: Clock::system(),
         };
         let (peers, incoming) = Peers::start(transport, config).unwrap();
         let events = peers.events();
@@ -274,6 +275,83 @@ async fn a_rebuilt_endpoint_keeps_its_key_and_accepts_again() {
         host.accept().await,
         Err(hide_peer::TransportError::Closed)
     ));
+}
+
+/// A machine starts a handshake with the host and never finishes it: what
+/// it sends arrives, and nothing the host answers reaches it. Anyone who
+/// can reach the host's UDP port can do this, and a slow network does it
+/// by accident. Another machine connects meanwhile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handshake_that_never_finishes_holds_up_no_other_connection() {
+    use hide_peer::PeerConn;
+    use std::sync::Arc;
+
+    let open = || async {
+        IrohTransport::open(&MachineKey::generate().unwrap().secret(), local())
+            .await
+            .unwrap()
+    };
+    let (host, guest, stuck) = (open().await, open().await, Arc::new(open().await));
+    let host_at = host
+        .candidates()
+        .into_iter()
+        .find_map(|candidate| match candidate {
+            Candidate::Ip(address) => Some(address),
+            Candidate::Relay(_) => None,
+        })
+        .expect("a bound endpoint has an address");
+
+    // A one-way wire to the host: it passes on what is sent to it and
+    // drops what the host answers, telling the test of each answer.
+    let wire = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let wire_at = wire.local_addr().unwrap();
+    let (answered, mut answers) = mpsc::channel(64);
+    let wiring = tokio::spawn(async move {
+        let mut datagram = vec![0u8; 4096];
+        while let Ok((length, from)) = wire.recv_from(&mut datagram).await {
+            if from == host_at {
+                let _ = answered.try_send(());
+            } else {
+                let _ = wire.send_to(&datagram[..length], host_at).await;
+            }
+        }
+    });
+    let through_the_wire = PeerAddr::new(host.key(), vec![Candidate::Ip(wire_at)]);
+    let stalled = tokio::spawn({
+        let stuck = Arc::clone(&stuck);
+        async move { stuck.dial(&through_the_wire).await.is_ok() }
+    });
+
+    // The host began that handshake: its answer went out, and was dropped.
+    let accepted = host.accept();
+    tokio::pin!(accepted);
+    within("the host's answer to the unfinished handshake", async {
+        tokio::select! {
+            _ = answers.recv() => {}
+            _ = &mut accepted => panic!("nothing can have connected yet"),
+        }
+    })
+    .await;
+
+    // Well inside the time the host gives the unfinished handshake: a host
+    // that waited for it first would take that whole time to get here.
+    let to = PeerAddr::new(host.key(), host.candidates());
+    let (dialed, accepted) = tokio::time::timeout(hide_peer::limits::HELLO_WITHIN / 2, async {
+        tokio::join!(guest.dial(&to), &mut accepted)
+    })
+    .await
+    .expect("the other machine connected while the host still waited for that handshake");
+    assert_eq!(accepted.unwrap().peer(), guest.key());
+    dialed.unwrap();
+    assert!(!stalled.is_finished(), "that handshake never finished");
+
+    stalled.abort();
+    wiring.abort();
+    stuck.close().await;
+    guest.close().await;
+    host.close().await;
 }
 
 /// A relay host on this machine's loopback that answers every request with

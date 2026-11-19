@@ -68,6 +68,7 @@
             <li>Your conversations, commands, code and files are never sent to us. They stay on your computer and your phone, except the part a Hide AI feature sends to the provider you chose (section 5).</li>
             <li>The desktop app sends counts of its own use, on by default, and you can turn them off in Settings › Privacy.</li>
             <li>The phone talks to your computer through hide's relay. If you turn notifications on, your computer sends them, encrypted, to the push service your phone uses: Apple's for the iOS app, Google's for the Android app, or the browser's own, which runs on Google's, Mozilla's or Microsoft's.</li>
+            <li>Your computers connect to each other directly when they can, and otherwise through hide's device relay, which cannot read what passes (section 3.4).</li>
           </ul>
 
           <h3>1. The desktop app</h3>
@@ -123,7 +124,7 @@
           <p>The download area asks GitHub's public releases API for the latest release. That request carries no hide data, and GitHub sees your IP address when it is made. Links to GitHub, Discord and Herdr leave this site and follow those sites' own policies.</p>
 
           <h3>3. The relay</h3>
-          <p>The relay at <code>relay.withhide.dev</code> connects your phone to your computer. It passes messages along and cannot read them: they are end-to-end encrypted between your phone and your computer, and the relay holds no key to them.</p>
+          <p>The relay at <code>relay.withhide.dev</code> connects your phone to your computer. It passes messages along and cannot read them: they are end-to-end encrypted between your phone and your computer, and the relay holds no key to them. A second, separate relay connects your computers to each other (section 3.4); sections 3.1 to 3.3 are about the phone relay.</p>
           <h4>3.1 What the relay sees</h4>
           <ul>
             <li>A room identifier, which is a SHA-256 hash of your computer's public signing key. It is not your account, your name or your machine's name.</li>
@@ -139,7 +140,15 @@
           <h4>3.3 Logs</h4>
           <p>The relay writes one line per event to the machine's system journal: an event name, the time, and sometimes a byte count or the name of the limit that was reached. The lines show when connections started and ended and how much data passed, but no value that identifies a computer or a phone: no room identifier, no address, no key, no name. No message content, file name or account is ever written, and, of a notification, only the name of what happened to it, never its token or its content.</p>
           <p>The journal keeps those lines at most seven days and caps them at 64 MiB in total. It rotates its files every hour, and an hourly job deletes files older than six days and trims the journal to that size, so a line is gone no later than seven days after it is written.</p>
-          <p>The web server in front of the relay keeps no access log. Three kinds of alert only, a limit reached, a server failure and a fixed test line, are forwarded to Google Cloud Logging, and each carries its event name and nothing else: no room identifier, size or address. They are kept for a period in a log store outside the relay, set by that logging project and not by hide's deploy files, and they hold no value that identifies a computer or a phone.</p>
+          <p>The web server in front of the relay keeps no access log. Six kinds of alert only are forwarded to Google Cloud Logging: from the phone relay a limit reached, a server failure and a fixed test line, and from the device relay its monthly traffic nearing its limit, the relay stopping at that limit, and a failure to count its traffic (section 3.4). Each carries its event name and nothing else: no room identifier, key, size or address. They are kept for a period in a log store outside the relay, set by that logging project and not by hide's deploy files, and they hold no value that identifies a computer or a phone.</p>
+          <h4>3.4 The device relay</h4>
+          <p>When you connect your computers to each other, they talk directly whenever they can reach each other. When they cannot, the device relay at <code>device-relay.withhide.dev</code> passes their traffic along. It runs on the same virtual machine as the phone relay but is a separate service, and it cannot read what passes: the connection is end-to-end encrypted between your two computers, and the relay holds no key to it.</p>
+          <ul>
+            <li>Each connected computer's public connection key, which tells the relay where to deliver. It is not your account, your name or your machine's name.</li>
+            <li>The IP address and port a computer reaches it from. It tells that computer its own address back, so your computers can try to connect directly.</li>
+            <li>How much data passes.</li>
+          </ul>
+          <p>The relay holds the keys of connected computers in memory only, while they are connected, and writes no key or address anywhere: what the relay program itself prints is discarded, and the web server in front of it keeps no access log. Once an hour, the machine's journal gets one line with how many connections began and how many bytes the relay sent in that hour, with no key, address or name, and it keeps those lines as long as the phone relay's (section 3.3). One running total of the bytes sent this month is kept in a file on the machine, because the relay stops relaying for the rest of a month in which it has sent 300 GB; your computers then still connect directly where they can. Of all this, only the three alerts in section 3.3 leave the machine.</p>
 
           <h3>4. The phone app</h3>
           <p>The phone app has no account, no sign-in, no advertising and no analytics of its own. The iOS and Android apps carry their files inside the app; the version in a browser loads them from <code>app.withhide.dev</code>, a host with no analytics on it. The phone talks only to your computer through the encrypted session. If you turn notifications on, iOS itself registers the phone with Apple's push service, and the Android app registers it with Google's Firebase Cloud Messaging (section 4.4).</p>
@@ -215,6 +224,7 @@
             <li>대화, 명령, 코드, 파일은 저희에게 가지 않습니다. 사용자의 컴퓨터와 폰에 있으며, Hide AI 기능이 사용자가 고른 공급자에게 보내는 부분만 예외입니다(5절).</li>
             <li>데스크톱 앱은 사용 횟수만 보내며 기본으로 켜져 있고, 설정 › 개인정보에서 끌 수 있습니다.</li>
             <li>폰은 hide의 중계 서버를 거쳐 사용자의 컴퓨터와 통신합니다. 알림을 켜면 그 알림을 사용자의 컴퓨터가 암호화해 폰이 쓰는 푸시 서비스로 보냅니다. iOS 앱이면 애플의 푸시 서비스, Android 앱이면 구글의 푸시 서비스이고, 브라우저라면 그 브라우저의 푸시 서비스로, 구글·모질라·마이크로소프트가 운영합니다.</li>
+            <li>사용자의 컴퓨터끼리는 닿을 수 있으면 바로 연결되고, 그렇지 않으면 hide의 기기 중계 서버를 거칩니다. 기기 중계 서버는 지나가는 내용을 읽을 수 없습니다(3.4절).</li>
           </ul>
 
           <h3>1. 데스크톱 앱</h3>
@@ -270,7 +280,7 @@
           <p>내려받기 영역은 최신 릴리스를 GitHub의 공개 API에 물어봅니다. 이 요청에도 hide의 데이터가 실리지 않고, 그때 GitHub가 사용자의 IP 주소를 봅니다. GitHub, Discord, Herdr로 가는 링크는 이 사이트를 떠나며 그 사이트의 방침을 따릅니다.</p>
 
           <h3>3. 중계 서버</h3>
-          <p><code>relay.withhide.dev</code>의 중계 서버는 사용자의 폰과 컴퓨터를 이어 줍니다. 메시지는 폰과 컴퓨터 사이에서 종단 간 암호화되므로 중계 서버는 내용을 읽을 수 없고, 열 수 있는 키도 갖지 않습니다.</p>
+          <p><code>relay.withhide.dev</code>의 중계 서버는 사용자의 폰과 컴퓨터를 이어 줍니다. 메시지는 폰과 컴퓨터 사이에서 종단 간 암호화되므로 중계 서버는 내용을 읽을 수 없고, 열 수 있는 키도 갖지 않습니다. 사용자의 컴퓨터끼리는 따로 된 두 번째 중계 서버가 이어 주며(3.4절), 3.1절부터 3.3절은 폰 중계 서버에 대한 것입니다.</p>
           <h4>3.1 중계 서버가 보는 것</h4>
           <ul>
             <li>방 식별자. 사용자의 컴퓨터 공개 서명 키의 SHA-256 해시이며, 계정도 이름도 기기 이름도 아닙니다.</li>
@@ -286,7 +296,15 @@
           <h4>3.3 로그</h4>
           <p>중계 서버는 이벤트마다 한 줄을 운영체제의 시스템 저널에 남깁니다. 이벤트 이름, 시각, 때로는 데이터 크기와 걸린 한도의 이름입니다. 그 줄에서 연결이 언제 시작하고 끝났는지, 데이터가 얼마나 오갔는지는 알 수 있지만, 컴퓨터나 폰을 가리키는 값(방 식별자, 주소, 키, 이름)은 적히지 않습니다. 메시지 내용, 파일 이름, 계정은 절대 적히지 않고, 알림에 대해서는 그 알림에 무슨 일이 있었는지의 이벤트 이름만 적히고, 토큰이나 내용은 적히지 않습니다.</p>
           <p>저널은 그 줄을 최대 7일 보관하고 전체 64 MiB로 제한합니다. 저널은 매시간 파일을 새로 시작하고, 매시간 도는 작업이 6일이 지난 파일을 지우고 저널을 그 크기로 줄이므로, 한 줄은 기록된 뒤 늦어도 7일 안에 사라집니다.</p>
-          <p>중계 서버 앞의 웹 서버는 접속 로그를 남기지 않습니다. 한도 도달, 서버 장애, 고정된 시험 줄 세 가지 알림만 Google Cloud Logging으로 보내며, 각각 이벤트 이름만 담고 방 식별자도 크기도 주소도 담지 않습니다. 그 알림은 중계 서버 밖의 로그 보관소에 일정 기간 보관되며, 기간은 그 로깅 프로젝트가 정하고 hide의 배포 파일이 정하지 않습니다. 그 로그에는 컴퓨터나 폰을 가리키는 값이 없습니다.</p>
+          <p>중계 서버 앞의 웹 서버는 접속 로그를 남기지 않습니다. Google Cloud Logging으로 보내는 알림은 여섯 가지뿐입니다. 폰 중계 서버의 한도 도달, 서버 장애, 고정된 시험 줄, 그리고 기기 중계 서버의 월 전송량이 한도에 가까워짐, 한도에 닿아 중계를 멈춤, 전송량을 세지 못함입니다(3.4절). 각각 이벤트 이름만 담고 방 식별자도 키도 크기도 주소도 담지 않습니다. 그 알림은 중계 서버 밖의 로그 보관소에 일정 기간 보관되며, 기간은 그 로깅 프로젝트가 정하고 hide의 배포 파일이 정하지 않습니다. 그 로그에는 컴퓨터나 폰을 가리키는 값이 없습니다.</p>
+          <h4>3.4 기기 중계 서버</h4>
+          <p>사용자의 컴퓨터끼리 연결하면, 서로 닿을 수 있을 때는 바로 이야기합니다. 닿을 수 없을 때는 <code>device-relay.withhide.dev</code>의 기기 중계 서버가 그 데이터를 넘겨 줍니다. 폰 중계 서버와 같은 가상 머신에서 돌지만 따로 된 서비스이고, 지나가는 내용을 읽을 수 없습니다. 연결은 사용자의 두 컴퓨터 사이에서 종단 간 암호화되며, 중계 서버는 열 수 있는 키를 갖지 않습니다.</p>
+          <ul>
+            <li>연결된 각 컴퓨터의 공개 연결 키. 어디로 넘길지 아는 데 쓰며, 계정도 이름도 기기 이름도 아닙니다.</li>
+            <li>컴퓨터가 접속해 온 IP 주소와 포트. 그 컴퓨터에 자기 주소를 알려 주어, 사용자의 컴퓨터끼리 바로 연결을 시도할 수 있게 합니다.</li>
+            <li>오간 데이터의 크기.</li>
+          </ul>
+          <p>중계 서버는 연결된 컴퓨터의 키를 연결된 동안 메모리에만 두고, 키도 주소도 어디에도 적지 않습니다. 중계 프로그램이 스스로 출력하는 내용은 버리고, 그 앞의 웹 서버는 접속 로그를 남기지 않습니다. 매시간 시스템 저널에 그 시간에 시작된 연결 수와 보낸 바이트 수를 한 줄 적으며, 키도 주소도 이름도 적지 않고, 그 줄은 폰 중계 서버의 줄과 같은 기간 동안 보관합니다(3.3절). 이번 달에 보낸 바이트의 누계 하나를 그 머신의 파일에 둡니다. 한 달에 300 GB를 보내면 그달 남은 기간 중계를 멈추기 때문이며, 그동안에도 사용자의 컴퓨터끼리 바로 닿을 수 있으면 연결됩니다. 이 가운데 머신 밖으로 나가는 것은 3.3절의 알림 세 가지뿐입니다.</p>
 
           <h3>4. 폰 앱</h3>
           <p>폰 앱에는 계정, 로그인, 광고, 자체 분석이 없습니다. iOS 앱과 Android 앱은 앱 파일을 앱 안에 담고 있고, 브라우저에서는 분석이 붙지 않은 <code>app.withhide.dev</code>에서 받습니다. 폰은 암호화된 세션으로 사용자의 컴퓨터와만 통신합니다. 알림을 켜면 iOS 자체가 폰을 애플 푸시 서비스에 등록하고, Android 앱은 폰을 구글의 Firebase Cloud Messaging에 등록합니다(4.4절).</p>

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Disposable GitHub Linux runner only: real systemd, proxy and collector.
 
-The relay is a tiny HTTP process fixture; real Stackdriver output talks to local
-metadata/Logging fixtures. TLS uses a fixture CA, never public TLS or real GCP.
+The phone relay is a tiny HTTP process fixture; the device relay is the real
+iroh-relay release of the pinned version, behind the real nftables limits and
+meter. Real Stackdriver output talks to local metadata/Logging fixtures. TLS
+uses a fixture CA, never public TLS or real GCP.
 """
 import hashlib
 import importlib.util
@@ -18,12 +20,49 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import tarfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("relay_deploy", ROOT / "scripts/relay-deploy.py")
 DEPLOY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DEPLOY)
+# The upstream release archive of the version deploy/relay/iroh-relay.version
+# names; bump both together.
+IROH_RELAY = ("1.4.1", "https://github.com/n0-computer/iroh/releases/download/v1.4.1/"
+              "iroh-relay-v1.4.1-x86_64-unknown-linux-musl.tar.gz",
+              "75254641e3fad7fcbac6dee4d485556fbe06ef708340a9d8810469270ba626b8")
+DEVICE = "device-relay.withhide.dev"
+METER_STATE = Path("/var/lib/hide-iroh-relay-meter")
+
+
+def device(path, *options):
+    return subprocess.run(["curl", "--silent", "--max-time", "5", "--noproxy", "*", "--resolve", DEVICE + ":443:127.0.0.1",
+                           "--write-out", "\n%{http_code}", *options, f"https://{DEVICE}{path}"],
+                          capture_output=True, check=False).stdout
+
+
+def meter(*action):
+    subprocess.run(["systemctl", "start", "hide-iroh-relay-meter.service"] if not action else
+                   ["python3", "-I", "/opt/hide-relay/current/iroh-relay-meter.py", *action], check=True)
+
+
+def main_pid(unit):
+    return subprocess.check_output(["systemctl", "show", unit, "-p", "MainPID", "--value"]).strip()
+
+
+def connect_many(port, count):
+    refused, opened = 0, []
+    for _ in range(count):
+        try:
+            opened.append(socket.create_connection(("127.0.0.1", port), timeout=2))
+        except ConnectionRefusedError:
+            refused += 1
+    return refused, opened
+
+
+def active(unit):
+    return subprocess.run(["systemctl", "is-active", "--quiet", unit], check=False).returncode == 0
 
 
 def request(url):
@@ -107,12 +146,19 @@ def main():
         certificates.mkdir()
         certificate, key = certificates / "certificate.crt", certificates / "key.pem"
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                        "-subj", "/CN=relay.withhide.dev", "-addext", "subjectAltName=DNS:relay.withhide.dev,IP:127.0.0.1",
+                        "-subj", "/CN=relay.withhide.dev",
+                        "-addext", f"subjectAltName=DNS:relay.withhide.dev,DNS:{DEVICE},IP:127.0.0.1",
                         "-keyout", str(key), "-out", str(certificate)], check=True, capture_output=True)
         subprocess.run(["chown", "root:hide-relay-proxy", str(key)], check=True)
         key.chmod(0o640)
         shutil.copyfile(certificate, "/usr/local/share/ca-certificates/hide-relay-test.crt")
         subprocess.run(["update-ca-certificates"], check=True, capture_output=True)
+        # Where Caddy would keep the certificate it obtained for the device
+        # host name; the relay unit and the meter read it from there.
+        issued = Path("/var/lib/hide-relay-proxy/caddy/certificates/acme-v02.api.letsencrypt.org-directory") / DEVICE
+        issued.mkdir(parents=True)
+        shutil.copyfile(certificate, issued / (DEVICE + ".crt"))
+        shutil.copyfile(key, issued / (DEVICE + ".key"))
         logging = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.load_cert_chain(certificate, key)
@@ -138,21 +184,32 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
 ''')
+            version, url, archive_digest = IROH_RELAY
+            assert (ROOT / "deploy/relay/iroh-relay.version").read_text().strip() == version
+            archive = folder / "iroh-relay.tar.gz"
+            subprocess.run(["curl", "--fail", "--silent", "--show-error", "--location", "--max-time", "120",
+                            "--output", str(archive), url], check=True)
+            assert hashlib.sha256(archive.read_bytes()).hexdigest() == archive_digest
+            with tarfile.open(archive) as bundle:
+                (artifact / "iroh-relay").write_bytes(bundle.extractfile("./iroh-relay").read())
             source = "1" * 40
             checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
+            device_checksum = hashlib.sha256((artifact / "iroh-relay").read_bytes()).hexdigest()
             (artifact / "source.json").write_text(json.dumps({
                 "source": source, "sha256": checksum, "repository": "with-hide/hide",
                 "workflow": ".github/workflows/relay-artifact.yml", "target": "x86_64-unknown-linux-gnu",
+                "iroh_relay": {"version": version, "sha256": device_checksum},
             }))
             staged = folder / "staged"
-            DEPLOY.stage(artifact, staged, dict(source=source, sha256=checksum, project="fixture-project",
-                        machine_id=Path("/etc/machine-id").read_text().strip()))
+            DEPLOY.stage(artifact, staged, dict(source=source, sha256=checksum, iroh_relay_sha256=device_checksum,
+                        project="fixture-project", machine_id=Path("/etc/machine-id").read_text().strip()))
             # A locally trusted fixture certificate avoids an external CA.
             # HTTPS and Caddy's automatic HTTP redirect remain enabled.
             # Production parser, canary, Stackdriver and service sandboxes stay.
             caddy = staged / "Caddyfile"
-            caddy.write_text(caddy.read_text().replace("relay.withhide.dev {",
-                            f"relay.withhide.dev {{\n\ttls {certificate} {key}"))
+            caddy.write_text(caddy.read_text().replace("\nrelay.withhide.dev {",
+                            f"\nrelay.withhide.dev {{\n\ttls {certificate} {key}").replace(
+                            "\ttls {\n\t\tissuer acme\n\t}", f"\ttls {certificate} {key}"))
             config = staged / "fluent-bit.conf"
             config.write_text(config.read_text() + f'''
     metadata_server http://127.0.0.1:{server.server_port}
@@ -179,6 +236,43 @@ HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
                 for entry in batch["entries"]:
                     assert entry["logName"] == "projects/fixture-project/logs/hide-relay", entry
                     assert entry["jsonPayload"] in ({"event": "server_failed"}, {"event": "collector_canary"}), entry
+            # The device relay: Caddy re-encrypts to the real iroh-relay, which
+            # answers address discovery on UDP 7842 itself.
+            assert device("/ping").endswith(b"\n200"), device("/ping")
+            assert device("/elsewhere").endswith(b"\n404")
+            assert subprocess.check_output(["ss", "-Hlun", "sport = :7842"]).strip(), "no address discovery socket"
+            # A burst of new connections meets the accept limit (10 a second, bursts of 30).
+            refused, opened = connect_many(3443, 80)
+            for connection in opened:
+                connection.close()
+            assert refused and opened, (refused, len(opened))
+            # The meter leaves a running relay alone while Caddy's certificate is unchanged.
+            relay = main_pid("hide-iroh-relay")
+            meter()
+            meter()
+            assert main_pid("hide-iroh-relay") == relay, "the meter restarted a relay whose certificate did not change"
+            state = json.loads((METER_STATE / "state.json").read_text())
+            assert state["sent"] > 0 and state["hour_connections"] > 0, state
+            # At the monthly cap the relay stops and Caddy says why; the alert leaves the machine.
+            state["sent"] = 300 * 10**9
+            (METER_STATE / "state.json").write_text(json.dumps(state))
+            meter()
+            assert not active("hide-iroh-relay.service")
+            assert device("/relay") == b"device relay stopped: monthly limit reached\n503", device("/relay")
+            wait_for(lambda: any(entry["jsonPayload"] == {"event": "device_relay_stopped"}
+                     for batch in received for entry in batch["entries"]), "collector delivered no stop alert")
+            meter()
+            assert not active("hide-iroh-relay.service"), "the meter started a relay past its cap"
+            meter("resume")
+            wait_for(lambda: device("/ping").endswith(b"\n200"), "resumed device relay did not answer")
+            assert active("hide-iroh-relay.service")
+            # A relay process that dies is started again by systemd.
+            subprocess.run(["systemctl", "kill", "--signal=SIGKILL", "hide-iroh-relay"], check=True)
+            wait_for(lambda: device("/ping").endswith(b"\n200"), "device relay did not restart")
+            for batch in received:
+                for entry in batch["entries"]:
+                    assert set(entry["jsonPayload"]) == {"event"}, entry
+                    assert entry["jsonPayload"]["event"] != "device_relay_hour", entry
             # Real process failure restarts the systemd-owned relay.
             old_pid = subprocess.check_output(["systemctl", "show", "hide-relay", "-p", "MainPID", "--value"]).strip()
             subprocess.run(["systemctl", "kill", "--signal=SIGKILL", "hide-relay"], check=True)
@@ -234,9 +328,11 @@ HTTPServer(("127.0.0.1", 8787), Handler).serve_forever()
                 raise AssertionError("broken candidate accepted")
             assert Path("/opt/hide-relay/current").resolve().name == source
             assert request("http://127.0.0.1:8787/health")
-            print("PASS: actual systemd restart/rollback, proxy overwrite, collector field boundary and failure health")
+            assert device("/ping").endswith(b"\n200")
+            print("PASS: actual systemd restart/rollback, proxy overwrite, collector field boundary and failure health;"
+                  " device relay behind Caddy, its limits, cap, resume and restart")
     finally:
-        subprocess.run(["systemctl", "stop", *DEPLOY.SERVICES, "hide-relay-retention.timer"], check=False)
+        subprocess.run(["systemctl", "stop", *DEPLOY.STOPPED], check=False)
         for owned in servers:
             owned.shutdown()
             owned.server_close()

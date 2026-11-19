@@ -1,62 +1,11 @@
 use super::*;
 use hide_peer::protocol::PeerKey;
-use hide_peer::store::{Host, Via};
+use hide_peer::store::{Grants, Via};
 
 const NOW: u64 = 1_800_000_000_000;
 
 fn guest() -> PeerKey {
     PeerKey::from_bytes([7; 32])
-}
-
-/// A machine that first paired through a grant it gave: pending opens
-/// nothing, the guest's confirm pairs it, and the removal of the last
-/// grant unpairs it.
-#[test]
-fn a_confirmed_grant_pairs_the_folder_and_its_removal_unpairs_it() {
-    let state = tempfile::tempdir().unwrap();
-    assert!(!paired(state.path()).unwrap());
-    let mut grants = Grants::open(hide_kit::layout::peer_grants(state.path())).unwrap();
-    let grant = grants
-        .grant_pending(guest(), "d1", "Laptop", Via::Link, NOW)
-        .unwrap();
-    assert!(
-        !paired(state.path()).unwrap(),
-        "a pending grant counts as a pairing"
-    );
-    grants.confirm(&guest(), &grant.id, NOW).unwrap();
-    assert!(paired(state.path()).unwrap());
-    grants.pause(&guest()).unwrap();
-    assert!(
-        paired(state.path()).unwrap(),
-        "a paused grant counts as no pairing"
-    );
-    grants.revoke(&guest(), None, NOW).unwrap();
-    assert!(!paired(state.path()).unwrap());
-}
-
-/// A machine that is a guest: a confirm not yet answered and a removal on
-/// its way count as none.
-#[test]
-fn a_confirmed_host_pairs_the_folder() {
-    let state = tempfile::tempdir().unwrap();
-    let mut known = Known::open(hide_kit::layout::peer_known(state.path())).unwrap();
-    let host = |state| Host {
-        key: guest(),
-        device: "d2".to_owned(),
-        name: "Mac".to_owned(),
-        grant: "g".to_owned(),
-        state,
-        candidates: Vec::new(),
-    };
-    for (state_now, is_paired) in [
-        (KnownState::Confirming, false),
-        (KnownState::Active, true),
-        (KnownState::PausedByMe, true),
-        (KnownState::RevokePending, false),
-    ] {
-        known.put(host(state_now)).unwrap();
-        assert_eq!(paired(state.path()).unwrap(), is_paired, "{state_now:?}");
-    }
 }
 
 /// launchd's stand-in: the session answers, and `print` answers a job

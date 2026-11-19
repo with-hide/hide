@@ -1041,7 +1041,17 @@ impl Runtime {
                     .filter(|device| device.kind == "remote")
                     .map(|device| self.device_answer(device))
                     .collect::<Vec<_>>();
-                Ok((serde_json::json!({ "devices": devices }), false))
+                let peers = self
+                    .snapshot
+                    .navigator
+                    .peers
+                    .iter()
+                    .map(crate::peer_machines::answer)
+                    .collect::<Vec<_>>();
+                Ok((
+                    serde_json::json!({ "devices": devices, "peers": peers }),
+                    false,
+                ))
             }
             DeviceCommand::Add { ssh_alias, name } => {
                 let ssh_alias = ssh_alias.trim().to_owned();

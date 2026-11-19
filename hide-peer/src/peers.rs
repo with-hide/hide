@@ -23,9 +23,11 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use tokio::time::Instant;
 
 use hide_kit::layout;
 use hide_peer_protocol::hello::{self, Agreed, Behind, GrantState, Hello, HelloFrame};
@@ -38,7 +40,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 
 use crate::gate::{CLOSED, Gate, Guarded};
 use crate::limits;
-use crate::store::{Change, Grant, Grants, Known, KnownState, StoreError, Via};
+use crate::store::{Change, Grant, Grants, Host, Known, KnownState, StoreError, Via};
 use crate::transport::{PeerConn, PeerTransport, TransportError};
 use crate::wire;
 
@@ -176,6 +178,51 @@ impl From<io::Error> for DialError {
     }
 }
 
+/// What time it is, as the records stamp it: Unix milliseconds. A daemon
+/// reads the system's clock; a test moves its own, so ten minutes of a
+/// pending grant take no time.
+#[derive(Clone)]
+pub struct Clock(Arc<dyn Fn() -> u64 + Send + Sync>);
+
+impl Clock {
+    pub fn system() -> Self {
+        Self::new(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |since| since.as_millis() as u64)
+        })
+    }
+
+    pub fn new(now_unix_ms: impl Fn() -> u64 + Send + Sync + 'static) -> Self {
+        Self(Arc::new(now_unix_ms))
+    }
+
+    pub fn now(&self) -> u64 {
+        (self.0)()
+    }
+}
+
+/// Why a connection to a machine may stay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reason {
+    /// A grant is settled in either direction.
+    Settled,
+    /// Only a grant that still waits this long for its confirm.
+    Pending { left: Duration },
+    /// Nothing: a machine in the middle of pairing, or a stranger.
+    None,
+}
+
+fn reason_in(grants: &Grants, known: &Known, key: &PeerKey, now_unix_ms: u64) -> Reason {
+    if grants.current(key).is_some() || known.of(key).is_some() {
+        return Reason::Settled;
+    }
+    match grants.pending_left(key, now_unix_ms) {
+        Some(left) => Reason::Pending { left },
+        None => Reason::None,
+    }
+}
+
 /// What to do with a newly established connection to a machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Standing {
@@ -209,6 +256,11 @@ pub fn decide(
     } else {
         Standing::Refuse(CloseCode::Duplicate)
     }
+}
+
+/// Whether this machine holds its side of host `key` back.
+fn held_back(known: &Known, key: &PeerKey) -> bool {
+    known.of(key).is_some_and(|host| host.state.held_back())
 }
 
 fn state_tag(state: GrantState) -> u8 {
@@ -268,7 +320,13 @@ struct LinkInner<C: PeerConn> {
     /// The grant this machine gives the peer: gates what the peer opens.
     inbound: Arc<Gate>,
     /// The grant the peer gives this machine: gates what is opened there.
+    /// It is shut while this machine holds its own side back
+    /// ([`KnownState::held_back`]), whatever the peer grants.
     outbound: Arc<Gate>,
+    /// The generation the peer last said its grant runs under, shut when
+    /// the grant is not active: what `outbound` opens to again when this
+    /// machine stops holding back.
+    heard: AtomicU64,
     granted: AtomicU8,
     counts: Arc<Counts>,
     /// Streams whose header is still being read.
@@ -439,8 +497,12 @@ struct Inner<T: PeerTransport> {
     /// The host's lock: every change of a grant is saved under it first.
     grants: Mutex<Grants>,
     known: Mutex<Known>,
-    gates: Mutex<HashMap<PeerKey, Arc<Gate>>>,
+    /// Taken after `grants` and `known`, never before them.
     table: Mutex<Table<T::Conn>>,
+    clock: Clock,
+    /// Counts changes of either record; a connection without a settled
+    /// grant watches it to read again how long it may stay.
+    relation: watch::Sender<u64>,
     /// Counts admissions; a dial in flight watches it.
     admitted: watch::Sender<u64>,
     /// One dial to a machine at a time: a second caller waits for the first
@@ -464,6 +526,7 @@ pub struct Config<'a> {
     pub device: &'a str,
     /// Whether this build is an official release.
     pub release: bool,
+    pub clock: Clock,
 }
 
 /// The connections of one machine, over one transport.
@@ -477,12 +540,6 @@ impl<T: PeerTransport> Clone for Peers<T> {
             inner: Arc::clone(&self.inner),
         }
     }
-}
-
-fn now_unix_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis() as u64)
 }
 
 fn lock<V>(mutex: &Mutex<V>) -> MutexGuard<'_, V> {
@@ -503,7 +560,9 @@ impl<T: PeerTransport> Peers<T> {
         config: Config<'_>,
     ) -> io::Result<(Self, mpsc::Receiver<Incoming<T::Conn>>)> {
         let mut grants = Grants::open(layout::peer_grants(config.state_dir))?;
-        grants.expire(now_unix_ms()).map_err(io::Error::other)?;
+        grants
+            .expire(config.clock.now())
+            .map_err(io::Error::other)?;
         let known = Known::open(layout::peer_known(config.state_dir))?;
         let (incoming, accepted) = mpsc::channel(limits::MAX_STREAMS);
         let inner = Arc::new(Inner {
@@ -511,11 +570,12 @@ impl<T: PeerTransport> Peers<T> {
             hello: Hello::ours(config.build, config.device, config.release),
             grants: Mutex::new(grants),
             known: Mutex::new(known),
-            gates: Mutex::new(HashMap::new()),
             table: Mutex::new(Table {
                 live: HashMap::new(),
                 draining: HashMap::new(),
             }),
+            clock: config.clock,
+            relation: watch::channel(0).0,
             admitted: watch::channel(0).0,
             dialing: Mutex::new(HashMap::new()),
             admitting: Arc::new(Semaphore::new(limits::MAX_ADMITTING)),
@@ -577,16 +637,61 @@ impl<T: PeerTransport> Peers<T> {
     /// changed: the next dial is not held back by an earlier failure (B15).
     pub fn network_changed(&self) {
         self.inner.woke.send_modify(|count| *count += 1);
+        // A timer does not run while the machine sleeps: what a connection
+        // may stay for is read again against the clock.
+        self.inner.relation_changed();
     }
 
-    /// Reads the host's record.
-    pub fn grants<R>(&self, read: impl FnOnce(&Grants) -> R) -> R {
-        read(&lock(&self.inner.grants))
+    /// Reads the host's record, with the time to read it at.
+    pub fn grants<R>(&self, read: impl FnOnce(&Grants, u64) -> R) -> R {
+        read(&lock(&self.inner.grants), self.inner.clock.now())
+    }
+
+    /// What the streams `key` opens here run under now.
+    pub fn granting(&self, key: &PeerKey) -> Change {
+        self.grants(|grants, now| grants.state_of(key, now))
+    }
+
+    /// The time the records are stamped with, as Unix milliseconds.
+    pub fn now(&self) -> u64 {
+        self.inner.clock.now()
+    }
+
+    /// The host this machine is a guest of under `key`.
+    pub fn host(&self, key: &PeerKey) -> Option<Host> {
+        lock(&self.inner.known).of(key).cloned()
+    }
+
+    /// Every host this machine is a guest of.
+    pub fn hosts(&self) -> Vec<Host> {
+        lock(&self.inner.known).list().to_vec()
+    }
+
+    /// Moves a host this machine is a guest of to `state`: saved first,
+    /// then the streams opened there end when this machine now holds its
+    /// side back, and open again under what the host last granted when it
+    /// no longer does (B25).
+    pub fn set_host(&self, key: &PeerKey, state: KnownState) -> Result<(), StoreError> {
+        {
+            let mut known = lock(&self.inner.known);
+            known.set_state(key, state)?;
+            if let Some(link) = lock(&self.inner.table).live.get(key) {
+                link.inner.outbound.set(if state.held_back() {
+                    CLOSED
+                } else {
+                    link.inner.heard.load(Ordering::Acquire)
+                });
+            }
+        }
+        self.inner.relation_changed();
+        Ok(())
     }
 
     /// Reads or changes the guest's record.
     pub fn known<R>(&self, change: impl FnOnce(&mut Known) -> R) -> R {
-        change(&mut lock(&self.inner.known))
+        let changed = change(&mut lock(&self.inner.known));
+        self.inner.relation_changed();
+        changed
     }
 
     /// Saves a pending grant for a guest the operator allowed. It opens
@@ -598,35 +703,45 @@ impl<T: PeerTransport> Peers<T> {
         name: &str,
         via: Via,
     ) -> Result<Grant, StoreError> {
-        lock(&self.inner.grants).grant_pending(key, device, name, via, now_unix_ms())
+        let now = self.inner.clock.now();
+        let grant = lock(&self.inner.grants).grant_pending(key, device, name, via, now)?;
+        self.inner.relation_changed();
+        Ok(grant)
     }
 
-    /// The guest's confirm of grant `id`.
+    /// The guest's confirm of grant `id`. One that changes nothing (the
+    /// grant is settled already, or is not there) touches no connection, so
+    /// its answer reaches the guest on the stream it asked on.
     pub fn confirm(&self, key: &PeerKey, id: &str) -> Result<ConfirmState, StoreError> {
-        let state = {
+        let (state, changed) = {
             let mut grants = lock(&self.inner.grants);
-            let (state, change) = grants.confirm(key, id, now_unix_ms())?;
+            let (state, change) = grants.confirm(key, id, self.inner.clock.now())?;
             if let Some(change) = change {
                 self.inner.move_gate(change);
             }
-            state
+            (state, change.is_some())
         };
-        self.inner.settle(key);
+        if changed {
+            self.inner.settle(key);
+        }
         Ok(state)
     }
 
+    /// Pausing what is paused, like resuming what is active, changes
+    /// nothing: the streams running under the grant go on.
     pub fn pause(&self, key: &PeerKey) -> Result<(), StoreError> {
-        self.change(key, |grants| grants.pause(key).map(Some))
+        self.change(key, |grants| grants.pause(key))
     }
 
     pub fn resume(&self, key: &PeerKey) -> Result<(), StoreError> {
-        self.change(key, |grants| grants.resume(key).map(Some))
+        self.change(key, |grants| grants.resume(key))
     }
 
     /// Removes the grant given to `key`; with `id`, only that grant.
     /// Removing what is not there is not an error.
     pub fn revoke(&self, key: &PeerKey, id: Option<&str>) -> Result<(), StoreError> {
-        self.change(key, |grants| grants.revoke(key, id, now_unix_ms()))
+        let now = self.inner.clock.now();
+        self.change(key, |grants| grants.revoke(key, id, now))
     }
 
     /// Forgets a host this machine was a guest of. Whether it was known.
@@ -638,7 +753,9 @@ impl<T: PeerTransport> Peers<T> {
 
     /// Saves a change of the grant given to `key`, then moves that
     /// direction's generation, then tells the peer. The save is first: a
-    /// failed one moves nothing.
+    /// failed one moves nothing. A request that changes nothing tells
+    /// nobody and closes nothing: a machine that asks for the removal of a
+    /// grant it does not hold is answered on the stream it asked on.
     fn change(
         &self,
         key: &PeerKey,
@@ -646,11 +763,12 @@ impl<T: PeerTransport> Peers<T> {
     ) -> Result<(), StoreError> {
         {
             let mut grants = lock(&self.inner.grants);
-            if let Some(change) = save(&mut grants)? {
-                // Under the lock that saved it, so two changes move the
-                // gate in the order they were saved.
-                self.inner.move_gate(change);
-            }
+            let Some(change) = save(&mut grants)? else {
+                return Ok(());
+            };
+            // Under the lock that saved it, so two changes move the gate
+            // in the order they were saved.
+            self.inner.move_gate(change);
         }
         self.inner.settle(key);
         Ok(())
@@ -688,38 +806,44 @@ impl<T: PeerTransport> Inner<T> {
         let _ = self.events.send(event);
     }
 
-    /// Whether this machine and `key` are paired in either direction, a
-    /// pending grant included.
-    fn related(&self, key: &PeerKey) -> bool {
-        lock(&self.grants)
-            .list()
-            .iter()
-            .any(|grant| grant.key == *key)
-            || lock(&self.known).of(key).is_some()
+    /// Why a connection to `key` may stay, as the two records stand now. A
+    /// pending grant past its time is no reason.
+    fn reason(&self, key: &PeerKey) -> Reason {
+        let grants = lock(&self.grants);
+        let known = lock(&self.known);
+        reason_in(&grants, &known, key, self.clock.now())
     }
 
-    fn gate(&self, key: &PeerKey, generation: impl FnOnce() -> u64) -> Arc<Gate> {
-        Arc::clone(
-            lock(&self.gates)
-                .entry(*key)
-                .or_insert_with(|| Gate::new(generation())),
-        )
+    /// Whether this machine and `key` are paired in either direction, a
+    /// pending grant that still waits included.
+    fn related(&self, key: &PeerKey) -> bool {
+        self.reason(key) != Reason::None
+    }
+
+    fn relation_changed(&self) {
+        self.relation.send_modify(|count| *count += 1);
     }
 
     /// Moves the generation of the grant given to `change.key`: every
-    /// stream that peer opened under the earlier one ends.
+    /// stream that peer opened under the earlier one ends. The gate is the
+    /// live connection's own, so nothing is kept for a machine that is not
+    /// connected; the next connection reads its generation from the record.
+    /// Called under the grants lock, which admission holds too, so a
+    /// connection is either in the table before the change or reads it.
     fn move_gate(&self, change: Change) {
-        self.gate(&change.key, || change.generation)
-            .set(change.generation);
+        if let Some(link) = lock(&self.table).live.get(&change.key) {
+            link.inner.inbound.set(change.generation);
+        }
     }
 
     /// After a record changed: tells the peer the grant it now has, and
     /// closes the connection when no grant is left in either direction.
     fn settle(&self, key: &PeerKey) {
+        self.relation_changed();
         let Some(link) = self.link(key) else {
             return;
         };
-        let change = lock(&self.grants).state_of(key);
+        let change = lock(&self.grants).state_of(key, self.clock.now());
         link.tell(HelloFrame::Grant {
             state: change.state,
             generation: change.generation,
@@ -731,6 +855,13 @@ impl<T: PeerTransport> Inner<T> {
 
     async fn accept_connections(self: Arc<Self>) {
         let mut shutdown = self.shutdown.subscribe();
+        let mut woke = self.woke.subscribe();
+        // A transport that cannot accept (its port is taken, there is no
+        // network) is asked again as a machine is dialed again: after a
+        // wait that doubles, and at once when the network changed. Only
+        // the change between failing and accepting is recorded.
+        let mut wait = limits::REDIAL_FIRST;
+        let mut failing = false;
         loop {
             let conn = tokio::select! {
                 _ = shutdown.wait_for(|stop| *stop) => return,
@@ -738,10 +869,18 @@ impl<T: PeerTransport> Inner<T> {
             };
             match conn {
                 Ok(conn) => {
+                    if failing {
+                        failing = false;
+                        crate::diagnostic!(json!({
+                            "component": "peer",
+                            "event": "accept.recovered",
+                        }));
+                    }
+                    wait = limits::REDIAL_FIRST;
                     // At the cap a connection is closed before any of its
                     // bytes are read.
                     let Ok(permit) = Arc::clone(&self.admitting).try_acquire_owned() else {
-                        conn.close(CloseCode::NoGrant);
+                        conn.close(CloseCode::Busy);
                         continue;
                     };
                     let inner = Arc::clone(&self);
@@ -757,11 +896,26 @@ impl<T: PeerTransport> Inner<T> {
                     });
                 }
                 Err(TransportError::Closed) => return,
-                Err(error) => crate::diagnostic!(json!({
-                    "component": "peer",
-                    "event": "accept.failed",
-                    "reason": error.to_string(),
-                })),
+                Err(error) => {
+                    if !failing {
+                        failing = true;
+                        crate::diagnostic!(json!({
+                            "component": "peer",
+                            "event": "accept.failed",
+                            "reason": error.to_string(),
+                        }));
+                    }
+                    tokio::select! {
+                        () = tokio::time::sleep(wait) => wait = next_wait(wait),
+                        changed = woke.changed() => {
+                            if changed.is_err() {
+                                return;
+                            }
+                            wait = limits::REDIAL_FIRST;
+                        }
+                        _ = shutdown.wait_for(|stop| *stop) => return,
+                    }
+                }
             }
         }
     }
@@ -925,13 +1079,24 @@ impl<T: PeerTransport> Inner<T> {
             Ok(agreed) => agreed,
             Err(behind) => {
                 // Decided before admission, so a build that cannot connect
-                // never pushes out a connection that works.
-                self.emit(PeerEvent::UpdateNeeded {
-                    key,
-                    device: theirs.device.clone(),
-                    build: theirs.build.clone(),
-                    behind,
-                });
+                // never pushes out a connection that works. Only a paired
+                // machine's is shown: a stranger's hello carries words it
+                // chose, and those go nowhere.
+                if self.related(&key) {
+                    self.emit(PeerEvent::UpdateNeeded {
+                        key,
+                        device: theirs.device.clone(),
+                        build: theirs.build.clone(),
+                        behind,
+                    });
+                } else {
+                    crate::diagnostic!(json!({
+                        "component": "peer",
+                        "event": "hello.incompatible",
+                        "peer": key.short(),
+                        "behind": format!("{behind:?}"),
+                    }));
+                }
                 conn.close(CloseCode::UpdateNeeded);
                 return Err(DialError::UpdateNeeded(behind));
             }
@@ -941,8 +1106,13 @@ impl<T: PeerTransport> Inner<T> {
         // The hello stream holds its kind's one place for the connection's
         // life, so a second one is refused at the limit.
         let hello_place = counts.take(StreamKind::Hello);
-        let related = self.related(&key);
         let link = {
+            // Under the host's lock: a grant change either finds this
+            // connection in the table or is read here.
+            let grants = lock(&self.grants);
+            let known = lock(&self.known);
+            let now = self.clock.now();
+            let unrelated = |key: &PeerKey| reason_in(&grants, &known, key, now) == Reason::None;
             let mut table = lock(&self.table);
             let held = table
                 .live
@@ -951,30 +1121,29 @@ impl<T: PeerTransport> Inner<T> {
                 .map(Link::dialed);
             let standing = decide(&self.transport.key(), &key, held, conn.dialed());
             if let Standing::Refuse(code) = standing {
-                drop(table);
                 conn.close(code);
                 return Err(DialError::Refused(code));
             }
-            if !related {
+            if unrelated(&key) {
                 let ungranted = table
                     .live
                     .keys()
-                    .filter(|other| **other != key && !self.related(other))
+                    .filter(|other| **other != key && unrelated(other))
                     .count();
                 if ungranted >= limits::MAX_UNGRANTED {
-                    drop(table);
-                    conn.close(CloseCode::NoGrant);
-                    return Err(DialError::Refused(CloseCode::NoGrant));
+                    conn.close(CloseCode::Busy);
+                    return Err(DialError::Refused(CloseCode::Busy));
                 }
             }
-            let granting = lock(&self.grants).state_of(&key);
+            let granting = grants.state_of(&key, now);
             let link = Link {
                 inner: Arc::new(LinkInner {
                     conn: conn.clone(),
                     theirs,
                     agreed,
-                    inbound: self.gate(&key, || granting.generation),
+                    inbound: Gate::new(granting.generation),
                     outbound: Gate::new(CLOSED),
+                    heard: AtomicU64::new(CLOSED),
                     granted: AtomicU8::new(state_tag(GrantState::None)),
                     counts,
                     headers: Arc::new(Semaphore::new(limits::MAX_STREAMS)),
@@ -1001,7 +1170,7 @@ impl<T: PeerTransport> Inner<T> {
         tokio::spawn(Arc::clone(self).write_hello_frames(link.clone(), send, queued, hello_place));
         tokio::spawn(Arc::clone(self).read_hello_frames(link.clone(), recv));
         tokio::spawn(Arc::clone(self).accept_streams(link.clone()));
-        tokio::spawn(Arc::clone(self).watch_end(link.clone(), related));
+        tokio::spawn(Arc::clone(self).watch_end(link.clone()));
         self.emit(PeerEvent::Connected {
             key,
             path: link.path(),
@@ -1054,7 +1223,17 @@ impl<T: PeerTransport> Inner<T> {
                     } else {
                         CLOSED
                     };
-                    link.inner.outbound.set(generation);
+                    {
+                        // Under the guest's lock, as `set_host` is: the
+                        // gate is opened by whichever of the two ran last.
+                        let known = lock(&self.known);
+                        link.inner.heard.store(generation, Ordering::Release);
+                        link.inner.outbound.set(if held_back(&known, &key) {
+                            CLOSED
+                        } else {
+                            generation
+                        });
+                    }
                     self.emit(PeerEvent::Granted { key, state });
                 }
                 Ok(Some(HelloFrame::Update)) => {
@@ -1140,20 +1319,54 @@ impl<T: PeerTransport> Inner<T> {
         }
     }
 
+    /// When a connection admitted at `admitted` has to have a settled grant
+    /// by, as the records stand now. `None` while one is settled.
+    fn leave_by(&self, key: &PeerKey, admitted: Instant) -> Option<Instant> {
+        let ungranted = admitted + limits::UNGRANTED_FOR;
+        match self.reason(key) {
+            Reason::Settled => None,
+            // The grant's own wait may end later than the connection's.
+            Reason::Pending { left } => Some(ungranted.max(Instant::now() + left)),
+            Reason::None => Some(ungranted),
+        }
+    }
+
     /// Ends a connection's place in the table when it ends, and closes one
-    /// that stays without a grant in either direction for too long.
-    async fn watch_end(self: Arc<Self>, link: Link<T::Conn>, related: bool) {
+    /// that stays without a settled grant in either direction for too long.
+    /// How long is read again whenever a record changes, so a pending grant
+    /// that was never confirmed, or a grant removed as its guest connected,
+    /// does not keep a connection the limit should have closed.
+    async fn watch_end(self: Arc<Self>, link: Link<T::Conn>) {
         let key = link.key();
-        let code = if related {
-            link.closed().await
-        } else {
+        let admitted = Instant::now();
+        let mut relation = self.relation.subscribe();
+        let code = loop {
+            // Seen before the read, so a change after it wakes the wait.
+            relation.borrow_and_update();
+            let by = self.leave_by(&key, admitted);
+            let overstayed = async {
+                match by {
+                    Some(by) => tokio::time::sleep_until(by).await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
-                code = link.closed() => code,
-                () = tokio::time::sleep(limits::UNGRANTED_FOR) => {
-                    if !self.related(&key) {
-                        link.close(CloseCode::NoGrant);
+                code = link.closed() => break code,
+                changed = relation.changed() => {
+                    if changed.is_err() {
+                        break link.closed().await;
                     }
-                    link.closed().await
+                }
+                () = overstayed => {
+                    // Read again at the time: a grant may have settled, or
+                    // a newer pending one may wait longer.
+                    let over = self
+                        .leave_by(&key, admitted)
+                        .is_some_and(|by| by <= Instant::now());
+                    if over {
+                        link.close(CloseCode::NoGrant);
+                        break link.closed().await;
+                    }
                 }
             }
         };
@@ -1184,10 +1397,11 @@ impl<T: PeerTransport> Inner<T> {
         let mut woke = self.woke.subscribe();
         let mut wait = limits::REDIAL_FIRST;
         loop {
-            // A host this machine forgot or paused is not dialed.
+            // A host this machine forgot or paused, or one that dropped the
+            // pairing, is not dialed.
             let Some(to) = lock(&self.known)
                 .of(&key)
-                .filter(|host| host.state != KnownState::PausedByMe)
+                .filter(|host| host.state.dialed())
                 .map(|host| PeerAddr::new(key, host.candidates.clone()))
             else {
                 return;
@@ -1195,20 +1409,19 @@ impl<T: PeerTransport> Inner<T> {
             let over = async {
                 match self.dial(&to).await {
                     Ok(link) => {
+                        let since = Instant::now();
                         link.closed().await;
-                        true
+                        Some(since.elapsed())
                     }
-                    Err(_) => false,
+                    Err(_) => None,
                 }
             };
-            let connected = tokio::select! {
-                connected = over => connected,
+            let lived = tokio::select! {
+                lived = over => lived,
                 _ = stopped.changed() => return,
                 _ = shutdown.wait_for(|stop| *stop) => return,
             };
-            if connected {
-                wait = limits::REDIAL_FIRST;
-            }
+            wait = wait_after(wait, lived);
             tokio::select! {
                 () = tokio::time::sleep(wait) => wait = next_wait(wait),
                 changed = woke.changed() => {
@@ -1228,12 +1441,173 @@ fn next_wait(wait: Duration) -> Duration {
     (wait * 2).min(limits::REDIAL_MOST)
 }
 
+/// The wait before the next dial, after a connection that lived `lived`
+/// (`None`: the dial failed). Only a connection that stayed starts the wait
+/// over: a host that admits and closes at once is dialed as rarely as one
+/// that does not answer.
+fn wait_after(wait: Duration, lived: Option<Duration>) -> Duration {
+    match lived {
+        Some(lived) if lived >= limits::STAYED_AFTER => limits::REDIAL_FIRST,
+        _ => wait,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::key::MachineKey;
+    use crate::loopback::{LoopConn, Net};
+    use crate::transport::RelayState;
+    use hide_peer_protocol::Candidate;
 
     fn key(byte: u8) -> PeerKey {
         PeerKey::from_bytes([byte; 32])
+    }
+
+    fn config(state_dir: &Path) -> Config<'_> {
+        Config {
+            state_dir,
+            build: "1.3.0-test",
+            device: "test-device",
+            release: false,
+            clock: Clock::system(),
+        }
+    }
+
+    /// A transport that cannot accept: its port is taken, or there is no
+    /// network. It counts how often it is asked.
+    struct Unbound {
+        asked: Arc<AtomicUsize>,
+    }
+
+    impl PeerTransport for Unbound {
+        type Conn = LoopConn;
+
+        fn key(&self) -> PeerKey {
+            key(1)
+        }
+
+        fn candidates(&self) -> Vec<Candidate> {
+            Vec::new()
+        }
+
+        async fn dial(&self, _to: &PeerAddr) -> Result<LoopConn, TransportError> {
+            Err(TransportError::Unreachable("unbound".into()))
+        }
+
+        async fn accept(&self) -> Result<LoopConn, TransportError> {
+            self.asked.fetch_add(1, Ordering::AcqRel);
+            // Lets the caller's other work run, as a bind that fails does.
+            tokio::task::yield_now().await;
+            Err(TransportError::Unreachable("the port is taken".into()))
+        }
+
+        async fn relay(&self) -> RelayState {
+            RelayState::None
+        }
+
+        async fn close(&self) {}
+    }
+
+    /// Lets every task run until it waits.
+    async fn settled() {
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_transport_that_cannot_accept_is_asked_again_as_a_machine_is_dialed_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let asked = Arc::new(AtomicUsize::new(0));
+        let transport = Unbound {
+            asked: Arc::clone(&asked),
+        };
+        let (peers, _incoming) = Peers::start(transport, config(dir.path())).unwrap();
+        let asked = || asked.load(Ordering::Acquire);
+        let millisecond = Duration::from_millis(1);
+
+        settled().await;
+        assert_eq!(asked(), 1, "asked once, and then it waits");
+        tokio::time::advance(limits::REDIAL_FIRST - millisecond).await;
+        settled().await;
+        assert_eq!(asked(), 1);
+        tokio::time::advance(millisecond).await;
+        settled().await;
+        assert_eq!(asked(), 2);
+
+        // The wait doubled.
+        tokio::time::advance(limits::REDIAL_FIRST).await;
+        settled().await;
+        assert_eq!(asked(), 2);
+        tokio::time::advance(limits::REDIAL_FIRST).await;
+        settled().await;
+        assert_eq!(asked(), 3);
+
+        // The network changed: asked at once, and the wait starts over.
+        peers.network_changed();
+        settled().await;
+        assert_eq!(asked(), 4);
+        tokio::time::advance(limits::REDIAL_FIRST).await;
+        settled().await;
+        assert_eq!(asked(), 5);
+        peers.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_machine_that_came_without_a_grant_and_left_leaves_nothing_behind() {
+        let net = Net::new();
+        let host_dir = tempfile::tempdir().unwrap();
+        let (host, _incoming) = Peers::start(
+            net.join(MachineKey::generate().unwrap()),
+            config(host_dir.path()),
+        )
+        .unwrap();
+        let mut events = host.events();
+        let to = PeerAddr::new(host.key(), Vec::new());
+        // More of them than may be connected without a grant at once: each
+        // one's place is free again when it left.
+        for _ in 0..limits::MAX_UNGRANTED + 4 {
+            let dir = tempfile::tempdir().unwrap();
+            let (guest, _incoming) = Peers::start(
+                net.join(MachineKey::generate().unwrap()),
+                config(dir.path()),
+            )
+            .unwrap();
+            guest.dial(&to).await.expect("a stranger is admitted");
+            guest.close().await;
+            let left = guest.key();
+            tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    let event = events.recv().await.expect("the host's events");
+                    if matches!(event, PeerEvent::Disconnected { key, .. } if key == left) {
+                        return;
+                    }
+                }
+            })
+            .await
+            .expect("the host saw the stranger leave");
+        }
+        {
+            let table = lock(&host.inner.table);
+            assert!(table.live.is_empty());
+            assert!(table.draining.is_empty());
+        }
+        assert!(lock(&host.inner.dialing).is_empty());
+        host.close().await;
+    }
+
+    #[test]
+    fn only_a_connection_that_stayed_starts_the_redial_wait_over() {
+        let waited = Duration::from_secs(16);
+        // The dial failed.
+        assert_eq!(wait_after(waited, None), waited);
+        // Admitted and closed at once: dialed as rarely as no answer.
+        assert_eq!(wait_after(waited, Some(Duration::from_secs(2))), waited);
+        assert_eq!(
+            wait_after(waited, Some(limits::STAYED_AFTER)),
+            limits::REDIAL_FIRST
+        );
     }
 
     #[test]

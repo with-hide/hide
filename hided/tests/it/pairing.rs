@@ -1,0 +1,587 @@
+//! Two Hides pair (PRD device-connect-iroh c1, c2): a host whose window
+//! shares a link and answers, and a guest that is a second daemon with a
+//! machine id of its own, driven by the built `hide` at a terminal. They
+//! pair by the link and the same four words, the host asks to be let in the
+//! other way, each direction is stopped and removed apart, and what is the
+//! operator's alone is refused to a pane and to a screen that is not this
+//! machine's own window (B52).
+//!
+//! The two endpoints bind loopback with no relay (`HIDE_PEER_DIRECT`), so
+//! nothing leaves the machine.
+
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use futures_util::{SinkExt, StreamExt};
+use hided::env::Env;
+use serde_json::{Value, json};
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::ORIGIN;
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The machine id the guest daemon runs under, so one host is two machines.
+const GUEST: &str = "pairing-guest";
+
+const WITHIN: Duration = Duration::from_secs(40);
+
+fn host_env(root: &Path) -> Env {
+    let state = root.join("host-state");
+    hide_platform::fs::private::create_dir_all(&state).unwrap();
+    std::fs::create_dir_all(root.join("host-home")).unwrap();
+    Env {
+        home: root.join("host-home"),
+        state_dir: state,
+        legacy_state_dir: None,
+        account_state_folder: false,
+        keep_alive: true,
+        vite_origin: None,
+        bind: "127.0.0.1:0".parse().unwrap(),
+        idle_secs: 600,
+        build: None,
+        starter_program: None,
+        open_command: None,
+        host_helper_root: None,
+        host_cli_dir: None,
+        pane_id: None,
+        install: None,
+        access: None,
+        tailscale_bin: Some(root.join("no-tailscale")),
+        relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+        peer_direct: Some("127.0.0.1:0".parse().unwrap()),
+        search_path: None,
+    }
+}
+
+/// A screen connection to the host daemon.
+struct Window(Socket);
+
+impl Window {
+    async fn open(running: &hided::RunningDaemon, kind: &str) -> Self {
+        let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            ORIGIN,
+            format!("http://127.0.0.1:{}", running.port)
+                .parse()
+                .unwrap(),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        socket
+            .send(Message::Text(
+                json!({"token": running.token, "schema_version": 2, "client_kind": kind})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        Self(socket)
+    }
+
+    async fn send(&mut self, kind: &str, payload: Value) {
+        self.0
+            .send(Message::Text(
+                json!({"schema_version": hide_core::SCHEMA_VERSION, "kind": kind,
+                    "payload": payload})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// The next frame `wanted` takes, of those the daemon sends this screen.
+    async fn frame(&mut self, what: &str, wanted: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + WITHIN;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let frame = tokio::time::timeout(left, self.0.next())
+                .await
+                .unwrap_or_else(|_| panic!("no {what} came"))
+                .expect("the connection closed")
+                .unwrap();
+            let Message::Text(text) = frame else { continue };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if wanted(&value) {
+                return value;
+            }
+        }
+    }
+
+    /// The answer to the `pairing_<verb>` this window sent.
+    async fn result(&mut self, verb: &str) -> Value {
+        let frame = self
+            .frame("pairing result", |frame| {
+                frame["type"] == "pairing_result" && frame["payload"]["verb"] == verb
+            })
+            .await;
+        frame["payload"].clone()
+    }
+}
+
+/// The built `hide`, at a terminal of one of the two machines.
+struct Terminal {
+    home: PathBuf,
+    state: PathBuf,
+    machine: Option<&'static str>,
+}
+
+impl Terminal {
+    fn command_of(&self, program: &Path, args: &[&str]) -> Command {
+        let mut command = Command::new(program);
+        for (key, _) in std::env::vars_os() {
+            let upper = key.to_string_lossy().to_uppercase();
+            if upper.starts_with("HIDE_") || upper.starts_with("HERDR_") {
+                command.env_remove(key);
+            }
+        }
+        command
+            .args(args)
+            .current_dir(&self.home)
+            .env(hided::env::HOME, &self.home)
+            .env("APPDATA", self.home.join("AppData").join("Roaming"))
+            .env("LOCALAPPDATA", self.home.join("AppData").join("Local"))
+            .env("XDG_CONFIG_HOME", self.home.join("xdg-config"))
+            .env_remove("XDG_STATE_HOME")
+            .env("HIDE_STATE_DIR", &self.state)
+            .env("HIDE_TAILSCALE_BIN", self.home.join("no-tailscale"))
+            .env("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws")
+            .env("HIDE_PEER_DIRECT", "127.0.0.1:0")
+            .env("LANG", "en_US.UTF-8")
+            .env_remove("LC_ALL")
+            .env_remove("LC_MESSAGES")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(machine) = self.machine {
+            command.env(hided::env::HIDE_MACHINE_ID, machine);
+        }
+        command
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        self.command_of(Path::new(env!("CARGO_BIN_EXE_hide")), args)
+    }
+
+    fn run(&self, args: &[&str]) -> Ran {
+        Ran::of(self.command(args).output().unwrap())
+    }
+
+    /// Runs `hide args` with `typed` waiting on its input, off the runtime.
+    fn typing(&self, args: &[&str], typed: &'static str) -> tokio::task::JoinHandle<Ran> {
+        let mut command = self.command(args);
+        command.stdin(Stdio::piped());
+        tokio::task::spawn_blocking(move || {
+            let mut child = command.spawn().unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(typed.as_bytes())
+                .unwrap();
+            Ran::of(child.wait_with_output().unwrap())
+        })
+    }
+
+    /// The paired machines `hide device list` names.
+    fn peers(&self) -> Vec<Value> {
+        let ran = self.run(&["device", "list", "--json"]);
+        assert!(ran.ok, "{}", ran.text());
+        ran.json()["value"]["peers"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Waits until this machine's one paired machine is as `wanted` says.
+    async fn peer_becomes(&self, what: &str, wanted: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + WITHIN;
+        loop {
+            let peers = self.peers();
+            if let [peer] = peers.as_slice()
+                && wanted(peer)
+            {
+                return peer.clone();
+            }
+            assert!(Instant::now() < deadline, "{what}: {peers:?}");
+            tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the other machine's answer crosses the connection; the list is the daemon's own account of it
+        }
+    }
+}
+
+/// What one `hide` run answered.
+struct Ran {
+    ok: bool,
+    out: String,
+    err: String,
+}
+
+impl Ran {
+    fn of(output: std::process::Output) -> Self {
+        Self {
+            ok: output.status.success(),
+            out: String::from_utf8_lossy(&output.stdout).into_owned(),
+            err: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
+    fn text(&self) -> String {
+        format!("{}{}", self.out, self.err)
+    }
+
+    fn json(&self) -> Value {
+        let line = self.out.lines().rev().find(|line| line.starts_with('{'));
+        serde_json::from_str(line.unwrap_or_else(|| panic!("no JSON line: {}", self.text())))
+            .unwrap()
+    }
+
+    /// Asserts a refusal with `code` and what that code says to do.
+    fn refused(&self, code: &str) {
+        assert!(
+            !self.ok,
+            "{code} expected, the command ran: {}",
+            self.text()
+        );
+        assert_eq!(self.json()["error"]["code"], code, "{}", self.text());
+        assert_eq!(
+            self.json()["error"]["message"],
+            hided::pairing::next_action(code),
+            "{}",
+            self.text()
+        );
+    }
+}
+
+/// Stops the guest daemon however the test ends.
+struct StopOnDrop<'a>(&'a Terminal);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.command(&["stop"]).status();
+    }
+}
+
+/// `hide args` started by a shell the engine records as a pane's program,
+/// with nothing in its environment that says so: what the daemon answers it.
+#[cfg(unix)]
+fn in_a_pane(terminal: &Terminal, args: &[&str]) -> Ran {
+    let mut shell = vec![
+        "-c",
+        "read _ && \"$0\" \"$@\"; exit $?",
+        env!("CARGO_BIN_EXE_hide"),
+    ];
+    shell.extend_from_slice(args);
+    let mut child = terminal
+        .command_of(Path::new("/bin/sh"), &shell)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let record =
+        hide_kit::layout::pane_record(&terminal.state, &format!("in-a-pane-{}", child.id()));
+    hide_platform::fs::private::create_dir_all(record.parent().unwrap()).unwrap();
+    hide_holder_protocol::record::write(
+        &record,
+        &hide_holder_protocol::record::PaneRecord {
+            format: hide_holder_protocol::record::RECORD_FORMAT,
+            pane: "in-a-pane".to_owned(),
+            owner: "fixture".to_owned(),
+            incarnation: 1,
+            phase: hide_holder_protocol::record::Phase::Running,
+            protocol: hide_holder_protocol::PROTOCOL_VERSION,
+            version_folder: "fixture".to_owned(),
+            spec: "fixture".to_owned(),
+            reservation: None,
+            reserved_at_unix_ms: 0,
+            boot: None,
+            holder: None,
+            program: Some(hide_holder_protocol::record::Identity::of(child.id()).unwrap()),
+            end: None,
+        },
+    )
+    .unwrap();
+    child.stdin.take().unwrap().write_all(b"go\n").unwrap();
+    let ran = Ran::of(child.wait_with_output().unwrap());
+    std::fs::remove_file(&record).unwrap();
+    ran
+}
+
+/// The words a terminal printed for its operator to compare.
+fn words_printed(ran: &Ran) -> Vec<String> {
+    let line = ran
+        .err
+        .lines()
+        .find_map(|line| line.strip_prefix("Words: "))
+        .unwrap_or_else(|| panic!("no words were shown: {}", ran.text()));
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
+// The host daemon runs on this test's runtime while a `hide` blocks a
+// thread of it, so it needs threads of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
+    let root = tempfile::tempdir().unwrap();
+    let running = hided::start_daemon(host_env(root.path())).await.unwrap();
+    let host = Terminal {
+        home: root.path().join("host-home"),
+        state: root.path().join("host-state"),
+        machine: None,
+    };
+    let guest = Terminal {
+        home: root.path().join("guest-home"),
+        state: root.path().join("guest-state"),
+        machine: Some(GUEST),
+    };
+    std::fs::create_dir_all(&guest.home).unwrap();
+    let _stop = StopOnDrop(&guest);
+    let connected = guest.run(&["connect"]);
+    assert!(connected.ok, "the guest daemon: {}", connected.text());
+
+    // A machine paired with nothing lists nothing, and looking opens no
+    // endpoint (D-83).
+    assert!(host.peers().is_empty());
+    assert!(!hided::peer_host::paired(&host.state).unwrap());
+
+    // What is the operator's alone is refused where an agent runs: by this
+    // command's own environment, and by what the kernel says of the caller.
+    let mut from_pane = host.command(&["device", "share", "--json"]);
+    from_pane.env("HIDE_PANE_ID", "w1:p1");
+    Ran::of(from_pane.output().unwrap()).refused("device_from_pane");
+    #[cfg(unix)]
+    in_a_pane(&host, &["device", "share", "--json"]).refused("device_from_pane");
+
+    // A screen that is not this machine's own window is refused, hears so
+    // alone, and is never sent the pairings under way.
+    let mut phone = Window::open(&running, "mobile").await;
+    phone
+        .send("pairing_share", json!({"request_id": "p1"}))
+        .await;
+    let refused = phone.result("share").await;
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["reason"], "device_from_other_screen", "{refused}");
+
+    // B1: the host's window shares a link that names the words' language.
+    let mut window = Window::open(&running, "web").await;
+    let idle = window
+        .frame("pairing frame", |frame| frame["type"] == "pairing")
+        .await;
+    assert!(idle["payload"]["offer"].is_null(), "{idle}");
+    window
+        .send(
+            "pairing_share",
+            json!({"request_id": "s1", "language": "ko"}),
+        )
+        .await;
+    let shared = window.result("share").await;
+    assert_eq!(shared["ok"], true, "{shared}");
+    assert_eq!(shared["request_id"], "s1", "{shared}");
+    let link = shared["link"].as_str().unwrap().to_owned();
+    assert!(link.starts_with("hide://pair#"), "{link}");
+
+    // B2: the guest pastes it at a terminal; both sides show four words.
+    let adding = guest.typing(&["device", "add", &link], "y\n");
+    let asked = window
+        .frame("the guest's ask", |frame| {
+            frame["type"] == "pairing"
+                && frame["payload"]["asks"]
+                    .as_array()
+                    .is_some_and(|asks| !asks.is_empty())
+        })
+        .await;
+    let ask = &asked["payload"]["asks"][0];
+    assert_eq!(ask["kind"], "link", "{ask}");
+    assert_eq!(ask["device"], GUEST, "{ask}");
+    let shown: Vec<String> = ask["words"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|word| word.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(shown.len(), 4, "{ask}");
+    // Nothing is connected while the host's operator has not answered.
+    assert!(host.peers().is_empty());
+    window
+        .send(
+            "pairing_answer",
+            json!({"request_id": "a1", "ask": ask["id"], "allow": true}),
+        )
+        .await;
+    assert_eq!(window.result("answer").await["ok"], true);
+
+    // B3: both said yes, so each lists the other, connected.
+    let added = adding.await.unwrap();
+    assert!(added.ok, "{}", added.text());
+    assert_eq!(
+        words_printed(&added),
+        shown,
+        "the same words, in the same order"
+    );
+    let on_guest = guest
+        .peer_becomes("the guest opens the host", |peer| {
+            peer["opens"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert!(on_guest["opened_by"].is_null(), "{on_guest}");
+    assert_eq!(on_guest["path"], "direct", "{on_guest}");
+    let on_host = host
+        .peer_becomes("the host is opened by the guest", |peer| {
+            peer["opened_by"] == "active" && peer["connected"] == true
+        })
+        .await;
+    assert_eq!(on_host["id"], GUEST, "{on_host}");
+    assert!(on_host["opens"].is_null(), "{on_host}");
+    let host_id = on_guest["id"].as_str().unwrap().to_owned();
+
+    // The link worked once (B4), and the same machine is not added twice
+    // (B51).
+    guest
+        .run(&["device", "add", &link, "--json"])
+        .refused("device_already_connected");
+
+    // A client never names the paired machines.
+    window.send("peer_machines", json!({"machines": []})).await;
+    let error = window
+        .frame("an error", |frame| frame["type"] == "error")
+        .await;
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("sent by the daemon only"),
+        "{error}"
+    );
+    assert_eq!(host.peers().len(), 1);
+
+    // B50: the host asks its guest to be let in the other way; the guest's
+    // operator answers at a terminal, with no words to compare.
+    window
+        .send(
+            "pairing_request",
+            json!({"request_id": "r1", "device": GUEST}),
+        )
+        .await;
+    assert_eq!(window.result("request").await["ok"], true);
+    let deadline = Instant::now() + WITHIN;
+    let allowed = loop {
+        let ran = guest
+            .typing(&["device", "allow", "--json"], "y\n")
+            .await
+            .unwrap();
+        assert!(ran.ok, "{}", ran.text());
+        if ran.json()["value"]["answered"]
+            .as_array()
+            .is_some_and(|answered| !answered.is_empty())
+        {
+            break ran;
+        }
+        assert!(Instant::now() < deadline, "the request never arrived");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the request crosses the connection before the guest's terminal can list it
+    };
+    assert_eq!(
+        allowed.json()["value"]["answered"][0]["allowed"],
+        true,
+        "{}",
+        allowed.text()
+    );
+    assert!(
+        !allowed.err.contains("Words:"),
+        "a request over the connection compares no words: {}",
+        allowed.text()
+    );
+    assert!(
+        allowed.err.contains("Hide program and agent hooks"),
+        "{}",
+        allowed.text()
+    );
+    host.peer_becomes("each opens the other", |peer| {
+        peer["opens"] == "active" && peer["opened_by"] == "active"
+    })
+    .await;
+    guest
+        .peer_becomes("each opens the other", |peer| {
+            peer["opens"] == "active" && peer["opened_by"] == "active"
+        })
+        .await;
+
+    // B51, B25: two directions are stopped apart, so a command that names
+    // none stops nothing.
+    host.run(&["device", "pause", GUEST, "--json"])
+        .refused("device_direction_needed");
+    let paused = host.run(&["device", "pause", GUEST, "--incoming", "--json"]);
+    assert!(paused.ok, "{}", paused.text());
+    host.peer_becomes("the guest's way in is paused", |peer| {
+        peer["opened_by"] == "paused" && peer["opens"] == "active"
+    })
+    .await;
+    // The guest hears it, and the other direction and the connection stay.
+    guest
+        .peer_becomes("the guest hears the pause", |peer| {
+            peer["opens"] == "paused_there"
+                && peer["opened_by"] == "active"
+                && peer["connected"] == true
+        })
+        .await;
+    let resumed = host.run(&["device", "resume", GUEST, "--incoming", "--json"]);
+    assert!(resumed.ok, "{}", resumed.text());
+    guest
+        .peer_becomes("the guest's way in is back", |peer| {
+            peer["opens"] == "active"
+        })
+        .await;
+
+    // B26, B51: removing one direction leaves the other, and the connection.
+    let removed = guest.run(&["device", "remove", &host_id, "--outgoing", "--json"]);
+    assert!(removed.ok, "{}", removed.text());
+    host.peer_becomes("the guest no longer opens the host", |peer| {
+        peer["opened_by"].is_null() && peer["opens"] == "active" && peer["connected"] == true
+    })
+    .await;
+    guest
+        .peer_becomes("the host still opens the guest", |peer| {
+            peer["opens"].is_null() && peer["opened_by"] == "active"
+        })
+        .await;
+
+    // The guest takes the host's way in away too. The host hears that it
+    // is let in nowhere, keeps the machine as one to pair again (B51), and
+    // forgets it when its own operator removes it.
+    let removed = guest.run(&["device", "remove", &host_id, "--json"]);
+    assert!(removed.ok, "{}", removed.text());
+    host.peer_becomes("the host is let in nowhere", |peer| {
+        peer["opens"] == "unpaired" && peer["opened_by"].is_null()
+    })
+    .await;
+    let removed = host.run(&["device", "remove", GUEST, "--json"]);
+    assert!(removed.ok, "{}", removed.text());
+    let deadline = Instant::now() + WITHIN;
+    while !(host.peers().is_empty() && guest.peers().is_empty()) {
+        assert!(
+            Instant::now() < deadline,
+            "{:?} {:?}",
+            host.peers(),
+            guest.peers()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the removal crosses the connection; each list is its daemon's own account
+    }
+
+    // The screen that was refused was never sent a pairing.
+    drop(window);
+    phone
+        .send("pairing_share", json!({"request_id": "p2"}))
+        .await;
+    let mut pairing_frames = 0;
+    loop {
+        let frame = phone.frame("the refusal", |_| true).await;
+        if frame["type"] == "pairing" {
+            pairing_frames += 1;
+        }
+        if frame["type"] == "pairing_result" && frame["payload"]["request_id"] == "p2" {
+            break;
+        }
+    }
+    assert_eq!(pairing_frames, 0);
+}
