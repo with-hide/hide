@@ -5639,13 +5639,32 @@
                     "value": {
                         "type": "text"
                     }
+                },
+                {
+                    "name": "--project",
+                    "repeats_at_most": 32,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--grant",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
                 "device_from_pane",
                 "invalid_request",
                 "device_already_connected",
-                "device_limit"
+                "device_limit",
+                "device_unknown",
+                "hide_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7567,7 +7586,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:cbde78423e7473915c657aa6c22e8ddbf5db6d7ee979ede3404ac12eaa9e91af",
+    "digest": "sha256:df86c54257e5bb97b3ff7c7c34ff26b34ac1389fcdc57d9ba022bbe63ab96a9b",
     "envelopes": {
         "access": {
             "answer": "value",
