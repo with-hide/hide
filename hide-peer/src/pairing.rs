@@ -1200,7 +1200,9 @@ impl<T: PeerTransport> Inner<T> {
             offer.expires_unix_ms > now
                 && Secret::from_hex(&secret).is_some_and(|shown| offer.secret.matches(&shown))
         });
-        let Some(offer) = offer else {
+        // A guest that commits to no value cannot be held to one: its link
+        // is spent like one with a wrong secret.
+        let Some(offer) = offer.filter(|_| words::valid_commitment(&commit)) else {
             return refused(PairRefusal::NoOffer);
         };
         if device == self.me.device || !link::valid_device(&device) || !link::valid_name(&name) {
@@ -1225,6 +1227,8 @@ impl<T: PeerTransport> Inner<T> {
         if wire::write_message(send, &asking).await.is_err() {
             return None;
         }
+        // The one message that may follow, from a machine and not from a
+        // person, so in the time a machine answers in.
         let theirs = match tokio::time::timeout(limits::HELLO_WITHIN, heard.recv()).await {
             Ok(Some(Message::Reveal { nonce })) => Nonce::from_hex(&nonce),
             // The guest left, or gave the pairing up before the words.
@@ -1233,10 +1237,12 @@ impl<T: PeerTransport> Inner<T> {
         };
         // A value that is not the committed one is a guest choosing its
         // value after it saw this machine's. The link is spent either way.
-        let Some(theirs) = theirs.filter(|theirs| words::opens(&commit, theirs)) else {
+        let host = self.peers.key();
+        let Some(theirs) = theirs.filter(|theirs| words::opens(&commit, &host, &key, theirs))
+        else {
             return refused(PairRefusal::NoOffer);
         };
-        let words = words::of(offer.list, &self.peers.key(), &key, &theirs, &mine);
+        let words = words::of(offer.list, &host, &key, &theirs, &mine);
         let now = self.peers.now();
         let expires_unix_ms = (now + millis(limits::ANSWER_WITHIN)).min(offer.expires_unix_ms);
         let Some((id, said)) = self.ask(
@@ -1520,7 +1526,7 @@ impl<T: PeerTransport> Inner<T> {
             secret: link.secret.to_hex().to_string(),
             device: self.me.device.clone(),
             name: self.me.name.clone(),
-            commit: words::commitment(&mine),
+            commit: words::commitment(&host, &self.peers.key(), &mine),
         };
         if wire::write_message(&mut send, &pair).await.is_err() {
             return Failed(JoinFailure::Unreachable);
@@ -1601,6 +1607,9 @@ impl<T: PeerTransport> Inner<T> {
                         granted = Some(grant);
                     }
                     Some(Message::Refused { reason }) => break Some(Some(reason.into())),
+                    // The words stay those of the first `asking`: a value
+                    // the host sends once this machine's is revealed would
+                    // be one it could have chosen knowing it.
                     Some(_) => {}
                     None => break Some(Some(JoinFailure::Unreachable)),
                 },

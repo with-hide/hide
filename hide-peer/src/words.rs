@@ -17,8 +17,9 @@
 //!
 //! The derivation is part of what two builds agree on, like a message of
 //! `contracts/peer-link.json`: the commitment is
-//! BLAKE3(`hide-pair/v1/commit` | value) in hex, and the words are the
-//! first 44 bits of
+//! BLAKE3(`hide-pair/v1/commit` | host key | guest key | guest value) in
+//! hex, so it is a commitment for this pair of machines and for no other,
+//! and the words are the first 44 bits of
 //! BLAKE3(`hide-pair/v1/sas` | host key | guest key | guest value | host value),
 //! cut into four 11-bit numbers, each one word of a 2048-word list. The
 //! lists are BIP-39's English and Korean ones, unchanged (see NOTICE); the
@@ -37,17 +38,26 @@ const COMMIT_DOMAIN: &[u8] = b"hide-pair/v1/commit";
 /// sent as 64 hex characters like a link's secret.
 pub type Nonce = Secret;
 
-/// What binds a side to `nonce` before it shows it.
-pub fn commitment(nonce: &Nonce) -> String {
+/// What binds the guest to `nonce` before it shows it, in a pairing of
+/// `host` and `guest` and in no other.
+pub fn commitment(host: &PeerKey, guest: &PeerKey, nonce: &Nonce) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(COMMIT_DOMAIN);
+    hasher.update(host.as_bytes());
+    hasher.update(guest.as_bytes());
     hasher.update(nonce.bytes());
     hasher.finalize().to_hex().to_string()
 }
 
-/// Whether `nonce` is the value `commit` was made from.
-pub fn opens(commit: &str, nonce: &Nonce) -> bool {
-    commitment(nonce) == commit
+/// Whether `commit` is spelled as a commitment is: 64 lower hex characters.
+pub fn valid_commitment(commit: &str) -> bool {
+    Nonce::from_hex(commit).is_some()
+}
+
+/// Whether `nonce` is the value `guest` committed to with `commit` for its
+/// pairing with `host`.
+pub fn opens(commit: &str, host: &PeerKey, guest: &PeerKey, nonce: &Nonce) -> bool {
+    commitment(host, guest, nonce) == commit
 }
 
 /// How many words are compared, and how many a list holds.
@@ -153,8 +163,8 @@ mod tests {
         // over the same bytes and the same two files.
         let (guest, host) = (nonce(0xa5), nonce(0x3c));
         assert_eq!(
-            commitment(&guest),
-            "27d2a30d1b20a66c64109f1e73ccadc3d737b3abde60c6629c4e5ee775feadea"
+            commitment(&key(7), &key(9), &guest),
+            "4e95ed2df094124280fe8f10301fd940a22f8414bf1f7979616499368559f8b2"
         );
         assert_eq!(
             indexes(&key(7), &key(9), &guest, &host),
@@ -186,13 +196,23 @@ mod tests {
     }
 
     #[test]
-    fn a_commitment_is_opened_only_by_the_value_it_was_made_from() {
-        let commit = commitment(&nonce(0xa5));
-        assert!(opens(&commit, &nonce(0xa5)));
-        assert!(!opens(&commit, &nonce(0xa4)));
-        // Not the bare hash of the value: a commitment is no other hash a
-        // machine might be made to compute over the same bytes.
-        assert_ne!(commit, blake3::hash(&[0xa5; 32]).to_hex().to_string());
+    fn a_commitment_is_opened_only_by_its_value_between_its_two_machines() {
+        let commit = commitment(&key(7), &key(9), &nonce(0xa5));
+        assert!(valid_commitment(&commit));
+        assert!(opens(&commit, &key(7), &key(9), &nonce(0xa5)));
+        assert!(!opens(&commit, &key(7), &key(9), &nonce(0xa4)));
+        // A machine in the middle that hands the guest's commitment on as
+        // its own holds another key: the commitment does not open there,
+        // and the words of the same two values would differ too.
+        assert!(!opens(&commit, &key(7), &key(8), &nonce(0xa5)));
+        assert!(!opens(&commit, &key(8), &key(9), &nonce(0xa5)));
+        assert_ne!(
+            indexes(&key(7), &key(8), &nonce(0xa5), &nonce(0x3c)),
+            indexes(&key(8), &key(9), &nonce(0xa5), &nonce(0x3c)),
+        );
+        for unspelled in ["", "27d2", &commit.to_uppercase(), &format!("{commit}00")] {
+            assert!(!valid_commitment(unspelled), "{unspelled}");
+        }
     }
 
     #[test]

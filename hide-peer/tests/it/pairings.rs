@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hide_kit::layout;
-use hide_peer::link::PairLink;
+use hide_peer::link::{PairLink, Secret};
 use hide_peer::loopback::{Loopback, Net};
 use hide_peer::pairing::{
     AcceptError, AskKind, JoinError, JoinFailure, JoinPhase, Me, Pairings, RequestError,
@@ -230,12 +230,13 @@ async fn a_guest_cannot_choose_its_value_after_it_saw_the_hosts() {
     let guest = Machine::new(&net, "macbook");
     let conn = guest.peers.dial(&pc.machine.addr()).await.unwrap();
     let committed = Nonce::from_bytes([1; 32]);
+    let commit = words::commitment(&pc.key(), &guest.key(), &committed);
     // What a guest sends with a link: the secret and its commitment.
     let pair = |link: &str| Pairing::Pair {
         secret: PairLink::parse(link).unwrap().secret.to_hex().to_string(),
         device: "macbook".into(),
         name: "MacBook".into(),
-        commit: words::commitment(&committed),
+        commit: commit.clone(),
     };
 
     // A guest that opens what it committed to: the operator is asked, with
@@ -267,6 +268,11 @@ async fn a_guest_cannot_choose_its_value_after_it_saw_the_hosts() {
             &hosts
         ))
     );
+    // One value for one `pair`: a second one is not read for the words.
+    let second = Pairing::Reveal {
+        nonce: Nonce::from_bytes([2; 32]).to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &second).await.unwrap();
     assert!(pc.pairings.answer(ask.id, false));
     assert_eq!(
         read(&mut pairing).await,
@@ -274,6 +280,7 @@ async fn a_guest_cannot_choose_its_value_after_it_saw_the_hosts() {
             reason: PairRefusal::Declined
         }
     );
+    assert_eq!(pc.view.borrow().asks.len(), 0);
 
     // The same guest on a new link, now choosing its value once it holds
     // the host's: the value it opens is not the committed one.
@@ -302,6 +309,115 @@ async fn a_guest_cannot_choose_its_value_after_it_saw_the_hosts() {
     let view = pc.view.borrow();
     assert!(view.asks.is_empty(), "nobody was asked");
     assert!(view.offer.is_none(), "the link is spent");
+}
+
+/// A guest that commits to no value cannot be held to one, so it is not
+/// answered with the host's: its link is spent like one with a wrong secret.
+#[tokio::test]
+async fn a_pair_that_commits_to_no_value_spends_the_link() {
+    let net = Net::new();
+    let pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let guest = Machine::new(&net, "macbook");
+    let conn = guest.peers.dial(&pc.machine.addr()).await.unwrap();
+    let mut pairing = conn.open(StreamKind::Pairing).await.unwrap();
+    let spelled = words::commitment(&pc.key(), &guest.key(), &Nonce::from_bytes([1; 32]));
+    for commit in [
+        String::new(),
+        spelled.to_uppercase(),
+        spelled[..62].to_owned(),
+    ] {
+        let offer = pc.pairings.share(WordList::English).unwrap();
+        let pair = Pairing::Pair {
+            secret: PairLink::parse(&offer.link)
+                .unwrap()
+                .secret
+                .to_hex()
+                .to_string(),
+            device: "macbook".into(),
+            name: "MacBook".into(),
+            commit,
+        };
+        write_message(&mut pairing.send, &pair).await.unwrap();
+        assert_eq!(
+            read(&mut pairing).await,
+            Pairing::Refused {
+                reason: PairRefusal::NoOffer
+            }
+        );
+        let view = pc.view.borrow();
+        assert!(view.asks.is_empty(), "nobody was asked");
+        assert!(view.offer.is_none(), "the link is spent");
+    }
+}
+
+/// The guest's words are those of the first value the host sent: a host
+/// that sends another once it holds the guest's value, one it could have
+/// searched for, moves nothing on the guest's screen (PRD D-17).
+#[tokio::test]
+async fn the_guests_words_stay_those_of_the_hosts_first_value() {
+    let net = Net::new();
+    let mut mac = Desk::new(&net, "macbook", "MacBook");
+    // The host is played by hand.
+    let mut host = Machine::new(&net, "windows-pc");
+    let link = PairLink {
+        host: host.key(),
+        device: "windows-pc".into(),
+        relay: None,
+        addrs: Vec::new(),
+        secret: Secret::from_bytes([5; 32]),
+    };
+    mac.pairings.join(&link.text().unwrap()).unwrap();
+    let mut pairing = host.accepted(StreamKind::Pairing).await;
+    let Pairing::Pair { commit, .. } = read(&mut pairing).await else {
+        panic!("the guest's pair");
+    };
+    let asking = |nonce: [u8; 32]| Pairing::Asking {
+        device: "windows-pc".into(),
+        name: "Windows PC".into(),
+        words: WordList::English.name().into(),
+        nonce: Nonce::from_bytes(nonce).to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &asking([3; 32]))
+        .await
+        .unwrap();
+    let Pairing::Reveal { nonce } = read(&mut pairing).await else {
+        panic!("the guest's value");
+    };
+    let guests = Nonce::from_hex(&nonce).expect("the guest's value");
+    assert!(
+        words::opens(&commit, &host.key(), &mac.key(), &guests),
+        "the guest opens what it committed to"
+    );
+    let first = words::of(
+        WordList::English,
+        &host.key(),
+        &mac.key(),
+        &guests,
+        &Nonce::from_bytes([3; 32]),
+    );
+    let shown = mac
+        .shows("the words", |view| view.join.as_ref()?.words)
+        .await;
+    assert_eq!(shown, first);
+
+    // Another value of the host's, then its grant. The guest reads them in
+    // order, so its confirm says both were read.
+    write_message(&mut pairing.send, &asking([4; 32]))
+        .await
+        .unwrap();
+    let granted = Pairing::Granted {
+        grant: "grant-1".into(),
+        device: "windows-pc".into(),
+        name: "Windows PC".into(),
+    };
+    write_message(&mut pairing.send, &granted).await.unwrap();
+    assert!(mac.pairings.compare(true));
+    assert!(matches!(
+        read(&mut pairing).await,
+        Pairing::Confirm { grant } if grant == "grant-1"
+    ));
+    let words = mac.view.borrow().join.as_ref().and_then(|join| join.words);
+    assert_eq!(words, Some(first), "the words did not move");
 }
 
 #[tokio::test]

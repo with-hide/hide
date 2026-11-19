@@ -33,12 +33,15 @@ use crate::frame::{self, FrameError};
 pub enum Pairing {
     /// Guest to host: the offer's secret (64 hex characters), who asks, and
     /// the guest's commitment to its value for the words (64 hex characters:
-    /// BLAKE3 of `hide-pair/v1/commit` and the value).
+    /// BLAKE3 of `hide-pair/v1/commit`, the host's key, the guest's key and
+    /// the value). A `pair` without one is read, so the host can end the
+    /// offer it showed the secret of.
     /// The guest's key comes from the connection, never from this message.
     Pair {
         secret: String,
         device: String,
         name: String,
+        #[serde(default)]
         commit: String,
     },
     /// Host to guest: the secret is the offer's. It names the host, the
@@ -51,8 +54,9 @@ pub enum Pairing {
         words: String,
         nonce: String,
     },
-    /// Guest to host: the value its `pair` committed to. The host's
-    /// operator is asked only once it opens that commitment.
+    /// Guest to host: the value its `pair` committed to, once and within
+    /// the time a machine answers in. The host's operator is asked only
+    /// once it opens that commitment.
     Reveal {
         nonce: String,
     },
