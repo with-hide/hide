@@ -24,15 +24,16 @@
 //! [`MAX_STREAMS`] stays taken until every thread of it ended. Its bytes from
 //! the other end wait for its socket in a queue of [`MAX_PENDING`] frames;
 //! one whose socket does not take them is aborted rather than hold up every
-//! other stream: its queue is dropped and its socket shut both ways, which
-//! wakes a write stuck on a peer that stopped reading. A stream the other
+//! other stream: its queue is dropped and its socket aborted
+//! (`hide_platform::sockets::abort`), which wakes a write stuck on a peer
+//! that stopped reading on every system. A stream the other
 //! end closed writes what is already queued, each write within
 //! [`WRITE_WITHIN`], then shuts its socket. The connection's end aborts
 //! every stream.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufReader, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::JoinHandle;
@@ -243,14 +244,17 @@ fn release(streams: &mut HashMap<u32, Stream>, id: u32) {
 }
 
 /// Closes `stream`: its queue is dropped, and when `abort` its reader is
-/// cancelled and its socket shut both ways at once.
+/// cancelled and its socket ended both ways at once, under whichever of its
+/// threads is blocked on it.
 fn shut(stream: &mut Stream, abort: bool) {
     stream.closed = true;
     stream.queue.take();
     if abort {
         stream.cancel.store(true, Ordering::SeqCst);
         if let Some(socket) = &stream.socket {
-            let _ = socket.shutdown(Shutdown::Both);
+            // Not `shutdown` alone: on Windows that leaves a read or a write
+            // another thread is blocked in asleep (#2655).
+            hide_platform::sockets::abort(socket);
         }
     }
 }
@@ -370,7 +374,7 @@ impl Shared {
                     (reading, Arc::clone(&stream.cancel))
                 }
                 (stream, _) => {
-                    let _ = socket.shutdown(Shutdown::Both);
+                    hide_platform::sockets::abort(&socket);
                     if let Some(stream) = stream {
                         shut(stream, true);
                     }
@@ -434,7 +438,8 @@ impl Shared {
             }
         }
         drop(queued);
-        let _ = socket.shutdown(Shutdown::Both);
+        // Ends the stream's reader too, which shares the socket.
+        hide_platform::sockets::abort(&socket);
         if failed {
             self.abort(id);
         } else {
@@ -909,6 +914,7 @@ impl Drop for Forward {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Shutdown;
     use std::time::Instant;
 
     /// A node and a core joined by a local pair, as the attach role joins
@@ -994,7 +1000,7 @@ mod tests {
     /// runs on a thread of its own rather than under a read timeout: macOS
     /// refuses `SO_RCVTIMEO` once the stream ended at the server, which is
     /// the very end this waits for. When the end does not come, the socket
-    /// is shut here, which ends the read, and the thread is joined before
+    /// is aborted here, which ends the read, and the thread is joined before
     /// the test fails.
     fn drained(socket: TcpStream) {
         let held = socket.try_clone().unwrap();
@@ -1012,9 +1018,9 @@ mod tests {
         });
         let heard = end.recv_timeout(Duration::from_secs(15)).is_ok();
         if !heard {
-            let _ = held.shutdown(Shutdown::Both);
+            hide_platform::sockets::abort(&held);
             end.recv_timeout(Duration::from_secs(15))
-                .expect("the read outlived its own socket's shutdown");
+                .expect("the read outlived its own socket's abort");
         }
         reading.join().unwrap();
         assert!(heard, "the stream never ended at the server");

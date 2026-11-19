@@ -13,6 +13,7 @@ mod path;
 mod process;
 mod programs;
 mod resident;
+mod sockets;
 #[cfg(unix)]
 mod stand_ins;
 mod stdio;
