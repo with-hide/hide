@@ -2385,8 +2385,10 @@ fn update_started_core(
         .arg(program)
         .args(["--intent", &intent]);
     // Its own process group, so a host that gives up on this connect and
-    // kills it never cuts the update short.
-    let finished = hide_platform::process::run_to_end(
+    // kills it never cuts the update short. A test fixture's update starts
+    // the core as its resident child, which leaves its job on Windows; the
+    // login item's core is Task Scheduler's and in no job of this process.
+    let finished = hide_platform::process::run_to_end_letting_residents_leave(
         &mut command,
         crate::core_update::WITHIN,
         &std::sync::atomic::AtomicBool::new(false),

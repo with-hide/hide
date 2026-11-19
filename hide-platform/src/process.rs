@@ -6,7 +6,9 @@
 //! too (engineering rule 14; practice `process.md`). On Windows the job also
 //! ends the child when the owner dies without running a destructor
 //! (`KILL_ON_JOB_CLOSE`). A resident child ([`start_resident`]) the owned
-//! child starts leaves its group (Unix) or job (Windows), and only it. [`OwnedChild::spawn_guarded`] adds an acknowledged
+//! child starts leaves its group on Unix; on Windows only an owned child
+//! started to place one ([`OwnedChild::spawn_letting_residents_leave`]) lets
+//! it leave the job, and every other start inside stays in it. [`OwnedChild::spawn_guarded`] adds an acknowledged
 //! independent Unix owner channel for cooperative children that retain an
 //! [`OwnerWatch`], without using or replacing stdin.
 //!
@@ -526,7 +528,25 @@ impl OwnedChild {
     /// The caller sets the program, arguments, environment and stdio first; on
     /// Windows the creation flags are replaced by the ones the job needs.
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
-        let (child, tie) = sys::spawn(command, None)?;
+        let (child, tie) = sys::spawn(command, None, false)?;
+        Ok(Self {
+            child,
+            tie,
+            tied: false,
+            ended: false,
+            reaped: false,
+            released: false,
+            bounded_drop: false,
+        })
+    }
+
+    /// [`Self::spawn`] for a program whose work is to start a resident child
+    /// ([`start_resident`]) that outlives it, such as `hided core-update`,
+    /// which starts the core it updates to: on Windows its job lets a start
+    /// that asks to leave it go, as a resident leaves the group on Unix.
+    /// Every other process it starts stays in the job and ends with it.
+    pub fn spawn_letting_residents_leave(command: &mut Command) -> io::Result<Self> {
+        let (child, tie) = sys::spawn(command, None, true)?;
         Ok(Self {
             child,
             tie,
@@ -584,7 +604,7 @@ impl OwnedChild {
     /// existing non-inherited kill-on-close job. Runtime stdin is untouched.
     /// An uncooperative Unix program cannot return guarded success.
     pub fn spawn_guarded(mut command: Command, deadline: Instant) -> io::Result<Self> {
-        let (child, tie) = sys::spawn(&mut command, Some(deadline))?;
+        let (child, tie) = sys::spawn(&mut command, Some(deadline), false)?;
         Ok(Self {
             child,
             tie,
@@ -1003,6 +1023,21 @@ pub fn run_to_end(
     stop: &std::sync::atomic::AtomicBool,
 ) -> Result<Finished, RunFailure> {
     run_owned(command, deadline, stop, OwnedChild::spawn)
+}
+
+/// [`run_to_end`] for a program whose work is to start a resident child
+/// that outlives it ([`OwnedChild::spawn_letting_residents_leave`]).
+pub fn run_to_end_letting_residents_leave(
+    command: &mut Command,
+    deadline: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<Finished, RunFailure> {
+    run_owned(
+        command,
+        deadline,
+        stop,
+        OwnedChild::spawn_letting_residents_leave,
+    )
 }
 
 /// [`run_to_end`] with the child started tied to this process
@@ -2001,7 +2036,8 @@ mod sys {
                 Ok(())
             });
         }
-        let (mut child, mut tie) = spawn(&mut supervisor, None).map_err(supervisor_failed)?;
+        let (mut child, mut tie) =
+            spawn(&mut supervisor, None, false).map_err(supervisor_failed)?;
         drop(reader);
         drop(diagnostics);
         tie.supervisor = Some(Box::new(Supervisor {
@@ -3018,9 +3054,12 @@ mod sys {
         }
     }
 
+    // A resident leaves the group on its own (`setsid`): there is nothing
+    // to let.
     pub(super) fn spawn(
         command: &mut Command,
         deadline: Option<Instant>,
+        _residents_leave: bool,
     ) -> io::Result<(Child, Tie)> {
         for key in OWNER_LAUNCH_KEYS {
             command.env_remove(key);
@@ -5373,6 +5412,7 @@ mod sys {
     pub(super) fn spawn(
         command: &mut Command,
         deadline: Option<Instant>,
+        residents_leave: bool,
     ) -> io::Result<(Child, Tie)> {
         for key in OWNER_LAUNCH_KEYS {
             command.env_remove(key);
@@ -5382,11 +5422,15 @@ mod sys {
         }
         // SAFETY: an all-zero limit structure is a valid value.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        // A resident start (`start_resident`) asks to leave the job and is
-        // let go, as a resident leaves the process group on Unix; every
-        // other process the child starts stays in it.
-        limits.BasicLimitInformation.LimitFlags =
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        // A child started to place a resident lets a start that asks to
+        // leave the job (`start_resident`) go, as a resident leaves the
+        // process group on Unix; every other process stays in it.
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | if residents_leave {
+                JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            } else {
+                0
+            };
         static NEXT_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let name = deadline.map(|_| {
             format!(
@@ -5717,7 +5761,7 @@ mod sys {
         command: &mut Command,
         end_limit: Duration,
     ) -> io::Result<(Child, Tie)> {
-        let (child, mut tie) = spawn(command, None)?;
+        let (child, mut tie) = spawn(command, None, false)?;
         tie.2 = Some(end_limit);
         Ok((child, tie))
     }

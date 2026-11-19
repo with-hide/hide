@@ -540,15 +540,15 @@ fn a_resident_child_outlives_what_ends_its_starter() {
     assert!(resident.is_running(), "the resident ended with its starter");
 }
 
-/// A program run as an owned child (`OwnedChild`, as `run_to_end` runs
-/// `hided core-update`) places a resident beside an ordinary child; ending
-/// the owned child's tree, its group on Unix and its kill-on-close job on
-/// Windows, ends the ordinary child and leaves the resident running.
-#[test]
-fn a_resident_child_outlives_the_owned_child_that_started_it() {
+/// Runs a starter with `setup` as an owned child started by `spawn`, and
+/// answers it with the line it printed.
+fn run_owned_starter(
+    setup: &str,
+    spawn: fn(&mut Command) -> std::io::Result<hide_platform::process::OwnedChild>,
+) -> (hide_platform::process::OwnedChild, String) {
     let mut command = role_command("starter");
-    command.env(SETUP, "ordinary");
-    let mut starter = hide_platform::process::OwnedChild::spawn(&mut command).unwrap();
+    command.env(SETUP, setup);
+    let mut starter = spawn(&mut command).unwrap();
     let stdout = starter.take_stdout().unwrap();
     let (sender, heard) = mpsc::channel();
     thread::spawn(move || {
@@ -564,6 +564,20 @@ fn a_resident_child_outlives_the_owned_child_that_started_it() {
     let line = heard
         .recv_timeout(HANG_LIMIT)
         .expect("the starter answered nothing");
+    (starter, line)
+}
+
+/// A program run as an owned child that lets residents leave (as
+/// `hide connect` runs `hided core-update`) places a resident beside an
+/// ordinary child; ending the owned child's tree, its group on Unix and
+/// its kill-on-close job on Windows, ends the ordinary child and leaves the
+/// resident running.
+#[test]
+fn a_resident_child_outlives_the_owned_child_that_started_it() {
+    let (mut starter, line) = run_owned_starter(
+        "ordinary",
+        hide_platform::process::OwnedChild::spawn_letting_residents_leave,
+    );
     assert!(line.starts_with("STARTED "), "{line}");
     let resident = Started::new(field(&line, "pid").parse().unwrap());
     let ordinary = Started::new(field(&line, "ordinary").parse().unwrap());
@@ -576,6 +590,22 @@ fn a_resident_child_outlives_the_owned_child_that_started_it() {
     assert!(
         resident.is_running(),
         "the resident ended with the owned child's tree"
+    );
+}
+
+/// Any other owned child keeps what it starts: on Windows its job lets no
+/// process leave, so a resident start inside it is refused rather than
+/// started to end with it (on Unix a resident leaves the group whoever
+/// starts it).
+#[cfg(windows)]
+#[test]
+fn a_resident_start_inside_an_ordinary_owned_child_is_refused() {
+    let (_starter, line) = run_owned_starter("", hide_platform::process::OwnedChild::spawn);
+    assert!(line.starts_with("REFUSED "), "{line}");
+    assert_eq!(field(&line, "kind"), "PermissionDenied", "{line}");
+    assert!(
+        line.contains("kill_on_close=true,breakaway_ok=false"),
+        "{line}"
     );
 }
 
