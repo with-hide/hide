@@ -398,3 +398,75 @@ fn a_copy_from_this_mac_reaches_the_device_whole_and_its_answer_holds_no_file_by
     settle(&shared);
     assert_eq!(store_calls(&helper).len(), 1);
 }
+
+/// A key the operator typed reaches the device's store over the device link
+/// and nothing else: not the snapshot every screen and the phone read, not
+/// the request's answer and not a diagnostic, which `hide issue` quotes
+/// (PRD skill-mcp-manager B13, D-11).
+#[test]
+fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
+    use hide_agent_hooks::mcp::{Reach, Server};
+    const KEY: &str = "ghp_core-s3cr3t-value";
+    let change = StoreChange::AddMcp {
+        server: Server {
+            name: "github".to_owned(),
+            reach: Reach::Local {
+                command: "npx".to_owned(),
+                args: vec!["-y".to_owned(), "github-mcp".to_owned()],
+                env: vec!["GITHUB_TOKEN".to_owned()],
+            },
+        },
+        keys: [("GITHUB_TOKEN".to_owned(), hide_kit::store::Sealed::new(KEY))]
+            .into_iter()
+            .collect(),
+        from: None,
+    };
+    let helper = KitDevice::answering(Ok(report(&[])));
+    // The device's store answers with the change as an outcome holds it.
+    helper.answer_store(Ok(serde_json::to_value(StoreReport {
+        outcomes: vec![ChangeOutcome {
+            change: change.redacted(),
+            refused: None,
+        }],
+        ..StoreReport::default()
+    })
+    .unwrap()));
+    let shared = with_consent(Some(helper.clone()));
+    let request = |id: &str, device: &str| {
+        serde_json::json!({
+            "device_id": device,
+            "request_id": id,
+            "changes": [serde_json::to_value(&change).unwrap()],
+        })
+    };
+
+    let ((), records) = crate::diagnostics::capture(|| {
+        assert!(dispatch(&shared, "kit_store", request("k1", DEVICE)));
+        settle(&shared);
+        // A request refused before it is sent says why, and no more.
+        assert!(dispatch(&shared, "kit_store", request("k2", "nowhere")));
+    });
+
+    assert_eq!(
+        store_calls(&helper),
+        vec![KitAction::Store {
+            changes: vec![change.clone()]
+        }],
+        "the device link carries the key to the device's store"
+    );
+    let mut runtime = shared.lock().unwrap();
+    let wire = String::from_utf8(
+        crate::runtime::serialize_snapshot_delta(&runtime.snapshot_delta_payload(u64::MAX))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(wire.contains("github"), "the snapshot carries the request");
+    assert!(!wire.contains(KEY), "{wire}");
+    let answered = runtime.snapshot.status.store_answer.clone().unwrap();
+    assert!(!format!("{answered:?}").contains(KEY));
+    assert!(!format!("{change:?}").contains(KEY));
+    assert!(!records.is_empty());
+    for record in &records {
+        assert!(!record.to_string().contains(KEY), "{record}");
+    }
+}
