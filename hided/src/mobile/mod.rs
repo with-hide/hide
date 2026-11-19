@@ -633,10 +633,11 @@ impl Mobile {
     }
 
     /// The follower reads the core for the phones while Mobile is on with a
-    /// phone paired, and for the desktop windows while one has notifications
-    /// on, so the two share one snapshot read per burst.
+    /// phone paired, and for the computers while one could show a notice (a
+    /// desktop window has notifications on, or a computer that may open
+    /// this machine is connected), so they share one snapshot read per burst.
     fn follower_active(&self) -> bool {
-        self.keep_alive() || self.config.desktop.wanted()
+        self.keep_alive() || self.config.desktop.judging()
     }
 
     /// A desktop window turned its notifications on: the follower starts if
@@ -2516,6 +2517,7 @@ impl Mobile {
                 });
                 tokio::select! {
                     _ = self.wake.notified() => continue,
+                    _ = self.config.desktop.judge_wanted() => continue,
                     _ = stopping.changed() => return,
                 }
             }
@@ -2634,13 +2636,20 @@ impl Mobile {
             if let Some((notices, seen)) = judged {
                 self.deliver(notices, seen, &current);
             }
-            // A phone notice waiting out its moment wakes the follower when it
-            // is due. A change already there goes first, so the snapshot is
-            // read and judged before any deadline (whose notice that pass also
-            // sends); a deadline alone reads no core and runs the due pass on
-            // the projection this follower already holds.
+            // A phone notice waiting out its moment, or a notice another
+            // computer was handed and has not answered, wakes the follower
+            // when it is due. A change already there goes first, so the
+            // snapshot is read and judged before any deadline (whose notice
+            // that pass also sends); a deadline alone reads no core and runs
+            // the judging pass on the projection this follower already holds.
             loop {
-                let settle = self.lock().phone_notices.next_due();
+                let settle = [
+                    self.lock().phone_notices.next_due(),
+                    self.config.desktop.next_due(),
+                ]
+                .into_iter()
+                .flatten()
+                .min();
                 tokio::select! {
                     biased;
                     _ = stopping.changed() => return,
@@ -2652,16 +2661,30 @@ impl Mobile {
                         break;
                     }
                     _ = self.wake.notified() => break,
+                    _ = self.config.desktop.judge_wanted() => break,
                     _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
                         settle.unwrap_or_else(std::time::Instant::now),
                     )), if settle.is_some() => {
-                        if !self.keep_alive() {
+                        if !self.follower_active() {
                             break;
                         }
                         let current = Arc::clone(&self.projection.borrow());
-                        let notices = self.lock().phone_notices.due(&current, std::time::Instant::now());
-                        if !notices.is_empty() {
-                            self.deliver(notices, BTreeSet::new(), &current);
+                        let phone_on = self.keep_alive();
+                        let judged = {
+                            let mut inner = self.lock();
+                            let phone_mode = phone_on.then_some(inner.settings.push_mode);
+                            judge_pass(
+                                &mut inner.phone_notices,
+                                phone_mode,
+                                &self.config.desktop,
+                                &current,
+                                false,
+                                false,
+                                std::time::Instant::now(),
+                            )
+                        };
+                        if let Some((notices, seen)) = judged {
+                            self.deliver(notices, seen, &current);
                         }
                     }
                 }
@@ -2811,12 +2834,13 @@ impl Mobile {
 
 /// One follower pass's judgement of the projection `current` for each side
 /// that wants it: the phones' push transitions while Mobile keeps the
-/// follower (`phone_on`), the desktop windows' while one asks (B38). A
-/// projection that `changed` is observed by each side on; once `read`, a side
-/// that is on but unseeded is seeded from what this follower last read, so a
-/// wait that began while that side was off is never announced late (B33). The
-/// phones' notices due `at` and the agents whose notices to close are
-/// returned; the desktop's go out as a frame.
+/// follower (`phone_on`), the computers' while one could show a notice (B38,
+/// `DesktopNotices::judging`). A projection that `changed` is observed by
+/// each side on; once `read`, a side that is on but unseeded is seeded from
+/// what this follower last read, so a wait that began while that side was off
+/// is never announced late (B33). The phones' notices due `at`, the ones no
+/// computer took, and the agents whose notices to close are returned; a
+/// computer's go out as a frame here or on its stream.
 fn judge_pass(
     phone: &mut push::PhoneNotices,
     phone_mode: Option<PushMode>,
@@ -2828,12 +2852,15 @@ fn judge_pass(
 ) -> Option<(Vec<push::Notice>, BTreeSet<AgentKey>)> {
     let phone_on = phone_mode.is_some();
     let (mut notices, mut seen) = (Vec::new(), BTreeSet::new());
-    let resting = phone_mode.is_some_and(|mode| !push::mode_allows(mode, desktop.rests_phone()));
+    // What another computer was handed and did not take by now goes to its
+    // next place first (B71), so the phones' rest is read as it stands then.
+    let mut fallen = desktop.expire(at);
+    let resting = || phone_mode.is_some_and(|mode| !push::mode_allows(mode, desktop.rests_phone()));
     if changed && phone_on {
-        (notices, seen) = phone.observe_with_rest(current, at, resting);
+        (notices, seen) = phone.observe_with_rest(current, at, resting());
     }
-    if changed && desktop.wanted() {
-        desktop.observe(current);
+    if changed && desktop.judging() {
+        fallen.extend(desktop.observe(current, at));
     }
     if !phone_on {
         phone.reset();
@@ -2841,13 +2868,15 @@ fn judge_pass(
         phone.seed(current, at);
     }
     if read && desktop.seed_pending() {
-        desktop.observe(current);
+        desktop.observe(current, at);
     }
     if phone_on {
         notices.extend(phone.due(current, at));
-        if resting {
+        if resting() {
             notices.clear();
         }
+        // The phones are the place of a notice no computer took.
+        notices.extend(phone.fall(&fallen, current));
     }
     (!notices.is_empty() || !seen.is_empty()).then_some((notices, seen))
 }
@@ -3002,6 +3031,55 @@ mod tests {
             .map(|(notices, _)| notices.len())
             .sum();
         (phones, frames.try_recv().is_ok())
+    }
+
+    /// PRD device-connect-iroh B71: while another computer is the place the
+    /// phones rest, and a wait that computer did not take in time is the
+    /// phones' at once, on the timer alone.
+    #[test]
+    fn a_wait_the_other_computer_did_not_take_reaches_the_phones() {
+        struct Taking;
+        impl crate::desktop_notices::Computers for Taking {
+            fn tell(&self, _: &str, _: hide_peer::protocol::core::CoreMessage) -> bool {
+                true
+            }
+        }
+        let mut phone = push::PhoneNotices::default();
+        let desktop = DesktopNotices::default();
+        desktop.set_computers(Arc::new(Taking));
+        desktop.peer_seat(
+            "macbook",
+            hide_core::notice_place::Seat {
+                input: Some(std::time::Duration::ZERO),
+                shows: true,
+                phone: None,
+            },
+        );
+        let at = std::time::Instant::now();
+        let mut judge = |current: &Projection, changed, at| {
+            judge_pass(
+                &mut phone,
+                Some(PushMode::AppClosed),
+                &desktop,
+                current,
+                changed,
+                true,
+                at,
+            )
+            .map(|(notices, _)| notices.len())
+        };
+        assert_eq!(judge(&projected("working", "none"), true, at), None);
+        let waiting = projected("needs_you", "approval");
+        assert_eq!(judge(&waiting, true, at), None);
+        assert_eq!(
+            judge(&waiting, false, at + push::SETTLE),
+            None,
+            "the computer has the notice"
+        );
+        let late = at + hide_core::notice_place::TAKEN_WITHIN;
+        assert_eq!(desktop.next_due(), Some(late));
+        assert_eq!(judge(&waiting, false, late), Some(1));
+        assert_eq!(judge(&waiting, false, late), None, "sent once");
     }
 
     /// B38, B33, PRD device-connect-iroh B59: each side judges the shared

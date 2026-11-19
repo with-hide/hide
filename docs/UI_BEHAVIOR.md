@@ -2908,6 +2908,9 @@ While either switch is on, the group shows what macOS allows with `Open System S
 The note says notices arrive only while no Hide window is in front, and the icon count sums the notification groups enabled by their own switches (First run above).
 A notice goes to one place (PRD device-connect-iroh D-60, B59): this computer's windows get a new one only while the computer is in use, by the rule the Phone group states below, and a computer that is on and not in use gets none, so the same question never rings here and on a phone.
 A wait that began while no one was at the computer is not announced when someone returns; its row stands in Needs You.
+Between paired computers the same rule picks one of them (B59, B71): work of a machine no one is at rings on the computer in use that may open that machine, the one used last when there are several, worded as that computer's own notices are, and a click selects that machine's tile.
+A computer that does not show it within 5 s is passed over for the next one, and the phone of the work's machine rings when no computer showed it; when the operator has seen the work, the notice is taken back wherever it was shown.
+A row that arrived from another machine never rings on its own.
 The second, Phone, has one switch, `컴퓨터를 쓰는 동안 폰 알림 쉬기`, on by default.
 Its two description lines are `컴퓨터를 쓰고 있으면 폰으로 알림을 보내지 않아요. 10분 넘게 자리를 비우거나 화면이 잠기면 폰으로 보내요.` and `알림을 받을지는 폰 앱의 설정에서 정해요.`
 On rests phone pushes only while an attached desktop host reports keyboard or mouse input anywhere on the system within ten minutes, unlocked and awake, at least one attached desktop window has Needs You notifications enabled (`app_closed`), and no later admitted phone action has taken over.

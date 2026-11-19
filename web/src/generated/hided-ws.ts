@@ -768,11 +768,15 @@ export interface TerminalFrame {
   terminal_sequence: number;
 }
 /**
- * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide.
+ * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide. A notice goes to one place (PRD device-connect-iroh D-60): the frame carries this machine's own only while someone uses this computer, and one a machine this computer may open handed over because no one is at that machine, which carries `peer` and a tag of the form `peer:<connection id>|<that machine's tag>`; opening it selects that machine's tile.
  */
 export interface AgentNotice {
   notices: {
     tag: string;
+    /**
+     * Present on a notice another machine handed over: that machine's connection id, `navigator.peers[].key`. `device_id` and `pane_id` are then that machine's own names for the work.
+     */
+    peer?: string;
     device_id: string;
     pane_id: string;
     title: string;

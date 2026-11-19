@@ -626,8 +626,15 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         }),
     );
     guests.serve(&peers, shutdown.clone());
-    // What this machine's core and another's say to each other (D-72).
-    peer_core::PeerCore::serve(&core, &peers, shutdown.clone());
+    // What this machine's core and another's say to each other (D-72), and
+    // what the two machines show of each other's work (D-50, D-60).
+    peer_core::PeerCore::serve(
+        &core,
+        &peers,
+        &desktop_notices,
+        mobile.subscribe_projection(),
+        shutdown.clone(),
+    );
     // A paired machine's login item follows the peer records (PRD
     // device-connect-iroh D-41).
     let always_on = always_on::Follower::new(

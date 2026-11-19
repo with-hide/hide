@@ -847,7 +847,7 @@
       }
     },
     "agentNotice": {
-      "description": "Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide.",
+      "description": "Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide. A notice goes to one place (PRD device-connect-iroh D-60): the frame carries this machine's own only while someone uses this computer, and one a machine this computer may open handed over because no one is at that machine, which carries `peer` and a tag of the form `peer:<connection id>|<that machine's tag>`; opening it selects that machine's tile.",
       "type": "object",
       "additionalProperties": false,
       "required": ["notices", "clear"],
@@ -860,6 +860,7 @@
             "required": ["tag", "device_id", "pane_id", "title", "state", "place"],
             "properties": {
               "tag": { "type": "string" },
+              "peer": { "description": "Present on a notice another machine handed over: that machine's connection id, `navigator.peers[].key`. `device_id` and `pane_id` are then that machine's own names for the work.", "type": "string" },
               "device_id": { "type": "string" },
               "pane_id": { "type": "string" },
               "title": { "type": "string" },

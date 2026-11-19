@@ -458,12 +458,17 @@ pub const SETTLE_CAP: usize = 64;
 /// ledger seeds silently and every root then waiting is standing, so a
 /// restart never sends a notice twice and still closes the ones it finds.
 /// Computer use records new resting waits as standing without replacing an
-/// existing pending root; ending rest never rebuilds a pending backlog.
+/// existing pending root; ending rest never rebuilds a pending backlog. A
+/// wait that rested is sent only when the computer it was left to did not
+/// take it ([`Self::fall`], PRD device-connect-iroh B71).
 #[derive(Default)]
 pub struct PhoneNotices {
     ledger: Transitions,
     pending: BTreeMap<AgentKey, Pending>,
     standing: BTreeSet<AgentKey>,
+    /// The standing roots no phone was sent because a computer was the
+    /// place: a subset of `standing`, closed with it.
+    rested: BTreeSet<AgentKey>,
     /// Whether the cap was crossed and not yet left, so a crossing is
     /// recorded once.
     capped: bool,
@@ -479,6 +484,7 @@ impl PhoneNotices {
         self.ledger.reset();
         self.pending.clear();
         self.standing.clear();
+        self.rested.clear();
         self.capped = false;
     }
 
@@ -528,6 +534,7 @@ impl PhoneNotices {
                 .cloned(),
         );
         self.standing.retain(|key| !close.contains(key));
+        self.rested.retain(|key| !close.contains(key));
         self.pending.retain(|key, _| {
             !close.contains(key) && (!ledger.present(key) || ledger.waits_on_operator(key))
         });
@@ -540,6 +547,7 @@ impl PhoneNotices {
             // Resting creates no candidate and leaves any existing pending
             // root alone. Standing still owns its eventual clear.
             if resting {
+                self.rested.insert(notice.key.clone());
                 self.standing.insert(notice.key);
                 continue;
             }
@@ -582,6 +590,23 @@ impl PhoneNotices {
             self.capped = false;
         }
         (now, close)
+    }
+
+    /// No computer took the notices of `roots` (B71): each that rested and
+    /// still waits on the operator is sent now, worded from its row as it
+    /// is, whatever the rest says. One the phones were sent, or that waits
+    /// no longer, is none.
+    pub fn fall(&mut self, roots: &[AgentKey], projection: &Projection) -> Vec<Notice> {
+        roots
+            .iter()
+            .filter(|key| self.rested.remove(*key) && self.ledger.waits_on_operator(key))
+            .filter_map(|key| {
+                let agent = projection.find(key)?;
+                Some(hide_core::agent_state::push::waiting_notice(
+                    key, agent, None,
+                ))
+            })
+            .collect()
     }
 
     /// Seeds the ledger with what already waits, which is never announced.

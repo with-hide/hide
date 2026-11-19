@@ -9,6 +9,15 @@
 //! pairing it was told (`hide_core::access::core_admit`), and the letters
 //! wait in the core's ledger, not here.
 //!
+//! What the two machines show of each other's work rides the same stream
+//! (D-50, D-60): this machine's own Needs You and Done go to the machines
+//! that may open it, as its list changes; this computer's seat goes to the
+//! machines it may open, as it changes; and a notification is handed to
+//! the computer someone is at, which answers whether it showed it. Which
+//! way each goes is checked here by who opened a stream, which is who
+//! holds a grant: the list and the place are the core's and
+//! `desktop_notices`' to judge.
+//!
 //! What is kept here is memory of this run only: which letters were sent
 //! and wait for their answer, so one is sent again after
 //! [`RESEND_AFTER`] or on the next connection, and the calls that wait for
@@ -20,7 +29,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use hide_core::agent_state::phone::Projection;
 use hide_core::core_calls::{self, Asked, CoreItem, CoreLink, Letter, Outcome, Party};
+use hide_core::notice_place::Seat;
 use hide_peer::PeerEvent;
 use hide_peer::protocol::core::{Ask, CoreMessage, Item};
 use hide_peer::protocol::hello::GrantState;
@@ -28,9 +39,10 @@ use hide_peer::protocol::stream::Status;
 use hide_peer::protocol::{PeerKey, StreamKind, frame};
 use hide_peer::wire::{MessageReader, write_message};
 use serde_json::{Value, json};
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Notify, Semaphore, mpsc, watch};
 
 use crate::core::CoreHandle;
+use crate::desktop_notices::{Computers, DesktopNotices};
 use crate::ending::Ending;
 use crate::peer_host::{HostPeers, Incoming, Link, PeerHost, Stream};
 
@@ -112,6 +124,9 @@ pub trait Cores: Send + Sync + 'static {
     fn answered(&self, key: &str, id: &str, outcome: Outcome) -> Result<(), String>;
     /// Runs a read or a start machine `key` asked for.
     fn call(&self, key: &str, from: Party, asked: Asked) -> Result<Value, String>;
+    /// Hands the core what machine `key` told of its own work, whole. The
+    /// core keeps it only for a connected machine this one opens.
+    fn work(&self, key: &str, work: Value) -> Result<(), String>;
 }
 
 impl Cores for CoreHandle {
@@ -137,6 +152,24 @@ impl Cores for CoreHandle {
         };
         self.prepare_core_call(key, from, asked)?.run(within)
     }
+
+    fn work(&self, key: &str, work: Value) -> Result<(), String> {
+        let event = json!({
+            "schema_version": hide_core::SCHEMA_VERSION,
+            "kind": "peer_work",
+            "payload": {"key": key, "work": work},
+        });
+        self.dispatch(event.to_string().into_bytes())
+    }
+}
+
+fn seat_out(seat: Seat) -> CoreMessage {
+    let ms = |length: Duration| u64::try_from(length.as_millis()).unwrap_or(u64::MAX);
+    CoreMessage::Seat {
+        input_ms: seat.input.map(ms),
+        shows: seat.shows,
+        phone_ms: seat.phone.map(ms),
+    }
 }
 
 /// One open stream to a peer: what is written to it.
@@ -155,6 +188,12 @@ struct Waiting {
 
 pub struct PeerCore {
     core: Arc<dyn Cores>,
+    /// This computer's seat, the seats the others tell, and the notices
+    /// handed between them.
+    desktop: Arc<DesktopNotices>,
+    /// What this machine last told of its own work, for a machine that
+    /// connects later.
+    told: Mutex<Option<Value>>,
     shutdown: Ending,
     /// How long a letter waits for its answer before it is sent again.
     resend_after: Duration,
@@ -174,10 +213,21 @@ impl PeerCore {
     /// Takes the `core` streams peers open and follows every connection to
     /// open its own, until the daemon ends, and hands the core this
     /// connection to the others. Called once, before the endpoint opens.
-    pub fn serve(core: &Arc<CoreHandle>, host: &Arc<PeerHost>, shutdown: Ending) -> Arc<Self> {
+    ///
+    /// `desktop` is where this computer's seat and notices live, and
+    /// `list` this machine's own list as the follower last read it.
+    pub fn serve(
+        core: &Arc<CoreHandle>,
+        host: &Arc<PeerHost>,
+        desktop: &Arc<DesktopNotices>,
+        list: watch::Receiver<Arc<Projection>>,
+        shutdown: Ending,
+    ) -> Arc<Self> {
         let service = Self::over(
             Arc::clone(core) as Arc<dyn Cores>,
             host,
+            desktop,
+            list,
             shutdown,
             RESEND_AFTER,
         );
@@ -188,11 +238,15 @@ impl PeerCore {
     fn over(
         core: Arc<dyn Cores>,
         host: &Arc<PeerHost>,
+        desktop: &Arc<DesktopNotices>,
+        list: watch::Receiver<Arc<Projection>>,
         shutdown: Ending,
         resend_after: Duration,
     ) -> Arc<Self> {
         let service = Arc::new(Self {
             core,
+            desktop: Arc::clone(desktop),
+            told: Mutex::new(None),
             shutdown,
             resend_after,
             open: Mutex::new(HashMap::new()),
@@ -210,9 +264,83 @@ impl PeerCore {
                 service.session(key, incoming.stream, false).await;
             }
         });
+        desktop.set_computers(Arc::clone(&service) as Arc<dyn Computers>);
         tokio::spawn(Arc::clone(&service).follow(Arc::clone(host)));
         tokio::spawn(Arc::clone(&service).pump());
+        tokio::spawn(Arc::clone(&service).tell_work(list));
+        tokio::spawn(Arc::clone(&service).tell_seat());
         service
+    }
+
+    /// Tells the machines that may open this one its own Needs You and
+    /// Done, whole, whenever the list reads differently (D-50).
+    async fn tell_work(self: Arc<Self>, mut list: watch::Receiver<Arc<Projection>>) {
+        loop {
+            let told = hide_core::peer_work::told(&list.borrow_and_update());
+            match serde_json::to_value(&told) {
+                Ok(work) => {
+                    let moved = {
+                        let mut held = lock(&self.told);
+                        let moved = held.as_ref() != Some(&work);
+                        if moved {
+                            *held = Some(work.clone());
+                        }
+                        moved
+                    };
+                    if moved {
+                        self.tell_all(false, &CoreMessage::Work { work });
+                    }
+                }
+                Err(error) => hide_core::diagnostic!(json!({
+                    "component": "peer_core", "kind": "peer_core.work_not_told",
+                    "reason": error.to_string(),
+                })),
+            }
+            tokio::select! {
+                () = self.shutdown.ended() => return,
+                moved = list.changed() => if moved.is_err() { return },
+            }
+        }
+    }
+
+    /// Tells the machines this computer may open its seat, as it changes
+    /// (D-60): never per input, which `DesktopNotices` sees to.
+    async fn tell_seat(self: Arc<Self>) {
+        let mut moves = self.desktop.seat_moves();
+        loop {
+            tokio::select! {
+                () = self.shutdown.ended() => return,
+                moved = moves.changed() => if moved.is_err() { return },
+            }
+            self.tell_all(true, &seat_out(self.desktop.seat()));
+        }
+    }
+
+    /// Writes `message` to every peer with a stream `mine` says who
+    /// opened: the machines this one may open, or the ones that may open
+    /// it. A stream that is full misses it, and the next one is whole.
+    fn tell_all(&self, mine: bool, message: &CoreMessage) {
+        let outs: Vec<(PeerKey, mpsc::Sender<CoreMessage>)> = lock(&self.open)
+            .iter()
+            .filter_map(|(key, streams)| {
+                let stream = streams.iter().find(|stream| stream.mine == mine)?;
+                Some((*key, stream.out.clone()))
+            })
+            .collect();
+        for (key, out) in outs {
+            if out.try_send(message.clone()).is_err() {
+                record("peer_core.not_told", &key, Value::Null);
+            }
+        }
+    }
+
+    /// Whether a stream to `key` is open that this side opened (`mine`),
+    /// so this machine may open that one, or that the peer opened, so it
+    /// may open this one.
+    fn has(&self, key: &PeerKey, mine: bool) -> bool {
+        lock(&self.open)
+            .get(key)
+            .is_some_and(|streams| streams.iter().any(|stream| stream.mine == mine))
     }
 
     /// Opens this side's stream on each connection under a grant the peer
@@ -299,8 +427,20 @@ impl PeerCore {
             mine,
         });
         record("peer_core.opened", &key, json!({"mine": mine}));
-        // What waited for this machine goes now.
+        // What waited for this machine goes now, and it is told where this
+        // one stands: this computer's seat for a machine it may open, this
+        // machine's own work for one that may open it.
         self.moved.notify_one();
+        let standing = if mine {
+            Some(seat_out(self.desktop.seat()))
+        } else {
+            lock(&self.told)
+                .clone()
+                .map(|work| CoreMessage::Work { work })
+        };
+        if let Some(message) = standing {
+            let _ = out.try_send(message);
+        }
         let calls = Arc::new(Semaphore::new(CALLS_AT_ONCE));
         let ended = loop {
             tokio::select! {
@@ -337,18 +477,25 @@ impl PeerCore {
     /// letters sent to it are sent again on the next one, and the calls
     /// that waited on it are answered that it is away.
     fn closed(&self, key: &PeerKey, id: u64) {
-        let gone = {
+        let (gone, opens_here) = {
             let mut open = lock(&self.open);
             let Some(streams) = open.get_mut(key) else {
                 return;
             };
             streams.retain(|stream| stream.id != id);
-            let gone = streams.is_empty();
+            let (gone, opens_here) = (
+                streams.is_empty(),
+                streams.iter().any(|stream| !stream.mine),
+            );
             if gone {
                 open.remove(key);
             }
-            gone
+            (gone, opens_here)
         };
+        // A machine that may open this one no longer has no seat here.
+        if !opens_here {
+            self.desktop.peer_gone(&key.to_hex());
+        }
         if gone {
             lock(&self.sent).retain(|(peer, _), _| peer != key);
             // Dropping the answer's sender ends the caller's wait.
@@ -524,6 +671,55 @@ impl PeerCore {
                 }
                 None
             }
+            // Its own work, from a machine this one may open.
+            CoreMessage::Work { work } => {
+                if !self.has(&key, true) {
+                    record("peer_core.work_refused", &key, Value::Null);
+                    return None;
+                }
+                let core = Arc::clone(&self.core);
+                let kept = tokio::task::spawn_blocking(move || core.work(&hex, work))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|kept| kept);
+                if let Err(reason) = kept {
+                    record("peer_core.work_not_kept", &key, json!({"reason": reason}));
+                }
+                None
+            }
+            // Its seat, from a machine that may open this one.
+            CoreMessage::Seat {
+                input_ms,
+                shows,
+                phone_ms,
+            } => {
+                if self.has(&key, false) {
+                    self.desktop.peer_seat(
+                        &hex,
+                        Seat {
+                            input: input_ms.map(Duration::from_millis),
+                            shows,
+                            phone: phone_ms.map(Duration::from_millis),
+                        },
+                    );
+                }
+                None
+            }
+            // A notice of its work, from a machine this one may open.
+            CoreMessage::Notice { id, notice } => Some(CoreMessage::NoticeAnswer {
+                id,
+                taken: self.has(&key, true) && self.desktop.show(&hex, &notice),
+            }),
+            CoreMessage::NoticeAnswer { id, taken } => {
+                self.desktop.answered(&hex, id, taken);
+                None
+            }
+            CoreMessage::NoticeClear { tags } => {
+                if self.has(&key, true) {
+                    self.desktop.withdraw(&hex, &tags);
+                }
+                None
+            }
         }
     }
 
@@ -595,6 +791,15 @@ impl PeerCore {
                     .or_insert_with(|| Instant::now() - self.resend_after);
             }
         }
+    }
+}
+
+impl Computers for PeerCore {
+    fn tell(&self, key: &str, message: CoreMessage) -> bool {
+        PeerKey::from_hex(key)
+            .ok()
+            .and_then(|key| self.out(&key))
+            .is_some_and(|out| out.try_send(message).is_ok())
     }
 }
 
@@ -690,6 +895,8 @@ mod tests {
         /// test to let it go.
         calls: Mutex<VecDeque<Result<Value, String>>>,
         held: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        /// What each machine told of its own work, as it arrived.
+        works: Mutex<Vec<(String, Value)>>,
         seen: watch::Sender<u64>,
     }
 
@@ -747,6 +954,12 @@ mod tests {
                 Err("held".into())
             })
         }
+
+        fn work(&self, key: &str, work: Value) -> Result<(), String> {
+            lock(&self.works).push((key.to_owned(), work));
+            self.moved();
+            Ok(())
+        }
     }
 
     fn party(id: &str, name: &str) -> Party {
@@ -779,23 +992,46 @@ mod tests {
         pc_core: Arc<Core>,
         mac_service: Arc<PeerCore>,
         pc_service: Arc<PeerCore>,
+        mac_desktop: Arc<DesktopNotices>,
+        pc_desktop: Arc<DesktopNotices>,
+        /// The PC's own list, as its follower would read it.
+        pc_list: watch::Sender<Arc<Projection>>,
         mac_key: String,
         pc_key: String,
     }
 
     impl Pair {
         async fn new(resend_after: Duration) -> Self {
+            Self::with(resend_after, Arc::default()).await
+        }
+
+        /// The pair with the Mac's seat and windows as `mac_desktop` has
+        /// them before the two connect.
+        async fn with(resend_after: Duration, mac_desktop: Arc<DesktopNotices>) -> Self {
             let (mac, pc) = (Machine::new("macbook"), Machine::new("windows-pc"));
             let (mac_core, pc_core) = (Arc::new(Core::default()), Arc::new(Core::default()));
-            let serve = |machine: &Machine, core: &Arc<Core>| {
+            let pc_desktop = Arc::<DesktopNotices>::default();
+            let (pc_list, _) = watch::channel(Arc::<Projection>::default());
+            let serve = |machine: &Machine,
+                         core: &Arc<Core>,
+                         desktop: &Arc<DesktopNotices>,
+                         list: watch::Receiver<Arc<Projection>>| {
                 PeerCore::over(
                     Arc::clone(core) as Arc<dyn Cores>,
                     &machine.host,
+                    desktop,
+                    list,
                     machine.shutdown.clone(),
                     resend_after,
                 )
             };
-            let (mac_service, pc_service) = (serve(&mac, &mac_core), serve(&pc, &pc_core));
+            let mac_service = serve(
+                &mac,
+                &mac_core,
+                &mac_desktop,
+                watch::channel(Arc::default()).1,
+            );
+            let pc_service = serve(&pc, &pc_core, &pc_desktop, pc_list.subscribe());
             let link = paired(&pc, &mac).await;
             let pc_key = link.key().to_hex();
             let mac_key = mac.host.peers().unwrap().key().to_hex();
@@ -806,10 +1042,123 @@ mod tests {
                 pc_core,
                 mac_service,
                 pc_service,
+                mac_desktop,
+                pc_desktop,
+                pc_list,
                 mac_key,
                 pc_key,
             }
         }
+    }
+
+    fn list(group: &str, demand: &str) -> Arc<Projection> {
+        Arc::new(hide_core::agent_state::phone::project(
+            &json!({
+                "navigator": {
+                    "agents": [{
+                        "pane_id": "w1:p1", "group": group, "mark": "going",
+                        "identity_label": "Fix login", "agent_kind": "claude",
+                        "changed_at_unix_ms": 1_790_000_000_000_u64, "status_code": "idle",
+                        "demand": demand,
+                    }],
+                    "workspaces": [{"label": "shop-api", "is_git": true, "checkouts": [
+                        {"label": "main", "branch": "main", "tabs": [{"panes": [{"id": "w1:p1"}]}]},
+                    ]}],
+                    "devices": [{"id": "node", "label": null}],
+                },
+            }),
+            "node",
+        ))
+    }
+
+    /// PRD device-connect-iroh D-50, D-60, B71: the machine that may open
+    /// another is told that machine's own Needs You, tells it its seat, and
+    /// while someone is at it shows that machine's notice and closes it;
+    /// nothing of the kind goes the other way, where no grant is held.
+    #[tokio::test]
+    async fn the_machine_that_opens_another_gets_its_work_and_shows_its_notice_while_in_use() {
+        // Someone is at the Mac, whose window shows notifications.
+        let mac_desktop = Arc::<DesktopNotices>::default();
+        mac_desktop.set(1, true);
+        mac_desktop.set_waiting(1, true);
+        mac_desktop.activity(1, true);
+        let mut windows = mac_desktop.subscribe();
+        let pair = Pair::with(Duration::from_secs(30), mac_desktop).await;
+        within("the Mac's seat on the PC", pair.pc_desktop.judge_wanted()).await;
+        assert!(pair.pc_desktop.judging() && pair.pc_desktop.rests_phone());
+
+        // The PC's follower reads a list in which nothing waits, then one
+        // whose agent asks.
+        let at = Instant::now();
+        pair.pc_list.send_replace(list("working", "none"));
+        pair.pc_desktop.observe(&list("working", "none"), at);
+        pair.pc_list.send_replace(list("needs_you", "question"));
+        pair.mac_core
+            .until("the PC's Needs You on the Mac", |core| {
+                lock(&core.works)
+                    .last()
+                    .is_some_and(|(_, work)| work["needs_you"] == 1)
+            })
+            .await;
+        let (from, work) = lock(&pair.mac_core.works).last().cloned().unwrap();
+        assert_eq!(from, pair.pc_key);
+        assert_eq!(work["rows"][0]["title"], "Fix login");
+
+        assert_eq!(
+            pair.pc_desktop.observe(&list("needs_you", "question"), at),
+            [],
+            "the Mac is the place, not the phones"
+        );
+        let frame: Value = serde_json::from_str(
+            &within("the notice on the Mac", windows.recv())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let tag = format!("peer:{}|node|w1:p1", pair.pc_key);
+        assert_eq!(frame["payload"]["notices"][0]["tag"], tag);
+        assert_eq!(frame["payload"]["notices"][0]["peer"], pair.pc_key);
+        assert_eq!(frame["payload"]["notices"][0]["place"], "shop-api");
+
+        pair.pc_desktop.observe(&list("seen", "none"), at);
+        let frame: Value = serde_json::from_str(
+            &within("the close on the Mac", windows.recv())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(frame["payload"]["clear"], json!([tag]));
+
+        // The PC may not open the Mac: its seat is not kept there, and
+        // the Mac's work is not kept on the PC. Each is followed on the
+        // same stream by a message that is taken, so it was read.
+        assert!(pair.pc_service.tell(
+            &pair.mac_key,
+            seat_out(Seat {
+                input: Some(Duration::ZERO),
+                shows: true,
+                phone: None,
+            })
+        ));
+        lock(&pair.pc_core.waiting).push((pair.mac_key.clone(), letter("letter-1")));
+        pair.pc_service.outbox_moved();
+        pair.mac_core
+            .until("the PC's letter", |core| !lock(&core.taken).is_empty())
+            .await;
+        assert!(!pair.mac_desktop.has_computers());
+
+        assert!(pair.mac_service.tell(
+            &pair.pc_key,
+            CoreMessage::Work {
+                work: json!({"needs_you": 3, "done": 0}),
+            }
+        ));
+        lock(&pair.mac_core.waiting).push((pair.pc_key.clone(), letter("letter-2")));
+        pair.mac_service.outbox_moved();
+        pair.pc_core
+            .until("the Mac's letter", |core| !lock(&core.taken).is_empty())
+            .await;
+        assert_eq!(*lock(&pair.pc_core.works), []);
     }
 
     #[tokio::test]
