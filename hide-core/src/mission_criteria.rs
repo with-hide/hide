@@ -64,6 +64,17 @@ impl CriterionKind {
             Self::Ci | Self::Review | Self::Verify | Self::Human => false,
         }
     }
+
+    /// Whether other agents, the plan's checkers, judge a line of this kind:
+    /// the review and the verification. Their failures in a row are the
+    /// node's checks failing (`MissionNode::review_fails`), which warn its
+    /// Conductor the same way whichever of the two failed.
+    pub fn checker_judges(self) -> bool {
+        match self {
+            Self::Review | Self::Verify => true,
+            Self::Own | Self::Check | Self::Ci | Self::Defect | Self::Human => false,
+        }
+    }
 }
 
 /// Where the operator's answer to a human gate came from (PRD
@@ -532,8 +543,19 @@ impl Criterion {
 
     /// Binds registration `id`, an agent of kind `agent`, to the line's next
     /// free slot asking for that kind, and judges the line again: a checker
-    /// taken after the line passed is one more it waits for.
-    pub(crate) fn bind(&mut self, id: &str, agent: &str) -> Result<(), String> {
+    /// taken after the line passed is one more it waits for. With no free
+    /// slot, it takes the first slot of that kind whose checker `ended`
+    /// (the caller's reading: gone, or ended as the mission reads its
+    /// life), whose answer goes with it: an
+    /// ended checker never answers again, so its slot would otherwise hold
+    /// the line open, or keep an old answer deciding, with no way to put a
+    /// fresh checker in its place.
+    pub(crate) fn bind(
+        &mut self,
+        id: &str,
+        agent: &str,
+        ended: impl Fn(&str) -> bool,
+    ) -> Result<(), String> {
         if self
             .checkers
             .iter()
@@ -541,15 +563,30 @@ impl Criterion {
         {
             return Ok(());
         }
-        let slot = self
+        let asks =
+            |checker: &Checker| hide_agent_adapter::canonical_kind(&checker.worker.agent) == agent;
+        let at = self
             .checkers
-            .iter_mut()
-            .find(|checker| {
-                checker.agent_id.is_none()
-                    && hide_agent_adapter::canonical_kind(&checker.worker.agent) == agent
+            .iter()
+            .position(|checker| checker.agent_id.is_none() && asks(checker))
+            .or_else(|| {
+                self.checkers.iter().position(|checker| {
+                    asks(checker) && checker.agent_id.as_deref().is_some_and(&ended)
+                })
             })
             .ok_or("mission_checker_unknown")?;
-        slot.agent_id = Some(id.to_owned());
+        let slot = &mut self.checkers[at];
+        *slot = Checker {
+            worker: slot.worker.clone(),
+            agent_id: Some(id.to_owned()),
+            state: CriterionState::Open,
+            evidence: None,
+            summary: None,
+            at_unix_ms: None,
+            commit: None,
+            pane_id: None,
+            machine: None,
+        };
         self.settle();
         self.count_failures(false);
         Ok(())
@@ -683,13 +720,13 @@ impl Criterion {
     }
 
     /// Follows the line's verdict with its failures in a row: a failure the
-    /// review reads failed after adds one, and the line reading passed or
-    /// skipped clears them, so a late failure on a line its rule passed, or
-    /// one the Conductor skipped, counts nothing.
+    /// review or verification reads failed after adds one, and the line
+    /// reading passed or skipped clears them, so a late failure on a line
+    /// its rule passed, or one the Conductor skipped, counts nothing.
     fn count_failures(&mut self, failed: bool) {
         match self.state {
             CriterionState::Pass | CriterionState::Skipped => self.fails_in_a_row = 0,
-            CriterionState::Fail if failed && self.kind == CriterionKind::Review => {
+            CriterionState::Fail if failed && self.kind.checker_judges() => {
                 self.fails_in_a_row = self.fails_in_a_row.saturating_add(1);
             }
             _ => {}
@@ -1268,12 +1305,12 @@ mod tests {
         };
         let lines = plan_lines(&[], &["works".into()], &[input], false, true);
         let mut review = lines[1].clone();
-        review.bind("agent-10", "codex").unwrap();
+        review.bind("agent-10", "codex", |_| false).unwrap();
         review
             .record_checker(0, true, Answer::default(), 1)
             .unwrap();
         assert_eq!(review.state, CriterionState::Pass);
-        review.bind("agent-11", "claude").unwrap();
+        review.bind("agent-11", "claude", |_| false).unwrap();
         assert_eq!(review.state, CriterionState::Open);
         assert_eq!(
             review.tally,
@@ -1284,10 +1321,10 @@ mod tests {
         );
         // The same registration again binds nothing; a kind nobody asked for
         // is refused.
-        review.bind("agent-11", "claude").unwrap();
+        review.bind("agent-11", "claude", |_| false).unwrap();
         assert_eq!(review.checkers[2].agent_id, None);
         assert_eq!(
-            review.bind("agent-12", "grok"),
+            review.bind("agent-12", "grok", |_| false),
             Err("mission_checker_unknown".into())
         );
         review
@@ -1309,8 +1346,8 @@ mod tests {
         let lines = plan_lines(&[], &["works".into()], &[two_of_three], false, true);
         let mut review = lines[1].clone();
         assert_eq!(review.tally, None, "none bound");
-        review.bind("agent-10", "codex").unwrap();
-        review.bind("agent-11", "claude").unwrap();
+        review.bind("agent-10", "codex", |_| false).unwrap();
+        review.bind("agent-11", "claude", |_| false).unwrap();
         let on = |head: &str| Answer {
             commit: Some(head.into()),
             ..Answer::default()
@@ -1342,7 +1379,7 @@ mod tests {
             by: vec![worker("codex")],
         };
         let mut single = plan_lines(&[], &["works".into()], &[one], false, true)[1].clone();
-        single.bind("agent-10", "codex").unwrap();
+        single.bind("agent-10", "codex", |_| false).unwrap();
         assert_eq!(single.tally, None);
         // A line saved with a count reads it from its checkers, not the book.
         let mut saved: Criterion =
@@ -1352,22 +1389,25 @@ mod tests {
         assert_eq!(saved.tally, review.tally);
     }
 
-    /// with-hide/hide-private#552: each failure recorded on the review line
-    /// counts one more in a row, and the line passing starts the count over;
-    /// a checker passing while the line still fails does not.
+    /// with-hide/hide-private#552: each failure recorded on a review or a
+    /// verification line counts one more in a row, and the line passing
+    /// starts the count over; a checker passing while the line still fails
+    /// does not. Both kinds count, so a node whose verification keeps
+    /// failing warns its Conductor as one whose review does.
     #[test]
-    fn a_review_counts_its_failures_in_a_row_until_it_passes() {
-        let input = CheckInput {
-            kind: CheckKind::Review,
-            rule: Rule::All,
-            by: vec![worker("codex"), worker("claude")],
-        };
-        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
-        let mut review = bound(lines[1].clone());
-        assert_eq!(review.fails_in_a_row, 0);
-        let fail = |review: &mut Criterion, slot: usize, why: &str, at: u64| {
-            review
-                .record_checker(
+    fn a_check_by_others_counts_its_failures_in_a_row_until_it_passes() {
+        for kind in [CheckKind::Review, CheckKind::Verify] {
+            let input = CheckInput {
+                kind,
+                rule: Rule::All,
+                by: vec![worker("codex"), worker("claude")],
+            };
+            let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+            let mut line = bound(lines[1].clone());
+            assert_eq!(line.kind, kind.kind());
+            assert_eq!(line.fails_in_a_row, 0);
+            let fail = |line: &mut Criterion, slot: usize, why: &str, at: u64| {
+                line.record_checker(
                     slot,
                     false,
                     Answer {
@@ -1377,34 +1417,76 @@ mod tests {
                     at,
                 )
                 .unwrap()
+            };
+            assert!(fail(&mut line, 0, "round 1", 1));
+            assert_eq!(line.fails_in_a_row, 1, "{kind:?}");
+            // The same answer sent again is the same record.
+            assert!(!fail(&mut line, 0, "round 1", 2));
+            assert_eq!(line.fails_in_a_row, 1);
+            // One checker passing leaves the line failed, and the count stands.
+            line.record_checker(1, true, Answer::default(), 3).unwrap();
+            assert_eq!((line.state, line.fails_in_a_row), (CriterionState::Fail, 1));
+            fail(&mut line, 0, "round 2", 4);
+            assert_eq!(line.fails_in_a_row, 2, "{kind:?}");
+            line.record_checker(0, true, Answer::default(), 5).unwrap();
+            assert_eq!((line.state, line.fails_in_a_row), (CriterionState::Pass, 0));
+            fail(&mut line, 1, "round 3", 6);
+            assert_eq!(line.fails_in_a_row, 1);
+            // A skip goes past the line, and the count with it.
+            line.skip("operator".into(), None, by(Role::Conductor));
+            assert_eq!(line.fails_in_a_row, 0);
+        }
+    }
+
+    /// A checker whose registration ended never answers again: a fresh one
+    /// of the same agent takes its slot, with its old answer gone, so the
+    /// line waits for the fresh answer instead of standing open for good
+    /// (an ended checker with no answer) or kept by a stale one. A slot
+    /// whose checker still lives is never taken.
+    #[test]
+    fn a_fresh_checker_takes_the_slot_of_one_that_ended() {
+        let input = CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker("codex"), worker("claude")],
         };
-        assert!(fail(&mut review, 0, "round 1", 1));
-        assert_eq!(review.fails_in_a_row, 1);
-        // The same answer sent again is the same record.
-        assert!(!fail(&mut review, 0, "round 1", 2));
-        assert_eq!(review.fails_in_a_row, 1);
-        // One checker passing leaves the line failed, and the count stands.
+        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
+        let mut review = lines[1].clone();
+        review.bind("agent-10", "codex", |_| false).unwrap();
+        review.bind("agent-11", "claude", |_| false).unwrap();
         review
-            .record_checker(1, true, Answer::default(), 3)
+            .record_checker(1, true, Answer::default(), 1)
             .unwrap();
+        assert_eq!(review.state, CriterionState::Open, "agent-10 never answers");
+        // Every slot taken and both checkers alive: nothing is free.
         assert_eq!(
-            (review.state, review.fails_in_a_row),
-            (CriterionState::Fail, 1)
+            review.bind("agent-12", "codex", |_| false),
+            Err("mission_checker_unknown".into())
         );
-        fail(&mut review, 0, "round 2", 4);
-        assert_eq!(review.fails_in_a_row, 2);
+        let ended = |id: &str| id == "agent-10";
+        review.bind("agent-12", "codex", ended).unwrap();
+        assert_eq!(review.checkers[0].agent_id.as_deref(), Some("agent-12"));
+        assert_eq!(review.checkers[1].agent_id.as_deref(), Some("agent-11"));
         review
-            .record_checker(0, true, Answer::default(), 5)
+            .record_checker(0, true, Answer::default(), 2)
             .unwrap();
+        assert_eq!(review.state, CriterionState::Pass);
+        // A failed answer leaves with its checker: the line waits again.
+        review
+            .record_checker(1, false, Answer::default(), 3)
+            .unwrap();
+        assert_eq!(review.state, CriterionState::Fail);
+        review
+            .bind("agent-13", "claude", |id| id == "agent-11")
+            .unwrap();
+        assert_eq!(review.checkers[1].state, CriterionState::Open);
+        assert_eq!(review.checkers[1].at_unix_ms, None);
+        assert_eq!(review.state, CriterionState::Open);
+        // Another agent's ended slot is not this agent's to take.
         assert_eq!(
-            (review.state, review.fails_in_a_row),
-            (CriterionState::Pass, 0)
+            review.bind("agent-14", "opencode", |_| true),
+            Err("mission_checker_unknown".into())
         );
-        fail(&mut review, 1, "round 3", 6);
-        assert_eq!(review.fails_in_a_row, 1);
-        // A skip goes past the line, and the count with it.
-        review.skip("operator".into(), None, by(Role::Conductor));
-        assert_eq!(review.fails_in_a_row, 0);
     }
 
     /// with-hide/hide-private#552 review: a replan that keeps the review
