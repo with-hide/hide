@@ -2529,6 +2529,29 @@ pub(super) fn close_refused_pane(
     }));
 }
 
+/// Closes the pane `record`'s start made, for its owner's cleanup (PRD
+/// automations D-13): only while it still runs the terminal the start
+/// recorded, so a pane that later answers to the same id is never closed.
+/// What became of it: `closed`, `none` (the start made no pane), `gone`,
+/// `replaced` (another terminal runs there) or `unrecorded` (a record from
+/// before terminals were kept, which proves nothing and is left).
+pub(crate) fn close_spawn_pane(
+    engine: &dyn Engine,
+    record: &SpawnRecord,
+) -> Result<&'static str, String> {
+    let Some(pane) = record.pane.as_deref() else {
+        return Ok("none");
+    };
+    let Some(recorded) = record.terminal.as_deref() else {
+        return Ok("unrecorded");
+    };
+    match recorded_pane(engine, Some(recorded), pane).map_err(String::from)? {
+        RecordedPane::Same => close_pane(engine, pane).map(|()| "closed"),
+        RecordedPane::Gone => Ok("gone"),
+        RecordedPane::Replaced | RecordedPane::Unrecorded => Ok("replaced"),
+    }
+}
+
 /// Whether `pane` is still the terminal `record` recorded with it, so a pane
 /// that later answers to the same id is never taken for the spawn's.
 fn same_terminal(engine: &dyn Engine, record: &SpawnRecord, pane: &str) -> Result<(), String> {

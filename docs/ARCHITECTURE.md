@@ -1063,31 +1063,45 @@ A known limit: the 24 hours of a gate's long wait count from when it was asked, 
 ## Automations
 
 An automation starts an agent on a schedule with no person present (PRD automations).
-The core of the machine it runs on owns the book: each automation's name, task, schedule, agent choice, folder, pause, next time and its last 50 records.
-The book is saved off the lock to `automations.json` in the state folder (`hide_kit::layout::automations_store`, a `LatestFile`) and moves with the core; it names no machine, and a run's agent is named by its ledger id.
-`hide-core/src/automations.rs` holds the types, the record cap, a run's prompt and the snapshot; `automations/schedule.rs` holds the choices and a five-field cron, read in the machine's zone with `jiff`, and refuses a schedule that can run more often than once an hour; `runtime/automations.rs` drives them.
+The core of the machine it runs on owns the book: each automation's name, task, schedule, agent choice, folder, pause, next time, its last 50 records and the closes it still owes.
+The book is saved off the lock to `automations.json` in the state folder (`hide_kit::layout::automations_store`, a `LatestFile`) and moves with the core; a run's agent is named by its ledger id.
+Each automation keeps the machine whose core made it or last turned it on: a core of another machine that reads it (after a core move) stops it as `machine_changed` with its own Needs You line, and a person's resume runs it there from then on.
+A book that cannot be read is set aside beside the store as `automations.json.unreadable-<unix ms>` with a diagnostic, and the core starts with an empty book; the caps on what is written (100 automations, 50 records each, 1,000-character answers, 400 owed closes) fit inside the 64 MiB read cap, which a test holds at every cap.
+`hide-core/src/automations.rs` holds the types, the caps, a run's prompt and the snapshot; `automations/schedule.rs` holds the choices and a five-field cron, read in the machine's zone with `jiff`, and refuses a schedule that can run more often than once an hour; `runtime/automations.rs` drives them.
 
 The clock is the local coordinator's tick (about 250 ms, wall-clock milliseconds; `tick_automations`): a time that came is taken once, so a sleep or a core that was off is noticed at the first tick after it.
+The machine's zone is read again on a worker every minute, and a changed zone moves every next time.
 Times that passed while the core was off (the first tick) or the machine slept (a gap over 60 s), or one noticed more than two minutes late, become one missed line and one run (D-15).
 Runs are followed at most once a second, and a core waiting for its move's link starts nothing.
 
 One run goes at a time: a time that comes while the automation's run is starting or running is a skipped line (D-14), and a finished run whose terminal is still open does not hold the next time.
-Before a run starts, the default account of its agent is judged from the usage the core already reads: signed out or not installed stops the automation for a person (D-12, D-17), and 100% before its reset skips a scheduled time; an account it cannot read, and a profile's account, run (D-16).
+Before a run starts, the account its agent runs in is judged from the usage the core already reads: a profile's own account, or the agent's default account when the profile shares it (`UsageModel::account_limits`).
+Signed out or not installed stops the automation for a person (D-12, D-17), and 100% before its reset skips a scheduled time; an account it cannot read runs (D-16).
+A run asked for with run now, the first run of an automation made with it included, is judged the same, except for the limit.
 
 A run's agent starts under Hide's own identity `hide:automation` with no parent (`coordination::run`, `Command::Spawn` with task kind `automation`), on a worker with the lock released.
 Its intent carries the automation, the run and the attempt (`automation-<id>-r<n>-a<k>`), so a start asked again after a restart converges on one agent (B36).
+A start that stopped after its pane was made (`coordination::INCOMPLETE_SPAWN`, such as `native_identity_unavailable`) is asked again under the same intent every 10 s, which continues that start in its pane, until the attempt's three-minute deadline; the attempt count moves only when a start ended.
+A start refused because the agent is not set up on the machine (`agent_not_installed`, `agent_hook_off`, `agent_not_set_up`, `agent_hook_missing`, `agent_hook_untrusted`) stops the automation as `agent_missing`.
 Its row leaves the operator's lists as a Hide AI task's does, and a View it opened reaches Needs You as well as a question or a block (`TaskHome::Automations`, `Ownership::HideAi { look_calls }`).
-It works in the project the operator chose, in a new worktree per run (`automation/<id>-r<n>`) when asked in a Git project, or else on the branch the project's folder has out.
-With no folder chosen, the core's own node makes `~/hide/automations/<name>-<id>` with the folders above it (`Call::AutomationFolder`, node protocol 99) and the core registers it, by the real path the node answers, as a plain folder project, which `hide_ai_checkouts` lists as the automation's, so no list shows it (D-08).
+It works in the project the operator chose, in a new worktree per run (`automation/<id>-r<n>`) when asked in a Git project, or else on the branch the project's folder has out; a project folder with no branch out (a detached HEAD) stops the automation as `folder_detached`.
+With no folder chosen, the core's own node makes `~/hide/automations/<name>-<id>` with the folders above it (`Call::AutomationFolder`, node protocol 99), and the core registers it, by the real path the node answers, as a plain folder project with no engine workspace and no pane (`register_without_workspace`), so the folder holds no idle exit (B32).
+The core marks that project's row `unlisted` in the snapshot (`WorkspaceSnapshot::unlisted`, absent while false), so no list shows it (D-08), and an edit that leaves the folder retires its registration.
+A default folder its machine reads inside a Git repository around it (a home folder that is a repository) is that repository's, not a project of its own, and stops the automation as `folder_in_repository`.
 
 A run follows its agent's row.
 A finished turn records the result at once: the state, the answer's first paragraph (from `request.answer`, then from the whole answer read on a worker) and the native session id.
-A provider refusal, an agent that exited, one that stopped after work with no finished turn, and a start that does not leave within three minutes are transient failures, tried again in the same conversation up to three attempts (D-17).
-A sign-in that ended, a folder that is gone or an agent that is not installed stops the automation and ends the run failed, and the automation raises its own Needs You line (`Scope::automation_asks`, counted as a mission's own ask is), which turning it on again clears.
-The terminal of a finished run closes only when nothing in it waits on the operator: no refusal it rests on, no block, nothing in Needs You, not on the operator's screen and no letter on its way (`agent_sleep::Awake`); a run's own worktree is released after it when nothing was left in it (`release_branch_worktree`).
-A finished run's conversation opens again in a new terminal on request (`automation_run_open`).
+A provider error, an agent that exited, and a start that does not leave within three minutes are transient failures, tried again in the same conversation up to three attempts (D-17).
+A turn refused for the account's usage limit ends the run skipped (`usage_limit`), and a turn a person ended in the run's terminal (Esc) after the agent worked ends it stopped (`stopped_by_person`); neither is tried again.
+A sign-in that ended, a folder that is gone or an agent that is not set up stops the automation and ends the run failed, and the automation raises its own Needs You line (`Scope::automation_asks`, counted as a mission's own ask is), which turning it on again clears.
 
-The window events (`automation_add`, `automation_edit`, `automation_pause`, `automation_resume`, `automation_run`, `automation_remove`, `automation_run_stop`, `automation_run_open`, `automation_seen`) and `Core::automation` take the same `automations::Call`, and an automation is named by its id or its unique name.
+Every close the core owes is one list in the book (`Stored::cleanups`), one entry per run naming the spawn intents to close and the run's worktree.
+A close closes each intent's pane through its spawn record, only the pane that spawn made (`executor::close_spawn_pane`), then releases the run's worktree when nothing was left in it (`release_branch_worktree`); one that fails is tried again after 5 s, doubling to 10 min, by the next core after a restart too, and a start for that run waits until the close it owes ran once.
+A failed attempt, a run that ends failed or stopped, and the run of a removed automation owe their close at once, so the next attempt never opens beside the last one's terminal.
+A finished run's close waits (`Run::closing`) until nothing in its terminal waits on the operator: no refusal it rests on, no block, nothing in Needs You, not on the operator's screen, not shown in the automation screen (`automation_run_viewing {id, run, on}`, held 30 min unless sent again) and no letter on its way (`agent_sleep::Awake`).
+A finished run's conversation opens again in a new terminal on request (`automation_run_open`) under the run's next opening number (`automation-<id>-r<n>-o<k>`, `Run::opens`), so every opening starts its own, and the opening's terminal is closed the same way when its agent ends.
+
+The window events (`automation_add`, `automation_edit`, `automation_pause`, `automation_resume`, `automation_run`, `automation_remove`, `automation_run_stop`, `automation_run_open`, `automation_run_viewing`, `automation_seen`) and `Core::automation` take the same `automations::Call`, and an automation is named by its id or its unique name.
 The `automations` snapshot section lists each automation with its reading of the schedule, its next time, its pause, whether a run goes, its unseen count and its records newest first, with the pane of a run whose terminal is open.
 `hided` skips its idle exit while any automation is on (`Core::automations_on`, read without the owner thread), so a time comes with no window open (D-19); after a reboot nothing runs until the app starts the daemon, which then takes the missed times as above.
 

@@ -1583,6 +1583,40 @@ mod row_tests {
         project_agents(payload).agents.remove(0)
     }
 
+    /// PRD automations B15: a View an automation run's agent opened calls
+    /// the operator to Needs You, since the automation's home shows no
+    /// result of its own; another Hide AI home's row stays Seen for it.
+    #[test]
+    fn a_view_an_automation_run_opened_calls_the_operator_and_another_homes_does_not() {
+        let group = |look_calls| {
+            agent_group_for(
+                AgentDemand::None,
+                AgentActivity::Stopped,
+                true,
+                false,
+                false,
+                Ownership::HideAi {
+                    operator_turn: false,
+                    look_calls,
+                },
+                false,
+                true,
+            )
+        };
+        assert_eq!(group(true), AgentGroup::NeedsYou);
+        assert_eq!(group(false), AgentGroup::Seen);
+        assert!(
+            crate::coordination::TaskKind::Automation
+                .home()
+                .is_some_and(|home| home.calls_on_look())
+        );
+        assert!(
+            !crate::coordination::TaskKind::MemoryPromote
+                .home()
+                .is_some_and(|home| home.calls_on_look())
+        );
+    }
+
     // A root whose own AI question was read, with a raised descendant, asks
     // the descendant's ask, not its read question; a native question holds
     // until answered.

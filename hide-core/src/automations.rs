@@ -23,16 +23,25 @@ pub use schedule::{Clock, Meaning, Schedule, Weekday};
 /// Records kept per automation (D-18): runs, skips and missed lines.
 pub const RECORD_CAP: usize = 50;
 /// Automations one core keeps; a create past it is refused (engineering 15).
-pub const AUTOMATION_CAP: usize = 200;
+pub const AUTOMATION_CAP: usize = 100;
 /// Attempts one run makes before it ends failed (D-17).
 pub const MAX_ATTEMPTS: u32 = 3;
-/// The file is refused past this size rather than read.
-pub(crate) const READ_CAP: u64 = 16 * 1024 * 1024;
+/// The file is refused past this size rather than read. A book filled to
+/// every cap below with the widest text JSON writes stays under it
+/// (`a_book_at_every_cap_reads_back`), so a book this core wrote is never
+/// refused.
+pub(crate) const READ_CAP: u64 = 64 * 1024 * 1024;
 const SCHEMA_VERSION: u32 = 1;
 const NAME_CAP: usize = 80;
 const TASK_CAP: usize = 16 * 1024;
 /// The last answer a run keeps for the next one: one paragraph (D-10).
-const ANSWER_CAP: usize = 2_000;
+const ANSWER_CAP: usize = 1_000;
+/// A failure's code as a run keeps it.
+const REASON_CAP: usize = 64;
+/// Closes waiting in the book (engineering 15): a run's, an opening's and
+/// a removed automation's. Each run has one at most, so the cap holds every
+/// automation's few; past it the oldest goes, logged.
+pub const CLEANUP_CAP: usize = 4 * AUTOMATION_CAP;
 /// How late a time may be noticed and still run as itself: the core's tick
 /// runs every 250 ms, so a later notice means the machine slept or the core
 /// was off, and the time runs as a missed one (D-15).
@@ -78,6 +87,17 @@ pub enum PauseReason {
     LoginExpired,
     FolderMissing,
     AgentMissing,
+    /// The project's folder has no branch out (a detached HEAD), so a run
+    /// has no branch to work on there (D-08).
+    FolderDetached,
+    /// The book was read by the core of another machine than the one the
+    /// automation was made on (a core move): it runs there only once a
+    /// person resumes it.
+    MachineChanged,
+    /// Its own folder lies inside a Git repository (a home folder that is
+    /// one), which Hide reads as that repository's, so no run can start in
+    /// the folder itself: a project folder is the person's choice.
+    FolderInRepository,
 }
 
 impl PauseReason {
@@ -114,8 +134,11 @@ pub enum RunState {
     /// Every attempt failed (D-17), or a failure a person fixes stopped it
     /// before its agent ran.
     Failed,
-    /// A person ended it (B16).
+    /// A person ended it (B16), from the screen or in its terminal.
     Stopped,
+    /// The provider refused the turn for the account's usage limit: not
+    /// tried again before the limit resets (D-16).
+    Skipped,
 }
 
 impl RunState {
@@ -185,6 +208,10 @@ pub struct Run {
     /// The conversation could not be opened again (B18).
     #[serde(default)]
     pub conversation_missing: bool,
+    /// How many times its conversation was opened again: each opening
+    /// starts under its own intent (B18).
+    #[serde(default)]
+    pub opens: u32,
 }
 
 impl Run {
@@ -254,9 +281,14 @@ pub struct Automation {
     pub task: String,
     pub schedule: Schedule,
     pub agent: AgentChoice,
-    /// On the machine of the core that keeps it (D-21): the book names no
-    /// machine, so it moves with the core like the rest of its state.
+    /// On the machine of the core that keeps it (D-21).
     pub folder: Folder,
+    /// The node id of the machine it was made on. The book moves with the
+    /// core; read by a core on another machine, the automation stops until a
+    /// person resumes it there (`PauseReason::MachineChanged`). Empty in a
+    /// book written before it was kept, which takes the reading core's.
+    #[serde(default)]
+    pub machine: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<Pause>,
     pub created_at_unix_ms: u64,
@@ -386,6 +418,7 @@ impl Automation {
             seen: false,
             opened: None,
             conversation_missing: false,
+            opens: 0,
         }));
         number
     }
@@ -405,6 +438,7 @@ impl Automation {
             RunState::Succeeded => "성공".to_owned(),
             RunState::Failed => format!("실패 · {}번 시도", last.attempt),
             RunState::Stopped => "멈춤 · 사람이 끝냄".to_owned(),
+            RunState::Skipped => "건너뜀 · 사용 한도".to_owned(),
             RunState::Starting | RunState::Running => unreachable!("a finished run"),
         };
         let mut prompt = format!("{}\n\n[지난 회차 · {when} · {result}]", self.task);
@@ -419,21 +453,28 @@ impl Automation {
         prompt
     }
 
-    /// The intent of an attempt's start: the same for the same attempt, so a
-    /// start asked again, by a restarted core or a second click, is the
-    /// spawn it was (B36, engineering 11).
-    pub fn attempt_intent(&self, run: u64, attempt: u32) -> String {
-        format!("automation-{}-r{run}-a{attempt}", self.id)
-    }
-
-    pub fn open_intent(&self, run: u64, number: u32) -> String {
-        format!("automation-{}-r{run}-o{number}", self.id)
-    }
-
     /// The branch of a run's own worktree.
     pub fn run_branch(&self, run: u64) -> String {
         format!("automation/{}-r{run}", self.id)
     }
+}
+
+/// The intent of an attempt's start: the same for the same attempt, so a
+/// start asked again, by a restarted core or after a start that stopped
+/// partway, is the spawn it was (B36, engineering 11).
+pub fn attempt_intent(automation: &str, run: u64, attempt: u32) -> String {
+    format!("automation-{automation}-r{run}-a{attempt}")
+}
+
+/// The intent of a finished run's conversation opened again, the `number`th
+/// time (B17, B18).
+pub fn open_intent(automation: &str, run: u64, number: u32) -> String {
+    format!("automation-{automation}-r{run}-o{number}")
+}
+
+/// A failure's code, cut to what a run keeps.
+pub fn reason_code(code: &str) -> String {
+    code.chars().take(REASON_CAP).collect()
 }
 
 /// A wall time to the minute in `zone`, as the next run's prompt writes it.
@@ -539,6 +580,13 @@ pub enum Call {
         id: String,
         run: u64,
     },
+    /// A window shows the run's terminal in the automation screen (`on`), or
+    /// no longer does: a terminal on screen is not closed (B15).
+    RunViewing {
+        id: String,
+        run: u64,
+        on: bool,
+    },
     /// The operator looked at the automation's runs (B11).
     Seen {
         id: String,
@@ -555,7 +603,7 @@ pub enum Call {
 
 /// The book: every automation of this core, and the agent last chosen,
 /// which the form starts from (D-07).
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stored {
     #[serde(default)]
@@ -564,6 +612,54 @@ pub struct Stored {
     pub automations: Vec<Automation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_choice: Option<AgentChoice>,
+    /// What runs left to close, oldest first (D-13, D-18, engineering 14).
+    /// Kept in the book, so a close that failed or that a restart cut off is
+    /// finished later, and a removed automation's runs still close.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cleanups: Vec<Cleanup>,
+}
+
+/// A run's terminals to close and its own worktree to release after them,
+/// one per run at a time. The terminals are named by the intents of the
+/// starts that made them, so a start that stopped partway, which has a pane
+/// and no agent, is closed like one whose agent registered; a pane that no
+/// longer runs the terminal its start recorded is left alone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cleanup {
+    pub automation: String,
+    pub run: u64,
+    pub intents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<RunWorktree>,
+    /// Failed tries so far, which space the next one out.
+    #[serde(default)]
+    pub tries: u32,
+    #[serde(default)]
+    pub next_at_unix_ms: u64,
+    /// Moves when more is added, so a try that began before keeps it.
+    #[serde(default)]
+    pub generation: u64,
+}
+
+/// A run's own worktree: the branch of the project at `repo`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunWorktree {
+    pub repo: String,
+    pub branch: String,
+}
+
+/// An empty book of this build's schema, which is what a new file says.
+impl Default for Stored {
+    fn default() -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            automations: Vec::new(),
+            last_choice: None,
+            cleanups: Vec::new(),
+        }
+    }
 }
 
 impl Stored {
@@ -591,6 +687,52 @@ impl Stored {
     /// exit (D-19).
     pub fn any_on(&self) -> bool {
         self.automations.iter().any(Automation::on)
+    }
+
+    /// Adds what a run leaves to close, `now`: to the run's waiting close
+    /// when it has one, so a run has one; past the cap the oldest goes.
+    pub fn clean_up(
+        &mut self,
+        automation: &str,
+        run: u64,
+        intents: Vec<String>,
+        worktree: Option<RunWorktree>,
+        now: u64,
+    ) {
+        if let Some(cleanup) = self
+            .cleanups
+            .iter_mut()
+            .find(|cleanup| cleanup.automation == automation && cleanup.run == run)
+        {
+            for intent in intents {
+                if !cleanup.intents.contains(&intent) {
+                    cleanup.intents.push(intent);
+                }
+            }
+            if worktree.is_some() {
+                cleanup.worktree = worktree;
+            }
+            cleanup.next_at_unix_ms = now;
+            cleanup.generation += 1;
+            return;
+        }
+        self.cleanups.push(Cleanup {
+            automation: automation.to_owned(),
+            run,
+            intents,
+            worktree,
+            tries: 0,
+            next_at_unix_ms: now,
+            generation: 0,
+        });
+        while self.cleanups.len() > CLEANUP_CAP {
+            let dropped = self.cleanups.remove(0);
+            crate::diagnostic!(serde_json::json!({
+                "component": "automations", "kind": "automation.cleanup_dropped",
+                "automation": dropped.automation, "run": dropped.run,
+                "intents": dropped.intents, "tries": dropped.tries,
+            }));
+        }
     }
 }
 
@@ -775,6 +917,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Stored, String> {
         let excess = automation.records.len().saturating_sub(RECORD_CAP);
         automation.records.drain(..excess);
     }
+    let excess = stored.cleanups.len().saturating_sub(CLEANUP_CAP);
+    stored.cleanups.drain(..excess);
     Ok(stored)
 }
 
@@ -917,6 +1061,7 @@ mod tests {
                 default: true,
                 worktree: false,
             },
+            machine: "node".into(),
             paused: None,
             created_at_unix_ms: now,
             records: Vec::new(),
@@ -1090,8 +1235,84 @@ mod tests {
             schema_version: 1,
             automations: vec![automation],
             last_choice: None,
+            cleanups: Vec::new(),
         };
         let read = decode(&encode(&stored).unwrap()).unwrap();
         assert_eq!(read.automations[0].records.len(), RECORD_CAP);
+    }
+
+    /// The write side fits the read side: a book at every cap, each text
+    /// at its longest in the character JSON spells widest (a control
+    /// character, six bytes), is under the size a read refuses, so a book
+    /// this core wrote always reads back. Measured one automation and one
+    /// close at a time and added up, which only overcounts.
+    #[test]
+    fn a_book_at_every_cap_reads_back() {
+        let wide = |count: usize| "\u{1}".repeat(count);
+        let now = at("2026-11-19T09:00");
+        let mut full = automation(daily("09:00"), now);
+        full.name = "\u{1d11e}".repeat(NAME_CAP);
+        full.task = wide(TASK_CAP);
+        full.folder.path = wide(1024);
+        full.machine = "m".repeat(64);
+        full.agent = AgentChoice {
+            kind: "opencode".into(),
+            profile: Some("p".repeat(128)),
+            model: Some("m".repeat(128)),
+            effort: Some("e".repeat(128)),
+        };
+        full.paused = Some(Pause {
+            reason: PauseReason::MachineChanged,
+            at_unix_ms: u64::MAX,
+        });
+        let branch = full.run_branch(u64::MAX);
+        for _ in 0..RECORD_CAP {
+            let number = full.new_run(Trigger::Missed, Some(u64::MAX), u64::MAX);
+            let run = full.run_mut(number).unwrap();
+            run.state = RunState::Skipped;
+            run.ended_at_unix_ms = Some(u64::MAX);
+            run.reason = Some(reason_code(&wide(1000)));
+            run.agent_id = Some("a".repeat(128));
+            run.conversation = Some(Conversation {
+                kind: "opencode".into(),
+                id: "c".repeat(256),
+            });
+            run.answer = answer_paragraph(&wide(5000));
+            run.branch = Some(branch.clone());
+            run.opened = Some(Opened {
+                number: u32::MAX,
+                agent_id: Some("a".repeat(128)),
+            });
+            run.opens = u32::MAX;
+        }
+        let choice = full.agent.clone();
+        let one = |automations: Vec<Automation>, cleanups: Vec<Cleanup>| {
+            encode(&Stored {
+                schema_version: SCHEMA_VERSION,
+                automations,
+                last_choice: Some(choice.clone()),
+                cleanups,
+            })
+            .unwrap()
+            .len() as u64
+        };
+        let cleanup = Cleanup {
+            automation: full.id.clone(),
+            run: u64::MAX,
+            intents: (1..=MAX_ATTEMPTS)
+                .map(|attempt| attempt_intent(&full.id, u64::MAX, attempt))
+                .chain([open_intent(&full.id, u64::MAX, u32::MAX)])
+                .collect(),
+            worktree: Some(RunWorktree {
+                repo: wide(1024),
+                branch: branch.clone(),
+            }),
+            tries: u32::MAX,
+            next_at_unix_ms: u64::MAX,
+            generation: u64::MAX,
+        };
+        let total = one(vec![full], Vec::new()) * AUTOMATION_CAP as u64
+            + one(Vec::new(), vec![cleanup]) * CLEANUP_CAP as u64;
+        assert!(total < READ_CAP, "{total} bytes at the caps");
     }
 }

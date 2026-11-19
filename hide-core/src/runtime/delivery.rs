@@ -2868,6 +2868,7 @@ pub(crate) mod tests {
             session_workspace_ids: Vec::new(),
             last_activity_unix_ms: None,
             pinned: false,
+            unlisted: false,
             checkouts: vec![crate::model::CheckoutSnapshot {
                 id: "checkout".into(),
                 workspace_id: "workspace".into(),

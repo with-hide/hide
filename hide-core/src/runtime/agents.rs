@@ -4199,7 +4199,6 @@ impl Runtime {
                 task: started.task.clone(),
                 tool: started.tool.as_ref().map(|tool| tool.name.clone()),
             })
-            .chain(self.automation_own_folders())
             .collect()
     }
 

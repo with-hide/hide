@@ -864,6 +864,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(
@@ -6090,6 +6091,7 @@ impl Runtime {
             &mut workspaces,
             &self.snapshot.navigator.agents,
         );
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.refresh_start_profile_catalog();
         self.snapshot.navigator.devices = workspace::devices(

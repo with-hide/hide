@@ -2482,6 +2482,12 @@ pub struct WorkspaceSnapshot {
     /// (D-07), so an unregistered workspace is never pinned.
     #[serde(default)]
     pub pinned: bool,
+    /// The core keeps this project off every list (the sidebar, the phone,
+    /// the project picker): an automation's own folder, registered only so
+    /// its runs can start there (PRD automations D-08, B30). Absent while
+    /// false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     pub checkouts: Vec<CheckoutSnapshot>,
     /// Checkout rows grouped after the active rows in this project. The full
     /// rows stay in `checkouts`, which remains the authority for focus,
@@ -11484,6 +11490,7 @@ mod wire_enum_tests {
             RunState::Succeeded,
             RunState::Failed,
             RunState::Stopped,
+            RunState::Skipped,
         ];
         for variant in states {
             match variant {
@@ -11491,7 +11498,8 @@ mod wire_enum_tests {
                 | RunState::Running
                 | RunState::Succeeded
                 | RunState::Failed
-                | RunState::Stopped => {}
+                | RunState::Stopped
+                | RunState::Skipped => {}
             }
         }
         assert_wire(&contract, "automation_run_state", &states);
@@ -11502,13 +11510,19 @@ mod wire_enum_tests {
             PauseReason::LoginExpired,
             PauseReason::FolderMissing,
             PauseReason::AgentMissing,
+            PauseReason::FolderDetached,
+            PauseReason::MachineChanged,
+            PauseReason::FolderInRepository,
         ];
         for variant in pauses {
             match variant {
                 PauseReason::Operator
                 | PauseReason::LoginExpired
                 | PauseReason::FolderMissing
-                | PauseReason::AgentMissing => {}
+                | PauseReason::AgentMissing
+                | PauseReason::FolderDetached
+                | PauseReason::MachineChanged
+                | PauseReason::FolderInRepository => {}
             }
         }
         assert_wire(&contract, "automation_pause_reason", &pauses);
