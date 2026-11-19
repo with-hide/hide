@@ -4,7 +4,7 @@ use hide_platform::user_agents::{LoginAgent, NOT_THE_ACCOUNT_HOME, UserAgents, a
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 #[test]
