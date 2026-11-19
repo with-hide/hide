@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { directionKey, isPairLink, joinFailureKey, mayRequest, openedMachines, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Peer } from "./pairing";
+import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, mayRequest, openedMachines, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Peer } from "./pairing";
 import type { SnapshotRest } from "./snapshot";
 
 const peer = (over: Partial<Peer> = {}): Peer => ({ key: "ab".repeat(32), device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: null, connected: true, path: "direct", reason: null, update: null, ...over });
@@ -49,6 +49,15 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     expect(requestLine({ key: "k", state: "unanswered" })).toBe("pairing.request.unanswered");
     expect(requestLine({ key: "k", state: "unreachable" })).toBe("pairing.request.unreachable");
     expect(requestLine(undefined)).toBeNull();
+  });
+});
+
+describe("this computer's own window (B52)", () => {
+  it("is the screen hided sent the pairing frame, and no other", () => {
+    expect(ownWindow(NOTHING_UNDER_WAY)).toBe(true);
+    // Another computer's view of this one, or a phone: no frame ever comes.
+    expect(ownWindow(null)).toBe(false);
+    expect(ownWindow(undefined)).toBe(false);
   });
 });
 
