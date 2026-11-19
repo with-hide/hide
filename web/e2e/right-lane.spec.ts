@@ -153,9 +153,13 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await quietFor(page, 500, "no terminal was fitted again while the lane came and went");
     expect(resizes(lane)).toBe(before);
 
-    // Escape on the rail closes it too.
+    // Escape on the rail closes it too. The press hands the keyboard to the
+    // document's editor, whose Escape is its own (PRD lane-desk-pair-view B30),
+    // so the Escape here is the rail button's.
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(documentArea(page).locator(".cm-content")).toBeFocused();
+    await railTool(page, "documents").focus();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
 
