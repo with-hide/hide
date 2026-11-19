@@ -253,7 +253,7 @@ class Verdicts(unittest.TestCase):
     def test_the_contract_names_each_agents_letter_and_wake_forms(self):
         rows = {row["id"]: row for row in contract()}
         self.assertEqual({key: (rows[key]["letter"], rows[key]["wake"]) for key in rows if key != "cursor"}, {
-            "claude-code": ("bell", "pane"), "codex": ("bell", "pane"), "antigravity": ("next_prompt", "pane"),
+            "claude-code": ("bell", "pane"), "codex": ("bell", "pane"), "antigravity": ("bell", "pane"),
             "grok": ("bell", "sleeping_session"), "opencode": ("next_prompt", "sleeping_session"),
             "pi": ("next_prompt", "sleeping_session"), "omp": ("next_prompt", "sleeping_session")})
 

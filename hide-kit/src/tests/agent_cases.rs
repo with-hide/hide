@@ -1415,6 +1415,11 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
     // subagents, and no bell rings for either. Their session readers add sleep, fork and titles.
     let pi = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
     let omp = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
+    // with-hide/hide#2580: agy is rung at rest, once the screen read shows its
+    // empty prompt, beside omp's features.
+    let antigravity = [
+        Skill, Guidance, Letters, Bell, Memory, Sleep, Fork, Start, Titles,
+    ];
     let expected: [(&str, &[Feature], bool); 7] = [
         ("claude-code", &Feature::ALL, false),
         ("codex", &Feature::ALL, false),
@@ -1422,7 +1427,7 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
         ("opencode", &opencode, false),
         ("pi", &pi, false),
         ("omp", &omp, false),
-        ("antigravity", &omp, false),
+        ("antigravity", &antigravity, false),
     ];
     assert_eq!(
         ADAPTERS.iter().map(|row| row.id).collect::<Vec<_>>(),
