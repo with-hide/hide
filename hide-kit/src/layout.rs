@@ -916,14 +916,14 @@ mod tests {
         use hide_agent_hooks::route;
         use hide_peer_protocol::launch;
         assert_eq!(route::GUEST_INSTALL_PREFIX, launch::HOOKS_INSTALL_PREFIX);
-        let state = Path::new("/home/hide/state");
+        let state = Path::new("/home/me/state");
         let root = guest_install_root(state, &PeerKey::from_bytes([0xab; 32]));
         assert_eq!(
             install_of_root(&root),
             format!("{}{}", launch::HOOKS_INSTALL_PREFIX, root.display())
         );
         for other in [
-            helper_root(Path::new("/home/hide")),
+            helper_root(Path::new("/home/me")),
             state.join("g").join("abababababababab"),
             state.join("g").join("abababababababab").join("n"),
             state.join("g").join("not-a-key").join("i"),
