@@ -429,6 +429,8 @@ impl AgentAdapter {
 /// this instead of searching again.
 pub(crate) struct Detection {
     rows: Vec<(&'static str, Option<Program>)>,
+    /// The search the agents were looked for on, the account's own.
+    search: OsString,
 }
 
 impl Detection {
@@ -444,7 +446,13 @@ impl Detection {
                 (adapter.id, program)
             })
             .collect();
-        Self { rows }
+        Self { rows, search: path }
+    }
+
+    /// Whether the program `name` is found on the search the agents were
+    /// looked for on.
+    pub(crate) fn finds(&self, name: &str) -> bool {
+        Program::find(&self.search, name).is_some()
     }
 
     /// Whether the agent is installed here: one of its programs is found.

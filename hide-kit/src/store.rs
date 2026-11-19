@@ -422,6 +422,10 @@ pub enum StoreChange {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<PastedPick>,
     },
+    /// The operator closed a paste's answer: the values it staged go now,
+    /// rather than at the hour's end (D-11). A paste already gone is no
+    /// error.
+    CancelMcp { preview: String },
     /// Change an MCP item's server and keys (B12); a key not typed keeps
     /// its value.
     SetMcp {
@@ -464,7 +468,8 @@ impl StoreChange {
             | StoreChange::Adopt { .. }
             | StoreChange::CheckUpdates
             | StoreChange::PreviewUpdate { .. }
-            | StoreChange::Update { .. } => self.clone(),
+            | StoreChange::Update { .. }
+            | StoreChange::CancelMcp { .. } => self.clone(),
         }
     }
 }
@@ -1549,6 +1554,7 @@ fn change_one(
         StoreChange::AddMcp { server, keys, from } => {
             mcp::add(ctx, store, server, keys, from.as_ref())
         }
+        StoreChange::CancelMcp { preview } => mcp::cancel(ctx, store, preview),
         StoreChange::SetMcp { item, server, keys } => mcp::set(ctx, store, item, server, keys),
         StoreChange::Receive { item } => receive(ctx, store, item),
     }

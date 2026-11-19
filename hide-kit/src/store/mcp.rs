@@ -630,13 +630,28 @@ fn checked(server: &Server, typed: &SentKeys, before: &Keys) -> Result<Keys, Sto
     Ok(keys)
 }
 
+/// Whether a pasted server's program is one this machine runs: a path, or a
+/// name found on the account's search. A sentence pasted into the field
+/// parses as a command line whose first word is no program, so it reads as
+/// no server, as an unreadable paste does.
+fn runs_here(ctx: &Ctx<'_>, server: &Server) -> bool {
+    match &server.reach {
+        Reach::Local { command, .. } => {
+            command.contains(['/', '\\']) || ctx.detection.finds(command)
+        }
+        Reach::Remote { .. } => true,
+    }
+}
+
 fn staged(ctx: &Ctx<'_>, preview: &str, index: usize) -> PathBuf {
     ctx.staging().join(preview).join(index.to_string())
 }
 
 /// Reads a paste (B8): each server it gives lands in
 /// [`StoreRecord::mcp_previews`] with the names of its keys, and the values
-/// it gave stay staged in the store until the preview goes.
+/// it gave stay staged in the store until an add takes them, the operator
+/// closes the answer ([`cancel`]) or, unanswered, it passes its hour or
+/// four newer pastes.
 pub(super) fn read_paste(
     ctx: &Ctx<'_>,
     store: &mut StoreRecord,
@@ -654,6 +669,9 @@ pub(super) fn read_paste(
         let Some(server) = pasted.server else {
             continue;
         };
+        if !runs_here(ctx, &server) {
+            continue;
+        }
         if servers.len() == PASTED_LIMIT {
             break;
         }
@@ -714,7 +732,7 @@ pub(super) fn add(
     let id = StoreItem::id_of(ItemKind::Mcp, &server.name);
     crate::mcp_keys::write(&ctx.item_files(&id), &keys).map_err(keys_failed)?;
     store.items.push(StoreItem {
-        id,
+        id: id.clone(),
         kind: ItemKind::Mcp,
         name: server.name.clone(),
         source: Source::Pasted,
@@ -729,7 +747,60 @@ pub(super) fn add(
             server: server.clone(),
         }),
     });
+    // A key lives in one place once the add ends: the staged copy goes, and
+    // the paste's answer with it once every server in it is added. A copy
+    // that cannot go now goes with the answer's hour.
+    if let Some(pick) = from {
+        if let Err(reason) = remove_staged(&staged(ctx, &pick.preview, pick.index)) {
+            super::log("store.staged_left", Some(&id), &reason);
+        }
+        let answered = store
+            .mcp_previews
+            .iter()
+            .find(|preview| preview.id == pick.preview)
+            .is_some_and(|preview| {
+                preview.servers.iter().all(|pasted| {
+                    store
+                        .item(&StoreItem::id_of(ItemKind::Mcp, &pasted.server.name))
+                        .is_some()
+                })
+            });
+        if answered {
+            cancel(ctx, store, &pick.preview)?;
+        }
+    }
     Ok(())
+}
+
+/// Drops the paste's answer `preview` and the values it staged.
+pub(super) fn cancel(
+    ctx: &Ctx<'_>,
+    store: &mut StoreRecord,
+    preview: &str,
+) -> Result<(), StoreRefusal> {
+    if !valid_preview(preview) {
+        return Err(not_found(format!("no paste {preview}")));
+    }
+    remove_staged(&ctx.staging().join(preview)).map_err(failed)?;
+    store.mcp_previews.retain(|kept| kept.id != preview);
+    Ok(())
+}
+
+/// A preview id as [`read_paste`] makes them, so a cancel names nothing
+/// outside the staging folder.
+fn valid_preview(preview: &str) -> bool {
+    preview.starts_with("mcp-")
+        && preview
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn remove_staged(path: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("{} could not be removed: {error}", path.display())),
+    }
 }
 
 /// Changes an MCP item's server and keys (B12): a key not typed keeps its

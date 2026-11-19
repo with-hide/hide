@@ -37,7 +37,37 @@ fn mcp_agents() -> Fixture {
     ] {
         std::fs::create_dir_all(fixture.home().join(folder)).unwrap();
     }
+    with_program(&fixture, "npx");
     fixture
+}
+
+/// A stand-in program `name` where the fixture's account finds its
+/// programs, so a pasted command that runs it reads as a server.
+fn with_program(fixture: &Fixture, name: &str) {
+    let bin = fixture.home().join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = bin.join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    std::fs::write(bin.join(format!("{name}.cmd")), "@exit /b 0\r\n").unwrap();
+}
+
+/// Every byte under the store's staging folder, as text.
+fn staged_bytes(fixture: &Fixture) -> String {
+    let dir = crate::layout::store_dir(fixture.home()).join("staging");
+    if !dir.exists() {
+        return String::new();
+    }
+    tree(&dir)
+        .into_values()
+        .filter_map(|(bytes, _)| bytes)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .collect()
 }
 
 fn github() -> Server {
@@ -544,6 +574,7 @@ fn a_paste_fills_the_fields_and_its_values_stay_in_the_store() {
     let McpPreview { id, servers, .. } = &report.mcp_previews[0];
     assert_eq!(servers[0].server, github());
     assert_eq!(servers[0].given, ["GITHUB_TOKEN"]);
+    assert!(staged_bytes(&fixture).contains(KEY));
     assert_eq!(servers[0].agents.len(), FILES.len());
     let wire = serde_json::to_string(&report).unwrap();
     assert!(!wire.contains(KEY), "{wire}");
@@ -569,6 +600,59 @@ fn a_paste_fills_the_fields_and_its_values_stay_in_the_store() {
         ),
         KEY
     );
+    // The key lives in one place once the add ends: the item's, and the
+    // paste's answer, all of it added, goes with its staged copy.
+    assert!(report.mcp_previews.iter().all(|preview| &preview.id != id));
+    assert!(!staged_bytes(&fixture).contains(KEY));
+
+    // Closing a paste's answer drops what it staged at once.
+    let report = store(
+        &fixture,
+        vec![StoreChange::ReadMcp {
+            text: Sealed::new("LINEAR_KEY=lin_s3cr3t npx -y linear-mcp"),
+        }],
+    );
+    let closed = report.mcp_previews.last().unwrap().id.clone();
+    assert!(staged_bytes(&fixture).contains("lin_s3cr3t"));
+    let report = store(
+        &fixture,
+        vec![StoreChange::CancelMcp {
+            preview: closed.clone(),
+        }],
+    );
+    assert!(
+        report
+            .mcp_previews
+            .iter()
+            .all(|preview| preview.id != closed)
+    );
+    assert!(!staged_bytes(&fixture).contains("lin_s3cr3t"));
+
+    // A sentence, or a command whose program this machine does not have,
+    // is no server; the same command once the program is there is one.
+    for text in [
+        "please add the github server for me",
+        "fetch-mcp --port 8080",
+    ] {
+        let report = store(
+            &fixture,
+            vec![StoreChange::ReadMcp {
+                text: Sealed::new(text),
+            }],
+        );
+        assert!(
+            report.mcp_previews.last().unwrap().servers.is_empty(),
+            "{text}"
+        );
+    }
+    with_program(&fixture, "fetch-mcp");
+    let report = store(
+        &fixture,
+        vec![StoreChange::ReadMcp {
+            text: Sealed::new("fetch-mcp --port 8080"),
+        }],
+    );
+    assert_eq!(report.mcp_previews.last().unwrap().servers.len(), 1);
 
     // A paste Hide cannot read leaves the fields empty.
     let report = store(
