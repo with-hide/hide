@@ -83,21 +83,23 @@ class Planning(unittest.TestCase):
         self.assertIn("unsafe", scene.plan(found, scene.CHECK)[1])
         self.assertEqual(scene.plan(found, scene.SURVEY)[0], "watch")
 
-    def test_a_safe_finding_is_proven_again_by_the_watch(self):
+    def test_a_safe_finding_is_proven_again_by_a_survey_and_not_by_the_ordinary_run(self):
         found = copy.deepcopy(case("claude-code", "popup"))
         found["finding"] = "safe"
-        self.assertEqual(scene.plan(found, scene.CHECK)[0], "watch")
+        self.assertEqual(scene.plan(found, scene.CHECK)[0], None)
+        self.assertEqual(scene.plan(found, scene.SURVEY)[0], "watch")
 
     def test_the_lane_requires_a_pass_exactly_where_the_ordinary_run_opens_the_scene(self):
         required = [(key, name) for key, row in ROWS.items() for name in scene.SCENES
                     if scene.lane_status(row, scene.cell_name(name)) == cells.PASS]
         self.assertEqual(required, [("codex", "model_picker")])
-        found = copy.deepcopy(ROWS["claude-code"])
-        for case_ in found["scenes"]:
-            if case_["scene"] == "popup":
-                case_["finding"] = "safe"
-        self.assertEqual(scene.lane_status(found, "scene_popup"), cells.PASS,
-                         "a safe finding is proven again every night")
+        # A safe finding opens nothing in the ordinary run, so the lane asks no pass of it.
+        declared_safe = [(key, name) for key, row in ROWS.items() for name in scene.SCENES
+                         if row["cells"][scene.cell_name(name)] and case(key, name)["finding"] == "safe"]
+        self.assertTrue(declared_safe, "the declarations carry safe findings")
+        for key, name in declared_safe:
+            self.assertEqual(scene.lane_status(ROWS[key], scene.cell_name(name)),
+                             cells.PASS if (key, name) == ("codex", "model_picker") else cells.NOT_MEASURED)
 
     def test_a_turn_scene_is_never_required_to_pass_in_ci(self):
         found = copy.deepcopy(ROWS["claude-code"])

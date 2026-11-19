@@ -609,8 +609,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         guard: Some(HookDialect::OpenCode),
         subagent_counts: Some(HookDialect::OpenCode),
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
-        // A bell's Enter in OpenCode's session picker opens another session
-        // (measured 2026-10-07); letters reach it on its next prompt instead.
+        // Off by decision: a forced letter was typed into the session picker's
+        // search (2026-11-12, `docs/INSTALL.md#what-a-letters-bell-does-on-each-screen`);
+        // letters reach it on its next prompt instead.
         bell: false,
         scenes: scene_declarations::OPENCODE,
         bell_names_inbox: false,
@@ -727,10 +728,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // Pi runs no subagents.
         subagent_counts: None,
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
-        // Pi's previous-session picker reads `done` and a bell's Enter there
-        // resumes another session; its trust dialog reads `idle` and Enter
-        // picks the highlighted item (measured 2026-10-07). Letters reach it on
-        // its next prompt instead.
+        // Off by decision: no scene was seen unsafe, but each was measured with
+        // a forced letter that skips Hide's draft record and 30 s wait
+        // (2026-11-12, `docs/INSTALL.md#what-a-letters-bell-does-on-each-screen`).
+        // Letters reach it on its next prompt instead.
         bell: false,
         scenes: scene_declarations::PI,
         bell_names_inbox: false,
@@ -837,9 +838,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         guard: Some(HookDialect::Omp),
         subagent_counts: Some(HookDialect::Omp),
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
-        // omp's previous-session picker reads `done` and a bell's Enter there
-        // resumes another session (measured 2026-10-07). Letters reach it on
-        // its next prompt instead.
+        // Off by decision: no scene was seen unsafe, but each was measured with
+        // a forced letter that skips Hide's draft record and 30 s wait
+        // (2026-11-12, `docs/INSTALL.md#what-a-letters-bell-does-on-each-screen`).
+        // Letters reach it on its next prompt instead.
         bell: false,
         scenes: scene_declarations::OMP,
         bell_names_inbox: false,
@@ -949,9 +951,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        // The screen rules read agy's permission question as an
-        // approval, but its folder-trust question is unmeasured, and a bell's
-        // Enter into a dialog the rules read as `idle` would answer it; letters reach agy on
+        // Off by decision: a forced letter was typed into the Conversations
+        // list's search, and every other scene was seen on 1.5.6, not the pin
+        // (2026-11-12, `docs/INSTALL.md#what-a-letters-bell-does-on-each-screen`);
+        // letters reach agy on
         // its next prompt instead (PRD antigravity-first-class D-06), and
         // while it works on a later model call of the turn, which its
         // `PreInvocation` hook runs before and Hide answers with the letters
