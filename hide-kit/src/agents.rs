@@ -398,6 +398,19 @@ impl AgentAdapter {
         self.declaration.basic()
     }
 
+    /// Whether the agent reads the skill folder `dir` besides its own
+    /// (`hide_agent_adapter::AgentAdapter::skill_also_reads`).
+    pub fn also_reads(&self, dir: SkillDir) -> bool {
+        use hide_agent_adapter::SkillLocation;
+        self.declaration.skill_also_reads.iter().any(|location| {
+            dir == match location {
+                SkillLocation::Shared => SkillDir::Shared,
+                SkillLocation::Claude => SkillDir::Claude,
+                SkillLocation::Antigravity => SkillDir::Antigravity,
+            }
+        })
+    }
+
     /// The agent's declaration, which resolves a profile's account
     /// (`hide_agent_adapter::AgentAdapter::resolve`).
     pub(crate) fn declaration(&self) -> &'static hide_agent_adapter::AgentAdapter {

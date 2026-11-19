@@ -40,6 +40,7 @@ mod retired_agents;
 pub mod retirement_inspection;
 pub mod runtime;
 mod state_route;
+pub mod store;
 mod targets;
 mod why;
 
@@ -246,6 +247,11 @@ pub struct KitReport {
     /// pass was given none, and in a report from a build that predates them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub profiles: Vec<ProfileReport>,
+    /// The machine's store of skills and MCP items, each with its cells
+    /// (PRD skill-mcp-manager); absent in a report from a build that
+    /// predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<store::StoreReport>,
     /// The pass stopped before changing anything, and why; the report then
     /// has no part and no agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -347,6 +353,9 @@ pub struct Scope {
     /// machine (PRD settings-cleanup D-12, B27). Only this request ever does
     /// it, and it answers in `KitReport::codex_daemon_off`.
     pub codex_daemon_off: bool,
+    /// The operator's changes to the machine's store, in order (PRD
+    /// skill-mcp-manager); each answers in `StoreReport::outcomes`.
+    pub store: Vec<store::StoreChange>,
 }
 
 impl Scope {
@@ -403,6 +412,14 @@ impl Scope {
         self
     }
 
+    /// The operator's changes to the store, and nothing else.
+    pub fn store(changes: impl IntoIterator<Item = store::StoreChange>) -> Self {
+        Self {
+            store: changes.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
     /// The operator's request to turn Codex's shared server off, and nothing
     /// else.
     pub fn codex_daemon_off() -> Self {
@@ -417,6 +434,7 @@ impl Scope {
             && self.agent_on.is_empty()
             && self.agent_off.is_empty()
             && !self.codex_daemon_off
+            && self.store.is_empty()
     }
 
     /// Two requests for one machine as one; for an agent named by both, the
@@ -424,6 +442,7 @@ impl Scope {
     pub fn merge(mut self, later: Scope) -> Scope {
         self.restore.extend(later.restore);
         self.codex_daemon_off |= later.codex_daemon_off;
+        self.store.extend(later.store);
         for id in later.agent_on {
             self.agent_off.remove(&id);
             self.agent_on.insert(id);
@@ -661,10 +680,12 @@ pub fn status(target: &KitTarget) -> KitReport {
         })
         .collect();
     let agents = agent_kit::status(target, &record, &agent_kit::part_views(&components));
+    let detection = agents::Detection::probe(target);
     let profiles = match target.profiles {
-        Some(_) => targets::status(target, &record, &agents::Detection::probe(target)),
+        Some(_) => targets::status(target, &record, &detection),
         None => Vec::new(),
     };
+    let store = store::status(target, &record, &detection);
     let daemon = codex_daemon(target);
     KitReport {
         components,
@@ -678,6 +699,7 @@ pub fn status(target: &KitTarget) -> KitReport {
         held_for_onboarding: held,
         legacy_retirement: Retirement::default(),
         profiles,
+        store: Some(store),
         refused: None,
     }
 }
@@ -806,12 +828,15 @@ pub fn apply(target: &KitTarget, scope: &Scope) -> KitReport {
     let daemon_off = scope
         .codex_daemon_off
         .then(|| turn_codex_daemon_off(target));
-    let mut report = apply_scope(target, scope);
+    // A source is read before the account lock, so a slow repository holds
+    // no other pass up.
+    let fetched = store::fetch(target, &scope.store);
+    let mut report = apply_scope(target, scope, fetched);
     report.codex_daemon_off = daemon_off;
     report
 }
 
-fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
+fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> KitReport {
     if let Err(refusal) = retirement_preflight(target) {
         return KitReport::refused(refusal);
     }
@@ -937,6 +962,9 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         &applied.detection,
     );
     changed |= profiles_changed;
+    // The store's items follow the same switches: an agent switched on, a
+    // new profile or a new agent gets every item that is on (D-13, D-31).
+    let store = store::pass(target, scope, &record, &applied.detection, fetched);
     // Whether this pass wrote the entries or found them, Codex trusts Hide's,
     // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
@@ -999,8 +1027,36 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         held_for_onboarding,
         legacy_retirement,
         profiles,
+        store: Some(store),
         refused: None,
     }
+}
+
+/// A pass over the machine's store alone, for a cell, a button or a
+/// command of the store's and the follow of its folders (PRD
+/// skill-mcp-manager): under the account's lock like every pass, with the
+/// agents' switches as the record has them and nothing else of the kit run.
+pub fn apply_store(target: &KitTarget, changes: Vec<store::StoreChange>) -> store::StoreReport {
+    let scope = Scope::store(changes);
+    let fetched = store::fetch(target, &scope.store);
+    if let Err(refusal) = retirement_preflight(target) {
+        return store::StoreReport::refused(refusal.detail);
+    }
+    let _lock = match lock_account(target) {
+        Ok(lock) => lock,
+        Err(refusal) => return store::StoreReport::refused(refusal.detail),
+    };
+    let record = match record::load(&target.home, &target.install) {
+        Ok(record) => record,
+        Err(refusal) => return store::StoreReport::refused(refusal.detail),
+    };
+    store::pass(
+        target,
+        &scope,
+        &record,
+        &agents::Detection::probe(target),
+        fetched,
+    )
 }
 
 /// What a pass over the machine's profile accounts did.
@@ -1187,9 +1243,21 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     }
     // Before the record goes: it is what says which integrations were Hide's
     // and which profile accounts hold Hide's pieces (PRD agent-profiles D-28).
-    let profiles = match record::load(&target.home, &target.install) {
-        Ok(record) => targets::remove(target, &record),
-        Err(_) => Vec::new(),
+    let (profiles, shared) = match record::load(&target.home, &target.install) {
+        Ok(record) => (targets::remove(target, &record), record.others_installed()),
+        Err(_) => (Vec::new(), true),
+    };
+    // The store is the account's: another installation of Hide there keeps
+    // it and what it applied (PRD skill-mcp-manager B30).
+    let store = if shared {
+        vec![(
+            "store".to_owned(),
+            RemoveOutcome::Kept {
+                reason: "another Hide on this account keeps the store".to_owned(),
+            },
+        )]
+    } else {
+        store::remove(target)
     };
     if let Err(reason) = record::forget(&target.home, &target.install) {
         components.push((
@@ -1201,6 +1269,7 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     }
     let mut agents = agent_kit::remove(target);
     agents.extend(profiles);
+    agents.extend(store);
     RemoveReport { components, agents }
 }
 

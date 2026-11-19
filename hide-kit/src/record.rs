@@ -239,6 +239,17 @@ impl Record {
     /// Whether another installation on the account keeps Hide's skill stubs
     /// in a folder (`TargetRecord::skill_root`) that holds the real place
     /// `path`, so this one's going leaves it.
+    /// Whether another installation of Hide on the account has put
+    /// anything on it, so what the account shares (the store) is still in
+    /// use when this one goes.
+    pub(crate) fn others_installed(&self) -> bool {
+        let app_is_other = !is_app(&self.install) && self.app != InstallRecord::default();
+        app_is_other
+            || self.installs.iter().flatten().any(|(install, part)| {
+                *install != self.install && !is_app(install) && *part != InstallRecord::default()
+            })
+    }
+
     pub(crate) fn skill_kept_elsewhere(&self, path: &Path) -> bool {
         let others = std::iter::once((hide_agent_hooks::route::APP_INSTALL, &self.app))
             .chain(
