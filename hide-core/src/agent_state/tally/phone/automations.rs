@@ -258,7 +258,7 @@ mod tests {
                 effort: None,
             },
             folder: Folder {
-                path: "/Users/secret/hide/automations/a".into(),
+                path: "/srv/secret/hide/automations/a".into(),
                 default: true,
                 worktree: false,
             },
@@ -275,7 +275,7 @@ mod tests {
             unseen: 0,
             last_choice: None,
             zone: Some("Asia/Seoul".into()),
-            own_folder_root: Some("/Users/secret/hide/automations".into()),
+            own_folder_root: Some("/srv/secret/hide/automations".into()),
             unreadable: None,
         }
     }
