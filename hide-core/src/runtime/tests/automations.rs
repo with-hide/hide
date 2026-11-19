@@ -1177,8 +1177,10 @@ fn an_opened_conversation_typed_into_sleeps_and_closes_once_the_screen_looks_awa
 }
 
 /// D-26, B39: a run carries what its conversation spent as the usage
-/// ledger read it, and its automation the runs' total; a run the ledger's
-/// seven days no longer hold keeps what it had.
+/// ledger read it, and its automation the runs' total. Only a reading with
+/// at least the tokens it has replaces it: one the ledger's seven days cut
+/// smaller, or one they no longer hold, keeps what it had, and the same
+/// session id under another agent is another conversation.
 #[test]
 fn a_run_carries_what_its_conversation_spent_as_the_ledger_read_it() {
     let state = tempfile::tempdir().unwrap();
@@ -1188,12 +1190,12 @@ fn a_run_carries_what_its_conversation_spent_as_the_ledger_read_it() {
     let pane = pane_of(&intent(&id, 1, 1));
     harness.show(&pane, working);
     harness.tick(1);
-    let report = |sessions: &[(&str, u64, u64, bool)]| {
+    let report = |sessions: &[(&str, &str, u64, u64, bool)]| {
         let spends = sessions
             .iter()
-            .map(|(session, tokens, micro_usd, unpriced)| {
+            .map(|(agent, session, tokens, micro_usd, unpriced)| {
                 crate::usage_ledger::project_cost::SessionSpend {
-                    agent: "claude".into(),
+                    agent: (*agent).into(),
                     session_id: (*session).into(),
                     tokens: *tokens,
                     micro_usd: *micro_usd,
@@ -1228,8 +1230,8 @@ fn a_run_carries_what_its_conversation_spent_as_the_ledger_read_it() {
     assert_eq!(spend(&harness), (Value::Null, Value::Null), "not read yet");
 
     harness.runtime.lock().unwrap().ingest_ledger(report(&[
-        (CONVERSATION, 12_300, 420_000, false),
-        ("other", 9, 9, true),
+        ("claude", CONVERSATION, 12_300, 420_000, false),
+        ("claude", "other", 9, 9, true),
     ]));
     assert_eq!(
         spend(&harness),
@@ -1238,14 +1240,40 @@ fn a_run_carries_what_its_conversation_spent_as_the_ledger_read_it() {
             json!({"tokens": 12_300, "micro_usd": 420_000, "unpriced": false, "runs": 1}),
         )
     );
-    harness
-        .runtime
-        .lock()
-        .unwrap()
-        .ingest_ledger(report(&[(CONVERSATION, 20_000, 0, true)]));
+    harness.runtime.lock().unwrap().ingest_ledger(report(&[(
+        "claude",
+        CONVERSATION,
+        20_000,
+        0,
+        true,
+    )]));
     assert_eq!(
         spend(&harness).0,
         json!({"tokens": 20_000, "micro_usd": 0, "unpriced": true})
+    );
+    harness.runtime.lock().unwrap().ingest_ledger(report(&[(
+        "claude",
+        CONVERSATION,
+        15_000,
+        9,
+        false,
+    )]));
+    assert_eq!(
+        spend(&harness).0,
+        json!({"tokens": 20_000, "micro_usd": 0, "unpriced": true}),
+        "a reading the seven days cut smaller"
+    );
+    harness.runtime.lock().unwrap().ingest_ledger(report(&[(
+        "codex",
+        CONVERSATION,
+        90_000,
+        9,
+        false,
+    )]));
+    assert_eq!(
+        spend(&harness).0["tokens"],
+        20_000,
+        "another agent's session"
     );
     harness.runtime.lock().unwrap().ingest_ledger(report(&[]));
     assert_eq!(
