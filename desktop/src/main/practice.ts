@@ -29,9 +29,10 @@ const PRACTICE_SHARE = 0.85;
 
 /**
  * The narrowest practice window whose screen shows every part side by side:
- * chapter 1's device rail, sidebar, Agent Views at their 480 px and a docked
- * lane with its tool rail need about 1264 px, and a narrower window draws the
- * lane over the agents it is meant to sit beside.
+ * chapter 1's device rail, sidebar, Agent Views at their 480 px and the lane
+ * at its ideal width with its tool rail need about 1264 px, and a narrower
+ * window has the lane, drawn over the agents' right edge, cover the part of
+ * them the chapter points at.
  */
 const PRACTICE_MIN_WIDTH = 1280;
 

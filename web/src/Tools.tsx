@@ -26,15 +26,15 @@ import type { MessageKey } from "./i18n/catalogs";
 
 // The right lane and its tool rail (PRD lane-two-columns D-01, D-02, D-07;
 // PRD right-lane D-05, D-08): the lane is two columns, the viewing column at
-// the agents' side showing the checkout's documents (the View areas) or the
-// front tab's 보기 slot (PRD sidebar-task-lens D-50), and the tool column beside
+// the agents' side showing the desk of the Agent tab in front, its documents
+// and cards (PRD lane-desk-pair-view D-06, D-13), and the tool column beside
 // the rail showing one tool, the Project tool (D-14), the Project's Memory,
 // Explorer (the file tree) or Changes (History). The rail at the body's right edge has the viewing
 // column's buttons above a rule and the tools below it; each brings its
-// column in front or folds it. Which columns show, the tool, the pin and the
-// widths are the front Workspace's, kept by the core; whether an unpinned
-// lane is up, whether it is expanded and which column a stacked lane draws
-// are this page's (`ui.ts`).
+// column in front or folds it. Whether the lane is open, which columns show,
+// the tool and the widths are the front Workspace's, kept by the core;
+// whether the lane is expanded and which column a stacked lane draws are
+// this page's (`ui.ts`).
 
 const TOOL_NAMES = { explorer: "panes.lane.explorer", changes: "panes.lane.changes", project: "projectTool.title", memory: "panes.lane.memory" } as const satisfies Record<Tool, MessageKey>;
 const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon, memory: BrainIcon };
@@ -69,8 +69,8 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
  * it, opening the tool column on it or closing the column when it already
  * shows it. The Project tool counts its project's 흘린 것 and the Hide AI
  * tool what its two tabs ask of the operator, each no number at 0. With no document the documents button is off and says so.
- * At the bottom the pin and the `…` stay in place whether the lane is up or
- * not and whichever column it shows (B15).
+ * At the bottom the `…` stays in place whether the lane is up or not and
+ * whichever column it shows (B15).
  */
 export function ToolRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();

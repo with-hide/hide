@@ -7,6 +7,7 @@
 // areas' own rules are `viewLayout.ts`.
 
 import { findArea } from "./areaLayout";
+import { workspaceKey } from "./viewLayout";
 import type { Checkout, DetailItem, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
 
 export { TOOLS, type Tool } from "./laneTools";
@@ -336,28 +337,49 @@ type CalledView = Pick<WorkspaceView, "device_id" | "path" | "layout" | "open" |
 
 /**
  * The page in front of the active View area of the desk the lane draws, as
- * its Workspace, display and load stamp, so a page that came forward, loaded
- * again or came up with its desk reads as new; null when a file, a diff, a
- * new tab or nothing is there, or the desk is not drawn.
+ * its display and load stamp, so a page that came forward or loaded again
+ * reads as new; null when a file, a diff, a new tab or nothing is there, or
+ * the desk is not drawn.
  */
-function frontPage(view: CalledView | null | undefined): string | null {
-  const layout = view?.layout;
+function frontPage(view: CalledView): string | null {
+  const layout = view.layout;
   if (!layout || !view.open || !view.tray.shown) return null;
   const area = findArea(layout.root, layout.active_area);
   const display = area?.displays.find((row) => row.id === area.active);
-  return display?.kind === "browser" && display.url ? `${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}` : null;
+  return display?.kind === "browser" && display.url ? `${display.id}\u0000${display.load ?? 0}` : null;
 }
 
+/** At most this many Workspaces keep the page they drew last (`DrawnPages`). */
+export const DRAWN_PAGES_LIMIT = 256;
+
 /**
- * Whether a lane call put a page in front (PRD browser-width-zoom D-04): the
- * drawn desk's active area shows a page that was not in front, or loaded
- * again, before the call; a desk the rail's documents button brings up with
- * a page in front counts, since an agent's page waits there with the lane
- * closed (lane-desk-pair-view B2). A reveal or a tool leaves it as it was.
+ * The page each Workspace drew last in front of its desk (`frontPage`), by
+ * `workspaceKey`. A lane that closes or a desk that folds leaves it, so the
+ * same page drawn again is not new; at most `DRAWN_PAGES_LIMIT` Workspaces,
+ * the one whose page changed longest ago dropped first.
  */
-export function pageCalled(previous: CalledView | null | undefined, view: CalledView | null | undefined): boolean {
-  const page = frontPage(view);
-  return page !== null && page !== frontPage(previous);
+export type DrawnPages = ReadonlyMap<string, string>;
+
+export const NO_DRAWN_PAGES: DrawnPages = new Map();
+
+/**
+ * Reads the page `view` draws in front (PRD browser-width-zoom D-04):
+ * `fresh` when the Workspace did not draw that page last, or drew it at an
+ * earlier load. A lane call with a fresh page widens the lane for it; the
+ * same page brought back by ⌘E or the desk button is not fresh, while one an
+ * agent opened as the lane was closed is, since it was never drawn
+ * (lane-desk-pair-view B2).
+ */
+export function readDrawnPage(drawn: DrawnPages, view: CalledView | null | undefined): { drawn: DrawnPages; fresh: boolean } {
+  const page = view ? frontPage(view) : null;
+  if (!view || page === null) return { drawn, fresh: false };
+  const key = workspaceKey(view);
+  if (drawn.get(key) === page) return { drawn, fresh: false };
+  const next = new Map(drawn);
+  next.delete(key);
+  next.set(key, page);
+  if (next.size > DRAWN_PAGES_LIMIT) next.delete(next.keys().next().value!);
+  return { drawn: next, fresh: true };
 }
 
 /** What the page has read of the core's lane calls. */

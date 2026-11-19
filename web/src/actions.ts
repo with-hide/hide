@@ -128,10 +128,10 @@ function deviceField(device: string, node: string): { device_id?: string } {
 export type Actions = ReturnType<typeof createActions>;
 
 /**
- * Whether an event puts the front Workspace's unpinned lane up (PRD
- * right-lane B15, B16): a tool, a reveal or a linked folder. Read here,
- * where every operator event passes, so no path can forget it; it is page
- * state and never sent. Choosing an agent or a tab leaves the lane as it
+ * Whether an event calls the front Workspace's lane up (PRD right-lane B15,
+ * B16): a tool, a reveal, the desk, an open or a linked folder. Read here,
+ * where every operator event passes, so no path can forget to draw the
+ * column the call is for in a stacked lane. Choosing an agent or a tab leaves the lane as it
  * is: only the operator closes it. An open, a History selection or a Recent
  * Panels display calls the lane through the core's call number instead
  * (`laneCalls.ts`), the one way a call from the CLI or another page arrives too.
@@ -583,7 +583,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (ui().screen?.kind === "missions" && frontCheckout(rest()) && workspaceViewOf(rest())) ui().setScreen({ kind: "workspace" });
   };
 
-  /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
+  /** Closes the lane (B15): ⌘E, the path's menu and Escape in the lane; both columns keep their shape for ⌘E's reopen. */
   const closeLane = () => setWorkspaceView({ open: false });
 
   /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
