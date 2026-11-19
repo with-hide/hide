@@ -1661,6 +1661,9 @@ enum ScopedRequest {
     Mission(Box<hide_core::missions::MissionCommand>),
     /// `hide task`: the caller's session's own plan, the core's record.
     Plan(hide_core::plans::PlanCommand),
+    /// `hide automation`: the operator's automations, the core's book
+    /// (`automation_cli`).
+    Automation(Box<hide_core::automations::Call>),
     /// `hide session fold-ask`: one of the caller's session's open questions,
     /// folded with its reason in the link record.
     FoldAsk {
@@ -1718,6 +1721,7 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::Plan(..)
+                | Self::Automation(..)
                 | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
@@ -1745,6 +1749,10 @@ impl ScopedRequest {
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
+            // Reading the automations is a view; a change starts agents
+            // later with no one present.
+            Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
+            Self::Automation(..) => Need::Act,
             Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
                 Need::Agent
             }
@@ -1870,6 +1878,8 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("automation") => crate::automation_cli::from_wire(&value["call"])
+                            .map(|call| ScopedRequest::Automation(Box::new(call))),
                         Some("fold_ask") => {
                             match (value["id"].as_str(), value["reason"].as_str()) {
                                 (Some(id), Some(reason))
@@ -1955,12 +1965,14 @@ async fn scoped_client_loop(
                         Some("access_list") => Some(ScopedRequest::AccessList),
                         _ => None,
                     };
-                    // A plan carries its whole node list, so a mission
-                    // command may use the frame's full size like a letter.
+                    // A plan carries its whole node list, and an automation
+                    // its task, so a mission, plan or automation command may
+                    // use the frame's full size like a letter.
                     if command.is_none()
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "automation"
                             && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
@@ -2133,6 +2145,9 @@ async fn scoped_client_loop(
                                             );
                                             (code, next)
                                         })?
+                                }
+                                ScopedRequest::Automation(call) => {
+                                    crate::automation_cli::answer(&core, *call)?
                                 }
                                 ScopedRequest::FoldAsk { id, reason } => {
                                     core.fold_ask_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
