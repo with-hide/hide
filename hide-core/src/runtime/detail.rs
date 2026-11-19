@@ -619,6 +619,9 @@ impl Runtime {
     /// The cards of one slot as tabs of `tab`'s tray, oldest first, the one
     /// the slot showed last in front; the tray is shown when the slot was. A
     /// card the checkout holds already stays on the desk it is on (D-20).
+    /// The move closes none of the desk's Views to make room (B34): the
+    /// cards the slot showed last take the room the desk has, and the rest,
+    /// which the operator can open again, are left out and said.
     fn place_slot_cards(
         &mut self,
         key: &WorkspaceKey,
@@ -627,13 +630,24 @@ impl Runtime {
         shown: bool,
     ) {
         let place = Place::Tray(tab.to_owned());
+        let mut cards: Vec<DetailItem> = cards
+            .into_iter()
+            .filter(|card| {
+                !self
+                    .view_displays(key)
+                    .any(|display| display.card.as_ref() == Some(card))
+            })
+            .collect();
+        let room = crate::view_layout::MAX_VIEW_DISPLAYS.saturating_sub(self.views_at(key, &place));
+        let dropped = cards.len().saturating_sub(room);
+        if dropped > 0 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "detail", "kind": "slot_cards.dropped",
+                "device": key.0, "tab": tab, "cards": dropped,
+            }));
+            cards.drain(..dropped);
+        }
         for card in cards {
-            let held = self
-                .view_displays(key)
-                .any(|display| display.card.as_ref() == Some(&card));
-            if held || !self.make_view_room(key, &place) {
-                continue;
-            }
             let _ = self.change_view_layout(key, &place, |layout, stamp| {
                 let display = layout.new_card_display(card);
                 let area = layout.active_area().id.clone();

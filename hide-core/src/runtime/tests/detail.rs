@@ -605,6 +605,74 @@ fn the_slots_an_older_build_kept_move_onto_their_panes_desks_once() {
     assert!(!runtime.move_slot_cards(), "nothing moves twice");
 }
 
+/// PRD lane-desk-pair-view B34: moving an older build's slot onto a desk
+/// that is nearly full closes none of the documents on it; the cards the
+/// slot showed last take the room left, and the older ones stay out.
+#[test]
+fn a_slot_moving_onto_a_full_desk_closes_no_document_and_keeps_its_newest_cards() {
+    let checkout_path = "/private/tmp/hide-desk-slot-full";
+    let (runtime, _checkout_id) = live_tab_order_runtime(checkout_path);
+    let mut runtime = super::workspace_view::with_new_views(runtime, "desk-slot-full");
+    let documents = crate::view_layout::MAX_VIEW_DISPLAYS - 2;
+    {
+        let desk = runtime
+            .workspace_views
+            .as_mut()
+            .unwrap()
+            .views
+            .entry(crate::node::TEST_NODE, checkout_path)
+            .tray_entry("w-order:t1");
+        let area = desk.layout.active_area.clone();
+        for index in 0..documents {
+            let document = desk.layout.new_display(
+                &format!("{checkout_path}/doc-{index}.md"),
+                crate::view_layout::DisplayKind::File,
+                None,
+                false,
+            );
+            desk.layout.append(&area, document).unwrap();
+        }
+    }
+    let cards = [
+        DetailItem::Cost {
+            workspace_id: "workspace:order".into(),
+        },
+        DetailItem::Worktrees {
+            workspace_id: "workspace:order".into(),
+        },
+        DetailItem::Mission {
+            mission: "mission-9".into(),
+        },
+    ];
+    runtime.snapshot.ui_state.moving_cards = vec![crate::model::MovingCards {
+        pane: Some("w-order:t1:p".into()),
+        cards: cards.to_vec(),
+        shown: true,
+    }];
+
+    let tabs = ["w-order:t1"];
+    runtime.ingest_session(Ok(tab_order_payload(
+        checkout_path,
+        &tabs,
+        &tabs,
+        "w-order:t1",
+    )));
+    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), cards[1..]);
+    let files = runtime
+        .workspace_views
+        .as_ref()
+        .and_then(|store| store.views.get(crate::node::TEST_NODE, checkout_path))
+        .and_then(|view| view.tray("w-order:t1"))
+        .map_or(0, |tray| {
+            tray.layout
+                .displays()
+                .filter(|display| display.card.is_none())
+                .count()
+        });
+    assert_eq!(files, documents, "every document stays open");
+    assert!(runtime.snapshot.ui_state.moving_cards.is_empty());
+}
+
 /// Operator decision 2026-11-09, PRD lane-desk-pair-view B6, B7: a record
 /// pressed where no agent is opens on the desk of the tab of the pane that
 /// runs its session, which comes forward; a session with no pane here opens

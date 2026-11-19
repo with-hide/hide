@@ -850,6 +850,14 @@ impl Runtime {
         }
     }
 
+    /// The Views at `place` of the Workspace `key`, with the opens still
+    /// being read into it, which `MAX_VIEW_DISPLAYS` caps.
+    pub(super) fn views_at(&self, key: &WorkspaceKey, place: &Place) -> usize {
+        self.view_layout_at(key, place)
+            .map_or(0, Layout::display_count)
+            + self.pending_view_placements(key, place)
+    }
+
     /// Room for one more View at `place` of the Workspace `key` (PRD
     /// lane-desk-pair-view D-23, B12; lane-files-checkout-views D-07). While
     /// the tree and the opens still being read into it fill
@@ -860,11 +868,7 @@ impl Runtime {
     /// leave, and when too few can, nothing does. Returns whether there is
     /// room.
     pub(super) fn make_view_room(&mut self, key: &WorkspaceKey, place: &Place) -> bool {
-        let shown = self
-            .view_layout_at(key, place)
-            .map_or(0, Layout::display_count)
-            + self.pending_view_placements(key, place);
-        let count = (shown + 1).saturating_sub(MAX_VIEW_DISPLAYS);
+        let count = (self.views_at(key, place) + 1).saturating_sub(MAX_VIEW_DISPLAYS);
         if count == 0 {
             return true;
         }
