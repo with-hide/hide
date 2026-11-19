@@ -552,8 +552,10 @@ impl Runtime {
             "component": "suggestions", "kind": "wake", "cause": payload.cause.as_str(),
         }));
         self.send_suggestions(Command::Wake);
-        // The app opening is also what may start a WSL distribution that is
-        // off (PRD wsl-device B3); a resume or an unlock is not.
+        // The app opening is also what lets an SSH device's sign-in ask
+        // the operator (PRD system-ssh-device-link B10); a resume or an
+        // unlock is not, and none of them starts a WSL distribution that
+        // is off (PRD device-connect-iroh B43).
         matches!(payload.cause, WakeCause::AppOpen) && self.wake_devices_for_app()
     }
 

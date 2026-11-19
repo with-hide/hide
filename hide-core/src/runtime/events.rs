@@ -3125,7 +3125,9 @@ impl Runtime {
             Event::RenameTab(payload) => self.rename_tab(payload),
             Event::ReorderTab(payload) => self.reorder_tab(payload),
             Event::FocusDevice(payload) => {
+                let opened = payload.device_id.clone();
                 self.bring_device_forward(payload.device_id);
+                self.wake_opened_device(&opened);
                 true
             }
             Event::ProjectCheckoutsFold(payload) => {
