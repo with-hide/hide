@@ -305,9 +305,20 @@ pub struct NodeView {
     pub attention: Option<AttentionView>,
     /// What Hide itself did to the node last (D-07, D-15).
     pub hide: Option<crate::missions::HideMark>,
-    /// Its review's or verification's failures in a row
-    /// (`MissionNode::review_fails`, with-hide/hide-private#552).
-    pub review_fails: u32,
+    /// Its review's or verification's rounds against the mission's limit
+    /// (`MissionNode::most_rounds`, `Strength::review_rounds`); none before
+    /// a checker answered.
+    pub review_rounds: Option<ReviewRounds>,
+    /// When it could have started: the mission's start or its last
+    /// dependency done, whichever came later (`ready_at`); none while it
+    /// cannot. Its 기다림 runs from here to `started_at_unix_ms`.
+    pub ready_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers first all stood met
+    /// (`MissionNode::own_met_at_unix_ms`): its 작업 runs from
+    /// `started_at_unix_ms` to here, its 리뷰·CI from here to
+    /// `finished_at_unix_ms` or now. None before then, and for a node of a
+    /// book from before it.
+    pub own_met_at_unix_ms: Option<u64>,
     /// When Hide last read a new head on one of its pull requests.
     pub pushed_at_unix_ms: Option<u64>,
     /// A push is asked of it (`MissionNode::asks_push`), the node whose
@@ -403,6 +414,32 @@ fn node_work(
             _ => None,
         },
     }
+}
+
+/// A node's review or verification rounds as its screens count them: the
+/// line, the distinct heads its checkers answered, and the rounds the
+/// mission's strength allows.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ReviewRounds {
+    pub line: String,
+    pub rounds: u32,
+    pub limit: u32,
+}
+
+/// When `node` could have started: the mission's start, or its last
+/// dependency's finish once every one is done, whichever came later; none
+/// before the mission started or while a dependency is not done, the rule
+/// `waiting_on` holds a planned node by.
+fn ready_at(mission: &Mission, node: &crate::missions::MissionNode) -> Option<u64> {
+    node.depends_on
+        .iter()
+        .try_fold(mission.started_at_unix_ms?, |at, key| {
+            let before = mission.nodes.iter().find(|other| other.key == *key)?;
+            (before.status == NodeStatus::Done)
+                .then_some(before.finished_at_unix_ms)
+                .flatten()
+                .map(|done| at.max(done))
+        })
 }
 
 /// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
@@ -1268,16 +1305,26 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 wake.node, mission.id
             );
             let (what, ask) = match (wake.warning, node, warning) {
-                (Some(WarningKind::ReviewFails), Some(node), _) => (
-                    format!(
-                        "failed its review or verification {} times in a row",
-                        node.review_fails()
-                    ),
-                    "judge whether its worker needs another approach or the node a fresh worker; the operator is not called about this warning, so ask with `hide mission decide --node` when what is left is theirs to decide",
-                ),
+                (Some(WarningKind::ReviewFails), Some(node), _) => {
+                    let limit = crate::mission_health::review_limit(mission);
+                    let line = node
+                        .review_past_limit(limit)
+                        .map_or("review", |line| line.key.as_str());
+                    (
+                        format!(
+                            "reached its review round limit: the {line} round {limit} of {limit} the mission's `{}` strength allows failed",
+                            mission.strength.unwrap_or_default().as_str()
+                        ),
+                        format!(
+                            "settle it yourself, without the operator: have its worker fix the serious findings in the node; file the ordinary and minor ones as follow-up issues, name them on the pull request, and skip the line with `hide mission skip {} {line} --reason \"<issue numbers>\"`",
+                            wake.node
+                        ),
+                    )
+                }
                 (Some(WarningKind::NoPush), _, Some(warning)) => (
                     format!("has worked {} minutes with no push", minutes(warning)),
-                    "judge whether its worker needs another approach or the node a fresh worker",
+                    "judge whether its worker needs another approach or the node a fresh worker"
+                        .to_owned(),
                 ),
                 (Some(WarningKind::Stopped), _, Some(warning)) => {
                     use crate::missions::StopCause;
@@ -1302,12 +1349,14 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                             _ => {
                                 "send it on with a letter saying what is left, or give the node a fresh worker"
                             }
-                        },
+                        }
+                        .to_owned(),
                     )
                 }
                 _ => (
                     "shows signs its worker is stuck".to_owned(),
-                    "judge whether its worker needs another approach or the node a fresh worker",
+                    "judge whether its worker needs another approach or the node a fresh worker"
+                        .to_owned(),
                 ),
             };
             // Only a warning the worker's own move takes off is raised again
@@ -4871,7 +4920,13 @@ impl Runtime {
                         }
                     }),
                     hide: node.hide.clone(),
-                    review_fails: node.review_fails(),
+                    review_rounds: node.most_rounds().map(|line| ReviewRounds {
+                        line: line.key.clone(),
+                        rounds: line.rounds,
+                        limit: crate::mission_health::review_limit(mission),
+                    }),
+                    ready_at_unix_ms: ready_at(mission, node),
+                    own_met_at_unix_ms: node.own_met_at_unix_ms,
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
                     asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),

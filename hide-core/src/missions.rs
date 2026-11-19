@@ -1301,6 +1301,14 @@ pub struct MissionNode {
     /// from before it has none, and `started_at_unix_ms` stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worked_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers (`CriterionKind::worker_answers`)
+    /// first all stood passed or skipped: where its own work ended and the
+    /// review, CI and fix rounds began, the split of the node's time
+    /// (`hide mission show`, the map's panel). Set once, on the record or
+    /// skip that met the last of them. A book from before it has none, and
+    /// a node whose lines were already met then never gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_met_at_unix_ms: Option<u64>,
     /// The warnings the node carries now, at most one of each kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<NodeWarning>,
@@ -1579,17 +1587,60 @@ impl MissionNode {
         }
     }
 
-    /// The failures in a row of the node's review or verification line, the
-    /// more of the two (`CriterionKind::checker_judges`); 0 with neither. The
-    /// name and the wire field `review_fails` predate the verification
-    /// counting too.
-    pub fn review_fails(&self) -> u32 {
+    /// Whether every line its worker answers stands passed or skipped, with
+    /// at least one such line.
+    pub(crate) fn own_lines_met(&self) -> bool {
+        let mut own = self
+            .criteria
+            .iter()
+            .filter(|line| line.kind.worker_answers())
+            .peekable();
+        own.peek().is_some()
+            && own.all(|line| {
+                matches!(
+                    line.state,
+                    crate::mission_criteria::CriterionState::Pass
+                        | crate::mission_criteria::CriterionState::Skipped
+                )
+            })
+    }
+
+    /// Stamps `own_met_at_unix_ms` at `now` when a record or skip met the
+    /// last of its worker's lines, which were not all met before it
+    /// (`was_met`): a node whose lines a book from before it already held
+    /// met gets no stamp, rather than one at a later record's time.
+    pub(crate) fn note_own_met(&mut self, was_met: bool, now: u64) {
+        if self.own_met_at_unix_ms.is_none() && !was_met && self.own_lines_met() {
+            self.own_met_at_unix_ms = Some(now);
+        }
+    }
+
+    /// The review or verification line whose rounds reached `limit` and
+    /// that has not passed or been skipped since (`Criterion::rounds`), the
+    /// one with more rounds first; none while every checker line is within
+    /// its rounds. The one rule the limit's warning stands on.
+    pub fn review_past_limit(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
         self.criteria
             .iter()
-            .filter(|line| line.kind.checker_judges())
-            .map(|line| line.fails_in_a_row)
-            .max()
-            .unwrap_or(0)
+            .filter(|line| {
+                line.kind.checker_judges()
+                    && line.rounds >= limit
+                    && !matches!(
+                        line.state,
+                        crate::mission_criteria::CriterionState::Pass
+                            | crate::mission_criteria::CriterionState::Skipped
+                    )
+            })
+            .max_by_key(|line| line.rounds)
+    }
+
+    /// The checker line with the most review rounds, for the screens that
+    /// count them against the limit; none before any checker answered.
+    pub fn most_rounds(&self) -> Option<&crate::mission_criteria::Criterion> {
+        self.criteria
+            .iter()
+            .filter(|line| line.kind.checker_judges() && line.rounds > 0)
+            .max_by_key(|line| line.rounds)
     }
 }
 
@@ -1983,8 +2034,10 @@ impl Default for ConductorSettings {
 }
 
 /// How strongly the Conductor has a mission's nodes checked: which nodes
-/// get a review or a run-it check, and how many review rounds. The Conductor
-/// follows it by `hide mission help`; the gate does not read it.
+/// get a review or a run-it check, which the Conductor follows by `hide
+/// mission help`, and how many review rounds a node gets
+/// (`Strength::review_rounds`), which Hide counts. A mission from before it
+/// counts as `Normal`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strength {
@@ -1992,6 +2045,31 @@ pub enum Strength {
     #[default]
     Normal,
     Thorough,
+}
+
+impl Strength {
+    /// Its stored spelling, which the Conductor's plan names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Normal => "normal",
+            Self::Thorough => "thorough",
+        }
+    }
+
+    /// The review rounds a node's review or verification gets at this
+    /// strength (`Criterion::rounds`): a review and its re-reviews. When the
+    /// round at the limit fails, its Conductor is told once to move the
+    /// ordinary and minor findings to follow-up issues and skip the line
+    /// (`mission_health::warn_acts`). The one place these numbers live;
+    /// `hide mission help` (Verification strength) says the same.
+    pub fn review_rounds(self) -> u32 {
+        match self {
+            Self::Fast => 1,
+            Self::Normal => 3,
+            Self::Thorough => 4,
+        }
+    }
 }
 
 fn default_clean_merged() -> bool {
@@ -3223,6 +3301,7 @@ pub(crate) fn apply_plan(
                 launched: None,
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
+                own_met_at_unix_ms: None,
                 warnings: Vec::new(),
                 hold: None,
                 operator_merge: None,

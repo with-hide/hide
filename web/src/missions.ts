@@ -613,6 +613,27 @@ export function nodeTimes(node: MissionNode, events: readonly MissionEvent[], en
 }
 
 /**
+ * Where a node's time went (mission-82), as `hide mission show` splits it:
+ * `work` from its start until its worker's lines first all stood met,
+ * `review` from then until it finished, and `wait` from when it could have
+ * started until it did; a span still running counts to `end`. A part the
+ * record cannot say (no start yet, a book from before the stamp) is null,
+ * and so is a wait under a minute. Null when no part can be said.
+ */
+export function nodeSpans(node: MissionNode, end: number): { work: number | null; review: number | null; wait: number | null } | null {
+  const started = node.started_at_unix_ms;
+  const finished = node.finished_at_unix_ms;
+  const met = node.own_met_at_unix_ms ?? null;
+  const span = (from: number, to: number) => Math.max(0, to - from);
+  const work = started == null ? null : met != null ? span(started, met) : finished == null ? span(started, end) : null;
+  const review = met == null ? null : span(met, finished ?? end);
+  const ready = node.ready_at_unix_ms ?? null;
+  const waited = ready == null ? null : started != null ? span(ready, started) : node.status === "planned" ? span(ready, end) : null;
+  const wait = waited != null && waited >= 60_000 ? waited : null;
+  return work == null && review == null && wait == null ? null : { work, review, wait };
+}
+
+/**
  * Where a defect a later node found points (B21): from the node that found it
  * to the node it opened again, while that line is still open or failing.
  */
@@ -1110,7 +1131,7 @@ export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"
   const words = (warning: MissionNodeWarning, form: "short" | "full") => {
     switch (warning.kind) {
       case "review_fails":
-        return t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 });
+        return t(`mission.warning.review_fails.${form}`, { rounds: node.review_rounds?.rounds ?? 0, limit: node.review_rounds?.limit ?? 0 });
       case "no_push":
         return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
       case "stopped":

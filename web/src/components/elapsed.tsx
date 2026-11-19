@@ -43,6 +43,13 @@ export function formatElapsed(language: InterfaceLanguage, elapsedMs: number): s
   return formatUnit(language, Math.floor(hours / 24), "day");
 }
 
+/** `40m`, `1.5h`, `9h` in English: whole minutes under an hour, else hours to one decimal, so a node's time split reads where its hours went. */
+export function formatSpan(language: InterfaceLanguage, elapsedMs: number): string {
+  const minutes = Math.floor(Math.max(0, elapsedMs) / 60_000);
+  if (minutes < 60) return formatUnit(language, minutes, "minute");
+  return formatUnit(language, Math.round(elapsedMs / 360_000) / 10, "hour");
+}
+
 /** The elapsed text for `since` on the shared clock; `null` when the core never measured it. */
 export function useElapsed(since: number | null | undefined): string | null {
   const language = requireInterfaceLanguage(useInterfaceTranslation().i18n.language);
