@@ -113,6 +113,27 @@ it("leaves the device as it was when the question is cancelled, and does not ask
   await unmount();
 });
 
+it("goes on without removing a device added for its switch when the held question is answered with Switch, and removes it on Cancel (B41, B69)", async () => {
+  const removed = (events: { kind: string; payload: Record<string, unknown> }[]) => events.filter((event) => event.kind === "remove_device").map((event) => event.payload.device_id);
+  const go = await mount(helper({ switch_first: true }));
+  await act(async () => { go.q('[data-device-switch="mini"]')?.click(); });
+  await go.answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
+  await act(async () => { go.q('[data-device-switch-held-go="true"]')?.click(); });
+  expect(go.q("[data-device-switch-held]")).toBeNull();
+  expect(switches(go.events).map((event) => event.payload.own_folder)).toEqual([undefined, true]);
+  expect(removed(go.events)).toEqual([]);
+  await go.unmount();
+
+  const left = await mount(helper({ switch_first: true }));
+  await act(async () => { left.q('[data-device-switch="mini"]')?.click(); });
+  await left.answer({ ok: true, switch: "held", by: "Office Mac", device_id: "mini" });
+  await act(async () => { (document.body.querySelector('[data-device-switch-held="mini"] [data-slot="alert-dialog-cancel"]') as HTMLElement).click(); });
+  expect(left.q("[data-device-switch-held]")).toBeNull();
+  expect(switches(left.events)).toHaveLength(1);
+  expect(removed(left.events)).toEqual(["mini"]);
+  await left.unmount();
+});
+
 it("says what would be put on a machine with no Hide of its own, and starts it only on Allow and install (B36, D-45)", async () => {
   const { events, q, answer, unmount } = await mount(helper());
   await act(async () => { q('[data-device-switch="mini"]')?.click(); });
@@ -166,6 +187,9 @@ it("asks for the switch of a device added over SSH once its helper is connected,
   // A helper device that was there before is never asked on its own.
   await show(helper({ ...ready, id: "older" }));
   expect(switches(events)).toHaveLength(1);
+  // Taken off and added again under the id it had: it is a new device, asked again.
+  await show(helper({ ...ready, id: "mini", switch_first: true }));
+  expect(switches(events).map((event) => event.payload.device)).toEqual(["mini", "mini"]);
   await unmount();
 });
 

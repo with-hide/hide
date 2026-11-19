@@ -49,7 +49,7 @@ pub struct DeviceSwitchSource {
     /// The device's id, which the one who asked may have named by its
     /// alias.
     pub device_id: String,
-    pub reach: SwitchReach,
+    pub via: SwitchVia,
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
     pub helper_root: String,
@@ -59,8 +59,8 @@ pub struct DeviceSwitchSource {
     pub projects: Vec<String>,
 }
 
-/// How hided reaches the machine a helper device is.
-pub enum SwitchReach {
+/// What hided reaches the machine a helper device is through.
+pub enum SwitchVia {
     /// Over the SSH alias the device is dialed by.
     Ssh {
         alias: String,
@@ -181,19 +181,19 @@ impl Runtime {
                     withdrawn: Arc::default(),
                 }) as Arc<dyn hide_node_link::device::SignIn>
             });
-        let reach = match (ssh_alias, registration.origin.wsl_distro()) {
-            (Some(alias), _) => SwitchReach::Ssh {
+        let via = match (ssh_alias, registration.origin.wsl_distro()) {
+            (Some(alias), _) => SwitchVia::Ssh {
                 alias: alias.to_owned(),
                 sign_in,
             },
-            (None, Some(distro)) => SwitchReach::Wsl {
+            (None, Some(distro)) => SwitchVia::Wsl {
                 distro: distro.to_owned(),
             },
             (None, None) => return Err("switch_unsupported"),
         };
         Ok(DeviceSwitchSource {
             device_id: device_id.to_owned(),
-            reach,
+            via,
             helper_root: registration
                 .host_consent
                 .as_ref()

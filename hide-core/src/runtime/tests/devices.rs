@@ -1510,7 +1510,7 @@ fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
 /// device does not take, and no other record of the release moves.
 #[test]
 fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
-    use crate::SwitchReach;
+    use crate::SwitchVia;
     use crate::model::LinkOrigin;
     use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
     let key = "cd".repeat(32);
@@ -1562,7 +1562,7 @@ fn a_released_builds_wsl_device_is_switched_and_keeps_its_id_and_name() {
                 .unwrap_or_else(|code| panic!("{tag}: {named} cannot be switched: {code}"));
             assert_eq!(source.device_id, helper.id, "{tag}: {named}");
             assert!(
-                matches!(&source.reach, SwitchReach::Wsl { distro } if distro == "Ubuntu"),
+                matches!(&source.via, SwitchVia::Wsl { distro } if distro == "Ubuntu"),
                 "{tag}: {named} is not reached through wsl.exe"
             );
             assert_eq!(source.projects, ["/home/me/app"], "{tag}: {named}");

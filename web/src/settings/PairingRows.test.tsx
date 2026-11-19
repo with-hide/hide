@@ -313,3 +313,15 @@ it("says under a machine's row what the Hide started there over SSH still needs,
   expect(q('[data-peer-row="laptop"] [data-device-needs]')).toBeNull();
   await unmount();
 });
+
+it("keeps under a machine's row how many terminals its switch could not take over (B36)", async () => {
+  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" })];
+  const devices: Partial<Device>[] = [
+    { id: "build-box", kind: "remote", not_carried: 2 },
+    { id: "laptop", kind: "remote" },
+  ];
+  const { q, unmount } = await mount(idle, peers, [], devices);
+  expect(q('[data-peer-row="build-box"] [data-device-not-carried="build-box:2"]')?.textContent).toBe("2 terminals could not be taken over · AI conversations can be resumed");
+  expect(q('[data-peer-row="laptop"] [data-device-not-carried]')).toBeNull();
+  await unmount();
+});
