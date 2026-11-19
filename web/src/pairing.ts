@@ -47,10 +47,13 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh";
+
+/** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
+export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
 
 /** The daemon's answer to one `pairing_*` event, for the window that sent it. */
-export type PairingResult = { verb: string; ok: boolean; reason?: string | null; request_id?: string | null; link?: string };
+export type PairingResult = { verb: string; ok: boolean; reason?: string | null; request_id?: string | null; link?: string; alias?: string; looked?: SshLook };
 
 export type PairRequest = { key: string; state: "waiting" | "declined" | "unanswered" | "unreachable" };
 
@@ -158,6 +161,25 @@ export function joinFailureKey(failure: JoinFailure | null): MessageKey {
   }
 }
 
+/**
+ * The one line a chosen SSH host shows once its own Hide answered (B7):
+ * connecting installs nothing there, or what has to happen on that machine
+ * before the two can connect as Hides. None for a machine with no Hide of
+ * its own or one ssh did not reach without asking: adding it is unchanged.
+ */
+export function sshLookLine(look: SshLook | null | undefined): { key: MessageKey; tone: "ok" | "warn" } | null {
+  switch (look?.state) {
+    case "ready":
+      return { key: "pairing.ssh.ready", tone: "ok" };
+    case "update_there":
+      return { key: "pairing.ssh.updateThere", tone: "warn" };
+    case "not_running":
+      return { key: look.system === "macos" ? "pairing.ssh.signInMac" : "pairing.ssh.notRunning", tone: "warn" };
+    default:
+      return null;
+  }
+}
+
 /** Why the daemon refused what a window asked, for the refusals a person can act on; the rest stay in the log. */
 export function refusalKey(reason: string | null | undefined): MessageKey | null {
   switch (reason) {
@@ -173,6 +195,16 @@ export function refusalKey(reason: string | null | undefined): MessageKey | null
       return "pairing.refused.unavailable";
     case "device_limit":
       return "pairing.failed.full";
+    case "device_own":
+      return "pairing.refused.own";
+    case "ssh_hide_absent":
+      return "pairing.ssh.absent";
+    case "ssh_update_there":
+      return "pairing.ssh.updateThere";
+    case "ssh_hide_not_running":
+      return "pairing.ssh.notRunning";
+    case "ssh_not_reached":
+      return "pairing.ssh.notReached";
     default:
       return null;
   }

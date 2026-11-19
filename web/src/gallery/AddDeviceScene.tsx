@@ -115,7 +115,7 @@ function Body({ actions }: { actions: ReturnType<typeof createActions> }) {
           <DialogTitle>{t("devices.addTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
-          <AddDevice actions={actions} devices={[]} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" />
+          <AddDevice actions={actions} devices={[]} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={() => {}} />
         </DialogBody>
       </DialogContent>
     </Dialog>
