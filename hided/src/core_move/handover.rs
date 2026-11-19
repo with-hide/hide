@@ -26,9 +26,10 @@ const LOCK_WAIT: Duration = Duration::from_secs(5);
 /// carries its move.
 pub const PENDING_LEASE: Duration = Duration::from_secs(60);
 /// How long a place's lease runs: the start that follows has
-/// [`STARTED_WITHIN`](super::starter::STARTED_WITHIN), and the core it
+/// [`STARTED_WITHIN`](crate::core_install::starter::STARTED_WITHIN), and the core it
 /// started still waits [`PENDING_LEASE`] whatever the start took.
-pub const PLACED_LEASE: Duration = super::starter::STARTED_WITHIN.saturating_add(PENDING_LEASE);
+pub const PLACED_LEASE: Duration =
+    crate::core_install::starter::STARTED_WITHIN.saturating_add(PENDING_LEASE);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Handover {

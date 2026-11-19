@@ -85,6 +85,9 @@ impl Runtime {
             })
             .collect();
         let launches = Arc::new(launches);
+        // The first open on the connection a switch gave the device closes
+        // what that connection does not hold (`device_switch`).
+        let switched = self.switch_open_pending(device_id);
         let device = device_id.to_owned();
         // The device's engine save is looked at before its engine opens, by
         // its node (B18); a device whose machine the core cannot name is
@@ -119,8 +122,11 @@ impl Runtime {
                             &device,
                             Arc::clone(&link),
                             &state_dir,
-                            home,
-                            windows,
+                            crate::engine::own::DeviceLink {
+                                home,
+                                windows,
+                                switched,
+                            },
                             definitions,
                             launches,
                         )

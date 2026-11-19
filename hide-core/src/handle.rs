@@ -751,6 +751,21 @@ impl Core {
         lock_recover(&self.runtime).prepare_delivery(device, caller, expected, hint, command)
     }
 
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Runtime::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        if !check_owner_thread(self, "delivery.prepare_kept") {
+            return Err("delivery_unavailable".into());
+        }
+        lock_recover(&self.runtime).prepare_kept_letter(device, pane, terminal, command)
+    }
+
     /// One call hided makes for an external tool (PRD
     /// hide-external-control): its request, status, leave, its key's proof
     /// or a command's check, under one short lock; the list is saved by its
@@ -1282,6 +1297,19 @@ impl Core {
         lock_recover(&self.runtime)
             .inbound_refusal(node)
             .map(str::to_owned)
+    }
+
+    /// What `device`'s switch to its machine's own connection starts from
+    /// (PRD device-connect-iroh D-45, D-49), or the code of why it cannot
+    /// be switched.
+    pub fn device_switch_source(
+        &self,
+        device: &str,
+    ) -> Result<crate::DeviceSwitchSource, &'static str> {
+        if !check_owner_thread(self, "device_switch_source") {
+            return Err("hide_unavailable");
+        }
+        lock_recover(&self.runtime).device_switch_source(device)
     }
 
     /// What a move of the core to `device` is made from (PRD

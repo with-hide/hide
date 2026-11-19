@@ -128,6 +128,18 @@ impl PreparedHuman {
     }
 }
 
+/// When a command's sender was established.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Proven {
+    /// By the caller's own credential as the command was asked: it is
+    /// checked again just before the command applies.
+    Now,
+    /// When the letter was written, by the node that kept it while this
+    /// core was away (`Runtime::prepare_kept_letter`): nothing of the
+    /// caller is checked again, since its pane may be gone by now.
+    WhenWritten,
+}
+
 pub(crate) struct Authority {
     pub caller: String,
     pub context: Context,
@@ -137,6 +149,7 @@ pub(crate) struct Authority {
     /// store stays the one place that decides who reads a letter
     /// (`mailbox::show`) and knows nothing of why.
     pub also_reads: Vec<mailbox::Exchange>,
+    pub proven: Proven,
 }
 
 impl Prepared {
@@ -1378,7 +1391,13 @@ fn current(
                 .lock()
                 .map_err(|_| "delivery_unavailable".to_owned())
                 .and_then(|guard| {
-                    if actor.code_owned() {
+                    if authority.proven == Proven::WhenWritten {
+                        // Only a kept letter is proven so.
+                        if !matches!(command, Command::Send { .. }) {
+                            return Err("caller_identity_changed".into());
+                        }
+                        actor.require_native_identity()?;
+                    } else if actor.code_owned() {
                         if !guard.code_owned_authority_current(&authority.caller, actor) {
                             return Err("caller_identity_changed".into());
                         }

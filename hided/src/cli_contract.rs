@@ -1004,6 +1004,45 @@ pub const COMMANDS: &[Spec] = &[
             "device_wait_timeout",
         ],
     },
+    // Switches an SSH device to the connection of the Hide on its machine:
+    // the two are paired over the device's SSH login, and the device keeps
+    // its id, its name and its running terminals. `held` names the machine
+    // that switched it first; `--own-folder` goes on without its terminals.
+    // `install_needed` is a machine that runs no Hide of its own, where
+    // `--install` starts one from this machine's helper build.
+    Spec {
+        words: &["device", "switch"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            switch("--install"),
+            switch("--own-folder"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_switched"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "switch_unsupported",
+            "switch_running",
+            "switch_not_connected",
+            "ssh_core_not_started",
+            "ssh_not_reached",
+            "ssh_busy",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "device_already_connected",
+        ],
+    },
     // What a machine about to pair over SSH runs on its target first: it
     // changes nothing there and answers whether a Hide of that account's
     // own runs. A refusal carries the same `look`, with `core` false on an
@@ -1034,6 +1073,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--device", Key),
             required("--name", Text),
             switch("--wsl"),
+            optional("--helper", Text),
         ],
         rest: None,
         answers: &["device_accepted"],
@@ -1043,6 +1083,21 @@ pub const COMMANDS: &[Spec] = &[
             "device_already_connected",
             "device_limit",
         ],
+    },
+    // What a machine that switched its device here runs once this machine
+    // admitted it: each `--project` is a folder of the account that machine
+    // had registered on its device, which this machine's own Hide then
+    // lists as a project too. It answers how many it lists; a folder that
+    // is gone, outside the account's home or refused is left out.
+    Spec {
+        words: &["device", "projects-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &["--project"],
+        options: &[repeated("--project", Text, hide_core::SWITCHED_PROJECTS)],
+        rest: None,
+        answers: &["device_projects_listed"],
+        refusals: &[],
     },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
@@ -1077,7 +1132,12 @@ pub const COMMANDS: &[Spec] = &[
         ],
         rest: None,
         answers: &["pane_read"],
-        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "pane_unavailable",
+            "guest_pane_read",
+        ],
     },
     Spec {
         words: &["pane", "send"],
@@ -1126,6 +1186,7 @@ pub const COMMANDS: &[Spec] = &[
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_keys",
         ],
     },
     Spec {
@@ -1252,13 +1313,15 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--force", &["--now"]),
         ],
         rest: None,
-        answers: &["letter"],
+        answers: &["letter", "queued"],
         refusals: &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
             "intent_conflict",
             "no_parent",
+            "outbox_full",
+            "outbox_unavailable",
             "participant_registering",
         ],
     },
@@ -2027,6 +2090,19 @@ fn body() -> Value {
                 ))
                 .collect::<Map<String, Value>>(),
         },
+        // A pane of another Hide's work on this machine, while that Hide
+        // is not connected: a letter is kept and answered `queued`, and any
+        // other command above answers `owner_offline` (PRD
+        // device-connect-iroh B12, B13).
+        "away": {
+            "refusals": crate::guest_node::away::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::guest_node::away::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
+        },
         "answers": answers(),
     })
 }
@@ -2045,6 +2121,19 @@ fn answers() -> Value {
         json!({"type": "object", "properties": properties, "required": fields})
     };
     let map = answers.as_object_mut().expect("the answers are an object");
+    // A letter its sender's node keeps until the Hide it belongs to is
+    // back (`away`).
+    map.insert(
+        "queued".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "queued": {"const": true},
+                "intent": {"type": "string"},
+            },
+            "required": ["queued", "intent"],
+        }),
+    );
     map.insert("mission".into(), shape(&["mission"]));
     map.insert("mission_created".into(), shape(&["mission", "settings"]));
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
@@ -2097,17 +2186,23 @@ fn answers() -> Value {
         "access_list".into(),
         shape(&["machine", "limit", "pending", "connections"]),
     );
-    // The SSH devices and, under `peers`, the Hides this machine is paired
-    // with: who opens whom, and whether the two are connected.
-    map.insert("device_list".into(), shape(&["devices", "peers"]));
+    // The SSH devices; under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected; and under
+    // `guest_panes`, the panes other machines' work runs in on this one.
+    map.insert(
+        "device_list".into(),
+        shape(&["devices", "peers", "guest_panes"]),
+    );
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
     map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));
     map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
     map.insert("device_allowed".into(), shape(&["answered"]));
     map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_switched".into(), shape(&["device_id", "switch"]));
     map.insert("device_accepted".into(), shape(&["accepted"]));
     map.insert("device_looked".into(), shape(&["look"]));
+    map.insert("device_projects_listed".into(), shape(&["projects"]));
     map.insert(
         "device_paired".into(),
         shape(&["device_id", "name", "paired"]),
@@ -2414,6 +2509,13 @@ mod tests {
                 .take_while(|argument| argument["required"] != false)
             {
                 base.push(exported_sample(&argument["value"]));
+            }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
             }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();
