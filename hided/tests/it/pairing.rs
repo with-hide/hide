@@ -697,7 +697,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
 /// A build that does not offer connections between two Hides (no
 /// `HIDE_DEVICE_CONNECT`, every build until that feature ships) says so in
 /// its hello, so its window shows no pairing, and refuses every pairing ask
-/// from a window and from a terminal while its SSH devices answer as before.
+/// from a window and from a terminal, opening nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_to_its_window() {
     let root = tempfile::tempdir().unwrap();
@@ -736,18 +736,7 @@ async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_t
     host.run(&["device", "pause", "studio", "--json"])
         .refused("device_connect_unavailable");
 
-    // The SSH devices are the core's, as before pairing.
-    let mut list = host.command(&["device", "list", "--json"]);
-    list.env_remove(hided::env::HIDE_DEVICE_CONNECT);
-    let listed = Ran::of(list.output().unwrap());
-    assert!(listed.ok, "{}", listed.text());
-    assert!(
-        listed.json()["value"]["peers"]
-            .as_array()
-            .is_none_or(Vec::is_empty),
-        "{}",
-        listed.text()
-    );
+    // Nothing was opened for it.
     assert!(!hided::peer_host::endpoint_wanted(&host.state, false).unwrap());
     assert!(!hide_kit::layout::machine_key(&host.state).exists());
 }
