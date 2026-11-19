@@ -136,3 +136,41 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     engine.stop();
   }
 });
+
+test("a crowded desk reads its front tab whole and shrinks the others, and the rail's desk button leaves the keyboard on that tab, whose Escape closes the lane", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const engine = await startFixture({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const names = ["release-checklist-for-the-desk.md", "pair-view-notes-and-questions.md", "card-tabs-on-a-desk-draft.md", "rail-button-and-path-line.md"];
+    for (const name of names) fs.writeFileSync(path.join(engine.root, "fixture", name), `# ${name}\n`);
+    daemon = await startHided(engine, "lane-desk-crowded");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await showTool(page, "explorer");
+    // A double click keeps each open, so the four stay as four tabs.
+    for (const [index, name] of names.entries()) {
+      await page.locator(`[data-explorer-row$="/${name}"]`).dblclick();
+      await expect(deskTabs(page)).toHaveCount(index + 1);
+    }
+    // D-30: the front tab's name is whole; a tab behind it is cut or down to its marks, its tooltip naming it whole.
+    const cut = (tab: ReturnType<typeof front>) => tab.locator("[data-tab-title]").evaluate((title: HTMLElement) => title.offsetParent === null || title.scrollWidth > title.clientWidth);
+    await expect(front(page)).toContainText(names[3]!);
+    expect(await cut(front(page))).toBe(false);
+    expect(await cut(deskTabs(page).first())).toBe(true);
+    await deskTabs(page).first().hover();
+    await expect(page.getByRole("tooltip")).toContainText(names[0]!);
+    await screenshot(page, "lane-desk-crowded");
+
+    // B30: ⌘E closes the lane; the rail's desk button brings the desk back with the keyboard on its front tab, and Escape there closes it.
+    await page.keyboard.press("Meta+KeyE");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+    await deskButton(page).click();
+    await expect(front(page)).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});

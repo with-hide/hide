@@ -12,7 +12,7 @@ import { IDLE, movePointer, pressTab, relayout, releasePointer, type DragSession
 import { focusFromKeyboard, installFocusModality } from "./areaFocus";
 import { RATIO_MAX, RATIO_MIN, RESIZE_STEP, areasOf, topRightArea, dropTarget, findArea, locateDisplay, ratioAtOffset, revealedScroll, sameTarget, singleAreaGeometry, steppedRatio, tabStripFit, areaGeometry,
   type Area, type AreaItem, type AreaLayout, type AreaNode, type AreaSplit, type AreaWords,
-  type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot } from "./areaLayout";
+  type DividerBox, type DropTarget, type Geometry, type LayoutSizes, type Point, type Rect, type TabFit, type TabSlot, type TabStripSizes } from "./areaLayout";
 
 /**
  * `fit` says how the tab draws its contents in its slot (`tabStripFit`): a
@@ -50,6 +50,26 @@ const TAB_SLOT = {
   selected: "flex shrink-0 w-(--tab-selected-width) has-data-renaming:w-(--size-tab-preferred)",
   others: "flex shrink-0 w-(--tab-other-width) has-data-renaming:w-(--size-tab-preferred)",
 };
+
+/**
+ * The width the selected tab's whole name takes, for a tab that marks its
+ * title (`data-tab-title`): its drawn chrome plus the title's full text, read
+ * from the title while it shows and, while its fit hides it, from the text in
+ * the title's font beside the tab's marks and close control.
+ */
+function selectedTabNeed(list: HTMLElement, sizes: TabStripSizes): number | undefined {
+  const tab = list.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  const title = tab?.querySelector<HTMLElement>("[data-tab-title]");
+  if (!tab || !title) return undefined;
+  if (title.offsetParent !== null) return Math.ceil(tab.offsetWidth - title.clientWidth + title.scrollWidth);
+  const context = measuringCanvas()?.getContext("2d");
+  if (!context) return undefined;
+  context.font = getComputedStyle(title).font;
+  return Math.ceil(sizes.icon + sizes.control + context.measureText(title.textContent ?? "").width);
+}
+
+let canvas: HTMLCanvasElement | null = null;
+const measuringCanvas = () => (canvas ??= typeof document === "undefined" ? null : document.createElement("canvas"));
 
 export type DrawnArea<I extends AreaItem> = { layout: AreaLayout<I>; geometry: Geometry; sizes: LayoutSizes };
 export type AreaAdapter<I extends AreaItem> = {
@@ -483,13 +503,15 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   const [fits, setFits] = useState<{ selected: TabFit; others: TabFit }>({ selected: "titled", others: "titled" });
   const tabCount = area.displays.length;
   const hasSelected = area.displays.some((display) => display.id === selectedId);
+  const selected = area.displays.find((display) => display.id === selectedId);
+  const selectedLabel = selected ? tree.adapter.label(selected) : "";
   useLayoutEffect(() => {
     const node = zone.current;
     const list = strip.current;
     if (!node || !list) return;
     const sizes = readTabStripSizes();
     // Fractional bounds, rounded down: the tabs fill the bar to its end and never overflow it by a sliver.
-    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes);
+    const measure = () => tabStripFit(Math.floor(node.getBoundingClientRect().width - (newTab.current?.getBoundingClientRect().width ?? 0) - (newTabMenu.current?.getBoundingClientRect().width ?? 0)), tabCount, hasSelected, sizes, selectedTabNeed(list, sizes));
     // The widths go straight onto the tab list; only a change of fit renders
     // the bar again, so a resize costs a style write, not a render per pixel.
     // Both land before paint, so the frame never shows tabs overflowing.
@@ -502,7 +524,7 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     const observer = new ResizeObserver(() => apply(measure(), flushSync));
     observer.observe(node);
     return () => observer.disconnect();
-  }, [tabCount, hasSelected]);
+  }, [tabCount, hasSelected, selectedId, selectedLabel, fits.selected]);
   // The shown view's tab stays in sight however many tabs the area holds
   // (B20, B21): the strip scrolls itself, and nothing around it, whenever
   // the shown view changes, the tabs change density or the strip is resized.

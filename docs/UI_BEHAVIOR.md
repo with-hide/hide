@@ -111,7 +111,7 @@ A second short rule between Memory and Explorer marks where the Project's tools 
 A rail button is drawn pressed, with a primary bar at the rail's edge, while its column shows it: a tool icon while the tool column shows that tool, the documents button while the viewing column draws the desk.
 Pressing a tool icon opens the tool column on that tool, or swaps the tool it shows; pressing the pressed one closes the tool column, and the viewing column stays (B14).
 A closed lane that a tool icon, an open, a reveal or a card opens shows that one column alone, the other closed, whatever the lane held when ⌘E closed it; only ⌘E brings back both columns (operator decision 2026-10-23, replacing the mockup's reopen of the other column).
-Pressing the documents button brings the desk to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same desk back (B11).
+Pressing the documents button brings the desk to the front of the viewing column with the keyboard on its active area's front tab, so a click or Tab enters the document and Escape closes the lane; pressed while it is in front, it folds the viewing column, and pressing it again brings the same desk back (B11, B30).
 Its number counts the tabs on the front Agent tab's desk, and there is no 보기 button (PRD lane-desk-pair-view D-29, B14).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
 The Project icon carries a warning-coloured number counting its project's 흘린 것, no number at 0, its hint ending in it, such as `흘린 것 2` (PRD project-panel-results, the operator's choice of 2026-10-31).
@@ -375,7 +375,7 @@ A View's address and path controls retain that View as the target of Close and N
 The content stays readable and unfiltered; focus adds no content blur, opacity reduction, capture loop or geometry change.
 The same rule applies at every lane width, in the narrow single-area presentation and in both themes.
 A View area's tabs use the same continuous shrinking strip as Agent tabs, with the same preferred, title-minimum and icon-identity widths.
-The selected view keeps its title and close control longest; other views first give up their close controls, then their titles, and the selected view gives up its title only when no more width can be taken from the others.
+The selected view reads its whole name, wider than the preferred width when the name needs it, and the other views share what is left: they first give up their close controls, then their titles, each naming itself whole in its tooltip; the selected view gives up width only when the others are down to their marks (PRD lane-desk-pair-view D-30).
 At marks density a file keeps its existing file-type mark, a diff its comparison mark and a page its globe; the full identity remains in the tooltip and accessible name.
 A saving spinner or unsaved-draft dot stays visible over a file's mark at that density, and the tooltip names saving, unsaved and tab-only draft state.
 Only when even the minimum marks and selected close control outrun the area's width does its own strip scroll, with the selected view kept in sight on selection and resize.
