@@ -7,14 +7,14 @@ import { setAgentState } from "./fixture-agents";
 import { claudeProjects, continueFixtureTranscript, labelMarker, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, reseedWork, seedFirstWork, startWork, workFixture, workRepositoryReady } from "./session-work-fixture";
-import { enterWorkspace, projectOpener, showProjectRow, taskRow } from "./wire";
+import { closeFrontCard, enterWorkspace, projectOpener, showProjectRow, taskRow } from "./wire";
 import { chord } from "./chords";
 import { openOverview } from "./overview-entry";
 
 test.describe.configure({ timeout: 180_000 });
 
-/** A session's record in the lane's 보기 slot (PRD sidebar-task-lens B15). */
-const RECORD = 'aside[data-lane="detail"][data-detail="record"] [data-session-record]';
+/** A session's record, a tab on a desk (PRD sidebar-task-lens B15; lane-desk-pair-view D-13). */
+const RECORD = '[data-card="record"] [data-session-record]';
 
 async function connectRepository(page: import("@playwright/test").Page, repository: string) {
   // The project's gear is on its row in the sidebar's 프로젝트 tree.
@@ -114,10 +114,10 @@ test("@platform a native session's record groups its requests by goal flow and k
     const detail = record.locator(`[data-record-child-detail="${child}"]`);
     await expect(flows).toHaveCount(2);
     await expect(detail.locator("[data-record-flow-name]")).toHaveText([/자식 세션 결과물 연결 검증/]);
-    // Explicit Open record navigates, and the slot's back action returns.
+    // Explicit Open record opens the child's record as a tab, and closing it returns to the parent's.
     await detail.getByRole("button", { name: "Open record", exact: false }).click();
     await expect(record.locator("[data-record-flow-name]")).toHaveText([/자식 세션 결과물 연결 검증/]);
-    await page.locator("[data-detail-back]").click();
+    await closeFrontCard(page);
     await expect(flows).toHaveCount(2);
     // Problems and follow-ups leave the record for the Overview backlog, which
     // never counts an ask, and 무시 there closes the line (D-13, B31).

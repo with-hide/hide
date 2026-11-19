@@ -124,18 +124,10 @@ export async function showDocuments(page: Page): Promise<void> {
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
 }
 
-/** The pin's state as the rail's pin button shows it: `off`, `on` or `narrow` (PRD lane-two-columns B15, B19). */
-export async function pinState(page: Page): Promise<string | null> {
-  return page.locator("[data-lane-pin]").getAttribute("data-lane-pin");
-}
-
-/** Pins or unpins the lane with the pin beside `✕` of its edge column, so the lane must be up (B15; PRD session-docs-and-assistant B33). */
-export async function setLanePinned(page: Page, pinned: boolean): Promise<void> {
-  const button = page.locator("[data-lane-pin]");
-  const on = (await button.getAttribute("data-lane-pin")) !== "off";
-  if (on !== pinned) await button.click();
-  // A pinned lane docks, or stays over the agents where docking has no room (B19).
-  await expect(button).toHaveAttribute("data-lane-pin", pinned ? /^(on|narrow)$/ : /^off$/);
+/** Closes the card tab in front with its tab's ✕, which brings the desk's tab looked at before it forward (PRD lane-desk-pair-view D-13). */
+export async function closeFrontCard(page: Page): Promise<void> {
+  const tab = page.locator('[role="tab"][data-tab-kind="card"][aria-selected="true"]').first();
+  await tab.locator("button").click();
 }
 
 /** Turns the sidebar to its 태스크 list (PRD sidebar-task-lens B1) and waits for the core's task scope. */

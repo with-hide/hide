@@ -33,7 +33,7 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     await withControl(daemon, (control) => closePane(control, source));
     // The record was the closed pane's slot, so it leaves the screen with the pane.
     await expect(record).toHaveCount(0, { timeout: 30_000 });
-    // ⌘K finds the session by its title, and its record opens again in the slot in front.
+    // ⌘K finds the session by its title, and its record opens again as a tab on the desk in front.
     await page.keyboard.press(chord("search"));
     const search = page.locator('[data-palette="Search"]');
     await expect(search.locator("[data-palette-input]")).toBeFocused();

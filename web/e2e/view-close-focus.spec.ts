@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { chooseExpand, enterWorkspace, setLanePinned, showExplorer } from "./wire";
+import { chooseExpand, enterWorkspace, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test("View close follows MRU, preserves background input and hands collapsed areas their keyboard", async ({ page }) => {
@@ -16,7 +16,6 @@ test("View close follows MRU, preserves background input and hands collapsed are
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await setLanePinned(page, true);
     for (const name of ["a.txt", "b.txt", "c.txt"]) await page.locator(`[data-explorer-row$="/${name}"]`).dblclick();
     const tabs = page.locator('[data-view-tab-bar] [role="tab"]');
     const tab = (name: string) => tabs.filter({ hasText: name });

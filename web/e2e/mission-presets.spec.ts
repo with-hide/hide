@@ -60,7 +60,7 @@ test("general nodes end in their preset's icon and name, a deploy node's start g
     await mission(conductor, ["create", "--title", "1.2.8 출시"]);
     await mission(conductor, ["plan", "--json", JSON.stringify(PLAN)]);
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await expect(map.locator("[data-mission-node]")).toHaveCount(5);
     const foot = (key: string) => map.locator(`[data-mission-node="${key}"] [data-node-foot] [data-node-line="result"]`);
     // Planned, each general node's foot is its preset's icon and name, grey (B1, B5).
