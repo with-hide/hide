@@ -6,3 +6,5 @@ hide-agent-hooks/tests/fixtures/hook-bytes/opencode-plugin.js text eol=lf
 hide-agent-hooks/src/pi_extension/extension.js text eol=lf
 hide-agent-hooks/tests/fixtures/hook-bytes/pi-extension.ts text eol=lf
 hide-agent-hooks/tests/fixtures/hook-bytes/omp-extension.ts text eol=lf
+# Hide's patches to libghostty-vt are pinned by sha256 in hide-vt/build-inputs.json.
+hide-vt/patches/*.patch text eol=lf
