@@ -1373,6 +1373,7 @@ A Conductor under a parent, a fork, and one a tool or Hide started send none.
 A question for a person (내 차례) reaches people only: no agent of another machine answers it.
 
 `hide-core/src/runtime/tests/core_letters.rs` runs two cores against each other for each of these, and `hided/src/peer_core.rs` the stream between two endpoints.
+`hided/tests/it/pairing/core_letters.rs` is the journey: two daemons of a shipped copy of the build pair by a link, and a stand-in agent in a pane of each runs the shipped `hide` through a letter and its reply, the reads, both refusals, a start with no parent and the closed mission's report.
 
 ## Missions
 
