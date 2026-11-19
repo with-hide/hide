@@ -100,9 +100,10 @@ fn now_unix_ms() -> u64 {
         .map_or(0, |since| since.as_millis() as u64)
 }
 
-/// Whether `state_dir` records a pairing in either direction: a grant this
-/// machine gives that has not run out, or a host it is a guest of.
-pub fn paired(state_dir: &Path) -> io::Result<bool> {
+/// Whether this machine's endpoint is wanted at the daemon's start:
+/// `state_dir` records a pairing in either direction, a grant this machine
+/// gives that has not run out or a host it is a guest of.
+pub fn endpoint_wanted(state_dir: &Path) -> io::Result<bool> {
     let mut grants = Grants::open(layout::peer_grants(state_dir))?;
     grants.expire(now_unix_ms()).map_err(io::Error::other)?;
     let known = Known::open(layout::peer_known(state_dir))?;
@@ -166,10 +167,10 @@ impl PeerHost {
     /// start. `None` when it is paired with nothing.
     pub async fn start(self: &Arc<Self>) -> io::Result<Option<HostPeers>> {
         let state_dir = self.settings.state_dir.clone();
-        let is_paired = tokio::task::spawn_blocking(move || paired(&state_dir))
+        let wanted = tokio::task::spawn_blocking(move || endpoint_wanted(&state_dir))
             .await
             .map_err(io::Error::other)??;
-        match is_paired {
+        match wanted {
             true => self.open().await.map(Some),
             false => Ok(None),
         }
