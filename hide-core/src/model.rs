@@ -900,6 +900,12 @@ pub struct NavigatorSnapshot {
     /// They are not this core's panes: its engine runs none of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guest_panes: Vec<crate::guest_panes::GuestPanes>,
+    /// What each connected machine this one opens told of its own work that
+    /// waits on a person or is done, as hided last handed it on (PRD
+    /// device-connect-iroh D-50). Another core's rows: listed with the
+    /// machine's mark and never judged for a notification here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_work: Vec<crate::peer_work::PeerWork>,
     pub workspaces: Vec<WorkspaceSnapshot>,
     /// Project rows the core grouped at the bottom of each device's Projects
     /// list. `workspaces` remains the one authoritative row collection so
@@ -8337,6 +8343,7 @@ impl Snapshot {
                 )],
                 peers: Vec::new(),
                 guest_panes: Vec::new(),
+                peer_work: Vec::new(),
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
                 agents: Vec::new(),

@@ -28,6 +28,104 @@ fn active(machine: &PeerMachine) -> bool {
 }
 
 impl Runtime {
+    /// Takes what the machine under `key` told of its own work, or forgets
+    /// it when it tells no more (D-50). Only a connected machine this one
+    /// may open is listed: what another sends is refused and recorded.
+    pub(super) fn take_peer_work(
+        &mut self,
+        key: &str,
+        work: Option<crate::peer_work::Told>,
+    ) -> bool {
+        let held = self
+            .snapshot
+            .navigator
+            .peer_work
+            .iter()
+            .position(|peer| peer.key == key);
+        let Some(told) = work else {
+            return held
+                .map(|index| self.snapshot.navigator.peer_work.remove(index))
+                .is_some();
+        };
+        let Some(device_id) = self
+            .snapshot
+            .navigator
+            .peers
+            .iter()
+            .find(|machine| machine.key == key && active(machine) && machine.connected)
+            .map(|machine| machine.device_id.clone())
+        else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "peer_work",
+                "kind": "peer_work.refused",
+                "target": key,
+                "reason": "not a connected machine this one opens",
+            }));
+            return false;
+        };
+        let work = crate::peer_work::PeerWork {
+            device_id,
+            key: key.to_owned(),
+            told,
+        };
+        match held {
+            Some(index) if self.snapshot.navigator.peer_work[index] == work => false,
+            Some(index) => {
+                self.snapshot.navigator.peer_work[index] = work;
+                true
+            }
+            None => {
+                self.snapshot.navigator.peer_work.push(work);
+                true
+            }
+        }
+    }
+
+    /// A machine that is no longer connected, or no longer opened, has no
+    /// rows here: its list goes with the connection (D-50).
+    pub(super) fn drop_unreachable_peer_work(&mut self) {
+        let peers = &self.snapshot.navigator.peers;
+        self.snapshot.navigator.peer_work.retain(|work| {
+            peers
+                .iter()
+                .any(|machine| machine.key == work.key && active(machine) && machine.connected)
+        });
+    }
+
+    /// Who answers a call made in `folder` on this machine and proved by
+    /// nothing else (D-55): a guest whose pane lives there alone, else this
+    /// core. A pane of this core's lives there when a checkout of this
+    /// machine that holds the folder has a pane.
+    pub(crate) fn folder_call(&self, folder: &str) -> crate::guest_panes::FolderCall {
+        let guests = &self.snapshot.navigator.guest_panes;
+        if guests.is_empty() {
+            return crate::guest_panes::FolderCall::Host;
+        }
+        let node = self.node.as_str();
+        let host_pane_there = self.snapshot.navigator.workspaces.iter().any(|workspace| {
+            workspace.device_id == node
+                && workspace.checkouts.iter().any(|checkout| {
+                    let root = checkout.path.trim_end_matches('/');
+                    !root.is_empty()
+                        && folder
+                            .strip_prefix(root)
+                            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                        && checkout.tabs.iter().any(|tab| !tab.panes.is_empty())
+                })
+        });
+        let (taker, kept) = crate::guest_panes::folder_call(folder, guests, host_pane_there);
+        if let Some(reason) = kept {
+            // The path stays out of the log: the reason says which rule
+            // kept the call here.
+            crate::diagnostic!(serde_json::json!({
+                "component": "guest_panes",
+                "kind": "folder_call.kept_by_host",
+                "reason": reason,
+            }));
+        }
+        taker
+    }
+
     /// Whether the paired machine under `key` may be opened now.
     pub(super) fn peer_opens(&self, key: &str) -> bool {
         self.snapshot

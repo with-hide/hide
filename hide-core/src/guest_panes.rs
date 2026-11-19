@@ -22,6 +22,8 @@ pub const MAX_PANES: usize = hide_kit::panes::HOLDER_CAP;
 const KEY_CHARS: usize = 64;
 const MAX_DEVICE_BYTES: usize = 128;
 const MAX_PANE_BYTES: usize = 256;
+/// The tap's bound on a pane's folder (`hide_peer_protocol::tap::MAX_FOLDER`).
+const MAX_FOLDER_BYTES: usize = 4096;
 
 /// One guest machine and its panes on this machine.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -43,6 +45,11 @@ pub struct GuestPane {
     pub pane: String,
     /// When this machine first saw it.
     pub since_unix_ms: u64,
+    /// The folder it was started in on this machine, once its node said it
+    /// (D-55, B10): where its row stands in the list, and whose a call
+    /// proved only by its folder is ([`folder_call`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 /// Whether `id` can name a guest in a pane's address: not empty, bounded,
@@ -77,11 +84,65 @@ pub fn valid(guests: &[GuestPanes]) -> bool {
                 && guest.panes.len() <= MAX_PANES
                 && guest.panes.iter().all(|pane| {
                     pane_is_listed(&pane.pane)
+                        && pane
+                            .folder
+                            .as_deref()
+                            .is_none_or(|folder| folder.len() <= MAX_FOLDER_BYTES)
                         && panes.insert(pane.pane.as_str())
                         && pane.id
                             == hide_node_link::address::guest_pane_id(&guest.device_id, &pane.pane)
                 })
         })
+}
+
+/// `path` is `root` itself or below it, by whole names.
+fn within(path: &str, root: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    !root.is_empty()
+        && path
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Who answers a call proved only by the folder it was made in.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FolderCall {
+    /// This machine's core, as before.
+    Host,
+    /// The core of the guest under this connection id: the host answers
+    /// that the folder is that installation's and passes nothing on.
+    Guest { key: String },
+}
+
+/// Whose a call proved only by its folder is (PRD device-connect-iroh D-55,
+/// B54): a guest's when panes of that one guest and no pane of this
+/// machine's own core live in the folder, and this machine's otherwise.
+/// `folder` is the caller's folder and a pane lives in it when the folder is
+/// the one the pane was started in or below it. The second value is why the
+/// host keeps a call that guest panes share the folder of, for the log.
+pub fn folder_call(
+    folder: &str,
+    guests: &[GuestPanes],
+    host_pane_there: bool,
+) -> (FolderCall, Option<&'static str>) {
+    let mut there = guests.iter().filter(|guest| {
+        guest.panes.iter().any(|pane| {
+            pane.folder
+                .as_deref()
+                .is_some_and(|started| within(folder, started))
+        })
+    });
+    match (there.next(), there.next()) {
+        (None, _) => (FolderCall::Host, None),
+        (Some(_), Some(_)) => (FolderCall::Host, Some("several_guests")),
+        (Some(_), None) if host_pane_there => (FolderCall::Host, Some("host_pane_alive")),
+        (Some(guest), None) => (
+            FolderCall::Guest {
+                key: guest.key.clone(),
+            },
+            None,
+        ),
+    }
 }
 
 /// One guest's panes as `hide device list` answers them.
@@ -107,6 +168,7 @@ mod tests {
                     id: hide_node_link::address::guest_pane_id(device, pane),
                     pane: (*pane).to_owned(),
                     since_unix_ms: 1,
+                    folder: None,
                 })
                 .collect(),
         }
@@ -129,5 +191,54 @@ mod tests {
         let mut key = guest("macbook", &[]);
         key.key = "AB".repeat(32);
         assert!(!valid(&[key]));
+    }
+
+    fn in_folder(device: &str, key: &str, folder: &str) -> GuestPanes {
+        let mut guest = guest(device, &["w1:p1"]);
+        guest.key = key.repeat(32);
+        guest.panes[0].folder = Some(folder.to_owned());
+        guest
+    }
+
+    /// D-55: one guest's pane alive in the folder and no pane of the host's
+    /// own there sends the call to that guest; a host pane there, or two
+    /// guests, keeps it with the host and says why.
+    #[test]
+    fn a_folder_call_goes_to_the_one_guest_whose_pane_lives_there() {
+        let macbook = in_folder("macbook", "ab", "/work/shop-api");
+        let mini = in_folder("mini", "cd", "/work/shop-api");
+        let to = |key: &str| FolderCall::Guest {
+            key: key.repeat(32),
+        };
+        let one = std::slice::from_ref(&macbook);
+        assert_eq!(folder_call("/work/shop-api", one, false), (to("ab"), None));
+        // A folder below the one the pane was started in is the pane's too.
+        assert_eq!(
+            folder_call("/work/shop-api/web", one, false),
+            (to("ab"), None)
+        );
+        // Not a folder beside it, nor the one above.
+        assert_eq!(
+            folder_call("/work/shop-api-2", one, false),
+            (FolderCall::Host, None)
+        );
+        assert_eq!(folder_call("/work", one, false), (FolderCall::Host, None));
+        assert_eq!(
+            folder_call("/work/shop-api", one, true),
+            (FolderCall::Host, Some("host_pane_alive"))
+        );
+        assert_eq!(
+            folder_call("/work/shop-api", &[macbook.clone(), mini], false),
+            (FolderCall::Host, Some("several_guests"))
+        );
+        // A pane whose folder its node never said is in no folder.
+        assert_eq!(
+            folder_call("/work/shop-api", &[guest("old", &["w1:p1"])], false),
+            (FolderCall::Host, None)
+        );
+        // A list with a folder longer than the tap carries is no list.
+        let mut long = macbook;
+        long.panes[0].folder = Some("x".repeat(MAX_FOLDER_BYTES + 1));
+        assert!(!valid(&[long]));
     }
 }

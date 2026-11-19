@@ -1437,6 +1437,17 @@ pub(super) struct GuestPanesPayload {
     pub(super) guests: Vec<crate::guest_panes::GuestPanes>,
 }
 
+/// What one machine this one opens told of its own work, sent by hided as
+/// it arrives on the connection; `work` absent when that machine tells no
+/// more (PRD device-connect-iroh D-50).
+#[derive(Debug, Deserialize)]
+pub(super) struct PeerWorkPayload {
+    /// The machine's connection id.
+    pub(super) key: String,
+    #[serde(default)]
+    pub(super) work: Option<crate::peer_work::Told>,
+}
+
 /// One Hide AI settings event, carrying whatever it is about.
 ///
 /// It folds what a single screen does into one event, the way
@@ -1838,6 +1849,7 @@ pub(super) enum Event {
     UiAttached(UiAttachedPayload),
     PeerMachines(PeerMachinesPayload),
     GuestPanes(GuestPanesPayload),
+    PeerWork(PeerWorkPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
@@ -2205,6 +2217,14 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "guest_panes" => decode!(GuestPanesPayload, GuestPanes).and_then(|event| match &event {
             Event::GuestPanes(payload) if crate::guest_panes::valid(&payload.guests) => Ok(event),
             _ => Err(invalid_payload("guest_panes")),
+        }),
+        "peer_work" => decode!(PeerWorkPayload, PeerWork).and_then(|event| match &event {
+            Event::PeerWork(payload)
+                if payload.work.as_ref().is_none_or(crate::peer_work::valid) =>
+            {
+                Ok(event)
+            }
+            _ => Err(invalid_payload("peer_work")),
         }),
         "peer_machines" => {
             decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
@@ -2618,11 +2638,13 @@ impl Runtime {
                 }
                 changed
             }
+            Event::PeerWork(payload) => self.take_peer_work(&payload.key, payload.work),
             Event::PeerMachines(payload) => {
                 let changed = self.snapshot.navigator.peers != payload.machines;
                 if changed {
                     let before =
                         std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
+                    self.drop_unreachable_peer_work();
                     self.reconcile_peer_devices(&before);
                 }
                 changed

@@ -1127,6 +1127,111 @@ fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
     assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
 }
 
+/// B49, D-50: the work a machine this one opens told of stands in the
+/// snapshot under that machine while it is connected, replaced whole each
+/// time; a machine this one does not open is refused, and the rows go when
+/// the machine is no longer connected.
+#[test]
+fn a_connected_machines_own_work_is_listed_until_it_is_no_longer_connected() {
+    let mut runtime = runtime();
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let key = "ab".repeat(32);
+    let machine = |opens: &str, connected: bool| {
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": "windows-pc", "name": "Windows PC",
+            "opens": opens, "opened_by": null, "connected": connected,
+            "path": connected.then_some("direct"), "reason": null, "update": null,
+        }] })
+    };
+    let work = |title: &str| {
+        serde_json::json!({ "key": key, "work": {
+            "needs_you": 1, "done": 0,
+            "rows": [{
+                "id": "w1:p1", "group": "needs_you", "title": title,
+                "agent_kind": "claude", "place": "shop-api · main", "mark": "turn",
+                "status_code": "question", "detail": "Which branch?",
+            }],
+        }})
+    };
+
+    // No machine under that key yet.
+    assert!(!dispatch(&mut runtime, "peer_work", work("Fix login")));
+    assert!(runtime.snapshot.navigator.peer_work.is_empty());
+
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", true)
+    ));
+    assert!(dispatch(&mut runtime, "peer_work", work("Fix login")));
+    assert!(
+        !dispatch(&mut runtime, "peer_work", work("Fix login")),
+        "what it already holds is no change"
+    );
+    assert!(dispatch(&mut runtime, "peer_work", work("Fix login again")));
+    let held = &runtime.snapshot.navigator.peer_work;
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].device_id, "windows-pc");
+    assert_eq!(held[0].told.needs_you, 1);
+    assert_eq!(held[0].told.rows[0].title, "Fix login again");
+
+    // A window reads it from the navigator, flat under the machine.
+    let payload = runtime.snapshot_delta_payload(0);
+    let frame: serde_json::Value =
+        serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+    let sent = &frame["rest"]["navigator"]["peer_work"][0];
+    assert_eq!(sent["device_id"], "windows-pc");
+    assert_eq!(sent["needs_you"], 1);
+    assert_eq!(sent["rows"][0]["id"], "w1:p1");
+
+    // A list no machine tells is refused whole and keeps what is held.
+    let mut wrong = work("Fix login");
+    wrong["work"]["rows"][0]["group"] = serde_json::json!("working");
+    dispatch(&mut runtime, "peer_work", wrong);
+    assert_eq!(runtime.snapshot.navigator.peer_work.len(), 1);
+    assert_eq!(
+        runtime.snapshot.navigator.peer_work[0].told.rows[0].group,
+        "needs_you"
+    );
+
+    // Not connected: its rows leave the list (D-50).
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", false)
+    ));
+    assert!(runtime.snapshot.navigator.peer_work.is_empty());
+    assert!(!dispatch(&mut runtime, "peer_work", work("Fix login")));
+
+    // Connected and paused: not opened now, so nothing of it is listed.
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("paused", true)
+    ));
+    assert!(!dispatch(&mut runtime, "peer_work", work("Fix login")));
+
+    // It tells no more.
+    assert!(dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", true)
+    ));
+    assert!(dispatch(&mut runtime, "peer_work", work("Fix login")));
+    assert!(dispatch(
+        &mut runtime,
+        "peer_work",
+        serde_json::json!({ "key": key })
+    ));
+    assert!(runtime.snapshot.navigator.peer_work.is_empty());
+}
+
 /// PRD device-connect-iroh D-61 over the state folders released builds
 /// wrote: a machine this build pairs with is saved as a device beside the
 /// ones the release stored, and the next start is the same machine to it.
