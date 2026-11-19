@@ -86,6 +86,10 @@ pub enum Verb {
     Retry {
         device: String,
     },
+    /// What a machine about to pair over SSH runs on its target first: it
+    /// changes nothing and says whether a Hide of the target's own runs
+    /// (B7); not a command a person types.
+    LookSsh,
     /// What a machine pairing over SSH or `wsl.exe` runs on its target
     /// (security spec 15, 17); not a command a person types.
     AcceptSsh {
@@ -201,6 +205,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("retry"), [device]) => Verb::Retry {
             device: named(device)?,
         },
+        (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
         (Some("accept-ssh"), []) => match (request, key, device, name) {
             (Some(request), Some(key), Some(device), Some(name)) => Verb::AcceptSsh {
                 request,
@@ -233,6 +238,14 @@ pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
             return Ok(());
         }
         Err(Refused::Answer { code, message }) => (code, message, None),
+        Err(Refused::Looked { code, look }) => {
+            let message = crate::cli::request_next_action(&code).to_owned();
+            println!(
+                "{}",
+                json!({"ok":false,"error":{"code":code,"message":message},"look":look})
+            );
+            return Err(code);
+        }
         Err(Refused::Unreachable(code)) => {
             let message = crate::cli::request_next_action(&code).to_owned();
             (code, message, None)
@@ -266,6 +279,9 @@ enum Printed {
 fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
     let direction = |direction: &Option<Direction>| direction.map(Direction::name);
     match &cli.verb {
+        Verb::Core(command @ DeviceCommand::Add { ssh_alias, .. }) => {
+            add_alias(env, command, ssh_alias, cli.wait)
+        }
         Verb::Core(command) => core(env, command, cli.wait),
         Verb::Share => share(env, cli.json),
         Verb::Join { link } => join(env, link, cli.json),
@@ -356,6 +372,24 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             ),
             Err(refused) => Err(refused),
         },
+        Verb::LookSsh => {
+            // Read by the machine that ran it, never by a person.
+            let look = |core: bool| json!({"system": std::env::consts::OS, "core": core});
+            match pairing(env, json!({"verb":"status"})) {
+                Ok(_) => {
+                    println!("{}", json!({"ok":true,"value":{"look":look(true)}}));
+                    Ok(Printed::Done)
+                }
+                // No daemon answered: a Hide of this account's own that is
+                // not running, or an account that never ran one (a device
+                // helper's `hide`), told apart by the daemon's own lock.
+                Err(Refused::Unreachable(code)) => Err(Refused::Looked {
+                    code,
+                    look: look(hide_kit::layout::daemon_lock(&env.state_dir).exists()),
+                }),
+                Err(refused) => Err(refused),
+            }
+        }
         Verb::AcceptSsh {
             request,
             key,
@@ -382,6 +416,9 @@ enum Refused {
     Answer { code: String, message: String },
     /// No answer arrived, for this reason code.
     Unreachable(String),
+    /// `look-ssh` reached no daemon: the reason code, and what the command
+    /// itself could say of this account.
+    Looked { code: String, look: Value },
     /// `retry --wait` reached its bound while the attempt still ran; the
     /// device as last read.
     WaitedOut(Value),
@@ -410,6 +447,47 @@ fn operators(env: &Env) -> Result<(), Refused> {
         return Err(Refused::code("device_from_pane"));
     }
     Ok(())
+}
+
+/// Adds a machine by its SSH alias (B7). One whose own Hide runs is paired
+/// over SSH, which installs nothing there; any other is the core's SSH
+/// device, as before, with a line when its Hide could pair once it is
+/// updated or running. A command the daemon refuses to look for (a pane's)
+/// goes to the core unchanged.
+fn add_alias(
+    env: &Env,
+    command: &DeviceCommand,
+    alias: &str,
+    wait: bool,
+) -> Result<Printed, Refused> {
+    let looked = match operators(env) {
+        Ok(()) => pairing(env, json!({"verb":"look_ssh","alias":alias})).ok(),
+        Err(_) => None,
+    };
+    match looked
+        .as_ref()
+        .and_then(|looked| looked["looked"]["state"].as_str())
+    {
+        Some("ready") => {
+            let mut value = pairing(env, json!({"verb":"pair_ssh","alias":alias}))?;
+            value["paired"] = json!("ssh");
+            let name = value["name"].as_str().unwrap_or(alias).to_owned();
+            return Ok(Printed::Value(
+                value,
+                format!(
+                    "{alias} already runs Hide: connected to {name}, and nothing was installed there. hide device list shows it.\n"
+                ),
+            ));
+        }
+        Some("update_there") => eprintln!(
+            "Hide on {alias} is too old to connect as a Hide: update it there to connect that way. Adding it as an SSH device."
+        ),
+        Some("not_running") => eprintln!(
+            "Hide is installed on {alias} and is not running: log in there and open Hide to connect as a Hide. Adding it as an SSH device."
+        ),
+        _ => {}
+    }
+    core(env, command, wait)
 }
 
 /// One ask of this machine's daemon about pairing.

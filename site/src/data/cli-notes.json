@@ -135,7 +135,7 @@
     "example": "hide device share"
   },
   "device add": {
-    "line": "With a link another Hide shared, pairs with that machine: the command shows four words, takes your yes or no once you have compared them with the other screen, and waits for that machine's operator to allow it; only the operator may run it, outside Hide's panes. With a Host name from ~/.ssh/config, registers a computer you reach over SSH as a device; nothing is installed until the operator chooses Allow and install on its row in Settings > Devices.",
+    "line": "With a link another Hide shared, pairs with that machine: the command shows four words, takes your yes or no once you have compared them with the other screen, and waits for that machine's operator to allow it; only the operator may run it, outside Hide's panes. With a Host name from ~/.ssh/config, adds a computer you reach over SSH: one that already runs its own Hide is connected to as a Hide, with no words and nothing installed there, when ssh signs in without asking and the command runs outside Hide's panes; any other is registered as a device, and nothing is installed until the operator chooses Allow and install on its row in Settings > Devices.",
     "example": "hide device add mini --name 'Mac mini'"
   },
   "device allow": {

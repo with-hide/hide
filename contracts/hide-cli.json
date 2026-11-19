@@ -1814,6 +1814,36 @@
             ],
             "type": "object"
         },
+        "device_looked": {
+            "properties": {
+                "look": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "look"
+            ],
+            "type": "object"
+        },
+        "device_paired": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "object"
+                },
+                "paired": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "name",
+                "paired"
+            ],
+            "type": "object"
+        },
         "device_removed": {
             "properties": {
                 "device_id": {
@@ -5090,7 +5120,8 @@
         {
             "answers": [
                 "device_added",
-                "device_joined"
+                "device_joined",
+                "device_paired"
             ],
             "arguments": [
                 {
@@ -5133,7 +5164,15 @@
                 "pairing_unanswered",
                 "pairing_unreachable",
                 "pairing_update_needed",
-                "pairing_ended"
+                "pairing_ended",
+                "ssh_hide_absent",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "ssh_not_reached",
+                "ssh_busy",
+                "device_own",
+                "device_limit",
+                "peer_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5441,6 +5480,20 @@
                 "device_ambiguous",
                 "device_dials_in",
                 "device_wait_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_looked"
+            ],
+            "arguments": [],
+            "command": "device look-ssh",
+            "options": [],
+            "refusals": [
+                "hide_unavailable",
+                "request_timeout"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7412,7 +7465,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e661c82a8fd8312bfaff985bc242b0f93b3c8619ae613734223ee55dbe5b98a3",
+    "digest": "sha256:6f3fa26a9b8a3b21bca2cbc41c3f832a5fc328bdd8c12c8e44bfdbf6f9862afd",
     "envelopes": {
         "access": {
             "answer": "value",
