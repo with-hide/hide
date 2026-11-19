@@ -22,12 +22,17 @@ function sessionTitle(s: ShellState, session: WorkSession): string | null {
   return read?.session && read.record && workKey(read.session) === workKey(session) ? recordTitle(read.record, summariesEnabled(s.rest?.status?.background_ai)) : null;
 }
 
-/** A card's name, read from the shell's state now; `bare` leaves out the kind a mission or plan title opens with. */
+/**
+ * A card's name, read from the shell's state now. `bare` is its name on its
+ * desk tab (PRD lane-desk-pair-view D-30): the tab's mark already says the
+ * kind a mission or plan title opens with, and a desk is one checkout's, so a
+ * pull request leaves out its project; the full name is the tab's tooltip.
+ */
 export function cardTitle(s: ShellState, t: Translate, item: DetailItem | null, bare = false): string {
   if (!item) return "";
   if (item.kind === "pull_request") {
     const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
-    return t("detail.pr", { number: item.number, project: project?.label ?? "" });
+    return bare ? t("detail.prTab", { number: item.number }) : t("detail.pr", { number: item.number, project: project?.label ?? "" });
   }
   if (item.kind === "mission") {
     const title = missionOf(s.rest, item.mission)?.title ?? item.mission;

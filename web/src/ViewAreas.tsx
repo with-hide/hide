@@ -196,8 +196,10 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
 
 /** One display's tab: its kind's mark, italic while a preview, its save marks, and its whole identity (B2, B21). */
 export function DisplayTab({ display: sent, workspace, interaction, actions }: { display: ViewDisplaySnapshot; workspace?: ViewWorkspace; interaction: AreaTabInteraction; actions: Actions }) {
-  // A card's name is the shell's to give (`cardTitle`).
-  const named = useCardTitle(sent.card ?? null);
+  // A card's name is the shell's to give (`cardTitle`): its short name on
+  // the tab, its full name in the tab's tooltip (PRD lane-desk-pair-view D-30).
+  const named = useCardTitle(sent.card ?? null, true);
+  const full = useCardTitle(sent.card ?? null);
   const display = sent.kind === "card" ? { ...sent, label: named } : sent;
   const { selected, areaActive } = interaction;
   const fit = tabFit(selected, interaction.fit);
@@ -215,7 +217,7 @@ export function DisplayTab({ display: sent, workspace, interaction, actions }: {
   // A View an agent opened that the operator has not looked at leads its tab with the 볼 것 eye (PRD unseen-agent-views B10); a tab only one mark wide shows the eye in its mark's place.
   const look = display.unseen ? <StatusMark mark="look" data-view-unseen={display.id} /> : null;
   const identity = [
-    displayIdentity(display, t),
+    displayIdentity(sent.kind === "card" ? { ...sent, label: full } : display, t),
     display.unseen ? t("agents.mark.look") : null,
     display.opener ? [
       display.opener.pane_id ? display.opener.name : t("feedback.mark.closed", { name: display.opener.name }),
@@ -315,9 +317,9 @@ function ExternalBadge({ path }: { path: string | null }) {
   );
 }
 
-/** A display's name on its tab, a card's from what the shell holds of its subject. */
+/** A display's name on its tab, a card's short one from what the shell holds of its subject. */
 function tabLabel(display: ViewDisplaySnapshot, t: Parameters<typeof cardTitle>[1]): string {
-  return display.kind === "card" ? cardTitle(useShellStore.getState(), t, display.card ?? null) : display.label;
+  return display.kind === "card" ? cardTitle(useShellStore.getState(), t, display.card ?? null, true) : display.label;
 }
 
 /** A file's type mark, the diff's comparison mark or a card's own; never colour alone (D-15). */

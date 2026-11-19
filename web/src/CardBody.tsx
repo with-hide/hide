@@ -51,12 +51,14 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
 }
 
 /**
- * A card tab's body: a row of the card's own buttons where it has some (a
- * mission's way to every mission and its settings, a pull request's GitHub
- * page), then what the card shows.
+ * A card tab's body: its path line, as a file's path toolbar stands over a
+ * file (PRD lane-desk-pair-view D-30), with the card's full name and the
+ * card's own buttons where it has some (a mission's way to every mission and
+ * its settings, a pull request's GitHub page), then what the card shows.
  */
 export function CardBody({ item, actions }: { item: DetailItem; actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  const name = useCardTitle(item);
   const url = useShellStore((s) => {
     if (item.kind !== "pull_request") return null;
     return catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id)?.pull_requests?.find((row) => row.number === item.number)?.url ?? null;
@@ -64,31 +66,30 @@ export function CardBody({ item, actions }: { item: DetailItem; actions: Actions
   const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : `${item.kind}:${item.workspace_id}`;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground" data-card={item.kind}>
-      {item.kind === "mission" || url ? (
-        <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center justify-end gap-xxs border-b border-border bg-card px-xs text-caption" data-card-head="true">
-          {item.kind === "mission" ? (
-            <>
-              {/* The sidebar's 미션 row's own mark, so the button reads as the way to the same screen. */}
-              <Button variant="secondary" size="sm" className="mr-xxs" onClick={() => actions.openMissions()} data-detail-all-missions="true">
-                <WaypointsIcon aria-hidden="true" />
-                {t("missionScreen.allMissions")}
-              </Button>
-              <Hint label={t("missionScreen.settings")}>
-                <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("missionScreen.settings")} onClick={() => actions.openMissionSettings()} data-detail-conductor-settings="true">
-                  <SettingsIcon />
-                </Button>
-              </Hint>
-            </>
-          ) : null}
-          {url ? (
-            <Hint label={t("detail.github")}>
-              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("detail.github")} onClick={() => actions.openLink(url, true)} data-detail-github="true">
-                <ExternalLinkIcon />
+      <div className="flex h-[var(--size-tab-strip)] shrink-0 items-center gap-xxs border-b border-border bg-card px-xs text-caption" data-card-head="true">
+        <span className="min-w-0 flex-1 truncate text-muted-foreground" data-card-name="true">{name}</span>
+        {item.kind === "mission" ? (
+          <>
+            {/* The sidebar's 미션 row's own mark, so the button reads as the way to the same screen. */}
+            <Button variant="secondary" size="sm" className="mr-xxs" onClick={() => actions.openMissions()} data-detail-all-missions="true">
+              <WaypointsIcon aria-hidden="true" />
+              {t("missionScreen.allMissions")}
+            </Button>
+            <Hint label={t("missionScreen.settings")}>
+              <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("missionScreen.settings")} onClick={() => actions.openMissionSettings()} data-detail-conductor-settings="true">
+                <SettingsIcon />
               </Button>
             </Hint>
-          ) : null}
-        </div>
-      ) : null}
+          </>
+        ) : null}
+        {url ? (
+          <Hint label={t("detail.github")}>
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("detail.github")} onClick={() => actions.openLink(url, true)} data-detail-github="true">
+              <ExternalLinkIcon />
+            </Button>
+          </Hint>
+        ) : null}
+      </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" key={key}>
         {item.kind === "pull_request"
           ? <PrCardView workspaceId={item.workspace_id} number={item.number} actions={actions} />
