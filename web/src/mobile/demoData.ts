@@ -320,7 +320,7 @@ export function automationsFrame(t: T, state: DemoState): ServerFrame {
       { ...run(4, at(0, 9), 3), seen: false } as PhoneAutomationRecord,
       run(3, at(1, 10) + 31 * MINUTE, 4, "missed"),
       { kind: "missed", first_unix_ms: at(2, 9), last_unix_ms: at(2, 9), count: 1, reason: "asleep" },
-      { kind: "skipped", at_unix_ms: at(3, 9), reason: { kind: "previous_running" } },
+      { kind: "skipped", at_unix_ms: at(3, 9), last_unix_ms: at(3, 9), count: 1, reason: { kind: "previous_running" } },
       run(1, at(4, 9), 5),
     ]),
     sample("auto-deps", t("mobile.demo.auto2.name"), { schedule: { kind: "weekly", days: ["mon"], time: "08:00" }, next_run_at_unix_ms: at(-3, 8), unseen: 0 }, [

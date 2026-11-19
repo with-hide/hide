@@ -880,7 +880,7 @@ export interface HumanTurnDonePayload {
   declaration: string;
 }
 /**
- * A client `automation_call` event is a call on this core's automations whose answer the window waits for (PRD automations B6-B8): the form's preview of a schedule, its make and its edit. `call` is the same call the CLI's `hide automation` sends, tagged by `call` (`add`, `edit`, `pause`, `resume`, `run`, `remove`, `run_stop`, `run_open`, `run_viewing`, `seen`, `list`, `show`, `preview`; `hide_core::automations::Call`). hided asks the core on a blocking task and answers this window alone with an automation_result frame under the same `request_id`; a call it cannot read is answered `automation_call_invalid` without asking the core. A press whose result the snapshot shows is the window event of the same name (`automation_run`, `automation_pause`, ...) instead.
+ * A client `automation_call` event is a call on this core's automations whose answer the window waits for (PRD automations B6-B8): the form's preview of a schedule and a name, its make and its edit. `call` is the same call the CLI's `hide automation` sends, tagged by `call` (`add`, `edit`, `pause`, `resume`, `run`, `remove`, `run_stop`, `run_open`, `run_viewing`, `seen`, `list`, `show`, `preview`; `hide_core::automations::Call`). hided asks the core on a blocking task and answers this window alone with an automation_result frame under the same `request_id`; a call it cannot read is answered `automation_call_invalid` without asking the core. A press whose result the snapshot shows is the window event of the same name (`automation_run`, `automation_pause`, ...) instead.
  */
 export interface AutomationCall {
   request_id: string;
@@ -891,7 +891,7 @@ export interface AutomationCall {
   [k: string]: unknown;
 }
 /**
- * Payload of an automation_result frame: the core's answer to the `automation_call` with this `request_id`, its value when it was done (`preview`: {reads_as, next_run_at_unix_ms, zone}; `add`: {id, name, folder, next_run_at_unix_ms, run?, paused?}; `edit`: {id, next_run_at_unix_ms}), or the code it was refused with (`schedule_under_hour`, `automation_name_taken`, `automation_call_invalid`, `automations_unavailable`, ...), which the window words.
+ * Payload of an automation_result frame: the core's answer to the `automation_call` with this `request_id`, its value when it was done (`preview`: {reads_as, next_run_at_unix_ms, zone, own_folder}; `add`: {id, name, folder, next_run_at_unix_ms, run?, paused?}; `edit`: {id, next_run_at_unix_ms}), or the code it was refused with (`schedule_too_often`, `automation_name_taken`, `automation_call_invalid`, `automations_unavailable`, ...), which the window words.
  */
 export interface AutomationResult {
   request_id: string;

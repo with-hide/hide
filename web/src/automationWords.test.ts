@@ -56,7 +56,15 @@ describe("an automation's words", () => {
     expect(recordText(run({ state: "running", attempt: 2 }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "running", text: "2번째 시도" });
     expect(recordText(run({ state: "stopped", reason: "stopped_by_person", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "stopped", text: "멈춤 · 사람이 끝냄" });
     expect(recordText(run({ state: "stopped", reason: "automation_machine_changed", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "stopped", text: "멈춤 · 기계 바뀜" });
-    expect(recordText({ kind: "skipped", at_unix_ms: NOW, reason: { kind: "previous_running" } }, NOW, SEOUL, "ko", ko)).toEqual({ tone: "skipped", text: "건너뜀 · 이전 회차 진행 중" });
+    expect(recordText({ kind: "skipped", at_unix_ms: NOW, last_unix_ms: NOW, count: 1, reason: { kind: "previous_running" } }, NOW, SEOUL, "ko", ko)).toEqual({ tone: "skipped", text: "건너뜀 · 이전 회차 진행 중" });
+  });
+
+  it("folds the times skipped one after another into one line that says how many and when", () => {
+    // 05:00-09:55 UTC is 14:00-18:55 on the same day in Seoul; 14:30 UTC is 23:30 the day before 01:10.
+    const today: AutomationRecord = { kind: "skipped", at_unix_ms: Date.UTC(2026, 10, 19, 5, 0), last_unix_ms: Date.UTC(2026, 10, 19, 9, 55), count: 12, reason: { kind: "previous_running" } };
+    expect(recordText(today, NOW, SEOUL, "ko", ko)).toEqual({ tone: "skipped", text: "건너뜀 · 이전 회차 진행 중 · 12번 · 오늘 14:00–18:55" });
+    const overnight: AutomationRecord = { ...today, at_unix_ms: Date.UTC(2026, 10, 18, 14, 30), last_unix_ms: Date.UTC(2026, 10, 18, 16, 10), count: 2, reason: { kind: "usage_limit", agent: "claude" } };
+    expect(recordText(overnight, NOW, SEOUL, "en", en).text).toBe("Skipped · Claude Code usage limit · 2 times · Yesterday 23:30 ~ Today 01:10");
   });
 
   it("folds the times missed while Hide was off into one line", () => {

@@ -167,7 +167,7 @@ it("opens an automation's runs newest first with their marks, tags and results, 
   const records: PhoneAutomation["records"] = [
     { kind: "run", number: 4, trigger: "manual", started_at_unix_ms: NOW - HOUR, state: "running", attempt: 2, seen: false },
     { kind: "run", number: 3, trigger: "missed", started_at_unix_ms: NOW - 24 * HOUR, ended_at_unix_ms: NOW - 24 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, seen: false },
-    { kind: "skipped", at_unix_ms: NOW - 48 * HOUR, reason: { kind: "previous_running" } },
+    { kind: "skipped", at_unix_ms: NOW - 48 * HOUR, last_unix_ms: NOW - 48 * HOUR, count: 1, reason: { kind: "previous_running" } },
     { kind: "run", number: 2, trigger: "scheduled", started_at_unix_ms: NOW - 72 * HOUR, ended_at_unix_ms: NOW - 71 * HOUR, state: "failed", attempt: 3, seen: true },
   ];
   const { container, list, click, unmount } = await connect([automation("a", { records, records_omitted: 30 })]);

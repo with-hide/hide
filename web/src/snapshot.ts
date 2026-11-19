@@ -3295,10 +3295,13 @@ export type AutomationRun = {
   seen: boolean;
 };
 
-/** One record of an automation, newest first: a run, a skipped time, or the times missed while nothing could run them (D-15). */
+/**
+ * One record of an automation, newest first: a run, the times skipped one after another for the same reason
+ * (`count` from `at_unix_ms` to `last_unix_ms`, one time when 1), or the times missed while nothing could run them (D-15).
+ */
 export type AutomationRecord =
   | ({ kind: "run" } & AutomationRun)
-  | { kind: "skipped"; at_unix_ms: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
+  | { kind: "skipped"; at_unix_ms: number; last_unix_ms: number; count: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
   | { kind: "missed"; first_unix_ms: number; last_unix_ms: number; count: number; reason: "core_off" | "asleep" };
 
 export type Automation = {

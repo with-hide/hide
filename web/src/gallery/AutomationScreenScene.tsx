@@ -42,7 +42,7 @@ function automations(project: string, now: number): Automation[] {
       records: [
         { kind: "run", number: 4, trigger: "scheduled", due_unix_ms: now - 9 * HOUR, started_at_unix_ms: now - 9 * HOUR, ended_at_unix_ms: now - 9 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false },
         { kind: "run", number: 3, trigger: "manual", started_at_unix_ms: now - 30 * HOUR, ended_at_unix_ms: now - 30 * HOUR + 8 * 60_000, state: "stopped", reason: "stopped_by_person", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true },
-        { kind: "skipped", at_unix_ms: now - 33 * HOUR, reason: { kind: "usage_limit", agent: "claude" } },
+        { kind: "skipped", at_unix_ms: now - 33 * HOUR, last_unix_ms: now - 29 * HOUR, count: 5, reason: { kind: "usage_limit", agent: "claude" } },
         { kind: "missed", first_unix_ms: now - 81 * HOUR, last_unix_ms: now - 57 * HOUR, count: 2, reason: "core_off" },
         { kind: "run", number: 2, trigger: "missed", due_unix_ms: now - 81 * HOUR, started_at_unix_ms: now - 56 * HOUR, ended_at_unix_ms: now - 56 * HOUR + 14 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: false, conversation_missing: true, seen: true },
       ],

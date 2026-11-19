@@ -121,7 +121,7 @@ const PAUSE_CODES: Record<string, AutomationPauseReason> = {
 /** How a record's mark reads (B3, B16, B20, B22): ✓, ✗, –, ● or ■. */
 export type RecordTone = "ok" | "failed" | "skipped" | "running" | "stopped";
 
-/** A record's mark and its words after the time: `✓ 12분`, `✗ 실패 · 3번 시도`, `✗ 로그인 만료`, `■ 멈춤 · 사람이 끝냄`, `– 건너뜀 · Claude 사용 한도`, `– 어제 10:00 ~ 오늘 08:00 · 놓침 24회 · Hide가 꺼져 있었음`. */
+/** A record's mark and its words after the time: `✓ 12분`, `✗ 실패 · 3번 시도`, `✗ 로그인 만료`, `■ 멈춤 · 사람이 끝냄`, `– 건너뜀 · Claude 사용 한도`, `– 건너뜀 · 이전 회차 진행 중 · 12번 · 오늘 14:00–18:55`, `– 어제 10:00 ~ 오늘 08:00 · 놓침 24회 · Hide가 꺼져 있었음`. */
 export type RecordText = { tone: RecordTone; text: string };
 
 /** The fields of a run its words are read from; the phone's frame carries only these, never a path, a branch, a pane or a conversation. */
@@ -133,13 +133,14 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
   switch (record.kind) {
     case "run":
       return runText(record, language, t);
-    case "skipped":
-      return {
-        tone: "skipped",
-        text: record.reason.kind === "previous_running"
-          ? t("automation.record.skippedPrevious")
-          : t("automation.record.skippedLimit", { agent: agentProductName(record.reason.agent) }),
-      };
+    case "skipped": {
+      const what = record.reason.kind === "previous_running"
+        ? t("automation.record.skippedPrevious")
+        : t("automation.record.skippedLimit", { agent: agentProductName(record.reason.agent) });
+      if (!skippedFolded(record)) return { tone: "skipped", text: what };
+      const span = spanText(record.at_unix_ms, record.last_unix_ms, now, zone, language, t);
+      return { tone: "skipped", text: t("automation.record.skippedFolded", { what, times: record.count, span }) };
+    }
     case "missed":
       return {
         tone: "skipped",
@@ -151,6 +152,18 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
         }),
       };
   }
+}
+
+/** Whether a skipped line holds several times, which then say their own span as a missed line does, with no time of their own. */
+export function skippedFolded(record: Extract<AutomationRecord, { kind: "skipped" }>): boolean {
+  return record.count > 1;
+}
+
+/** `오늘 14:00–18:55` within one day, else `어제 23:30 ~ 오늘 01:10`. */
+function spanText(first: number, last: number, now: number, zone: string | undefined, language: InterfaceLanguage, t: Translate): string {
+  const from = whenText(first, now, zone, language, t);
+  const end = wall(last, zone);
+  return wall(first, zone).day === end.day ? `${from}–${end.time}` : `${from} ~ ${whenText(last, now, zone, language, t)}`;
 }
 
 /** A run's mark and words (B16, B22, B24): its length when it finished the task, else why it did not. */
