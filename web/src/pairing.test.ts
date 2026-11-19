@@ -9,6 +9,9 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     expect(directionKey(peer())).toBe("pairing.direction.outgoing");
     expect(directionKey(peer({ opens: null, opened_by: "active" }))).toBe("pairing.direction.incoming");
     expect(directionKey(peer({ opened_by: "active" }))).toBe("pairing.direction.both");
+    // A host that dropped this machine's pairing is not opened: only the direction that stands is said.
+    expect(directionKey(peer({ opens: "unpaired", opened_by: "active" }))).toBe("pairing.direction.incoming");
+    expect(directionKey(peer({ opens: "unpaired" }))).toBe("pairing.direction.outgoing");
   });
 
   it("says only how a connected machine is reached", () => {
