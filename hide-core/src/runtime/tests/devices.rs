@@ -1221,7 +1221,10 @@ fn a_machine_paired_over_a_released_state_folder_is_the_same_device_at_the_next_
         assert!(runtime.dispatch_json(&event), "{tag}");
         expected.push((
             "windows-pc".to_owned(),
-            LinkOrigin::Peer { key: key.clone() },
+            LinkOrigin::Peer {
+                key: key.clone(),
+                switched: false,
+            },
         ));
         assert_eq!(devices(&runtime), expected, "{tag}");
         drop(runtime);
