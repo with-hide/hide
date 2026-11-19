@@ -2161,8 +2161,8 @@ mod tests {
 
     fn opened_view_at(runtime: &mut Runtime, path: &str) -> String {
         let key = key();
-        let view = runtime
-            .change_view_layout(&key, |layout, stamp| {
+        let place = runtime.front_place(&key);
+        let view = runtime.change_view_layout(&key, &place, |layout, stamp| {
                 let display = layout.new_display(path, DisplayKind::File, None, false);
                 let id = display.id.clone();
                 let area = layout.active_area().id.clone();
@@ -2224,7 +2224,7 @@ mod tests {
         let mut guard = runtime.lock().unwrap();
         let view = opened_view(&mut guard);
         let opener = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&view)
             .unwrap()
@@ -2288,7 +2288,7 @@ mod tests {
         );
         let view = opened_view(&mut guard);
         let opener = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&view)
             .unwrap()
@@ -2306,8 +2306,8 @@ mod tests {
         let (runtime, worker, _) = send_fixture(root.path());
         let mut guard = runtime.lock().unwrap();
         let opener = guard.opener_of_pane("recipient");
-        let page = guard
-            .change_view_layout(&key(), |layout, stamp| {
+        let place = guard.front_place(&key());
+        let page = guard.change_view_layout(&key(), &place, |layout, stamp| {
                 let mut display = layout.new_browser_display("http://localhost:5173/", 1);
                 display.opener = opener;
                 let id = display.id.clone();
@@ -2318,7 +2318,7 @@ mod tests {
             .unwrap();
         guard.navigate_browser(&key(), &page, "http://localhost:5173/other".into());
         let display = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&page)
             .unwrap();
@@ -2431,7 +2431,7 @@ mod tests {
         }
         // The comments left their View with the letter (D-13).
         let display = guard
-            .view_layout_of(&key())
+            .front_tray_layout(&key())
             .unwrap()
             .display(&view)
             .unwrap()
@@ -2556,7 +2556,7 @@ mod tests {
             (1, Some("recipient"))
         );
         let guard = runtime.lock().unwrap();
-        let layout = guard.view_layout_of(&key()).unwrap();
+        let layout = guard.front_tray_layout(&key()).unwrap();
         let on = |id: &str| {
             let display = layout.display(id).unwrap().clone();
             guard.feedback_of(&key()).unwrap().on(&display).count()

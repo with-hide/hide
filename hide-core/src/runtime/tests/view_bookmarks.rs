@@ -118,16 +118,16 @@ fn fill_unread(runtime: &mut Runtime, directory: &Path, count: usize) {
         .unwrap()
         .views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy());
-    let area = entry.layout.active_area.clone();
+    let area = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.active_area.clone();
     for index in 0..count {
         let path = directory.join(format!("unread-{index}.md"));
-        let shown = entry.layout.new_display(
+        let shown = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.new_display(
             &path.to_string_lossy(),
             crate::view_layout::DisplayKind::File,
             None,
             false,
         );
-        entry.layout.append(&area, shown).unwrap();
+        entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.append(&area, shown).unwrap();
     }
 }
 
@@ -140,18 +140,18 @@ fn fill_pages(runtime: &mut Runtime, directory: &Path, count: usize) {
         .unwrap()
         .views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy());
-    let area = entry.layout.active_area.clone();
+    let area = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.active_area.clone();
     for index in 0..count {
         let page = entry
-            .layout
+            .tray_entry(crate::workspace_views::PENDING_TRAY).layout
             .new_browser_display(&format!("https://example.test/saved/{index}"), 0);
-        entry.layout.insert(&area, page, index as u64 + 1).unwrap();
+        entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.insert(&area, page, index as u64 + 1).unwrap();
     }
 }
 
 fn layout<'a>(runtime: &'a Runtime, directory: &Path) -> &'a ViewLayout {
     runtime
-        .view_layout_of(&key(directory))
+        .front_tray_layout(&key(directory))
         .expect("the Workspace has a layout")
 }
 
@@ -344,7 +344,7 @@ fn lane_tool(runtime: &Runtime) -> Option<crate::workspace_views::Tool> {
 
 fn lane_documents(runtime: &Runtime) -> bool {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    view.open && view.documents
+    view.open && view.tray.shown
 }
 
 /// B1, B13: every tab sees the checkout's one list and the lane is the
@@ -360,7 +360,7 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     open(&mut runtime, &checkout, &directory, "b.md");
     view_event(
         &mut runtime,
-        serde_json::json!({"tool": "project", "pinned": true, "document_width": 444}),
+        serde_json::json!({"tool": "project", "document_width": 444}),
     );
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md"]);
@@ -371,8 +371,8 @@ fn every_tab_sees_the_checkouts_one_list_and_the_lane_stays_the_workspaces() {
     );
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.tool, view.pinned, view.document_width),
-        (Some(crate::workspace_views::Tool::Project), true, Some(444))
+        (view.tool, view.document_width),
+        (Some(crate::workspace_views::Tool::Project), Some(444))
     );
 }
 
@@ -495,7 +495,7 @@ fn a_background_agents_open_joins_the_list_and_moves_nothing() {
         open(&mut runtime, &checkout, &directory, "a.md");
         view_event(
             &mut runtime,
-            serde_json::json!({"tool": tool, "pinned": true}),
+            serde_json::json!({"tool": tool}),
         );
         let area = active_area(&runtime, &directory);
         let editor = runtime.snapshot.editor.active_tab_id.clone();
@@ -541,7 +541,7 @@ fn an_agent_closing_the_last_view_leaves_the_lane_open() {
     let (mut runtime, checkout, directory) = setup("agent-close-lane");
     let lane = |runtime: &Runtime| {
         let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-        (view.open, view.documents, view.layout.display_count)
+        (view.open, view.tray.shown, view.layout.display_count)
     };
     open(&mut runtime, &checkout, &directory, "a.md");
     let a = display_id(&runtime, &directory, "a.md");
@@ -584,13 +584,13 @@ fn a_front_tab_open_calls_the_lane_and_keeps_the_explorer() {
     );
     runtime.sync_workspace_view();
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    assert!(view.open && view.documents);
+    assert!(view.open && view.tray.shown);
     assert!(view.lane_called > calls, "a put-away lane comes forward");
 
     // The Explorer shows alone, and the open keeps it beside the document.
     let (mut runtime, _checkout, directory) = setup("front-open-tree");
     view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
-    assert!(!runtime.snapshot.workspace_view.as_ref().unwrap().documents);
+    assert!(!runtime.snapshot.workspace_view.as_ref().unwrap().tray.shown);
     control_file(
         &mut runtime,
         "w-order:t1:p",
@@ -602,7 +602,7 @@ fn a_front_tab_open_calls_the_lane_and_keeps_the_explorer() {
     assert_eq!(strip(&runtime, &directory), ["b.md"]);
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     assert_eq!(
-        (view.documents, view.tool),
+        (view.tray.shown, view.tool),
         (true, Some(crate::workspace_views::Tool::Explorer)),
         "the Explorer stays beside the opened file"
     );
@@ -940,21 +940,14 @@ fn the_list_and_selection_survive_a_restart_and_agent_switch() {
         "c.md",
         "restart-background",
     );
-    let before = runtime
-        .workspace_views
-        .as_ref()
-        .unwrap()
-        .views
-        .get(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .unwrap()
-        .clone();
+    let before = layout(&runtime, &directory).clone();
     let path = runtime.workspace_views.as_ref().unwrap().path.clone();
     runtime.workspace_views =
         Some(WorkspaceViewStore::open(path, (false, RightPanelSection::default())).0);
     runtime.sync_workspace_view();
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md", "c.md"]);
     assert_eq!(lane_tool(&runtime), None);
-    assert_eq!(layout(&runtime, &directory), &before.layout);
+    assert_eq!(layout(&runtime, &directory), &before);
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
     assert_eq!(fronts(&runtime, &directory), ["b.md"]);
 }
@@ -1032,19 +1025,19 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
         .views
         .entry(device, "/srv/remote");
     for name in ["x.md", "y.md"] {
-        let display = entry.layout.new_display(
+        let display = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.new_display(
             &format!("/srv/remote/{name}"),
             crate::view_layout::DisplayKind::File,
             None,
             false,
         );
-        entry.layout.insert("a1", display, 1).unwrap();
+        entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.insert("a1", display, 1).unwrap();
     }
-    let ids: Vec<String> = entry.layout.displays().map(|d| d.id.clone()).collect();
-    entry.show_documents();
+    let ids: Vec<String> = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.displays().map(|d| d.id.clone()).collect();
+    entry.show_tray(crate::workspace_views::PENDING_TRAY);
     let front = |runtime: &Runtime| {
         runtime
-            .view_layout_of(&(device.to_owned(), "/srv/remote".to_owned()))
+            .front_tray_layout(&(device.to_owned(), "/srv/remote".to_owned()))
             .unwrap()
             .areas()[0]
             .active

@@ -730,6 +730,7 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
                 }
             }
         }
+        map_trays(view, map);
         super::each_opener(view, &mut |device| match device
             .as_str()
             .map(|id| map(Moves::Device, id))
@@ -740,6 +741,55 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
             }
             _ => false,
         });
+    }
+}
+
+/// Each tray's Agent tab and pair view pane, and each card's project,
+/// checkout and session machine, on a tray or not (PRD lane-desk-pair-view
+/// D-06, D-13, D-15).
+fn map_trays(view: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+    fn set(value: Option<&mut Value>, kind: Moves, map: &dyn Fn(Moves, &str) -> Mapped) {
+        if let Some(value) = value
+            && let Some(Mapped::To(id)) = value.as_str().map(|text| map(kind, text))
+        {
+            *value = Value::String(id);
+        }
+    }
+    fn cards(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(card) = fields.get_mut("card") {
+                    set(card.get_mut("workspace_id"), Moves::Registration, map);
+                    set(card.get_mut("checkout_id"), Moves::Checkout, map);
+                    set(
+                        card.get_mut("session").and_then(|session| session.get_mut("device_id")),
+                        Moves::Device,
+                        map,
+                    );
+                }
+                for (key, entry) in fields.iter_mut() {
+                    if key != "card" {
+                        cards(entry, map);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| cards(item, map)),
+            _ => {}
+        }
+    }
+    for tray in each(view, "trays") {
+        set(tray.get_mut("tab"), Moves::Tab, map);
+        set(
+            tray.get_mut("pair").and_then(|pair| pair.get_mut("pane")),
+            Moves::Pane,
+            map,
+        );
+        if let Some(layout) = tray.get_mut("layout") {
+            cards(layout, map);
+        }
+    }
+    if let Some(shelf) = view.get_mut("shelf") {
+        cards(shelf, map);
     }
 }
 
@@ -1629,6 +1679,10 @@ mod tests {
             json!({"schema_version": 3, "workspaces": [
                 {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "pane_moves": pane_move(0),
                  "tab_views": {tabs[0].clone(): "d1"},
+                 "trays": [{"tab": tabs[0].clone(), "pair": {"pane": panes[0].clone()},
+                     "layout": {"root": {"area": {"id": "a9", "displays": [
+                         {"id": "d9", "kind": "card", "opener": {"device_id": ALIAS, "terminal_id": "t2"},
+                          "card": {"kind": "record", "session": {"device_id": ALIAS, "agent": "claude", "session_id": "s1"}}}]}}}}],
                  "view_layout": {"root": {"split": {"id": "s1", "first": {"area": {"id": "a1", "displays": [{"id": "d1", "opener": {"device_id": M, "terminal_id": "t1"}}]}},
                      "second": {"area": {"id": "a2", "displays": [{"id": "d2", "opener": {"device_id": ALIAS, "terminal_id": "t2"}}, {"id": "d3", "opener": {"device_id": X, "terminal_id": "t3"}}]}}}}},
                  "feedback": {"comments": feedback_comments, "waiting": feedback_waiting}},
@@ -1883,6 +1937,15 @@ mod tests {
         // A View's opener on the mini names it by the new owner's node id,
         // wherever in a layout it sits (PRD view-opener-feedback B41).
         let mac_views = &views["workspaces"][0];
+        // A tray names its tab, its pair view's pane and its cards' machines
+        // as the new owner does (PRD lane-desk-pair-view D-06, D-15).
+        let moved = |kind: &str| shapes(kind).into_iter().next().unwrap().1;
+        let tray = &mac_views["trays"][0];
+        assert_eq!(tray["tab"], json!(moved("tab")));
+        assert_eq!(tray["pair"]["pane"], json!(moved("pane")));
+        let card = &tray["layout"]["root"]["area"]["displays"][0];
+        assert_eq!(card["opener"]["device_id"], json!(C));
+        assert_eq!(card["card"]["session"]["device_id"], json!(C));
         let split = &mac_views["view_layout"]["root"]["split"];
         assert_eq!(
             split["first"]["area"]["displays"][0]["opener"]["device_id"],

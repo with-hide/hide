@@ -893,14 +893,15 @@ impl Runtime {
             .map(|area| area.id.clone())
     }
 
-    /// The tree that holds the area `area_id`.
+    /// The desk that holds the area `area_id`; the shelf's area is no
+    /// command's to name.
     fn area_place(&self, key: &(String, String), area_id: &str) -> Option<Place> {
         self.workspace_views
             .as_ref()?
             .views
             .get(&key.0, &key.1)?
             .layouts()
-            .find(|(_, layout)| layout.area(area_id).is_some())
+            .find(|(place, layout)| matches!(place, Place::Tray(_)) && layout.area(area_id).is_some())
             .map(|(place, _)| place)
     }
 

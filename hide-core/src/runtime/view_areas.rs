@@ -652,6 +652,17 @@ impl Runtime {
         moved
     }
 
+    /// `change_view_layout` on the desk the Workspace `key` shows.
+    #[cfg(test)]
+    pub(super) fn change_front_layout<T>(
+        &mut self,
+        key: &WorkspaceKey,
+        change: impl FnOnce(&mut Layout, u64) -> Result<(T, bool), LayoutError>,
+    ) -> Result<T, LayoutError> {
+        let place = self.front_place(key);
+        self.change_view_layout(key, &place, change)
+    }
+
     /// Applies one change to the tree at `place` of a Workspace, made when
     /// the file has none for it, and saves it when it changed something. The
     /// tree mints from the checkout's one count (`WorkspaceView::align_ids`).

@@ -1669,7 +1669,7 @@ fn convert_workspace_views(value: &mut Value, node: &str, _: &BTreeMap<String, S
 }
 
 /// Calls `change` with every View opener's machine in one Workspace's
-/// layout, at any depth: the agent that opened a View last (`opener`) and
+/// layouts, at any depth: the agent that opened a View last (`opener`) and
 /// every session that opened it (`openers`, PRD session-files D-10).
 pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
     fn walk(value: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
@@ -1699,8 +1699,13 @@ pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -
             _ => false,
         }
     }
-    view.get_mut("view_layout")
-        .is_some_and(|layout| walk(layout, change))
+    // An older file's one View list, or each tray and the Views on no tray
+    // (PRD lane-desk-pair-view D-06, D-19).
+    ["view_layout", "trays", "shelf"]
+        .into_iter()
+        .fold(false, |changed, key| {
+            view.get_mut(key).is_some_and(|layout| walk(layout, change)) | changed
+        })
 }
 
 fn convert_labels(value: &mut Value, node: &str, _: &BTreeMap<String, String>) -> bool {

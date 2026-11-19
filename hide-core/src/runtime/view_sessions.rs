@@ -576,7 +576,7 @@ fn first_lines(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::view_feedback::Opener;
-    use crate::view_layout::DisplayKind;
+    use crate::view_layout::{DisplayKind, Layout};
 
     fn opener(terminal: &str, session: Option<&str>) -> Opener {
         Opener {

@@ -178,7 +178,7 @@ fn authoritative_final_node_tab_close_keeps_its_page_and_drops_its_bookmark() {
         .get(NODE, &t.main)
         .unwrap();
     assert_eq!(
-        entry.layout.display_count(),
+        entry.view_count(),
         1,
         "the page stays in the list"
     );

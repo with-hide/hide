@@ -207,6 +207,24 @@ impl Tray {
     }
 }
 
+/// The one area of the shelf. The shelf is never drawn and no command
+/// addresses its area, so it takes no number from the count the desks' areas
+/// share: the first desk's area is `a1`, as the documents' was.
+pub const SHELF_AREA: &str = "shelf";
+
+/// An empty shelf whose next id is `next_id`.
+fn shelf_layout(next_id: u64) -> Layout {
+    let mut layout = Layout {
+        next_id: next_id.max(1),
+        ..Layout::default()
+    };
+    if let crate::view_layout::Node::Area(root) = &mut layout.root {
+        root.id = SHELF_AREA.to_owned();
+    }
+    layout.active_area = SHELF_AREA.to_owned();
+    layout
+}
+
 /// One empty area numbered from `next_id`.
 fn fresh_layout(next_id: u64) -> Layout {
     let mut layout = Layout {
@@ -269,7 +287,7 @@ impl StoredTrays {
             last_used_unix_ms: self.last_used_unix_ms,
             made_unix_ms: self.made_unix_ms,
             trays: self.trays,
-            shelf: self.shelf.unwrap_or_default(),
+            shelf: self.shelf.unwrap_or_else(|| shelf_layout(1)),
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
@@ -425,7 +443,7 @@ impl WorkspaceView {
             last_used_unix_ms: 0,
             made_unix_ms: 0,
             trays: Vec::new(),
-            shelf: Layout::default(),
+            shelf: shelf_layout(1),
             agent_layout: crate::agent_layout::Layout::default(),
             agent_groups: Default::default(),
             agent_starts: Default::default(),
@@ -461,7 +479,7 @@ impl WorkspaceView {
             pair: None,
         });
         // The shelf numbers after the documents, so no id repeats.
-        self.shelf = fresh_layout(next_id);
+        self.shelf = shelf_layout(next_id);
     }
 
     /// The next id no tree of the checkout has minted: every desk and the
@@ -1122,7 +1140,7 @@ impl WorkspaceView {
         }
         if self.shelf.area_count() > 1 {
             let displays: Vec<_> = self.shelf.displays().cloned().collect();
-            let mut flat = fresh_layout(self.shelf.next_id);
+            let mut flat = shelf_layout(self.shelf.next_id);
             let area = flat.active_area.clone();
             for display in displays {
                 let _ = flat.append(&area, display);
@@ -1245,8 +1263,23 @@ mod tests {
 
     fn unbound(mut views: WorkspaceViews) -> WorkspaceViews {
         for view in &mut views.workspaces {
-            for display in view.layout.displays_mut() {
+            for display in view.views_mut() {
                 display.tab_id = None;
+            }
+        }
+        views
+    }
+
+    /// `views` as a load reads it back: every tree numbering from the
+    /// view's one counter, and comments with nothing in them left out.
+    fn settled(mut views: WorkspaceViews) -> WorkspaceViews {
+        for view in &mut views.workspaces {
+            let next = view.next_id();
+            for layout in view.layouts_mut() {
+                layout.next_id = next;
+            }
+            if view.feedback.is_empty() {
+                view.feedback = Default::default();
             }
         }
         views
@@ -1259,172 +1292,198 @@ mod tests {
         }
     }
 
-    /// The lane a view holds, as the shell reads it.
-    fn lane(view: &WorkspaceView) -> (bool, bool, Option<Tool>, bool) {
-        (view.open, view.documents, view.tool, view.pinned)
+    /// The lane a view holds, as the shell reads it: open, the first tray
+    /// shown, the tool.
+    fn lane(view: &WorkspaceView) -> (bool, bool, Option<Tool>) {
+        (
+            view.open,
+            view.trays.first().is_some_and(|tray| tray.shown),
+            view.tool,
+        )
     }
 
-    /// S7 B14, PRD right-lane B22, lane-two-columns B17: the lane (its two
-    /// columns, pin and four widths) and a nested tree come back with its
-    /// axes, ratios, order, previews, active displays and the area in use;
-    /// runtime bindings are never written.
+    fn operators(layout: &mut Layout, path: &str) -> String {
+        let mut display = layout.new_display(path, DisplayKind::File, None, false);
+        display.operator = true;
+        let id = display.id.clone();
+        let area = layout.active_area().id.clone();
+        layout.insert(&area, display, 1).unwrap();
+        id
+    }
+
+    fn agents(layout: &mut Layout, path: &str) -> String {
+        let mut display = layout.new_display(path, DisplayKind::File, None, false);
+        display.opened_by(
+            crate::view_feedback::Opener {
+                device_id: "local".into(),
+                terminal_id: "t1".into(),
+                session: Some("s1".into()),
+                resume: None,
+                resume_path: None,
+                provider: "claude".into(),
+                name: "claude".into(),
+                profile: None,
+            },
+            1,
+        );
+        let id = display.id.clone();
+        let area = layout.active_area().id.clone();
+        layout.insert(&area, display, 1).unwrap();
+        id
+    }
+
+    /// PRD lane-desk-pair-view D-06, D-15, B27: each Agent tab's tray (its
+    /// nested tree, shown flag and pair view), the Views on no tray, the
+    /// tool column and three widths come back as they were; runtime
+    /// bindings are never written.
     #[test]
-    fn a_saved_lane_and_nested_layout_load_back_as_they_were() {
+    fn saved_trays_pair_views_and_the_views_on_no_tray_load_back_as_they_were() {
         let folder = scratch("roundtrip");
-        let root = folder.path().to_path_buf();
-        let path = root.join("workspace-views.json");
+        let path = folder.path().join("workspace-views.json");
         let mut views = WorkspaceViews::default();
         let entry = views.entry("local", "/repo");
-        entry.show_documents();
-        entry.show_tool(Tool::Changes);
-        entry.pinned = true;
+        entry.show_tray("w1:t1");
+        entry.show_tool(Tool::Changes, Some("w1:t1"));
         entry.document_width = Some(720);
-        entry.detail_width = Some(400);
         entry.explorer_width = Some(300);
         entry.panel_width = Some(420);
-        let layout = &mut entry.layout;
+        entry.align_ids(&Place::Tray("w1:t1".into()));
+        let layout = &mut entry.tray_mut("w1:t1").unwrap().layout;
         for (path, kind, committed, preview) in [
             ("/repo/a.md", DisplayKind::File, None, false),
             ("/repo/b.rs", DisplayKind::Diff, Some(true), false),
             ("/repo/c.rs", DisplayKind::File, None, false),
             ("/repo/d.md", DisplayKind::File, None, true),
         ] {
-            // Every View is someone's; these are the operator's (PRD
-            // session-files D-10), which a load reads back as they are.
             let mut display = layout.new_display(path, kind, committed, preview);
             display.operator = true;
-            layout.insert("a1", display, 1).unwrap();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, 1).unwrap();
         }
+        let first = layout.active_area().id.clone();
         let b = layout.displays().nth(1).unwrap().id.clone();
-        let right = layout.split(&b, "a1", Edge::Right, 2).unwrap();
+        let right = layout.split(&b, &first, Edge::Right, 2).unwrap();
         let c = layout.displays().nth(1).unwrap().id.clone();
         layout.split(&c, &right, Edge::Down, 3).unwrap();
-        layout.focus_area("a1", 4).unwrap();
+        layout.focus_area(&first, 4).unwrap();
         if let Node::Split(split) = &mut layout.root {
             split.ratio = 0.7;
         }
-        for display in layout.displays_mut() {
-            display.tab_id = Some("file:bound-at-runtime".to_owned());
+        entry.tray_entry("w1:t2").pair = Some(PairView {
+            pane: "w1:p3".into(),
+        });
+        entry.align_ids(&Place::Tray("w1:t2".into()));
+        let card = entry.tray_mut("w1:t2").unwrap().layout.new_card_display(
+            crate::model::DetailItem::Mission {
+                mission: "mission-7".into(),
+            },
+        );
+        let tray = &mut entry.tray_mut("w1:t2").unwrap().layout;
+        let area = tray.active_area().id.clone();
+        tray.insert(&area, card, 5).unwrap();
+        entry.align_ids(&Place::Shelf);
+        agents(&mut entry.shelf, "/repo/agent.md");
+        for display in entry.views_mut() {
+            if display.kind != DisplayKind::Card {
+                display.tab_id = Some("file:bound-at-runtime".to_owned());
+            }
         }
         save(&path, &views).unwrap();
 
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"schema_version\": 5"));
+        assert!(written.contains("\"schema_version\": 6"));
         assert!(!written.contains("bound-at-runtime"));
         let (loaded, outcome) = load(&path, 1);
         assert_eq!(outcome, current());
-        assert_eq!(loaded, unbound(views));
+        assert_eq!(settled(loaded.clone()), settled(unbound(views)));
         let view = &loaded.workspaces[0];
-        assert_eq!(lane(view), (true, true, Some(Tool::Changes), true));
+        assert_eq!(lane(view), (true, true, Some(Tool::Changes)));
         assert_eq!(
-            (
-                view.document_width,
-                view.detail_width,
-                view.explorer_width,
-                view.panel_width
-            ),
-            (Some(720), Some(400), Some(300), Some(420))
+            (view.document_width, view.explorer_width, view.panel_width),
+            (Some(720), Some(300), Some(420))
         );
-        let layout = &view.layout;
+        let layout = &view.tray("w1:t1").unwrap().layout;
         let Node::Split(root_split) = &layout.root else {
             panic!("a split root")
         };
         assert_eq!(root_split.axis, SplitAxis::Row);
         assert_eq!(root_split.ratio, 0.7);
-        assert_eq!(layout.active_area, "a1");
-        let kept: Vec<_> = layout
-            .area("a1")
-            .unwrap()
-            .displays
-            .iter()
-            .map(|display| (display.path.as_str(), display.preview))
-            .collect();
-        assert_eq!(kept, vec![("/repo/a.md", false), ("/repo/d.md", true)]);
+        let paired = view.tray("w1:t2").unwrap();
+        assert_eq!(paired.pair.as_ref().unwrap().pane, "w1:p3");
+        assert_eq!(paired.layout.displays().next().unwrap().kind, DisplayKind::Card);
+        assert_eq!(view.shelf.display_count(), 1);
+        let ids: Vec<&str> = view.views().map(|display| display.id.as_str()).collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "one id names one View: {ids:?}");
     }
 
     /// B1, B23: a Workspace seen for the first time has its lane closed,
-    /// unpinned, with no column and the default widths.
+    /// with no tray, no tool and the default widths.
     #[test]
     fn a_new_workspace_starts_with_the_lane_closed() {
         let view = WorkspaceView::new("local", "/repo");
-        assert_eq!(lane(&view), (false, false, None, false));
+        assert_eq!(lane(&view), (false, false, None));
         assert_eq!(
-            (
-                view.document_width,
-                view.detail_width,
-                view.explorer_width,
-                view.panel_width
-            ),
-            (None, None, None, None)
+            (view.document_width, view.explorer_width, view.panel_width),
+            (None, None, None)
         );
-        assert!(!view.has_column());
+        assert!(view.trays.is_empty());
+        assert!(!view.has_column(Some("w1:t1")));
         assert!(!view.shows_explorer());
     }
 
-    /// B5, B12, B14, B15: the documents count as a column only with a view to
-    /// show, a tool closes alone, a close keeps both columns' shape for ⌘E's
-    /// reopen, and a tool or the documents called into a closed lane open
-    /// their own column alone (operator decision 2026-10-23).
+    /// B5, B12, B14, B15 (lane-two-columns), PRD lane-desk-pair-view B9,
+    /// B30: a tray counts as a column only with a tab to show, a tool closes
+    /// alone, ⌘E's close keeps both columns' shape for its reopen, a tool or
+    /// a tray called into a closed lane opens its own column alone, and each
+    /// tab's tray is its own.
     #[test]
     fn the_columns_open_close_and_keep_their_shape_through_a_close() {
         let mut view = WorkspaceView::new("local", "/repo");
-        view.show_documents();
-        assert_eq!(lane(&view), (true, true, None, false));
-        assert!(!view.has_column(), "no view to show");
-        let display = view
-            .layout
-            .new_display("/repo/a.md", DisplayKind::File, None, false);
-        view.layout.insert("a1", display, 1).unwrap();
-        assert!(view.has_column());
-        view.show_tool(Tool::Explorer);
+        view.show_tray("t1");
+        assert_eq!(lane(&view), (true, true, None));
+        assert!(!view.has_column(Some("t1")), "no tab to show");
+        operators(&mut view.tray_mut("t1").unwrap().layout, "/repo/a.md");
+        assert!(view.has_column(Some("t1")) && view.draws_tray("t1"));
+        assert!(!view.has_column(Some("t2")), "another tab's tray is empty");
+        view.show_tool(Tool::Explorer, Some("t1"));
         assert!(view.shows_explorer());
         view.close_tool();
-        assert_eq!(lane(&view), (true, true, None, false));
-        assert!(!view.shows_explorer());
-        view.show_tool(Tool::Project);
+        assert_eq!(lane(&view), (true, true, None));
+        view.show_tool(Tool::Project, Some("t1"));
         view.open = false;
-        assert_eq!(lane(&view), (false, true, Some(Tool::Project), false));
-        assert!(!view.shows_explorer(), "a closed lane draws no tool");
+        assert_eq!(lane(&view), (false, true, Some(Tool::Project)));
+        assert!(!view.shows_explorer() && !view.draws_tray("t1"));
         view.open = true;
-        assert_eq!(
-            lane(&view),
-            (true, true, Some(Tool::Project), false),
-            "⌘E's reopen brings both columns back"
-        );
+        assert_eq!(lane(&view), (true, true, Some(Tool::Project)));
         view.open = false;
-        assert!(
-            view.show_tool(Tool::Memory),
-            "the tool opened a closed lane"
-        );
+        assert!(view.show_tool(Tool::Memory, Some("t1")));
         assert_eq!(
             lane(&view),
-            (true, false, Some(Tool::Memory), false),
+            (true, false, Some(Tool::Memory)),
             "a tool opens a closed lane on itself alone"
         );
-        assert!(!view.show_tool(Tool::Changes), "the lane was already open");
-        view.show_documents();
-        assert_eq!(
-            lane(&view),
-            (true, true, Some(Tool::Changes), false),
-            "the documents join an open lane beside its tool"
-        );
+        assert!(!view.show_tool(Tool::Changes, Some("t1")));
+        view.show_tray("t1");
+        assert_eq!(lane(&view), (true, true, Some(Tool::Changes)));
         view.open = false;
-        view.show_documents();
+        view.show_tray("t1");
         assert_eq!(
             lane(&view),
-            (true, true, None, false),
-            "the documents open a closed lane on themselves alone"
+            (true, true, None),
+            "a tray opens a closed lane on itself alone"
         );
     }
 
-    /// S7 D-10, B17; lane-two-columns D-10: an S6 file becomes one area
+    /// S7 D-10, B17; lane-desk-pair-view D-18: an S6 file becomes one area
     /// holding its tabs in saved order, with its active tab and its preview,
-    /// its lane starts closed, and the next save writes schema 5.
+    /// on the tray the first tab shown takes, the lane closed.
     #[test]
-    fn a_schema_1_file_migrates_into_one_area() {
+    fn a_schema_1_file_migrates_into_one_area_on_the_tray_to_come() {
         let folder = scratch("migrate");
-        let root = folder.path().to_path_buf();
-        let path = root.join("workspace-views.json");
+        let path = folder.path().join("workspace-views.json");
         fs::write(
             &path,
             serde_json::json!({
@@ -1455,10 +1514,11 @@ mod tests {
             }
         ));
         let view = &loaded.workspaces[0];
-        assert_eq!(lane(view), (false, false, None, false));
+        assert_eq!(lane(view), (false, false, None));
         assert_eq!(view.last_used_unix_ms, 7);
-        assert_eq!(view.layout.area_count(), 1);
-        let area = view.layout.active_area();
+        let tray = view.tray(PENDING_TRAY).expect("the tray to come");
+        assert_eq!(tray.layout.area_count(), 1);
+        let area = tray.layout.active_area();
         let displays: Vec<_> = area
             .displays
             .iter()
@@ -1477,7 +1537,7 @@ mod tests {
         save(&path, &loaded).unwrap();
         let (again, outcome) = load(&path, 2);
         assert_eq!(outcome, current());
-        assert_eq!(again, loaded);
+        assert_eq!(settled(again), settled(loaded));
     }
 
     /// S6 B20, S7 B17, PRD right-lane B22: a file this build cannot read,
@@ -1486,8 +1546,7 @@ mod tests {
     #[test]
     fn an_unreadable_future_or_unmigratable_file_is_preserved_and_defaults_load() {
         let folder = scratch("unreadable");
-        let root = folder.path().to_path_buf();
-        let path = root.join("workspace-views.json");
+        let path = folder.path().join("workspace-views.json");
         for (index, body) in [
             b"{not json".as_slice(),
             br#"{"schema_version":9,"workspaces":[]}"#.as_slice(),
@@ -1495,6 +1554,7 @@ mod tests {
             br#"{"schema_version":2,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
             br#"{"schema_version":3,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
             br#"{"schema_version":5,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
+            br#"{"schema_version":6,"workspaces":[{"device_id":"local"}]}"#.as_slice(),
         ]
         .into_iter()
         .enumerate()
@@ -1509,52 +1569,33 @@ mod tests {
             else {
                 panic!("expected a preserved unreadable file, got {outcome:?}");
             };
-            assert!(
-                !path.exists(),
-                "the original path is free for the next save"
-            );
+            assert!(!path.exists(), "the original path is free for the next save");
             assert_eq!(fs::read(&preserved).unwrap(), body);
         }
     }
 
     /// PRD sidebar-task-lens B51: a pull request card an older build stored
     /// as a View is dropped as the file loads, without an error, and the
-    /// other Views of its area and the arrangement stay.
+    /// other Views of its area stay.
     #[test]
     fn a_stored_pull_request_card_is_dropped_and_the_other_views_stay() {
         let folder = scratch("retired-card");
         let path = folder.path().join("workspace-views.json");
-        let with_card = |files: &[&str], number: u32| {
-            let mut layout = Layout::default();
-            for file in files {
-                let display = layout.new_display(file, DisplayKind::File, None, false);
-                layout.insert("a1", display, 1).unwrap();
-            }
-            let mut value = serde_json::to_value(&layout).unwrap();
-            fn displays(value: &mut serde_json::Value) -> Option<&mut Vec<serde_json::Value>> {
-                match value {
-                    serde_json::Value::Object(object) => {
-                        if object.contains_key("displays") {
-                            return object.get_mut("displays")?.as_array_mut();
-                        }
-                        object.values_mut().find_map(displays)
-                    }
-                    _ => None,
-                }
-            }
-            displays(&mut value).unwrap().push(serde_json::json!(
-                {"id": "d90", "path": "", "kind": "pull_request", "pr": number, "last_focused_unix_ms": 5}
+        let mut layout = Layout::default();
+        let display = layout.new_display("/r/a.rs", DisplayKind::File, None, false);
+        layout.insert("a1", display, 1).unwrap();
+        let mut value = serde_json::to_value(&layout).unwrap();
+        value["root"]["area"]["displays"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(
+                {"id": "d90", "path": "", "kind": "pull_request", "pr": 7, "last_focused_unix_ms": 5}
             ));
-            value
-        };
         fs::write(
             &path,
             serde_json::json!({
                 "schema_version": 3,
-                "workspaces": [{
-                    "device_id": "local", "path": "/r", "tool": "files",
-                    "view_layout": with_card(&["/r/a.rs"], 7),
-                }]
+                "workspaces": [{"device_id": "local", "path": "/r", "tool": "files", "view_layout": value}]
             })
             .to_string(),
         )
@@ -1570,17 +1611,8 @@ mod tests {
             "{repairs:?}"
         );
         let view = loaded.get("local", "/r").unwrap();
-        let shown: Vec<_> = view
-            .layout
-            .displays()
-            .map(|display| display.path.as_str())
-            .collect();
+        let shown: Vec<_> = view.views().map(|display| display.path.as_str()).collect();
         assert_eq!(shown, ["/r/a.rs"]);
-        let active = view.layout.active_area().active.clone();
-        assert_eq!(
-            active.as_deref(),
-            view.layout.displays().next().map(|d| d.id.as_str())
-        );
     }
 
     #[test]
@@ -1626,7 +1658,7 @@ mod tests {
         );
     }
 
-    /// One View on file, as an entry's `layout` key.
+    /// One View on file, as an entry's `view_layout` key.
     fn one_view_layout() -> serde_json::Value {
         let mut layout = Layout::default();
         let display = layout.new_display("/repo/a.md", DisplayKind::File, None, false);
@@ -1634,6 +1666,7 @@ mod tests {
         serde_json::to_value(&layout).unwrap()
     }
 
+    /// A schema 2 entry, whose View list was its `layout`.
     fn stored_entry(path: &str, extra: serde_json::Value) -> serde_json::Value {
         let mut entry =
             serde_json::json!({"device_id": "local", "path": path, "layout": one_view_layout()});
@@ -1644,10 +1677,72 @@ mod tests {
         entry
     }
 
+    /// An Agent layout of two tabs, the second in front: the tab last seen.
+    fn agent_layout() -> serde_json::Value {
+        serde_json::json!({
+            "root": {"area": {"id": "a1", "active": "w1:t2", "displays": [{"id": "w1:t1"}, {"id": "w1:t2"}]}},
+            "active_area": "a1", "next_id": 2,
+        })
+    }
+
+    /// PRD lane-desk-pair-view D-18, B34, B35: a schema 5 checkout's
+    /// documents move once onto the tray of the Agent tab last seen in that
+    /// checkout, shown as its documents were; a pinned lane loads unpinned,
+    /// open as it was; comments survive; the next save writes schema 6 with
+    /// none of the checkout-wide keys.
+    #[test]
+    fn a_schema_5_checkout_moves_its_documents_to_the_tab_last_seen_once() {
+        let folder = scratch("tray-move");
+        let path = folder.path().join("workspace-views.json");
+        fs::write(
+            &path,
+            serde_json::json!({
+                "schema_version": 5,
+                "workspaces": [
+                    {"device_id": "local", "path": "/docs", "open": true, "documents": true,
+                     "tool": "changes", "pinned": true, "detail_width": 380, "document_width": 640,
+                     "agent_layout": agent_layout(), "view_layout": one_view_layout(),
+                     "feedback": {"next_id": 7}},
+                    {"device_id": "local", "path": "/unseen", "documents": false,
+                     "view_layout": one_view_layout()},
+                    {"device_id": "local", "path": "/empty", "open": true, "pinned": true},
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (loaded, outcome) = load(&path, 1);
+        assert!(matches!(
+            outcome,
+            LoadOutcome::Loaded { migrated_from: Some(5), ref repairs } if repairs.is_empty()
+        ));
+        let docs = loaded.get("local", "/docs").unwrap();
+        assert_eq!(lane(docs), (true, true, Some(Tool::Changes)));
+        assert_eq!(docs.document_width, Some(640));
+        let tray = docs.tray("w1:t2").expect("the tab last seen holds them");
+        assert_eq!(tray.layout.display_count(), 1);
+        assert_eq!(docs.feedback.next_id, 7, "the comments survive");
+        let unseen = loaded.get("local", "/unseen").unwrap();
+        assert_eq!(unseen.tray(PENDING_TRAY).unwrap().layout.display_count(), 1);
+        assert!(!unseen.tray(PENDING_TRAY).unwrap().shown);
+        let empty = loaded.get("local", "/empty").unwrap();
+        assert!(empty.trays.is_empty() && empty.open);
+
+        save(&path, &loaded).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("\"schema_version\": 6"));
+        for retired in ["\"pinned\"", "\"documents\"", "detail_width", "\"view_layout\""] {
+            assert!(!written.contains(retired), "{retired} is not written again");
+        }
+        let (again, outcome) = load(&path, 2);
+        assert_eq!(outcome, current(), "it moves once");
+        assert_eq!(settled(again), settled(loaded));
+    }
+
     /// PRD lane-two-columns D-10, B23: a schema 3 lane, whatever tool, tree,
     /// pin and widths it stored, starts closed at the default widths; its
-    /// View list and comments stay, and the next save writes schema 5 with
-    /// none of the old keys, the PRs tool's scope (`work`) among them.
+    /// View list and comments stay, and the next save writes none of the old
+    /// keys, the PRs tool's scope (`work`) among them.
     #[test]
     fn a_schema_3_lane_starts_closed_and_keeps_its_views() {
         let folder = scratch("one-tool-lane");
@@ -1676,26 +1771,21 @@ mod tests {
             LoadOutcome::Loaded { migrated_from: Some(3), ref repairs } if repairs.is_empty()
         ));
         for view in &loaded.workspaces {
-            assert_eq!(lane(view), (false, false, None, false), "{}", view.path);
+            assert_eq!(lane(view), (false, false, None), "{}", view.path);
             assert_eq!(
-                (
-                    view.document_width,
-                    view.detail_width,
-                    view.explorer_width,
-                    view.panel_width
-                ),
-                (None, None, None, None),
+                (view.document_width, view.explorer_width, view.panel_width),
+                (None, None, None),
                 "{}",
                 view.path
             );
         }
         let old = loaded.get("local", "/old").unwrap();
-        assert_eq!(old.layout.display_count(), 1);
+        assert_eq!(old.view_count(), 1);
         assert_eq!(old.feedback.next_id, 7, "the comments survive");
 
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"schema_version\": 5"));
+        assert!(written.contains("\"schema_version\": 6"));
         for retired in [
             "last_tool",
             "\"tree\"",
@@ -1711,20 +1801,12 @@ mod tests {
         }
         let (again, outcome) = load(&path, 2);
         assert_eq!(outcome, current());
-        let shape = |views: &WorkspaceViews| {
-            views
-                .workspaces
-                .iter()
-                .map(|view| (view.path.clone(), lane(view), view.layout.display_count()))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(shape(&again), shape(&loaded));
+        assert_eq!(settled(again), settled(loaded));
     }
 
     /// PRD lane-two-columns D-20, D-10: a schema 4 lane loads as it was, a
-    /// PRs tool column reading as none (the sidebar's PR list takes its
-    /// place) and its PRs scope dropped, a Memory one as the Memory tool it
-    /// is again (operator decision 2026-10-23); the next save writes schema 5.
+    /// PRs tool column reading as none and its PRs scope dropped, a Memory
+    /// one as the Memory tool it is again (operator decision 2026-10-23).
     #[test]
     fn a_schema_4_lane_loads_whole_and_a_retired_tool_reads_as_no_tool_column() {
         let folder = scratch("two-column-lane");
@@ -1752,24 +1834,17 @@ mod tests {
             LoadOutcome::Loaded { migrated_from: Some(4), ref repairs } if repairs.is_empty()
         ));
         let memory = loaded.get("local", "/memory").unwrap();
-        assert_eq!(lane(memory), (true, true, Some(Tool::Memory), true));
+        assert_eq!(lane(memory), (true, true, Some(Tool::Memory)));
         assert_eq!(memory.panel_width, Some(420));
-        assert_eq!(memory.layout.display_count(), 1);
-        assert_eq!(
-            lane(loaded.get("local", "/prs").unwrap()),
-            (true, false, None, false)
-        );
+        assert_eq!(memory.view_count(), 1);
+        assert_eq!(lane(loaded.get("local", "/prs").unwrap()), (true, false, None));
         let explorer = loaded.get("local", "/explorer").unwrap();
-        assert_eq!(lane(explorer), (true, false, Some(Tool::Explorer), false));
+        assert_eq!(lane(explorer), (true, false, Some(Tool::Explorer)));
         assert_eq!(explorer.explorer_width, Some(250));
 
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"schema_version\": 5"));
-        assert!(
-            !written.contains("\"prs\""),
-            "the PRs scope is not written again"
-        );
+        assert!(!written.contains("\"prs\""), "the PRs scope is not written again");
         assert!(written.contains("\"tool\": \"memory\""));
         assert_eq!(load(&path, 2).1, current());
     }
@@ -1794,15 +1869,11 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let (loaded, outcome) = load(&path, 1);
-        assert_eq!(outcome, current());
+        let (loaded, _) = load(&path, 1);
         let docs = loaded.get("local", "/docs").unwrap();
-        assert_eq!(lane(docs), (true, true, None, true));
-        assert_eq!(docs.layout.display_count(), 1);
-        assert_eq!(
-            lane(loaded.get("local", "/alone").unwrap()),
-            (true, false, None, false)
-        );
+        assert_eq!(lane(docs), (true, true, None));
+        assert_eq!(docs.view_count(), 1);
+        assert_eq!(lane(loaded.get("local", "/alone").unwrap()), (true, false, None));
 
         save(&path, &loaded).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("\"mission\""));
@@ -1814,8 +1885,7 @@ mod tests {
     #[test]
     fn a_schema_2_workspace_loads_its_views_with_the_lane_closed() {
         let folder = scratch("columns");
-        let root = folder.path().to_path_buf();
-        let path = root.join("workspace-views.json");
+        let path = folder.path().join("workspace-views.json");
         fs::write(
             &path,
             serde_json::json!({
@@ -1843,13 +1913,12 @@ mod tests {
         );
         assert_eq!(loaded.workspaces.len(), 5);
         for view in &loaded.workspaces {
-            assert_eq!(lane(view), (false, false, None, false), "{}", view.path);
-            assert_eq!(view.layout.display_count(), 1, "views are kept");
+            assert_eq!(lane(view), (false, false, None), "{}", view.path);
+            assert_eq!(view.view_count(), 1, "views are kept");
         }
 
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"schema_version\": 5"));
         for retired in [
             "\"views\"",
             "\"tools\"",
@@ -1864,68 +1933,81 @@ mod tests {
         }
         let (again, outcome) = load(&path, 2);
         assert_eq!(outcome, current());
-        assert_eq!(again, loaded);
+        assert_eq!(settled(again), settled(loaded));
     }
 
-    /// The checkout's View list and selection survive a save, and a schema 5
-    /// file carrying keys this build does not read loads the lane with an
-    /// empty View list and no repair.
+    /// A saved file whose trays break the model loads repaired, each fix
+    /// said: a tab named twice keeps its first tray, a card on no tray goes
+    /// (a card is the operator's, opened on a tray), and an id two trees
+    /// both use is minted again so one id names one View.
     #[test]
-    fn the_checkout_views_survive_a_save_and_obsolete_keys_are_ignored() {
-        let folder = scratch("bookmarks");
+    fn a_saved_tray_past_the_model_is_repaired_on_load() {
+        let folder = scratch("repair");
         let path = folder.path().join("workspace-views.json");
         let mut views = WorkspaceViews::default();
         let entry = views.entry("local", "/repo");
-        let display = entry
-            .layout
-            .new_display("/repo/a.md", DisplayKind::File, None, false);
-        let shown = display.id.clone();
-        entry.layout.insert("a1", display, 1).unwrap();
-        save(&path, &views).unwrap();
-
-        let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("\"view_layout\"") && !written.contains("\"tab_views\""));
+        operators(&mut entry.tray_entry("t1").layout, "/repo/a.md");
+        operators(&mut entry.tray_entry("t2").layout, "/repo/b.md");
+        let card = entry
+            .shelf
+            .new_card_display(crate::model::DetailItem::Cost {
+                workspace_id: "w".into(),
+            });
+        let area = entry.shelf.active_area().id.clone();
+        entry.shelf.insert(&area, card, 1).unwrap();
+        let mut value = serde_json::to_value(&views.workspaces[0]).unwrap();
+        let first = value["trays"][0].clone();
+        value["trays"].as_array_mut().unwrap().push(first);
         fs::write(
             &path,
-            written.replacen(
-                "\"view_layout\":",
-                "\"tab_views\": {\"w:t1\":\"removed-view\"}, \"view_layout\":",
-                1,
-            ),
+            serde_json::json!({"schema_version": 6, "workspaces": [value]}).to_string(),
         )
         .unwrap();
         let (loaded, outcome) = load(&path, 1);
-        let entry = loaded.get("local", "/repo").unwrap();
-        assert_eq!(entry.layout.display_count(), 1);
-        assert_eq!(
-            entry.layout.active_area().active.as_deref(),
-            Some(shown.as_str())
-        );
-        assert_eq!(outcome, current());
+        let LoadOutcome::Loaded { repairs, .. } = outcome else {
+            panic!("loads, got {outcome:?}");
+        };
+        assert!(repairs.iter().any(|note| note.contains("named a tab twice")), "{repairs:?}");
+        let view = loaded.get("local", "/repo").unwrap();
+        assert_eq!(view.trays.len(), 2);
+        assert_eq!(view.shelf.display_count(), 0, "a card on no tray goes");
+        let ids: Vec<&str> = view.views().map(|display| display.id.as_str()).collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+    }
 
-        fs::write(
-            &path,
-            serde_json::json!({
-                "schema_version": 5,
-                "workspaces": [stored_entry("/old", serde_json::json!({
-                    "open": true, "documents": true, "tool": "changes", "pinned": true,
-                    "document_width": 500, "explorer_width": 260,
-                    "feedback": {"next_id": 7},
-                    "view_presentations": {"w:t2": {"layout": one_view_layout()}},
-                }))]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let (older, outcome) = load(&path, 2);
-        let old = older.get("local", "/old").unwrap();
-        assert_eq!(outcome, current());
-        assert_eq!(old.layout.display_count(), 0, "a `layout` key is not read");
-        assert_eq!(lane(old), (true, true, Some(Tool::Changes), true));
-        assert_eq!(
-            (old.document_width, old.explorer_width, old.feedback.next_id),
-            (Some(500), Some(260), 7)
-        );
+    /// PRD lane-desk-pair-view D-19, B11: a tab that left takes its tray;
+    /// its agent's Views stay on no tray, in their pane's list, and the
+    /// operator's go with it.
+    #[test]
+    fn a_retired_tray_keeps_its_agents_views_on_no_tray() {
+        let mut view = WorkspaceView::new("local", "/repo");
+        let layout = &mut view.tray_entry("t1").layout;
+        operators(layout, "/repo/mine.md");
+        agents(layout, "/repo/agent.md");
+        assert_eq!(view.retire_tray("t1"), 1);
+        assert!(view.tray("t1").is_none());
+        let kept: Vec<&str> = view.shelf.displays().map(|d| d.path.as_str()).collect();
+        assert_eq!(kept, ["/repo/agent.md"]);
+    }
+
+    /// D-18: the tray a migration could not name goes to the first tab
+    /// shown, joining that tab's own tray when it already has one.
+    #[test]
+    fn the_pending_tray_goes_to_the_first_tab_shown() {
+        let mut view = WorkspaceView::new("local", "/repo");
+        let mut layout = Layout::default();
+        operators(&mut layout, "/repo/a.md");
+        view.adopt_checkout_documents(layout, true);
+        assert!(view.tray(PENDING_TRAY).is_some());
+        assert!(view.adopt_pending_tray("t1"));
+        assert!(view.tray(PENDING_TRAY).is_none());
+        let tray = view.tray("t1").unwrap();
+        assert!(tray.shown);
+        assert_eq!(tray.layout.display_count(), 1);
+        assert!(!view.adopt_pending_tray("t2"), "nothing is pending any more");
     }
 
     #[test]

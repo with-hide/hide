@@ -53,7 +53,7 @@ fn seed_browser_areas(runtime: &mut Runtime, context: &Context) -> (String, Stri
         .unwrap()
         .views
         .entry(&context.device_id, &context.checkout_path)
-        .layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
     let first = layout.new_browser_display("https://example.test/page", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -115,7 +115,7 @@ fn caller_query_reads_only_its_live_checkout_and_untouched_views_are_empty() {
         .unwrap()
         .views
         .entry(crate::node::TEST_NODE, "/checkouts/b")
-        .layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
     let display = layout.new_display(
         "/checkouts/b/보고서.md",
         crate::view_layout::DisplayKind::File,
@@ -259,7 +259,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
         .unwrap()
         .views
         .entry(key.0, key.1)
-        .layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
     for path in ["first.md", "second.md"] {
         let display = layout.new_display(
             &format!("/checkouts/b/{path}"),
@@ -275,7 +275,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
         runtime.snapshot.ui_state.selected_pane_id.clone(),
     );
     let view_id = runtime
-        .view_layout_of(&(key.0.into(), key.1.into()))
+        .front_tray_layout(&(key.0.into(), key.1.into()))
         .unwrap()
         .areas()[0]
         .displays[0]
@@ -311,7 +311,7 @@ fn background_view_commands_preserve_front_focus_and_retried_split_converges() {
     assert_eq!(retry, first);
     assert_eq!(
         runtime
-            .view_layout_of(&(key.0.into(), key.1.into()))
+            .front_tray_layout(&(key.0.into(), key.1.into()))
             .unwrap()
             .area_count(),
         2
@@ -396,7 +396,7 @@ fn close_of_an_already_closed_view_returns_a_no_change_result() {
         .unwrap()
         .views
         .entry(key.0, key.1)
-        .layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
     let display = layout.new_browser_display("https://example.org", 1);
     let view_id = display.id.clone();
     layout.insert("a1", display, 1).unwrap();
@@ -432,7 +432,7 @@ fn close_of_an_already_closed_view_returns_a_no_change_result() {
     );
     assert!(
         runtime
-            .view_layout_of(&(key.0.into(), key.1.into()))
+            .front_tray_layout(&(key.0.into(), key.1.into()))
             .unwrap()
             .displays()
             .next()
@@ -459,7 +459,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
         .unwrap()
         .views
         .entry(key.0, key.1)
-        .layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
     let first = layout.new_browser_display("https://example.org", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -477,7 +477,7 @@ fn a_select_calls_the_lane_only_from_the_pane_the_operator_is_in() {
     let called = |runtime: &Runtime| runtime.workspace_views.as_ref().unwrap().lane_calls;
     let in_front = |runtime: &Runtime| {
         runtime
-            .view_layout_of(&(key.0.to_owned(), key.1.to_owned()))
+            .front_tray_layout(&(key.0.to_owned(), key.1.to_owned()))
             .and_then(|layout| layout.active_area().active.clone())
     };
     operator_in(&mut runtime, "workspace-a", "checkout-a", "pane-a");
@@ -553,7 +553,7 @@ fn views_of(runtime: &Runtime, key: (&str, &str)) -> bool {
         .workspaces
         .iter()
         .find(|view| view.is(key.0, key.1))
-        .map(|view| view.shows_documents())
+        .map(|view| view.open && view.trays.iter().any(|tray| tray.shown))
         .unwrap()
 }
 
@@ -643,7 +643,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
         expected.checkout_path.clone(),
     );
     let load = runtime
-        .view_layout_of(&key)
+        .front_tray_layout(&key)
         .unwrap()
         .display(&first.view_id)
         .unwrap()
@@ -663,7 +663,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
     );
     assert_eq!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .display(&first.view_id)
             .unwrap()
@@ -716,7 +716,7 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
         )
         .unwrap();
     let newer = runtime
-        .view_layout_of(&key)
+        .front_tray_layout(&key)
         .unwrap()
         .display(&first.view_id)
         .unwrap()
@@ -743,7 +743,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
     let (existing, other_view, other_area) = seed_browser_areas(&mut runtime, &expected);
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
     assert_eq!(
-        runtime.view_layout_of(&key).unwrap().active_area().id,
+        runtime.front_tray_layout(&key).unwrap().active_area().id,
         other_area
     );
     let before =
@@ -766,7 +766,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
         .unwrap();
     assert_ne!(first.view_id, existing);
     assert_eq!(first.area_id.as_deref(), Some("a1"));
-    let layout = runtime.view_layout_of(&key).unwrap();
+    let layout = runtime.front_tray_layout(&key).unwrap();
     assert_eq!(layout.area("a1").unwrap().displays.len(), 2);
     assert_eq!(
         layout.area(&other_area).unwrap().active.as_deref(),
@@ -816,7 +816,7 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
     assert_eq!(second.area_id.as_deref(), Some("a1"));
     assert_eq!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .area("a1")
             .unwrap()
@@ -865,7 +865,7 @@ fn browser_explicit_area_dedupes_only_within_that_area() {
     assert_eq!(reloaded.view_id, first.view_id);
     assert_eq!(reloaded.area_id.as_deref(), Some("a1"));
     assert!(reloaded.load.unwrap() > first.load.unwrap());
-    let layout = runtime.view_layout_of(&key).unwrap();
+    let layout = runtime.front_tray_layout(&key).unwrap();
     assert_eq!(layout.displays().count(), 3);
     assert_eq!(layout.display(&other_view).unwrap().load, 2);
     assert_eq!(
@@ -914,7 +914,7 @@ fn legacy_browser_open_keeps_global_dedupe_and_active_area_insertion() {
         .unwrap();
     assert_eq!(reused.view_id, existing);
     assert_eq!(reused.area_id.as_deref(), Some("a1"));
-    assert_eq!(runtime.view_layout_of(&key).unwrap().displays().count(), 3);
+    assert_eq!(runtime.front_tray_layout(&key).unwrap().displays().count(), 3);
 }
 
 #[test]
@@ -1004,12 +1004,11 @@ fn browser_area_removed_during_file_read_refuses_without_mutation() {
     };
     let material = source.read().unwrap();
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
-    runtime
-        .change_view_layout(&key, |layout, _| Ok((layout.remove(&other_view), true)))
+    runtime.change_front_layout(&key, |layout, _| Ok((layout.remove(&other_view), true)))
         .unwrap();
     assert!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .area(&other_area)
             .is_none()
@@ -1093,7 +1092,7 @@ fn scoped_browser_close_and_select_refuse_a_page_moved_after_prepare() {
         let key = (expected.device_id.clone(), expected.checkout_path.clone());
         assert_eq!(
             runtime
-                .view_layout_of(&key)
+                .front_tray_layout(&key)
                 .unwrap()
                 .area_of(&view_id)
                 .unwrap()
@@ -1133,7 +1132,7 @@ fn scoped_browser_close_and_select_refuse_a_document_in_the_named_area() {
             .unwrap()
             .views
             .entry(&expected.device_id, &expected.checkout_path)
-            .layout;
+            .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
         let file = layout.new_display(
             "/checkouts/b/index.html",
             crate::view_layout::DisplayKind::File,
@@ -1266,7 +1265,7 @@ fn browser_scope_is_part_of_retry_identity_and_closed_target_replays_its_receipt
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
     assert!(
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .unwrap()
             .display(&view_id)
             .is_none()
