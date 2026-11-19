@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use super::*;
 use crate::agent_sleep::{
-    DECISION_INTERVAL_MS, SLEEP_RETRY_BACKOFF_MS, Settled, SleepCause, SleepMachine, SleepPhase,
-    SleepRecord, SleepScope, WakeMode, valid_after_hours,
+    Awake, DECISION_INTERVAL_MS, LetterWaits, SLEEP_RETRY_BACKOFF_MS, Settled, SleepCause,
+    SleepMachine, SleepPhase, SleepRecord, SleepScope, WakeMode, valid_after_hours,
 };
 use crate::agent_sleep_engine::{self, SleepTarget, WakeOutcome, WakeRequest};
 use crate::model::AgentActionRefusal;
@@ -207,26 +207,32 @@ impl Runtime {
             .iter()
             .map(|(pane_id, backoff)| (pane_id.clone(), backoff.until_unix_ms))
             .collect::<HashMap<_, _>>();
+        // Sleep set to Off sleeps nothing, so no letter is read for it; a
+        // store that could not load keeps no letter.
+        let letters = match (
+            self.snapshot.ui_state.agent_sleep_after_hours,
+            &self.delivery_ledger,
+        ) {
+            (Some(_), Ok(ledger)) => LetterWaits::of(ledger),
+            _ => LetterWaits::default(),
+        };
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters: &letters,
+        };
         let store = &self.snapshot.ui_state.agent_sleep;
         let due = store.due(
             self.sleep_agents(device),
             machine,
-            &on_screen,
+            &awake,
             self.snapshot.ui_state.agent_sleep_after_hours,
-            &backoff_until,
             now_unix_ms,
         );
         for pane_id in due.iter().take(ends_left(store)) {
             changed |= self.begin_agent_sleep(pane_id, "idle", None, now_unix_ms);
         }
-        changed |= self.sleep_one_under_pressure(
-            device,
-            machine,
-            &on_screen,
-            &backoff_until,
-            &due,
-            now_unix_ms,
-        );
+        changed |= self.sleep_one_under_pressure(device, machine, &awake, &due, now_unix_ms);
         if seen && !changed {
             self.persist_ui_state();
         }
@@ -246,8 +252,7 @@ impl Runtime {
         &mut self,
         device: Option<&str>,
         machine: SleepMachine,
-        on_screen: &HashSet<String>,
-        backoff_until: &HashMap<String, u64>,
+        awake: &Awake<'_>,
         taken: &[String],
         now_unix_ms: u64,
     ) -> bool {
@@ -271,8 +276,7 @@ impl Runtime {
         let candidates = store.pressure_candidates(
             self.sleep_agents(device),
             machine,
-            on_screen,
-            backoff_until,
+            awake,
             taken,
             now_unix_ms,
         );
@@ -375,7 +379,11 @@ impl Runtime {
         }
         // A woken or closed sleeper frees its letter wake's place.
         self.letter_wakes.touch();
+        let now = unix_milliseconds();
         for event in &settled {
+            if let Settled::Woke { pane_id, .. } = event {
+                self.snapshot.ui_state.agent_sleep.came_back(pane_id, now);
+            }
             let (pane_id, kind, phase) = match event {
                 Settled::Woke { pane_id, phase } => (pane_id, "agent_sleep.awake", Some(*phase)),
                 Settled::Closed { pane_id } => (pane_id, "agent_sleep.closed", None),
@@ -880,13 +888,6 @@ impl Runtime {
             Some(record) => self.agent_permission_for_pane(pane_id, &record.kind),
             None => return false,
         };
-        // A wake is the operator's attention, as a look is: the conversation
-        // it resumes is as old as the sleep, so without this an agent woken
-        // from the menu or the phone off screen would be due again at once.
-        self.snapshot
-            .ui_state
-            .agent_sleep
-            .mark_seen([pane_id], unix_milliseconds());
         let Some(record) = self.snapshot.ui_state.agent_sleep.records.get_mut(pane_id) else {
             return false;
         };

@@ -584,7 +584,7 @@ fn antigravity_event(event: HookEvent, started: Instant) {
         // letters-to-busy-agents D-02).
         (HookEvent::UserPromptSubmit, None) => {
             if read.invocation == Some(0) {
-                antigravity_prompt(&home, &conversation, started);
+                antigravity_prompt(&home, &conversation, read.prompt.clone(), started);
             } else {
                 antigravity_tool_gap(&home, &conversation, started);
             }
@@ -622,11 +622,20 @@ fn antigravity_event(event: HookEvent, started: Instant) {
 
 /// The prompt's Memory cards and the pane's waiting letters, asked at once,
 /// injected as one system message; a letter is confirmed only after that
-/// answer reached agy.
-fn antigravity_prompt(home: &std::path::Path, conversation: &str, started: Instant) {
+/// answer reached agy. The ask names the prompt by its digest, as every
+/// prompt hook's does, so the core hands a bell's turn its letters and the
+/// operator's own prompt only their count (`docs/delivery.md`, Recognizing
+/// the bell): the event's `lastUserInput`, else the transcript's last
+/// prompt for an agy that sends none.
+fn antigravity_prompt(
+    home: &std::path::Path,
+    conversation: &str,
+    prompt: Option<String>,
+    started: Instant,
+) {
     let memory_deadline = started + hide_agent_hooks::memory::MEMORY_BUDGET;
     let delivery_deadline = started + INTAKE_BUDGET;
-    let prompt = antigravity::last_prompt(home, conversation);
+    let prompt = prompt.or_else(|| antigravity::last_prompt(home, conversation));
     let (cards, intake) = std::thread::scope(|scope| {
         let asking = std::thread::Builder::new()
             .name("hide-hook-memory".to_owned())
@@ -642,7 +651,9 @@ fn antigravity_prompt(home: &std::path::Path, conversation: &str, started: Insta
         let intake = hide_agent_hooks::delivery::pull(
             delivery_deadline,
             &hide_agent_hooks::delivery::Prompt {
-                digest: None,
+                digest: prompt
+                    .as_deref()
+                    .map(hide_agent_hooks::delivery::prompt_digest),
                 session: Some(conversation.to_owned()),
             },
         )
