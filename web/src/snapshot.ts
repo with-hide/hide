@@ -3293,7 +3293,15 @@ export type AutomationRun = {
   conversation_missing: boolean;
   branch?: string;
   seen: boolean;
+  /** What its conversation spent, absent until Hide's usage ledger read it (D-26, B39). */
+  spend?: AutomationSpend;
 };
+
+/**
+ * What a run's conversation spent as Hide's usage ledger read it from the agent's own records (D-26, B39): its new
+ * tokens and their price in millionths of a dollar; `unpriced` when some calls had no price, so the price is a lower bound.
+ */
+export type AutomationSpend = { tokens: number; micro_usd: number; unpriced: boolean };
 
 /**
  * One record of an automation, newest first: a run, the times skipped one after another for the same reason
@@ -3321,6 +3329,8 @@ export type Automation = {
   /** A run goes now: [지금 실행] is refused (B19). */
   running: boolean;
   unseen: number;
+  /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
+  recent_spend?: AutomationSpend & { runs: number };
   records: AutomationRecord[];
 };
 

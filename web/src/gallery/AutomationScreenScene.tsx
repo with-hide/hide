@@ -38,10 +38,10 @@ function automations(project: string, now: number): Automation[] {
     {
       id: "a-issues", name: "아침 이슈 정리", task: "새로 올라온 이슈를 읽고 우선순위와 담당 후보를 정리해 줘.",
       schedule: { kind: "weekdays", time: "09:00" }, reads_as: { kind: "weekdays", time: "09:00" }, next_run_at_unix_ms: now + 15 * HOUR,
-      agent: { kind: "claude", model: "opus", effort: "high" }, folder: { path: `${ROOT}/아침-이슈-정리-a1`, default: true, worktree: false }, running: false, unseen: 1,
+      agent: { kind: "claude", model: "opus", effort: "high" }, folder: { path: `${ROOT}/아침-이슈-정리-a1`, default: true, worktree: false }, running: false, unseen: 1, recent_spend: { tokens: 16_440, micro_usd: 510_000, unpriced: true, runs: 2 },
       records: [
-        { kind: "run", number: 4, trigger: "scheduled", due_unix_ms: now - 9 * HOUR, started_at_unix_ms: now - 9 * HOUR, ended_at_unix_ms: now - 9 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false },
-        { kind: "run", number: 3, trigger: "manual", started_at_unix_ms: now - 30 * HOUR, ended_at_unix_ms: now - 30 * HOUR + 8 * 60_000, state: "stopped", reason: "stopped_by_person", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true },
+        { kind: "run", number: 4, trigger: "scheduled", due_unix_ms: now - 9 * HOUR, started_at_unix_ms: now - 9 * HOUR, ended_at_unix_ms: now - 9 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: false, spend: { tokens: 12_340, micro_usd: 420_000, unpriced: false } },
+        { kind: "run", number: 3, trigger: "manual", started_at_unix_ms: now - 30 * HOUR, ended_at_unix_ms: now - 30 * HOUR + 8 * 60_000, state: "stopped", reason: "stopped_by_person", attempt: 1, opened: false, resumable: true, conversation_missing: false, seen: true, spend: { tokens: 4_100, micro_usd: 90_000, unpriced: true } },
         { kind: "skipped", at_unix_ms: now - 33 * HOUR, last_unix_ms: now - 29 * HOUR, count: 5, reason: { kind: "usage_limit", agent: "claude" } },
         { kind: "missed", first_unix_ms: now - 81 * HOUR, last_unix_ms: now - 57 * HOUR, count: 2, reason: "core_off" },
         { kind: "run", number: 2, trigger: "missed", due_unix_ms: now - 81 * HOUR, started_at_unix_ms: now - 56 * HOUR, ended_at_unix_ms: now - 56 * HOUR + 14 * 60_000, state: "succeeded", attempt: 1, opened: false, resumable: false, conversation_missing: true, seen: true },
@@ -57,7 +57,7 @@ function automations(project: string, now: number): Automation[] {
     },
     {
       id: "a-logs", name: "로그 정리", task: "어제 쌓인 진단 로그에서 같은 실패를 묶고 처음 보는 것만 알려 줘.",
-      schedule: { kind: "every_hours", hours: 6, time: "00:00" }, reads_as: { kind: "every_hours", hours: 6, time: "00:00" }, next_run_at_unix_ms: now + 5 * HOUR,
+      schedule: { kind: "every_minutes", minutes: 30 }, reads_as: { kind: "every_minutes", minutes: 30 }, next_run_at_unix_ms: now + 19 * 60_000,
       agent: { kind: "claude" }, folder: { path: `${ROOT}/로그-정리-a3`, default: true, worktree: false }, running: true, unseen: 0,
       records: [
         { kind: "run", number: 7, trigger: "scheduled", due_unix_ms: now - 11 * 60_000, started_at_unix_ms: now - 11 * 60_000, state: "running", attempt: 1, opened: false, resumable: false, conversation_missing: false, seen: true },

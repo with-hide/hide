@@ -8,7 +8,7 @@ import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, type AutomationExample } 
 import { AutomationForm, EXAMPLE_WORDS } from "./AutomationForm";
 import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
-import { lastResult, pauseReasonText, recordText, scheduleText, skippedFolded, whenText, type RecordTone } from "./automationWords";
+import { lastResult, pauseReasonText, recentSpendText, recordText, scheduleText, skippedFolded, spendText, whenText, type RecordTone } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
 import { formatElapsed, useMinuteClock } from "./components/elapsed";
 import { EmptyWelcome } from "./components/empty-welcome";
@@ -23,7 +23,7 @@ import { requireInterfaceLanguage, type InterfaceLanguage } from "./i18n/locale"
 import { cn } from "./lib/utils";
 import { agentProps } from "./PaneGrid";
 import { PaneView } from "./PaneView";
-import { catalogWorkspaces, type Automation, type AutomationRecord, type AutomationRun, type AutomationsSection, type PaneRow, type SnapshotRest } from "./snapshot";
+import { catalogWorkspaces, type Automation, type AutomationRecord, type AutomationRun, type AutomationSpend, type AutomationsSection, type PaneRow, type SnapshotRest } from "./snapshot";
 import { focusedPaneOf, useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -453,6 +453,7 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
               <StateBadge automation={automation} />
             </h1>
             <p className="max-w-(--size-editor-measure) whitespace-pre-wrap text-body text-subtle-foreground" data-automation-task="true">{automation.task}</p>
+            {automation.recent_spend ? <p className="text-caption tabular-nums text-muted-foreground" data-automation-recent-spend={automation.recent_spend.runs}>{recentSpendText(automation.recent_spend, words.language, t)}</p> : null}
           </div>
         </div>
       </div>
@@ -538,6 +539,7 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
         <RecordWords tone={shown.tone} text={shown.text} />
         {record.kind === "run" ? <RunTags run={record} /> : null}
       </span>
+      {record.kind === "run" && record.spend ? <RunSpend spend={record.spend} words={words} /> : null}
     </>
   );
   const data = { "data-automation-record": record.kind, "data-automation-record-number": record.kind === "run" ? record.number : undefined, "data-automation-run-state": record.kind === "run" ? record.state : undefined, "data-automation-run-reason": record.kind === "run" ? record.reason : undefined };
@@ -550,6 +552,11 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
       <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />
     </RowButton>
   );
+}
+
+/** What a run's conversation spent, `토큰 12.3K · $0.42`, once the ledger read it (B39). */
+function RunSpend({ spend, words }: { spend: AutomationSpend; words: Words }) {
+  return <span className="shrink-0 text-caption tabular-nums text-muted-foreground" data-automation-run-spend={spend.micro_usd}>{spendText(spend, words.language, words.t)}</span>;
 }
 
 /** `수동`, `놓친 회차`, `이어서 대화 중`, `대화를 찾을 수 없음` (B17-B20). */
@@ -633,6 +640,7 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
           <RecordWords tone={shown.tone} text={shown.text} />
           <RunTags run={run} />
         </span>
+        {run.spend ? <RunSpend spend={run.spend} words={words} /> : null}
         {going ? (
           <Button variant="secondary" size="sm" onClick={() => actions.automationRunStop(automation.id, run.number)} data-automation-run-stop={run.number}>
             <SquareIcon aria-hidden="true" className="fill-current" />

@@ -2,7 +2,9 @@ import type { TFunction } from "i18next";
 import { agentProductName } from "./agentAdapters";
 import { formatElapsed } from "./components/elapsed";
 import type { InterfaceLanguage } from "./i18n/locale";
-import type { Automation, AutomationPauseReason, AutomationRecord, AutomationRun, AutomationSchedule, AutomationWeekday } from "./snapshot";
+import { usd } from "./projectStatus";
+import type { Automation, AutomationPauseReason, AutomationRecord, AutomationRun, AutomationSchedule, AutomationSpend, AutomationWeekday } from "./snapshot";
+import { compactTokens } from "./usageHistory";
 
 // The words of an automation (PRD automations B3, B6, B11, B16-B23, B34),
 // one set for the desktop screen and the phone's tab: what a schedule reads
@@ -152,6 +154,20 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
         }),
       };
   }
+}
+
+/**
+ * What a run spent, `토큰 12.3K · $0.42` (D-26, B39), in the usage screen's
+ * token form and the project tool's money; a price some calls lacked is a
+ * lower bound, `≥ $0.42`, as the project tool's per-PR cost reads.
+ */
+export function spendText(spend: AutomationSpend, language: InterfaceLanguage, t: Translate): string {
+  return t("automation.spend", { tokens: compactTokens(spend.tokens, language), cost: `${spend.unpriced ? "≥ " : ""}${usd(spend.micro_usd, language)}` });
+}
+
+/** `최근 5회 · 토큰 61.5K · $2.10`: what the runs the ledger read among those kept spent together (B39). */
+export function recentSpendText(recent: AutomationSpend & { runs: number }, language: InterfaceLanguage, t: Translate): string {
+  return t("automation.recentSpend", { count: recent.runs, spend: spendText(recent, language, t) });
 }
 
 /** Whether a skipped line holds several times, which then say their own span as a missed line does, with no time of their own. */

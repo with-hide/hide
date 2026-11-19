@@ -166,7 +166,7 @@ it("lists each automation's schedule and next run in the computer's zone, its un
 it("opens an automation's runs newest first with their marks, tags and results, and closes the page when it leaves", async () => {
   const records: PhoneAutomation["records"] = [
     { kind: "run", number: 4, trigger: "manual", started_at_unix_ms: NOW - HOUR, state: "running", attempt: 2, seen: false },
-    { kind: "run", number: 3, trigger: "missed", started_at_unix_ms: NOW - 24 * HOUR, ended_at_unix_ms: NOW - 24 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, seen: false },
+    { kind: "run", number: 3, trigger: "missed", started_at_unix_ms: NOW - 24 * HOUR, ended_at_unix_ms: NOW - 24 * HOUR + 12 * 60_000, state: "succeeded", attempt: 1, seen: false, spend: { tokens: 12_340, micro_usd: 420_000, unpriced: false } },
     { kind: "skipped", at_unix_ms: NOW - 48 * HOUR, last_unix_ms: NOW - 48 * HOUR, count: 1, reason: { kind: "previous_running" } },
     { kind: "run", number: 2, trigger: "scheduled", started_at_unix_ms: NOW - 72 * HOUR, ended_at_unix_ms: NOW - 71 * HOUR, state: "failed", attempt: 3, seen: true },
   ];
@@ -185,6 +185,8 @@ it("opens an automation's runs newest first with their marks, tags and results, 
       ["skipped", null, "Skipped · the last run was still going"],
       ["failed", null, "Failed · 3 tries"],
     ]);
+    // B39: a run the ledger read says what it spent, in the desktop's words.
+    expect([...container.querySelectorAll("[data-phone-automation-spend]")].map((line) => line.textContent)).toEqual(["12.3K tokens · $0.42"]);
     expect(container.querySelector("[data-phone-automation-older]")!.getAttribute("data-phone-automation-older")).toBe("30");
     await list([]);
     expect(container.querySelector("[data-phone-automation-page]")).toBeNull();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createInterfaceI18n } from "./i18n/instance";
-import { lastResult, nextRunText, recordText, scheduleText, whenText } from "./automationWords";
+import { lastResult, nextRunText, recentSpendText, recordText, scheduleText, spendText, whenText } from "./automationWords";
 import type { Automation, AutomationRecord } from "./snapshot";
 
 // PRD automations B3, B6, B20, B22: what the table, the detail and the phone
@@ -57,6 +57,12 @@ describe("an automation's words", () => {
     expect(recordText(run({ state: "stopped", reason: "stopped_by_person", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "stopped", text: "멈춤 · 사람이 끝냄" });
     expect(recordText(run({ state: "stopped", reason: "automation_machine_changed", ended_at_unix_ms: NOW }), NOW, SEOUL, "ko", ko)).toEqual({ tone: "stopped", text: "멈춤 · 기계 바뀜" });
     expect(recordText({ kind: "skipped", at_unix_ms: NOW, last_unix_ms: NOW, count: 1, reason: { kind: "previous_running" } }, NOW, SEOUL, "ko", ko)).toEqual({ tone: "skipped", text: "건너뜀 · 이전 회차 진행 중" });
+  });
+
+  it("words what a run spent in the usage screen's tokens, and its price as a lower bound when some calls had none", () => {
+    expect(spendText({ tokens: 12_340, micro_usd: 420_000, unpriced: false }, "ko", ko)).toBe("토큰 12.3K · $0.42");
+    expect(spendText({ tokens: 900, micro_usd: 90_000, unpriced: true }, "en", en)).toBe("900 tokens · ≥ $0.09");
+    expect(recentSpendText({ tokens: 1_500_000, micro_usd: 2_100_000, unpriced: false, runs: 5 }, "ko", ko)).toBe("최근 5회 · 토큰 1.5M · $2.10");
   });
 
   it("folds the times skipped one after another into one line that says how many and when", () => {

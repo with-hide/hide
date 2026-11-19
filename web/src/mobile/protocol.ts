@@ -178,7 +178,7 @@ export type PhoneMission = MissionBrief<PhoneMissionNode> & {
 };
 
 /** One run as the phone gets it (`hide-core` phone `PhoneRun`): no pane, branch, conversation or answer. */
-export type PhoneAutomationRun = Pick<AutomationRun, "number" | "trigger" | "started_at_unix_ms" | "ended_at_unix_ms" | "state" | "attempt" | "reason" | "seen">;
+export type PhoneAutomationRun = Pick<AutomationRun, "number" | "trigger" | "started_at_unix_ms" | "ended_at_unix_ms" | "state" | "attempt" | "reason" | "seen" | "spend">;
 
 export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exclude<AutomationRecord, { kind: "run" }>;
 
@@ -186,7 +186,7 @@ export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exc
  * One automation as the phone gets it (`hide-core` phone `PhoneAutomation`): no folder, task or agent. `schedule` is the choice it
  * reads as, `records` the newest first with `records_omitted` older ones left on the desktop.
  */
-export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused"> & {
+export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused" | "recent_spend"> & {
   schedule: AutomationSchedule;
   records: PhoneAutomationRecord[];
   records_omitted?: number;

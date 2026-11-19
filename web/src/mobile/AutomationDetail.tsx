@@ -4,7 +4,7 @@
 // The rest of a run (its terminal, its conversation) stays on the desktop.
 
 import { ArrowLeftIcon, CheckIcon, Loader2Icon, MinusIcon, PauseIcon, PlayIcon, SquareIcon, XIcon } from "lucide-react";
-import { recordText, skippedFolded, whenText, type RecordTone } from "../automationWords";
+import { recordText, skippedFolded, spendText, whenText, type RecordTone } from "../automationWords";
 import { Button } from "../components/ui/button";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -157,6 +157,7 @@ function Record({ record }: { record: PhoneAutomationRecord }) {
           {tag ? <span className="rounded-sm bg-secondary px-xs text-caption text-subtle-foreground" data-phone-automation-tag={record.kind === "run" ? record.trigger : undefined}>{tag}</span> : null}
         </span>
         <span className="break-keep text-body text-subtle-foreground wrap-anywhere" data-phone-automation-result="true">{line.text}</span>
+        {record.kind === "run" && record.spend ? <span className="text-caption tabular-nums text-muted-foreground" data-phone-automation-spend="true">{spendText(record.spend, language, t)}</span> : null}
       </div>
     </div>
   );
