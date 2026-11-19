@@ -886,6 +886,72 @@ async fn a_removal_reaches_a_host_that_was_off_and_a_second_one_forgets_it_here(
     .await;
 }
 
+/// B27: a removal of a grant the two have since replaced by pairing again
+/// takes nothing. The host answers it as done, so whoever kept sending it
+/// stops, and the new grant, its connection and its streams stay.
+#[tokio::test]
+async fn a_late_removal_of_an_old_grant_leaves_the_pairing_made_since() {
+    let net = Net::new();
+    let mut pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let mut mac = Desk::new(&net, "macbook", "MacBook");
+    let (host, guest) = (pc.key(), mac.key());
+    pair_by_link(&mut pc, &mut mac).await;
+    let old = mac.peers().host(&host).unwrap().grant;
+
+    // The host removes the guest, and the two pair again: a new grant.
+    pc.pairings.remove_guest(&guest).unwrap();
+    mac.saves("the removal heard", |peers| {
+        peers
+            .host(&host)
+            .is_some_and(|host| host.state == KnownState::Unpaired)
+    })
+    .await;
+    mac.machine
+        .event("the connection's end", |event| {
+            matches!(event, PeerEvent::Disconnected { key, .. } if *key == host).then_some(())
+        })
+        .await;
+    pair_by_link(&mut pc, &mut mac).await;
+    let new = mac.peers().host(&host).unwrap().grant;
+    assert_ne!(old, new);
+    let held = |pc: &Desk| {
+        pc.peers()
+            .grants(|grants, _| grants.current(&guest).map(|grant| grant.id.clone()))
+    };
+    assert_eq!(held(&pc), Some(new.clone()));
+
+    // The guest works over the new pairing.
+    let link = mac.peers().link(&host).unwrap();
+    let mut terminal = link.open(StreamKind::Terminal).await.unwrap();
+    let mut there = pc.machine.accepted(StreamKind::Terminal).await;
+
+    // The removal of the old grant, sent before the two paired again,
+    // arrives only now.
+    let mut revoking = link.open(StreamKind::Revoke).await.unwrap();
+    let revoke = Revoke::Revoke { grant: old.clone() };
+    write_message(&mut revoking.send, &revoke).await.unwrap();
+    let body = within("the answer", read_message(&mut revoking.recv, MAX_MESSAGE))
+        .await
+        .unwrap()
+        .expect("an answer");
+    assert_eq!(
+        Revoke::parse(&body).unwrap(),
+        Some(Revoke::Revoked { grant: old })
+    );
+
+    // It took nothing: the new grant stands on both machines, and the
+    // stream opened under it still carries the guest's keys.
+    assert_eq!(held(&pc), Some(new));
+    assert_eq!(pc.grants(&guest), GrantState::Active);
+    assert_eq!(mac.host_state(&host), Some(KnownState::Active));
+    terminal.send.write_all(b"k").await.unwrap();
+    let mut byte = [0u8; 1];
+    within("the guest's key", there.recv.read_exact(&mut byte))
+        .await
+        .unwrap();
+    assert_eq!(&byte, b"k");
+}
+
 #[tokio::test(start_paused = true)]
 async fn the_seventh_confirm_or_removal_in_a_minute_goes_unanswered() {
     let net = Net::new();
