@@ -97,9 +97,9 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   const moved = kind === "lane" ? edgeColumn(frame) : frame.view;
   const value = moved?.width ?? 0;
   const min = moved?.min ?? 0;
-  // Docked, the lane grows into what Agent Views can spare; over them, to
-  // the body's edge; between the columns, into what the tool column can spare.
-  const spare = kind === "lane" ? (frame.mode === "overlay" ? frame.agents - frame.width - sizes.divider : frame.agents - sizes.agentMin) : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
+  // Over the agents the lane grows to the body's edge; between the columns,
+  // into what the tool column can spare.
+  const spare = kind === "lane" ? frame.agents - frame.width - sizes.divider : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
   return (
     <div
       role="separator"

@@ -184,7 +184,7 @@ describe("close chords close what covers the screen first", () => {
   const press = (init: KeyboardEventInit) => window.dispatchEvent(new PlatformKeyboardEvent("keydown", init));
   const closeChord = { key: "w", code: "KeyW", metaKey: true };
   // The documents are drawn in the lane, so the chord's ordinary target is the focused View's page.
-  beforeEach(() => useUiStore.setState({ drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } }));
+  beforeEach(() => useUiStore.setState({ drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } }));
 
   it("closes the focused view when nothing covers it", () => {
     press(closeChord);

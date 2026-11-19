@@ -79,7 +79,7 @@
   "right-lane.spec.ts › a Workspace switch cancels its lane drag without changing another Workspace": 8.8,
   "right-lane.spec.ts › an SSH Workspace's lane keeps its chords, narrow fallback and saved widths apart from the same local path": 0.0,
   "right-lane.spec.ts › lane dividers retain every rapid arrow step before a snapshot arrives": 6.8,
-  "right-lane.spec.ts › the lane comes and goes over the terminals without a resize, the pin and a docked divider resize once, and input continues through all of it": 31.8,
+  "right-lane.spec.ts › the lane comes and goes over the terminals without a resize, its divider lands once without a resize, and input continues through all of it": 31.8,
   "server-picker.spec.ts › native fixture refuses shared runtime state before launch": 0.0,
   "server-picker.spec.ts › server picker in a background native window": 9.1,
   "session-labels.spec.ts › a label belongs to its session: never shown for another, restored for its own": 34.8,

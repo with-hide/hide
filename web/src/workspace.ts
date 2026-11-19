@@ -121,7 +121,7 @@ export type CheckoutCi = {
 /** The pixel sizes the body is laid out with, read from their tokens (D-09). */
 export type LaneSizes = {
   agentMin: number;
-  /** The documents' and the 보기 slot's minimum and width until the operator resizes them. */
+  /** The documents' minimum and width until the operator resizes them. */
   viewMin: number;
   viewIdeal: number;
   /** The document width a page opened in the lane widens it to (`pageLaneWidth`). */
@@ -131,7 +131,7 @@ export type LaneSizes = {
   /** The Project tool and Changes. */
   panelMin: number;
   panelIdeal: number;
-  /** A divider: between Agent Views and a pinned lane, and between the two columns. */
+  /** A divider: at the lane's left edge, and between the two columns. */
   divider: number;
 };
 
@@ -141,10 +141,9 @@ export type LaneSizes = {
  *
  * - `closed`: no column; Agent Views has the body.
  * - `overlay`: drawn over Agent Views, which keeps its width.
- * - `docked`: pinned, beside Agent Views, which gives up the lane's width.
  * - `expanded`: over the whole body; Agent Views keeps the width it had.
  */
-export type LaneMode = "closed" | "overlay" | "docked" | "expanded";
+export type LaneMode = "closed" | "overlay" | "expanded";
 
 /** The Workspace widths the columns draw from (D-09). */
 export type LaneWidthField = "document_width" | "explorer_width" | "panel_width";
@@ -167,8 +166,6 @@ export type LaneFrame = {
   tool: LaneColumn | null;
   /** Both columns exist but the body holds only one at a time, the front one drawn (B19). */
   stacked: boolean;
-  /** Pinned, but drawn over Agent Views because docking would leave it under its minimum (B19). */
-  narrowPin: boolean;
 };
 
 /** What `laneFrame` reads: the core's lane and this page's own facts. */
@@ -176,7 +173,6 @@ export type LaneInput = {
   open: boolean;
   view: LaneView;
   tool: Tool | null;
-  pinned: boolean;
   documentWidth: number | null;
   explorerWidth: number | null;
   panelWidth: number | null;
@@ -219,64 +215,44 @@ function fitColumns(view: Want, tool: Want, room: number, divider: number): { vi
 }
 
 /**
- * The body as it is drawn (PRD lane-two-columns B1, B15, B17, B19, B20).
- * Each column draws at its own stored width, the same pinned or not, so a
- * wide document leaves the tool column as it was. A pinned lane docks
- * wherever its columns' minimums fit beside Agent Views' own, the viewing
- * column giving way first; when the two do not fit even at their minimums
- * the front one covers the other; and only a body too narrow for even that
- * draws it over the agents, where it stays (PRD right-lane D-07). A window
- * that narrows and widens again moves between these by width alone: nothing
- * narrow is stored. Expanded, the tool column keeps its width and the
- * viewing column takes the rest.
+ * The body as it is drawn (PRD lane-two-columns B1, B15, B17, B19, B20;
+ * lane-desk-pair-view B35): the lane is drawn over Agent Views, which keeps
+ * its width. Each column draws at its own stored width, so a wide document
+ * leaves the tool column as it was; a body narrower than both gives way
+ * inside the lane, the viewing column first, and when even their minimums
+ * do not fit the front one covers the other; a body narrower than one
+ * column is the lane's whole width. A window that narrows and widens again
+ * moves between these by width alone: nothing narrow is stored. Expanded,
+ * the tool column keeps its width and the viewing column takes the rest.
  */
 export function laneFrame(input: LaneInput): LaneFrame {
   const { body, sizes } = input;
   const view = viewWant(input);
   const tool = toolWant(input);
-  const columns = (view ? 1 : 0) + (tool ? 1 : 0);
-  const open = input.open && columns > 0;
-  const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false, narrowPin: false };
-  if (!open) return none;
-  if (body <= 0) return { ...none, mode: input.expanded ? "expanded" : input.pinned ? "docked" : "overlay", agents: 0 };
-  // The lane's room: beside the agents' minimum when pinned, else the body.
-  const dockRoom = body - sizes.divider - sizes.agentMin;
+  const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false };
+  if (!input.open || (!view && !tool)) return none;
+  const mode: LaneMode = input.expanded ? "expanded" : "overlay";
+  if (body <= 0) return { ...none, mode, agents: 0 };
   const column = (want: Want, width: number): LaneColumn => ({ field: want.field, width, min: want.min });
-  // What the lane wants in `room`: both columns, the front one alone when
-  // stacked, or the one column it has.
-  // `squeezed`, a column too narrow for its minimum takes `room` anyway: a
-  // body narrower than one column is the lane's whole width (B19).
-  const place = (room: number, squeezed = false): { view: LaneColumn | null; tool: LaneColumn | null; stacked: boolean; width: number } | null => {
-    if (view && tool) {
-      const fit = fitColumns(view, tool, room, sizes.divider);
-      if (fit) return { view: column(view, fit.view), tool: column(tool, fit.tool), stacked: false, width: fit.view + sizes.divider + fit.tool };
-      const front = input.front === "tool" ? tool : view;
-      if (front.min > room && !squeezed) return null;
-      const width = Math.min(front.want, room);
-      return { view: front === view ? column(view, width) : null, tool: front === tool ? column(tool, width) : null, stacked: true, width };
-    }
-    const one = (view ?? tool)!;
-    if (one.min > room && !squeezed) return null;
-    const width = Math.min(one.want, room);
-    return { view: view ? column(view, width) : null, tool: tool ? column(tool, width) : null, stacked: false, width };
-  };
-  const docks = input.pinned && dockRoom >= 0 && place(dockRoom) !== null;
-  const mode: LaneMode = input.expanded ? "expanded" : docks ? "docked" : "overlay";
   if (mode === "expanded") {
     // The tool column keeps its width and the viewing column takes the rest (B15).
     if (view && tool) {
       const toolWidth = Math.min(tool.want, Math.max(0, body - sizes.divider - view.min));
-      return { mode, agents: docks ? body - sizes.divider - place(dockRoom)!.width : body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, narrowPin: false };
+      return { mode, agents: body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false };
     }
     const one = (view ?? tool)!;
-    return { mode, agents: docks ? body - sizes.divider - place(dockRoom)!.width : body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, narrowPin: false };
+    return { mode, agents: body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false };
   }
-  // Docked, the lane takes what it wants of the agents' spare; over them it
-  // may take the body, giving way inside itself like a narrow dock, and a
-  // body narrower than one column is the whole lane.
-  const placed = docks ? place(dockRoom)! : place(body, true)!;
-  const agents = docks ? body - sizes.divider - placed.width : body;
-  return { mode, agents, width: placed.width, view: placed.view, tool: placed.tool, stacked: placed.stacked, narrowPin: input.pinned && !docks };
+  if (view && tool) {
+    const fit = fitColumns(view, tool, body, sizes.divider);
+    if (fit) return { mode, agents: body, width: fit.view + sizes.divider + fit.tool, view: column(view, fit.view), tool: column(tool, fit.tool), stacked: false };
+    const front = input.front === "tool" ? tool : view;
+    const width = Math.min(front.want, body);
+    return { mode, agents: body, width, view: front === view ? column(view, width) : null, tool: front === tool ? column(tool, width) : null, stacked: true };
+  }
+  const one = (view ?? tool)!;
+  const width = Math.min(one.want, body);
+  return { mode, agents: body, width, view: view ? column(view, width) : null, tool: tool ? column(tool, width) : null, stacked: false };
 }
 
 /** `value` within `min..max`, the minimum winning when the two cross. */
@@ -296,9 +272,8 @@ export function edgeColumn(frame: LaneFrame): LaneColumn | null {
  * Where the divider at the lane's left edge, dragged to `x` pixels from the
  * body's left edge, lands: the width of the column at that edge, in the
  * width it draws from, so the other column keeps its own, never under that
- * column's minimum (B17). Docked, it leaves Agent Views their own width;
- * over the agents it may reach the body's edge, since nothing beside it
- * gives way.
+ * column's minimum (B17); over the agents it may reach the body's edge,
+ * since nothing beside it gives way.
  */
 export function laneLanding(input: { x: number; body: number; frame: LaneFrame; sizes: LaneSizes }): LaneLanding {
   const { x, body, frame, sizes } = input;
@@ -306,8 +281,7 @@ export function laneLanding(input: { x: number; body: number; frame: LaneFrame; 
   if (!edge) return {};
   const other = frame.view && frame.tool ? frame.tool.width + sizes.divider : 0;
   const width = body - x - sizes.divider - other;
-  const beside = frame.mode === "overlay" ? 0 : sizes.agentMin;
-  return { [edge.field]: clamp(width, edge.min, body - sizes.divider - other - beside) };
+  return { [edge.field]: clamp(width, edge.min, body - sizes.divider - other) };
 }
 
 /**
@@ -328,7 +302,7 @@ export function columnLanding(input: { x: number; frame: LaneFrame }): LaneLandi
 /**
  * The document width to store when a page opens in the lane (PRD
  * browser-width-zoom D-02, D-21; lane-two-columns B18), or null to leave it:
- * a lane narrower than `lanePage` widens to it, pinned or not, as far as
+ * a lane narrower than `lanePage` widens to it, as far as
  * Agent Views keeps its minimum beside the lane and its tool column; it
  * never narrows the lane.
  */
@@ -358,14 +332,17 @@ export function agentEntries(checkout: Checkout): StripTab[] {
   return checkout.strip.filter((entry) => entry.kind === "engine");
 }
 
+type CalledView = Pick<WorkspaceView, "device_id" | "path" | "layout" | "open" | "tray">;
+
 /**
- * The page in front of the active View area, as its Workspace, display and
- * load stamp, so a page that came forward or loaded again reads as new; null
- * when a file, a diff, a new tab or nothing is there.
+ * The page in front of the active View area of the desk the lane draws, as
+ * its Workspace, display and load stamp, so a page that came forward, loaded
+ * again or came up with its desk reads as new; null when a file, a diff, a
+ * new tab or nothing is there, or the desk is not drawn.
  */
-function frontPage(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): string | null {
+function frontPage(view: CalledView | null | undefined): string | null {
   const layout = view?.layout;
-  if (!layout) return null;
+  if (!layout || !view.open || !view.tray.shown) return null;
   const area = findArea(layout.root, layout.active_area);
   const display = area?.displays.find((row) => row.id === area.active);
   return display?.kind === "browser" && display.url ? `${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}` : null;
@@ -373,10 +350,12 @@ function frontPage(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | 
 
 /**
  * Whether a lane call put a page in front (PRD browser-width-zoom D-04): the
- * active area's front display is a page that was not in front, or loaded
- * again, before the call. The rail's documents button or a reveal leaves it as it was.
+ * drawn desk's active area shows a page that was not in front, or loaded
+ * again, before the call; a desk the rail's documents button brings up with
+ * a page in front counts, since an agent's page waits there with the lane
+ * closed (lane-desk-pair-view B2). A reveal or a tool leaves it as it was.
  */
-export function pageCalled(previous: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined, view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): boolean {
+export function pageCalled(previous: CalledView | null | undefined, view: CalledView | null | undefined): boolean {
   const page = frontPage(view);
   return page !== null && page !== frontPage(previous);
 }

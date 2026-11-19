@@ -346,7 +346,7 @@ describe("input after a confirmed View close", () => {
     header.dataset.browserToolbar = "";
     header.innerHTML = "<input />";
     content.parentElement!.append(header);
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout } as never);
     try {
       header.querySelector("input")!.focus();
@@ -366,7 +366,7 @@ describe("input after a confirmed View close", () => {
     let command: (id: string) => void = () => {};
     const previousHost = window.hideHost;
     Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn(), reportDesk: vi.fn() } });
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
     useShellStore.setState({ editor: { active_tab_id: "d1" } as never });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout, geometry: { areas: [{ id: "a1" }] } } as never);
     const stopKeyboard = installKeyboard(actions);

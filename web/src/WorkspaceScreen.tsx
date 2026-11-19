@@ -75,8 +75,6 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     open: view?.open === true,
     view: laneView,
     tool: view?.tool ?? null,
-    // The Workspace lane draws over the agents; its pin now enters pair view (B16).
-    pinned: false,
     documentWidth: view?.document_width ?? null,
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
@@ -169,7 +167,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-shows={drawnTool ?? "none"}
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} frame={frame} documents={documents} width={width} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
+      <LaneRow view={view} frame={frame} documents={documents} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, actions)}>
         <ToolRail actions={actions} />
       </div>
@@ -215,22 +213,18 @@ function useWidth(element: HTMLElement | null): number {
 
 /**
  * The body left of the rail: Agent Views, and the lane. The lane is always
- * placed over the body's right edge, so moving between over, beside and
- * expanded never mounts it again; a docked lane, and an
- * expanded one that was docked, keep their width beside Agent Views with a
- * divider and an empty slot under the lane, so Agent Views keeps the width
- * it has (B8).
+ * placed over the body's right edge, so moving between over and expanded
+ * never mounts it again, and Agent Views keeps the width it has (B8;
+ * lane-desk-pair-view B35).
  */
-function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; width: number; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
+function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
-  // The width Agent Views gives up: a docked lane's, kept while it is expanded.
-  const slot = frame.agents > 0 && frame.agents < width ? width - frame.agents - sizes.divider : 0;
   // A terminal click leaves the lane where it is: only the operator closes
   // it, with ⌘E or Escape (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : "inset-y-0 right-0 z-20";
-  const raised = frame.mode === "overlay" || frame.mode === "expanded" ? "border-l border-border shadow-overlay" : "";
+
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane
@@ -239,16 +233,9 @@ function LaneRow({ view, frame, documents, width, body, setBody, sizes, actions,
       <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" inert={frame.mode === "expanded"} data-agent-area="true">
         <AgentArea checkout={checkout} actions={actions} />
       </div>
-      {slot > 0 ? (
-        <>
-          {/* The divider draws the lane's own surface up to the agents' hairline, so no strip of another fill stands between them, while the lane's content (a page's native view included) starts after it and never covers it. */}
-          <LaneDivider kind="lane" label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
-          <div className="shrink-0" style={{ width: slot }} aria-hidden="true" data-lane-slot="true" />
-        </>
-      ) : null}
       {frame.mode !== "closed" ? (
         <div
-          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", placed, raised)}
+          className={cn("absolute flex min-h-0 min-w-0 flex-col border-l border-border bg-card shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}

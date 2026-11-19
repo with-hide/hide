@@ -24,7 +24,7 @@ useShellStore.subscribe((state, previous) => {
   if (!call || !view) return;
   // A call draws the column it brought forward in a stacked lane (PRD
   // lane-two-columns B19), as the core recorded it: a reveal or a tool the
-  // tool column, an open or the 보기 slot the viewing column.
+  // tool column, an open, a card or the desk button the viewing column.
   ui.setStackFront(view.lane_called_side);
   if (pageCalled(before, view)) ui.setPageWiden(workspaceKey(view));
 });

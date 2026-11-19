@@ -279,7 +279,7 @@ describe("commands with an SSH device selected", () => {
       useUiStore.setState({ notices: [], pendingClose: null });
       seed({ ...rest("studio", state), workspace_view: deviceViews(true) });
       const { sent, actions } = recorder();
-      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
       noteKeyboardOwner({ kind: "view", workspace: frontCheckout(useShellStore.getState().rest)!.id, areaId: "a1" });
       actions.closeFocused();
       expect(sent).toHaveLength(1);

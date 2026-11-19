@@ -90,7 +90,7 @@ describe("the Project tool", () => {
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project }, suggestions: { project: suggestions }, usage });
       const card = frontCard(workspaceViewOf(rest));
-      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: card ? "documents" : "none", tool: "project", stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: card ? "documents" : "none", tool: "project", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} />{card ? <CardBody item={card} actions={actions} /> : null}</TooltipProvider>);
     });
     return actions;
