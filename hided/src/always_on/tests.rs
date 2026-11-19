@@ -329,6 +329,7 @@ fn a_home_that_is_not_the_accounts_own_puts_no_login_item_in() {
     let asker = Asker {
         program: &program,
         under_item: false,
+        device_connect: true,
     };
     let outcome = reconcile(
         &agents_for(home.path()),

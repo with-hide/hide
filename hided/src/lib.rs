@@ -625,7 +625,12 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             core: Arc::clone(&core),
         }),
     );
-    guests.serve(&peers, shutdown.clone());
+    // A build that does not offer connections between two Hides takes no
+    // other machine's work: no guest's stream is handled and no guest node
+    // is started again from the folders a development build left.
+    if env.device_connect {
+        guests.serve(&peers, shutdown.clone());
+    }
     // A paired machine's login item follows the peer records (PRD
     // device-connect-iroh D-41).
     let always_on = always_on::Follower::new(
