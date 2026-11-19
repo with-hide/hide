@@ -32,10 +32,10 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // PRD lane-two-columns D-01, D-02, D-09): one checkout's path in the
 // window's top row (PRD sidebar-titlebar-refresh D-15, `WorkspaceTitle`),
 // and in the body Agent Views (its engine tabs and their panes), the right
-// lane's two columns (the documents or the front tab's 보기 slot at the agents'
-// side, and a tool, Memory, PRs, Explorer or Changes, beside the rail) and,
-// at the right edge, the tool rail. Which columns show, the tool, the pin
-// and the four widths are the core's, per Workspace; this draws them and
+// lane's two columns (the front Agent tab's desk at the agents' side, and a
+// tool, Memory, PRs, Explorer or Changes, beside the rail) and, at the right
+// edge, the tool rail. Which columns show, the tool, each tab's desk and the
+// three widths are the core's, per Workspace; this draws them and
 // sends one event per operator choice.
 //
 // The lane is drawn over Agent Views, which keeps its width, so opening and
@@ -133,8 +133,8 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     const owner = keyboardOwner();
     if (agentsCovered && (owner.kind === "pane" || owner.kind === "agent") && owner.workspace === checkoutId) noteKeyboardOwner({ kind: "none" });
   }, [agentsCovered, checkoutId]);
-  // A lane that goes out of sight with the keyboard inside it, or documents
-  // the 보기 slot or a fold replaces with the keyboard in them, hands the
+  // A lane that goes out of sight with the keyboard inside it, or a desk
+  // folded with the keyboard in it, hands the
   // keyboard to the pane the core has focused, as after a closing sheet, so
   // no focus is reported for it (PRD right-lane B4, B23; lane-two-columns
   // B11). Documents that closed with their last view are not a fold: the

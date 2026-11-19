@@ -324,7 +324,7 @@ type UiStore = {
   /** Where the mission screen stands (PRD mission-screen D-10). */
   missions: MissionPlace;
   setMissions: (patch: Partial<MissionPlace>) => void;
-  /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
+  /** The column in front while a narrow lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;

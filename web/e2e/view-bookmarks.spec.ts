@@ -13,8 +13,7 @@ import { enterWorkspace, screenshot, showExplorer } from "./wire";
 // the lane as they were, its View waiting in its pane's list; and each Agent
 // tab shows its own desk.
 
-test.describe.configure({ timeout: 180_000 });
-test.use({ actionTimeout: 15_000 });
+test.describe.configure({ timeout: 180_000 }); // wait-ok: two agents start and report their sessions before the first step
 
 const agentTab = (page: Page, id: string) => page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`);
 const viewTabs = (page: Page) => page.locator('[data-view-tab-bar] [role="tab"]');

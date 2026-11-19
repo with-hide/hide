@@ -48,7 +48,7 @@ export type WorkspaceView = {
   lane_called: number;
   /** How many lane calls the core has numbered, in any Workspace. */
   lane_calls: number;
-  /** Which column the last call brought forward (B19): the viewing column for an open, the 보기 slot or ⌘E, the tool column for a tool, a reveal or a folder link. */
+  /** Which column the last call brought forward (B19): the viewing column for an open, a card, the desk button or ⌘E, the tool column for a tool, a reveal or a folder link. */
   lane_called_side: LaneSide;
   /** The Workspace the operator last chose, now or before a restart, so the page opens on it (PRD right-lane D-11). */
   resumed?: boolean;

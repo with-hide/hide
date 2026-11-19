@@ -10,8 +10,8 @@ const DIVIDER_STEP = 32;
 /**
  * A divider of the lane (PRD right-lane B6, B10; lane-two-columns B17;
  * `Component / Side panel grip`): `lane`, at the lane's left edge, sets the
- * width of the column at that edge, against Agent Views when docked and
- * over them otherwise (`edge`, hung outside the lane's box); `column`,
+ * width of the column at that edge, over Agent Views (`edge`, hung outside
+ * the lane's box); `column`,
  * between the viewing column and the tool column, trades width between the
  * two. Nothing at rest, and on hover, keyboard focus and while dragging a
  * hairline with a ⇆ pill at its middle. A drag moves a guide and lands once

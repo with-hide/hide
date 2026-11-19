@@ -1385,7 +1385,7 @@ export type ProjectAddReceipt = { request_id: string; device_id: string; path: s
 );
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
-/** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
+/** One card a desk tab shows (`DetailItem`, PRD sidebar-task-lens D-50; lane-desk-pair-view D-13). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
@@ -1402,11 +1402,12 @@ export type DetailItem =
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
 
 /**
- * Which agent's 보기 slot an item opens in, where it was pressed (operator
- * decision 2026-11-09): `here` the slot in front, over what it shows, for
- * what a card opens inside the slot; `{ pane }` the slot of the agent whose
- * row, head or chip was pressed, that pane taking the keyboard; `owner` the
- * slot of the agent that owns the item, pressed where no agent is.
+ * Which Agent tab's desk a card opens on, where it was pressed (PRD
+ * lane-desk-pair-view D-12, B6, B7): `here` the desk in front, beside what
+ * it holds, for what a card opens inside a card; `{ pane }` the desk of the
+ * tab of the agent whose row, head or chip was pressed, that pane taking the
+ * keyboard; `owner` the desk of the tab of the agent that owns the item,
+ * pressed where no agent is.
  */
 export type DetailPlace = "here" | "owner" | { pane: string };
 
