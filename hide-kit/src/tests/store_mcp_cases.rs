@@ -766,6 +766,109 @@ fn a_server_taken_over_and_switched_off_where_it_was_goes_back_there_when_the_ma
     assert!(!crate::layout::store_dir(fixture.home()).exists());
 }
 
+/// `github` as Pi and omp keep it, with `key`.
+fn github_with(key: &str) -> String {
+    format!(
+        "{{\"mcpServers\": {{\"github\": {{\"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"], \"env\": {{\"GITHUB_TOKEN\": \"{key}\"}}}}}}}}"
+    )
+}
+
+#[test]
+fn the_same_server_with_two_keys_is_two_servers_and_a_take_over_keeps_both_keys() {
+    let fixture = mcp_agents();
+    write(&path_of(&fixture, "omp"), &github_with("ghp_omp_work"));
+    write(&path_of(&fixture, "pi"), &github_with("ghp_pi_personal"));
+
+    // Listed as copies that differ, and taken over only from the one picked.
+    let report = store(&fixture, Vec::new());
+    let found = report
+        .unmanaged
+        .iter()
+        .find(|unmanaged| unmanaged.name == "github")
+        .unwrap();
+    assert!(!found.same);
+    let refused = crate::apply_store(
+        &fixture.target,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "github".to_owned(),
+            from: None,
+        }],
+    );
+    assert_eq!(
+        refused.outcomes[0]
+            .refused
+            .as_ref()
+            .map(|refusal| refusal.cause),
+        Some(StoreRefusalCause::Differs)
+    );
+    assert_eq!(
+        key_of(&held(&fixture, "omp", "github").unwrap(), "GITHUB_TOKEN"),
+        "ghp_omp_work"
+    );
+
+    let place = format!("mcp:pi:{}", path_of(&fixture, "pi").display());
+    let report = store(
+        &fixture,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "github".to_owned(),
+            from: Some(place),
+        }],
+    );
+    // omp's server, its key with it, waits in the undo list; every agent
+    // gets the one picked.
+    assert_eq!(report.trash.len(), 1, "{:#?}", report.trash);
+    assert!(store_bytes(&fixture).contains("ghp_omp_work"));
+    for (agent, _) in FILES {
+        assert_eq!(
+            key_of(&held(&fixture, agent, "github").unwrap(), "GITHUB_TOKEN"),
+            "ghp_pi_personal",
+            "{agent}"
+        );
+    }
+    // Switching omp off and on writes Hide's server and never loses omp's
+    // own key, which stays in the undo list.
+    for on in [false, true] {
+        store(
+            &fixture,
+            vec![StoreChange::Set {
+                item: "mcp:github".to_owned(),
+                column: Some("omp".to_owned()),
+                on,
+            }],
+        );
+    }
+    assert!(store_bytes(&fixture).contains("ghp_omp_work"));
+
+    // An item already in the store meets an agent's own entry of another
+    // key, where Hide's copy is not (switched off there): that entry goes
+    // to the undo list whole too.
+    store(
+        &fixture,
+        vec![StoreChange::Set {
+            item: "mcp:github".to_owned(),
+            column: Some("grok".to_owned()),
+            on: false,
+        }],
+    );
+    write(
+        &path_of(&fixture, "grok"),
+        "[mcp_servers.github]\ncommand = \"npx\"\nargs = [\"-y\", \"@modelcontextprotocol/server-github\"]\nenv = { GITHUB_TOKEN = \"ghp_grok_other\" }\n",
+    );
+    let report = store(
+        &fixture,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "github".to_owned(),
+            from: None,
+        }],
+    );
+    assert_eq!(report.trash.len(), 2, "{:#?}", report.trash);
+    assert!(store_bytes(&fixture).contains("ghp_grok_other"));
+    assert!(held(&fixture, "grok", "github").is_none());
+}
+
 #[test]
 fn removing_the_machine_takes_hides_servers_and_their_keys_out() {
     let fixture = mcp_agents();

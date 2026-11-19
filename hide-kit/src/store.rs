@@ -864,6 +864,10 @@ pub(crate) struct Entry {
     /// inside): only then can Hide's copy stand for it, and only then is it
     /// ever Hide's to replace or take out.
     pub(crate) whole: bool,
+    /// The keys it holds beside what its digest covers (an MCP server's
+    /// variables and headers), as [`Applier::keys`] fingerprints them; none
+    /// for a kind without keys. A copy is an item only when both agree.
+    pub(crate) keys: Option<String>,
 }
 
 /// One entry as a place's listing read it, or why it could not be read.
@@ -887,6 +891,13 @@ pub(crate) trait Applier {
     /// the MCP file that holds the server.
     fn entry_path(&self, place: &Place, name: &str) -> PathBuf {
         place.path.join(name)
+    }
+    /// A fingerprint of the keys `item` keeps beside its body, comparable
+    /// only with an [`Entry::keys`] read in this process: no value leaves
+    /// the applier, and the fingerprint is never written. None for a kind
+    /// without keys.
+    fn keys(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<Option<String>, String> {
+        Ok(None)
     }
     /// Writes `item` at `place`, replacing what is there under its name
     /// (only ever Hide's own copy); answers the digest written.
@@ -1947,7 +1958,7 @@ fn adopt(
                 .ok_or_else(|| not_found(format!("no agent holds {name}")))?;
             if copies
                 .iter()
-                .any(|(_, entry)| entry.digest != first.1.digest)
+                .any(|(_, entry)| entry.digest != first.1.digest || entry.keys != first.1.keys)
             {
                 return Err(StoreRefusal::new(
                     StoreRefusalCause::Differs,
@@ -1985,8 +1996,11 @@ fn adopt(
         .cloned()
         .ok_or_else(|| not_found(format!("no item {id}")))?;
     let digest = item.digest();
+    // A copy is the item only with the item's keys too: one holding another
+    // key is the operator's other server, and goes to the undo list whole.
+    let keys = applier.keys(ctx, &item).map_err(failed)?;
     for (place, entry) in &copies {
-        if entry.digest == digest && entry.link.is_none() && entry.whole {
+        if entry.digest == digest && entry.keys == keys && entry.link.is_none() && entry.whole {
             record_written(store, place, &item, &digest);
         } else if entry.link.is_some() {
             // A link goes as a link; what it leads to stays (D-20).
@@ -2559,6 +2573,11 @@ fn cell_state(
 /// shows in that item's cell instead (B22).
 fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Vec<Unmanaged> {
     let mut found: BTreeMap<(ItemKind, String), Vec<FoundCopy>> = BTreeMap::new();
+    // What tells the copies apart, a digest and an MCP server's keys as
+    // fingerprinted for this process alone, kept beside them and never
+    // reported.
+    type Sameness = (String, Option<String>);
+    let mut sameness: BTreeMap<(ItemKind, String), Vec<Sameness>> = BTreeMap::new();
     for (kind, places) in places {
         let applier = applier(*kind);
         let columns = applier.columns();
@@ -2585,11 +2604,17 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                 // One entry that cannot be read is listed with why, and the
                 // folder's others as ever.
                 let (digest, link, refused) = match read {
-                    Ok(entry) => (
-                        entry.digest,
-                        entry.link.as_ref().map(|link| link.display().to_string()),
-                        None,
-                    ),
+                    Ok(entry) => {
+                        sameness
+                            .entry((*kind, name.clone()))
+                            .or_default()
+                            .push((entry.digest.clone(), entry.keys));
+                        (
+                            entry.digest,
+                            entry.link.as_ref().map(|link| link.display().to_string()),
+                            None,
+                        )
+                    }
                     Err(reason) => (String::new(), None, Some(reason)),
                 };
                 found
@@ -2612,9 +2637,9 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
         .map(|((kind, name), copies)| Unmanaged {
             kind,
             same: copies.iter().all(|copy| copy.refused.is_none())
-                && copies
-                    .windows(2)
-                    .all(|pair| pair[0].digest == pair[1].digest),
+                && sameness
+                    .get(&(kind, name.clone()))
+                    .is_none_or(|read| read.windows(2).all(|pair| pair[0] == pair[1])),
             name,
             copies,
         })

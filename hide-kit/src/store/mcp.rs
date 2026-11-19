@@ -23,6 +23,12 @@
 //! marks every place Hide wrote the item to as stale ([`StoreRecord::stale`])
 //! and the reconcile writes them again, a failed one staying stale until a
 //! pass gets through (B12, B26).
+//!
+//! Whether an agent's entry is the item, or two agents' entries are one
+//! server, takes the keys too: the same server with another key is the
+//! operator's other server (B21). The keys are compared inside this applier
+//! as a fingerprint keyed for this process alone ([`keys_fingerprint`]),
+//! never written, so no value leaves it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -248,17 +254,58 @@ fn refusal(adapter: &AgentAdapter, server: &Server) -> Option<String> {
     None
 }
 
-/// An entry's digest; one Hide cannot read has one no server has, so it is
-/// never taken for Hide's.
+/// An entry's digest and keys; one Hide cannot read has a digest no server
+/// has, so it is never taken for Hide's.
 fn entry_of(found: &mcp::Found) -> Entry {
-    Entry {
-        digest: found
-            .server
-            .as_ref()
-            .map_or_else(|| "unreadable".to_owned(), |(server, _)| server.digest()),
-        link: None,
-        whole: found.whole && found.server.is_some(),
+    match &found.server {
+        Some((server, keys)) => Entry {
+            digest: server.digest(),
+            link: None,
+            whole: found.whole,
+            keys: Some(keys_fingerprint(server, keys)),
+        },
+        None => Entry {
+            digest: "unreadable".to_owned(),
+            link: None,
+            whole: false,
+            keys: None,
+        },
     }
+}
+
+/// The values of the keys `server` names, folded into a fingerprint keyed
+/// with a secret drawn once per process: equal fingerprints are equal keys
+/// within this run, and the fingerprint is never written, logged or
+/// compared across runs, so it tells nothing of a value.
+fn keys_fingerprint(server: &Server, keys: &Keys) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::hash::BuildHasher as _;
+    static SECRET: std::sync::OnceLock<[u64; 2]> = std::sync::OnceLock::new();
+    let secret = SECRET.get_or_init(|| {
+        let random = std::collections::hash_map::RandomState::new();
+        [random.hash_one(0u8), random.hash_one(1u8)]
+    });
+    let mut hash = Sha256::new();
+    hash.update(secret[0].to_le_bytes());
+    hash.update(secret[1].to_le_bytes());
+    let mut names = server.reach.key_names().to_vec();
+    names.sort();
+    for name in names {
+        hash.update((name.len() as u64).to_le_bytes());
+        hash.update(name.as_bytes());
+        match keys.get(&name) {
+            Some(value) => {
+                hash.update([1]);
+                hash.update((value.expose().len() as u64).to_le_bytes());
+                hash.update(value.expose().as_bytes());
+            }
+            None => hash.update([0]),
+        }
+    }
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn keys_failed(error: crate::mcp_keys::KeyFileError) -> StoreRefusal {
@@ -355,6 +402,13 @@ impl Applier for McpApplier {
                 (found.name.clone(), read)
             })
             .collect())
+    }
+
+    fn keys(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<Option<String>, String> {
+        let body = body_of(item)?;
+        let keys =
+            crate::mcp_keys::read(&ctx.item_files(&item.id)).map_err(|error| error.to_string())?;
+        Ok(Some(keys_fingerprint(&body.server, &keys)))
     }
 
     fn entry_path(&self, place: &Place, _name: &str) -> PathBuf {
