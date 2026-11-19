@@ -27,9 +27,9 @@ pub const TOPIC_LIMIT: usize = 3;
 /// The pull requests one entry names, newest first.
 pub const PR_LIMIT: usize = 6;
 /// The characters a topic's name or its result shows.
-pub const LINE_CHARS: usize = 120;
+pub const LINE_CHARS: usize = 60;
 /// The whole block's bytes: an entry that would pass it is counted instead.
-pub const BRIEF_LIMIT_BYTES: usize = 12 * 1024;
+pub const BRIEF_LIMIT_BYTES: usize = 6 * 1024;
 
 /// What a session start reads the brief from, copied under the runtime's
 /// lock.
@@ -583,7 +583,7 @@ mod tests {
     }
 
     /// Past the byte bound the rest is counted, never cut mid-entry, and the
-    /// count points at the full list.
+    /// count points at the full list; a long topic and its result are cut.
     #[test]
     fn past_its_bound_the_block_counts_the_sessions_it_left_out() {
         let mut fixture = Fixture::new();
@@ -598,6 +598,11 @@ mod tests {
         }
         let brief = fixture.brief().unwrap();
         assert!(brief.len() <= BRIEF_LIMIT_BYTES, "{}", brief.len());
+        // A topic line is its time, its name and its result, each of the two
+        // cut to 60 characters: well under 150 with the quotes and marks.
+        for line in brief.lines().filter(|line| line.starts_with("  ")) {
+            assert!(line.chars().count() < 150, "{line}");
+        }
         let given = brief.matches("\n- \"s-").count();
         assert!(given > 0 && given < CLOSED_LIMIT, "{given}");
         assert!(
