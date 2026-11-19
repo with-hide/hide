@@ -32,7 +32,10 @@ export async function askForFirewallOnce(): Promise<FirewallAnswer | null> {
   if (askedOnItsOwn || !host?.firewallState || !host.allowFirewall) return null;
   askedOnItsOwn = true;
   try {
-    if ((await host.firewallState()) !== "missing") return null;
+    // Before the endpoint first opens the folder has no port yet; the ask
+    // chooses it (`hide always-on firewall ask-allow`).
+    const state = await host.firewallState();
+    if (state !== "missing" && state !== "no_port") return null;
     return await asked(host.allowFirewall());
   } catch {
     // The host logged why; the Devices row still offers the ask.

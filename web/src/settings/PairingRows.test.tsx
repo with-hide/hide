@@ -137,8 +137,8 @@ it("shows the pasted link's words with They match and They differ, then how it e
 });
 
 /** A desktop host on Windows whose firewall rules answer `state` until an ask returns `answer`. */
-function windowsHost(state: "allowed" | "missing", answer: "allowed" | "declined") {
-  let now: "allowed" | "missing" = state;
+function windowsHost(state: "allowed" | "missing" | "no_port", answer: "allowed" | "declined") {
+  let now: "allowed" | "missing" | "no_port" = state;
   const host = {
     kind: "electron",
     platform: "win32",
@@ -171,6 +171,16 @@ it("asks Windows once for the firewall rules when this PC is shared, and a no le
   await again.press("[data-pair-share-make]");
   expect(host.allowFirewall, "a second share asks nothing on its own").toHaveBeenCalledTimes(1);
   await again.unmount();
+  delete window.hideHost;
+});
+
+it("asks Windows on the first share before the folder has a port, since the ask chooses it (B32)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("no_port", "allowed");
+  const screen = await mount(idle);
+  await screen.press("[data-pair-share-make]");
+  expect(host.allowFirewall).toHaveBeenCalledTimes(1);
+  await screen.unmount();
   delete window.hideHost;
 });
 

@@ -106,6 +106,18 @@ pub fn reconcile(
             Ok(Outcome::Removed)
         }
         (true, false) => {
+            // Asked before a build is copied: a Mac with no one logged in
+            // would copy one on every change only to refuse the item.
+            if agents
+                .login(home, &AtomicBool::new(false))
+                .map_err(|error| format!("the login session: {error}"))?
+                == hide_platform::user_agents::Login::LoggedOut
+            {
+                return Err(
+                    "no GUI session runs for this account: the login item waits for a login"
+                        .to_owned(),
+                );
+            }
             let program = install(&hide_kit::layout::core_root(home))?;
             // The asking core goes on; the item's core waits on the
             // folder's lock until it exits.
@@ -190,18 +202,31 @@ impl Follower {
                             install_this_build(asker.program, root)
                         })
                     });
+                // A failure that holds (no systemd, a Mac with no one logged
+                // in) is logged once, not at every connection change.
+                let mut last = LAST_FAILURE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 match outcome {
-                    Ok(Outcome::Kept | Outcome::Nothing) => {}
-                    Ok(outcome) => hide_core::diagnostic!(json!({
-                        "component": "always_on",
-                        "kind": "always_on.reconciled",
-                        "outcome": outcome,
-                    })),
-                    Err(message) => hide_core::diagnostic!(json!({
-                        "component": "always_on",
-                        "kind": "always_on.failed",
-                        "message": message,
-                    })),
+                    Ok(Outcome::Kept | Outcome::Nothing) => *last = None,
+                    Ok(outcome) => {
+                        *last = None;
+                        hide_core::diagnostic!(json!({
+                            "component": "always_on",
+                            "kind": "always_on.reconciled",
+                            "outcome": outcome,
+                        }));
+                    }
+                    Err(message) => {
+                        if last.as_deref() != Some(message.as_str()) {
+                            hide_core::diagnostic!(json!({
+                                "component": "always_on",
+                                "kind": "always_on.failed",
+                                "message": message,
+                            }));
+                            *last = Some(message);
+                        }
+                    }
                 }
             });
         if let Err(error) = spawned {
@@ -216,6 +241,8 @@ impl Follower {
 
 /// One reconcile at a time in this process: two would both install.
 static RECONCILING: Mutex<()> = Mutex::new(());
+/// The last failure logged, so one that holds is logged once.
+static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
 pub mod cli;
 
