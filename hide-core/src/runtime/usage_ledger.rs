@@ -126,6 +126,7 @@ impl Runtime {
     pub(crate) fn ingest_ledger(&mut self, value: Publication) -> bool {
         self.ledger_spends = value.projects.built;
         let mut changed = self.publish_project_tasks();
+        changed |= self.price_automation_runs();
         let own = &mut self.snapshot.usage.nodes[0];
         changed |= own.history != value.history
             || own.projects_failed != value.projects.failed

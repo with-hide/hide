@@ -161,6 +161,27 @@ impl RunState {
     }
 }
 
+/// What a run's conversation spent, as Hide's usage ledger read it from
+/// the agent's own records (D-26, B39): its new tokens (input, output and
+/// cache writes) and their price in millionths of a dollar; `unpriced` says
+/// some calls had no price, so the amount is a lower bound.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Spend {
+    pub tokens: u64,
+    pub micro_usd: u64,
+    #[serde(default)]
+    pub unpriced: bool,
+}
+
+impl Spend {
+    pub fn add(&mut self, other: Spend) {
+        self.tokens = self.tokens.saturating_add(other.tokens);
+        self.micro_usd = self.micro_usd.saturating_add(other.micro_usd);
+        self.unpriced |= other.unpriced;
+    }
+}
+
 /// The agent's conversation, which a finished run is opened again by
 /// (D-13): the provider's own session id.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -273,6 +294,10 @@ pub struct Run {
     /// The current attempt's start, until its agent registered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask: Option<Ask>,
+    /// What its conversation spent, as last read; kept once the ledger's
+    /// seven days no longer hold it (D-26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend: Option<Spend>,
 }
 
 impl Run {
@@ -525,6 +550,7 @@ impl Automation {
             conversation_missing: false,
             opens: 0,
             ask: None,
+            spend: None,
         }));
         number
     }
@@ -931,8 +957,19 @@ pub struct AutomationSnapshot {
     /// A run goes now: [지금 실행] is refused (B19).
     pub running: bool,
     pub unseen: usize,
+    /// What the runs its records keep spent together, and how many of them
+    /// the ledger read (B39); absent while it read none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_spend: Option<RecentSpend>,
     /// Newest first.
     pub records: Vec<RecordSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RecentSpend {
+    #[serde(flatten)]
+    pub spend: Spend,
+    pub runs: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -980,6 +1017,9 @@ pub struct RunSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     pub seen: bool,
+    /// What its conversation spent (B39); absent until the ledger read it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend: Option<Spend>,
 }
 
 impl AutomationsSnapshot {
@@ -1007,6 +1047,15 @@ impl AutomationsSnapshot {
                 paused: automation.paused,
                 running: automation.active_run().is_some(),
                 unseen: automation.unseen(),
+                recent_spend: automation.runs().filter_map(|run| run.spend).fold(
+                    None,
+                    |total: Option<RecentSpend>, spend| {
+                        let mut total = total.unwrap_or_default();
+                        total.spend.add(spend);
+                        total.runs += 1;
+                        Some(total)
+                    },
+                ),
                 records: automation
                     .records
                     .iter()
@@ -1028,6 +1077,7 @@ impl AutomationsSnapshot {
                             conversation_missing: run.conversation_missing,
                             branch: run.branch.clone(),
                             seen: run.seen,
+                            spend: run.spend,
                         }),
                         Entry::Skipped {
                             at_unix_ms,
