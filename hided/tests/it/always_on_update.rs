@@ -8,7 +8,7 @@
 //! The login item is the fixture starter here (`HIDE_CORE_STARTER=fixture`
 //! in a fixture HOME), which runs the core with the item's own command,
 //! `hided core-login`, and never reaches the account's real login items.
-//! Every process runs on a private home and state folder with no Herdr or
+//! Every process runs on a private home and state folder with none of the
 //! Hide variables of the run that started the test.
 
 use std::io::{Read, Write};
@@ -101,7 +101,7 @@ impl Machine {
         let mut command = Command::new(program);
         for (key, _) in std::env::vars_os() {
             let upper = key.to_string_lossy().to_uppercase();
-            if upper.starts_with("HERDR_") || upper.starts_with("HIDE_") {
+            if upper.starts_with("HIDE_") {
                 command.env_remove(key);
             }
         }
@@ -189,7 +189,7 @@ impl Machine {
                 "the core did not answer as expected: {last}; its log: {}",
                 std::fs::read_to_string(self.home.join("old-core.log")).unwrap_or_default()
             );
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(100)); // wait-ok: another process's /health naming the build expected
         }
     }
 
