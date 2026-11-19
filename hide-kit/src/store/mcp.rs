@@ -630,19 +630,6 @@ fn checked(server: &Server, typed: &SentKeys, before: &Keys) -> Result<Keys, Sto
     Ok(keys)
 }
 
-/// Whether a pasted server's program is one this machine runs: a path, or a
-/// name found on the account's search. A sentence pasted into the field
-/// parses as a command line whose first word is no program, so it reads as
-/// no server, as an unreadable paste does.
-fn runs_here(ctx: &Ctx<'_>, server: &Server) -> bool {
-    match &server.reach {
-        Reach::Local { command, .. } => {
-            command.contains(['/', '\\']) || ctx.detection.finds(command)
-        }
-        Reach::Remote { .. } => true,
-    }
-}
-
 fn staged(ctx: &Ctx<'_>, preview: &str, index: usize) -> PathBuf {
     ctx.staging().join(preview).join(index.to_string())
 }
@@ -665,13 +652,11 @@ pub(super) fn read_paste(
     }
     let id = super::source::fresh_id("mcp-");
     let mut servers = Vec::new();
-    for pasted in mcp::paste::read(&text.0) {
+    for pasted in mcp::paste::read(&text.0, &|program| ctx.detection.finds(program)) {
         let Some(server) = pasted.server else {
             continue;
         };
-        if !runs_here(ctx, &server) {
-            continue;
-        }
+
         if servers.len() == PASTED_LIMIT {
             break;
         }
@@ -765,8 +750,13 @@ pub(super) fn add(
                         .is_some()
                 })
             });
+        // The answer goes either way; a folder left behind goes with the
+        // staging folders no record names.
         if answered {
-            cancel(ctx, store, &pick.preview)?;
+            if let Err(reason) = remove_staged(&ctx.staging().join(&pick.preview)) {
+                super::log("store.staged_left", Some(&id), &reason);
+            }
+            store.mcp_previews.retain(|kept| kept.id != pick.preview);
         }
     }
     Ok(())

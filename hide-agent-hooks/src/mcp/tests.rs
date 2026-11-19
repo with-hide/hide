@@ -1,5 +1,10 @@
-use super::paste::{Pasted, read};
+use super::paste::Pasted;
 use super::*;
+
+/// A paste read on a machine that finds every program.
+fn read(text: &str) -> Vec<Pasted> {
+    super::paste::read(text, &|_| true)
+}
 
 fn one(text: &str) -> Pasted {
     let mut read = read(text);
@@ -422,4 +427,23 @@ fn every_named_key_needs_a_value_an_agents_file_can_carry() {
         assert_eq!(reason, refusal);
         assert!(!reason.contains("s3cr3t") && !reason.contains("ssh"));
     }
+}
+
+#[test]
+fn a_command_line_whose_program_this_machine_lacks_is_no_server_and_a_json_snippet_still_is() {
+    let found = |program: &str| program == "npx";
+    let read = |text: &str| super::paste::read(text, &found);
+    let servers = |text: &str| -> Vec<Option<Server>> {
+        read(text).into_iter().map(|pasted| pasted.server).collect()
+    };
+    assert_eq!(servers("please add the github server for me"), [None]);
+    assert_eq!(servers("uvx mcp-server-fetch"), [None]);
+    assert!(servers("npx -y @modelcontextprotocol/server-github")[0].is_some());
+    // A path is a program wherever it is.
+    assert!(servers("/opt/fetch/bin/fetch-mcp --port 8080")[0].is_some());
+    // A README's snippet is a server whatever it runs (B8).
+    assert_eq!(
+        servers(r#"{"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}}"#),
+        [Some(local("fetch", "uvx", &["mcp-server-fetch"], &[]))]
+    );
 }

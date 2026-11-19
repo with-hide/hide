@@ -21,15 +21,18 @@ pub struct Pasted {
 }
 
 /// The servers a paste holds, in the order it lists them; one empty reading
-/// when it holds none Hide can read.
-pub fn read(text: &str) -> Vec<Pasted> {
+/// when it holds none Hide can read. `found` answers whether a program name
+/// is found on this machine: a command line whose program is neither a path
+/// nor found is a sentence pasted into the field, not a server. A JSON
+/// snippet's servers stay whatever they run, as a README gives them.
+pub fn read(text: &str, found: &dyn Fn(&str) -> bool) -> Vec<Pasted> {
     let text = text.trim();
     let read = if text.starts_with('{') {
         json(text)
     } else if let Some(address) = address(text) {
         vec![address]
     } else {
-        command_line(text).into_iter().collect()
+        command_line(text, found).into_iter().collect()
     };
     if read.is_empty() {
         vec![Pasted::default()]
@@ -102,7 +105,7 @@ fn name_of_host(host: &str) -> String {
 
 /// A command line: `NAME=value` words before the program become variables;
 /// `claude mcp add` and `codex mcp add` lines are read by their own options.
-fn command_line(text: &str) -> Option<Pasted> {
+fn command_line(text: &str, found: &dyn Fn(&str) -> bool) -> Option<Pasted> {
     let words = hide_shell::simple_commands(text, hide_shell::Syntax::Posix)
         .into_iter()
         .find(|words| !words.is_empty())?;
@@ -130,6 +133,9 @@ fn command_line(text: &str) -> Option<Pasted> {
             "codex" => codex_add(&words[3..], env, keys),
             _ => None,
         };
+    }
+    if !words[0].contains(['/', '\\']) && !found(&words[0]) {
+        return None;
     }
     Some(Pasted {
         server: Some(Server {
