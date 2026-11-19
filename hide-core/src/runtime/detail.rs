@@ -666,7 +666,7 @@ impl Runtime {
     }
 
     /// The Workspace that holds `pane`, on this machine or a device.
-    fn pane_workspace_of(&self, pane: &str) -> Option<WorkspaceKey> {
+    pub(super) fn pane_workspace_of(&self, pane: &str) -> Option<WorkspaceKey> {
         let local = self
             .snapshot
             .navigator

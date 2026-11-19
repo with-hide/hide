@@ -659,10 +659,10 @@ impl Runtime {
     /// Moves the View `id` of `key` onto `place` (D-20: one View, one desk),
     /// making room there first. Whether it moved.
     pub(super) fn bring_view_to(&mut self, key: &WorkspaceKey, id: &str, place: &Place) -> bool {
-        match self.view_place(key, id) {
-            Some(from) if &from != place => {}
+        let from = match self.view_place(key, id) {
+            Some(from) if &from != place => from,
             _ => return false,
-        }
+        };
         if !self.make_view_room(key, place) {
             return false;
         }
@@ -671,11 +671,21 @@ impl Runtime {
         };
         let entry = store.views.entry(&key.0, &key.1);
         let moved = entry.move_view(id, place).is_some();
-        if moved {
-            store.generation += 1;
-            self.persist_workspace_views();
+        if !moved {
+            return false;
         }
-        moved
+        store.generation += 1;
+        self.persist_workspace_views();
+        // A desk left empty has nothing to pair with: its pair view ends,
+        // as the desk in front's does when its last tab closes (B26).
+        if let Place::Tray(left) = &from
+            && self
+                .view_layout_at(key, &from)
+                .is_none_or(|layout| layout.display_count() == 0)
+        {
+            self.end_pair_view(key, left, "emptied");
+        }
+        true
     }
 
     /// The area in use of the tree at `place`, the tree made first when the
@@ -3464,7 +3474,10 @@ impl Runtime {
 
     /// Every View of the checkout as the snapshot carries one, on a desk or
     /// not: a pane's `N views` lists what its session opened wherever it is
-    /// (B3, D-19).
+    /// (B3, D-19). It runs under the runtime lock on each snapshot of the
+    /// Workspace in front, so its bound is the checkout's: at most
+    /// `MAX_TRAYS` (64) desks of `MAX_VIEW_DISPLAYS` (32) Views each, and
+    /// the shelf's 32 (`docs/PERFORMANCE_TESTING.md`).
     pub(super) fn every_view_snapshot(&self, key: &WorkspaceKey) -> Vec<ViewDisplaySnapshot> {
         let facts = self.display_facts(key);
         self.view_displays(key)

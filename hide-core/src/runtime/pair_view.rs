@@ -42,13 +42,22 @@ impl Runtime {
             return self.end_pair_view(&key, &tab, "left");
         };
         // A terminal outside every Agent tab, such as an automation run's
-        // chat, has no tray to pair with (inventory X02).
+        // chat, has no tray to pair with (inventory X02); a pane of another
+        // Workspace pairs only once that Workspace is in front.
         let Some(tab) = self.pane_tab(&key, &pane) else {
-            self.set_error(
-                "pair_view.no_agent_tab",
-                "Pair view shows a pane of an Agent tab beside its tray; this pane is in none",
-                false,
-            );
+            if self.pane_workspace_of(&pane).is_some() {
+                self.set_error(
+                    "pair_view.other_workspace",
+                    "Pair view shows a pane beside the desk of its own Workspace; bring that Workspace forward first",
+                    false,
+                );
+            } else {
+                self.set_error(
+                    "pair_view.no_agent_tab",
+                    "Pair view shows a pane of an Agent tab beside its tray; this pane is in none",
+                    false,
+                );
+            }
             return true;
         };
         let place = Place::Tray(tab.clone());
@@ -61,6 +70,23 @@ impl Runtime {
             }
             None => self.pair_view_of(&key, &pane),
         };
+        // The same pane again, with its View already in front of the drawn
+        // desk, changes nothing and publishes nothing.
+        let view = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1));
+        let unchanged = view.is_some_and(|view| {
+            view.draws_tray(&tab)
+                && view.tray(&tab).is_some_and(|tray| {
+                    tray.pair.as_ref().is_some_and(|pair| pair.pane == pane)
+                        && shown.is_some()
+                        && tray.layout.active_area().active == shown
+                })
+        });
+        if unchanged {
+            return false;
+        }
         match shown {
             Some(id) => {
                 if self.view_place(&key, &id).as_ref() != Some(&place)

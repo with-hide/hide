@@ -801,6 +801,51 @@ fn an_open_past_the_cap_closes_the_view_looked_at_longest_ago() {
     )));
 }
 
+/// B12, D-23: when the cap takes an agent's View off a desk, it waits on no
+/// desk, still in its pane's list, rather than closing as an operator's
+/// page does.
+#[test]
+fn an_agents_view_the_cap_takes_off_a_desk_stays_in_its_panes_list() {
+    let (mut runtime, _checkout, directory) = setup("cap-agent-shelved");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "agent");
+    assert_eq!(strip(&runtime, &directory), ["a.md"]);
+    // Looked at before anything else on the desk.
+    let id = display_id(&runtime, &directory, "a.md");
+    runtime
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
+        .view_mut(&id)
+        .unwrap()
+        .last_focused_unix_ms = 0;
+    fill_pages(&mut runtime, &directory, MAX_VIEW_DISPLAYS - 1);
+    runtime.sync_workspace_view();
+    assert_eq!(strip(&runtime, &directory).len(), MAX_VIEW_DISPLAYS);
+
+    let url = "https://example.test/clicked";
+    runtime.dispatch_json(&explorer_event(
+        "browser_open",
+        serde_json::json!({
+            "url": url,
+            "workspace": {"device_id": crate::node::TEST_NODE, "path": directory.to_string_lossy()},
+        }),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    let shown = strip(&runtime, &directory);
+    assert!(shown.contains(&url.to_owned()));
+    assert!(
+        !shown.contains(&"a.md".to_owned()),
+        "the oldest left the desk"
+    );
+    assert_eq!(
+        shelf(&runtime, &directory),
+        ["a.md"],
+        "its pane's list keeps it"
+    );
+}
+
 /// B12, D-34: the View in front of another area is never the one taken off,
 /// even when it was looked at longest ago.
 #[test]
@@ -1724,6 +1769,13 @@ fn a_pair_view_is_its_tabs_and_survives_a_tab_switch_and_a_restart() {
         "B18: its agent's View"
     );
     assert!(lane_documents(&runtime));
+    assert!(
+        !runtime.dispatch_json(&explorer_event(
+            "pair_view",
+            serde_json::json!({"pane_id": "w-order:t1:p"}),
+        )),
+        "the same pair view again publishes nothing"
+    );
 
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     assert_eq!(
@@ -1767,6 +1819,22 @@ fn a_pair_view_ends_when_its_left_pane_leaves_the_tab() {
     assert_eq!(pairs(&runtime), (None, vec![]));
     assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
     assert_eq!(strip(&runtime, &directory), ["b.md"]);
+}
+
+/// D-20, B26: the last View of a paired desk brought onto another desk ends
+/// that pair view, as the desk's last tab closing does.
+#[test]
+fn a_pair_view_ends_when_its_desks_last_view_moves_to_another_desk() {
+    let (mut runtime, checkout, directory) = setup("pair-emptied");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
+
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    open(&mut runtime, &checkout, &directory, "a.md");
+    assert_eq!(desk(&runtime, &directory, TABS[1]), ["a.md"]);
+    assert!(desk(&runtime, &directory, TABS[0]).is_empty());
+    assert_eq!(pairs(&runtime), (None, vec![]));
 }
 
 /// Inventory X02: a pane in no Agent tab has no desk to pair with, and the
