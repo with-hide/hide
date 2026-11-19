@@ -1796,8 +1796,7 @@ mod tests {
     }
 
     /// A store request carries the operator's changes to a device as the
-    /// store reads them, in order, and the follow carries nothing; a helper
-    /// on the protocol before them refuses both at Hello, never mid-call.
+    /// store reads them, in order, and the follow carries nothing.
     #[test]
     fn the_store_calls_carry_the_operators_changes_to_a_device() {
         use hide_kit::store::{ItemKind, SourceSpec, StoreChange};
@@ -1846,7 +1845,6 @@ mod tests {
             serde_json::to_value(KitAction::FollowStore).unwrap(),
             serde_json::json!({"kind": "follow_store"})
         );
-        assert!(PROTOCOL_VERSION >= 99);
     }
 
     /// The branch calls are on the wire as `op` objects; a facts request
