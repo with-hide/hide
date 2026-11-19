@@ -78,11 +78,7 @@ async fn a_guest_runs_nothing_until_both_sides_settled() {
         link.open(StreamKind::Management).await,
         Err(OpenError::NoGrant(_))
     ));
-    assert_eq!(
-        host.peers
-            .grants(|grants| grants.state_of(&guest.key()).state),
-        GrantState::Pending
-    );
+    assert_eq!(host.peers.granting(&guest.key()).state, GrantState::Pending);
 
     // The guest's operator says the words match: its side is saved, then
     // the confirm goes out.

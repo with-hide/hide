@@ -38,9 +38,7 @@ async fn a_stream_is_judged_by_its_kind_and_the_generation_it_names() {
         .grant_pending(guest.key(), "by-hand", "By hand", Via::Link)
         .unwrap();
     host.peers.confirm(&guest.key(), &grant.id).unwrap();
-    let generation = host
-        .peers
-        .grants(|grants| grants.state_of(&guest.key()).generation);
+    let generation = host.peers.granting(&guest.key()).generation;
 
     // The first exchange: the header of the hello stream and one hello each
     // way, then the host says what it grants.

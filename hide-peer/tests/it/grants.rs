@@ -33,9 +33,7 @@ async fn a_pause_ends_that_direction_s_streams_and_leaves_the_other_direction_an
     let mut pc_accepted = pc.accepted(StreamKind::NodeLink).await;
     let mut pc_opened = back.open(StreamKind::NodeLink).await.unwrap();
     let mut mac_accepted = mac.accepted(StreamKind::NodeLink).await;
-    let before = pc
-        .peers
-        .grants(|grants| grants.state_of(&mac.key()).generation);
+    let before = pc.peers.granting(&mac.key()).generation;
 
     // The PC pauses the Mac. Reads parked on that direction's stream end on
     // both machines, with nothing sent on it.
@@ -85,16 +83,80 @@ async fn a_pause_ends_that_direction_s_streams_and_leaves_the_other_direction_an
     drop(pc_accepted);
     pc.peers.resume(&mac.key()).unwrap();
     granted(&mut mac, pc.key(), GrantState::Active).await;
-    link.open(StreamKind::NodeLink)
+    let reopened = link
+        .open(StreamKind::NodeLink)
         .await
         .expect("the resumed grant opens streams again");
-    let after = pc
-        .peers
-        .grants(|grants| grants.state_of(&mac.key()).generation);
+    let after = pc.peers.granting(&mac.key()).generation;
     assert!(
         after > before,
         "the resumed grant runs under a generation never used before"
     );
+
+    // The same resume sent again (a retry, a second press) is no change:
+    // the stream running under the grant goes on.
+    pc.peers.resume(&mac.key()).unwrap();
+    assert_eq!(pc.peers.granting(&mac.key()).generation, after);
+    assert!(reopened.send.holds());
+}
+
+/// The guest was allowed nine minutes into its connection and never
+/// confirmed. The pending grant kept the connection past the ten minutes a
+/// connection without a grant gets, and no longer than the grant itself
+/// waits.
+#[tokio::test(start_paused = true)]
+async fn a_connection_kept_by_a_pending_grant_closes_when_that_grant_stops_waiting() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use hide_peer::store::{Host, KnownState, Via};
+
+    use crate::runtime_clock;
+
+    const MINUTE: Duration = Duration::from_secs(60);
+    let net = Net::new();
+    let dir = || Arc::new(tempfile::tempdir().unwrap());
+    let host = Machine::with_clock(&net, "windows-pc", dir(), runtime_clock());
+    let guest = Machine::with_clock(&net, "macbook", dir(), runtime_clock());
+    let link = guest.peers.dial(&host.addr()).await.unwrap();
+
+    tokio::time::advance(9 * MINUTE).await;
+    let pending = host
+        .peers
+        .grant_pending(guest.key(), guest.name, guest.name, Via::Link)
+        .unwrap();
+    // The guest saved its side and never sends its confirm: its own end
+    // has a reason to stay, so only the host's limit can end this.
+    guest
+        .peers
+        .known(|known| {
+            known.put(Host {
+                key: host.key(),
+                device: host.name.to_owned(),
+                name: host.name.to_owned(),
+                grant: pending.id.clone(),
+                state: KnownState::Confirming,
+                candidates: Vec::new(),
+            })
+        })
+        .unwrap();
+
+    // Minute 18: past the ten minutes, and the grant still waits.
+    tokio::time::advance(9 * MINUTE).await;
+    assert_eq!(host.peers.granting(&guest.key()).state, GrantState::Pending);
+    assert_eq!(
+        host.peers.link(&guest.key()).map(|live| live.id()),
+        Some(link.id()),
+        "the pending grant keeps its guest connected while it waits"
+    );
+
+    // Minute 19: the grant stopped waiting, unconfirmed.
+    tokio::time::advance(MINUTE).await;
+    assert_eq!(
+        within("the connection's end", link.closed()).await,
+        CloseCode::NoGrant
+    );
+    assert_eq!(host.peers.granting(&guest.key()).state, GrantState::None);
 }
 
 #[tokio::test]

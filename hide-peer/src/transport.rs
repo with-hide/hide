@@ -73,7 +73,9 @@ pub trait PeerTransport: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send;
 
     /// The next connection a peer dialed, its key proved.
-    /// [`TransportError::Closed`] once the transport is closed.
+    /// [`TransportError::Closed`] once the transport is closed. It never
+    /// waits on one peer's proof: a peer that starts one and does not
+    /// finish it holds up no other peer's connection.
     fn accept(&self) -> impl Future<Output = Result<Self::Conn, TransportError>> + Send;
 
     /// The relay's state now. A transport may ask the relay to answer, so
