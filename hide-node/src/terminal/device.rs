@@ -115,6 +115,11 @@ struct UplinkState {
     /// Clipboard writes not sent yet, the latest line of each pane, which go
     /// ahead of every pane's output.
     clipboard: WaitingCopies<Vec<u8>>,
+    /// On a node that outlives its links and keeps every pane's session
+    /// itself: the panes the linked core attached and has not released,
+    /// the only ones whose output goes up. `None` on any other node, whose
+    /// panes have a session only while its core attached them.
+    admitted: Option<HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -166,9 +171,48 @@ impl Uplink {
         self.ready.notify_one();
     }
 
+    /// Whether the linked core takes `pane`'s output.
+    fn admits(state: &UplinkState, pane: &str) -> bool {
+        state
+            .admitted
+            .as_ref()
+            .is_none_or(|admitted| admitted.contains(pane))
+    }
+
+    /// From now on only the panes the linked core attaches go up.
+    fn admit_by_attach(&self) {
+        lock(&self.state).admitted = Some(HashSet::new());
+    }
+
+    /// The linked core attached `pane`; whether it was not going up before.
+    fn admit(&self, pane: &str) -> bool {
+        lock(&self.state)
+            .admitted
+            .as_mut()
+            .is_some_and(|admitted| admitted.insert(pane.to_owned()))
+    }
+
+    /// The linked core released `pane`, or lost it: nothing of it goes up,
+    /// and what waited is dropped. `false` on a node whose core's release
+    /// ends the pane's session instead.
+    fn dismiss(&self, pane: &str) -> bool {
+        let mut state = lock(&self.state);
+        let Some(admitted) = state.admitted.as_mut() else {
+            return false;
+        };
+        admitted.remove(pane);
+        state.panes.remove(pane);
+        state.order.retain(|queued| queued != pane);
+        state.clipboard.forget(pane);
+        true
+    }
+
     fn push_output(&self, pane: &str, bytes: &[u8], full: bool) {
         {
             let mut state = lock(&self.state);
+            if !Self::admits(&state, pane) {
+                return;
+            }
             if state.withheld {
                 if !state.stopped {
                     state.panes.entry(pane.to_owned()).or_default().dropping = true;
@@ -262,8 +306,11 @@ impl Uplink {
     /// node's panes it is dropped, as output is: the screen that draws them
     /// had it.
     fn push_clipboard(&self, pane: &str, text: &[u8]) {
-        if lock(&self.state).withheld {
-            return;
+        {
+            let state = lock(&self.state);
+            if state.withheld || !Self::admits(&state, pane) {
+                return;
+            }
         }
         let Some(line) = line_of(TerminalUp::Clipboard(TerminalClipboard::new(pane, text))) else {
             return;
@@ -389,7 +436,12 @@ impl Uplink {
     /// A new link takes the lines from here on: what a link that ended
     /// stopped is sent again.
     fn restart(&self) {
-        lock(&self.state).stopped = false;
+        let mut state = lock(&self.state);
+        state.stopped = false;
+        // The new link's core attaches what it draws.
+        if let Some(admitted) = state.admitted.as_mut() {
+            admitted.clear();
+        }
     }
 
     fn stop(&self) {
@@ -546,6 +598,7 @@ impl NodeTerminals {
         let mut terminals = Self::new();
         terminals.screen = Some(tap);
         terminals.resident = Some(folders);
+        terminals.uplink.admit_by_attach();
         terminals
     }
 
@@ -559,12 +612,12 @@ impl NodeTerminals {
         lock(&self.holders).clone()
     }
 
-    /// How many of this node's panes may still run; none before it started
-    /// its holders.
-    pub fn live_panes(&self) -> Result<usize, String> {
+    /// This node's panes that may still run, as its holders' records say;
+    /// none before it started its holders.
+    pub fn live_panes(&self) -> Result<Vec<String>, String> {
         match lock(&self.local).as_ref() {
-            Some(holders) => holders.live_panes(),
-            None => Ok(0),
+            Some(holders) => holders.live_pane_ids(),
+            None => Ok(Vec::new()),
         }
     }
 
@@ -604,6 +657,27 @@ impl NodeTerminals {
                 }
             }
             control => self.with_service(|service| service.control(control)),
+        }
+    }
+
+    /// A control of the linked core. On a node that keeps every pane's
+    /// session itself (a guest's node, PRD device-connect-iroh D-77 (5)),
+    /// the core's attach and release only say whether the pane's output
+    /// goes up to it: the session stays for the host's tap, and a pane that
+    /// goes up again is drawn whole.
+    fn take_link_control(&self, control: TerminalControl) {
+        match control {
+            TerminalControl::Release { pane, .. } if self.uplink.dismiss(&pane) => {}
+            TerminalControl::Attach { ref pane, .. } if self.uplink.admit(pane) => {
+                let pane = pane.clone();
+                self.take_control(control);
+                self.with_service(|service| service.redraw(&pane));
+            }
+            TerminalControl::Forget { ref pane } => {
+                self.uplink.dismiss(pane);
+                self.take_control(control);
+            }
+            control => self.take_control(control),
         }
     }
 
@@ -693,7 +767,7 @@ impl hide_host::serve::Terminals for NodeTerminals {
             return;
         }
         match down {
-            TerminalDown::Control { control } => self.take_control(control),
+            TerminalDown::Control { control } => self.take_link_control(control),
             TerminalDown::InputPermit {
                 ticket,
                 pane,

@@ -14,7 +14,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
-use hide_node_link::terminal::{GridSize, KeyTarget, TerminalNode};
+use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalNode};
 use hide_peer::protocol::tap::{self, PaneSize, ToHost, ToNode};
 use hide_platform::ipc::{LocalListener, LocalStream, ShutdownHandle};
 use serde_json::json;
@@ -58,6 +58,22 @@ impl TapState {
         }
     }
 
+    /// Drops what waits of `pane`'s output; its next frame for this host
+    /// has to be a full one.
+    fn unstart(&mut self, pane: &str) {
+        self.started.remove(pane);
+        self.asked.remove(pane);
+        let mut freed = 0;
+        self.queue.retain(|(waiting, bytes)| {
+            let gone = waiting.as_deref() == Some(pane);
+            if gone {
+                freed += bytes.len();
+            }
+            !gone
+        });
+        self.bytes -= freed;
+    }
+
     fn fact(&mut self, frame: ToHost) {
         if self.client == 0 {
             return;
@@ -97,6 +113,52 @@ impl TapHub {
         if let Some(node) = self.node() {
             for pane in panes {
                 node.redraw(&pane);
+            }
+        }
+    }
+
+    /// The panes that may still run, as the node's holders' records say:
+    /// the list the host is told follows them, a started or adopted pane
+    /// joining it and an ended one leaving it, and the node keeps a
+    /// session of its own on each so the host draws it whether or not the
+    /// guest's core looks at it (D-77 (5)).
+    pub(super) fn live(&self, live: &[String]) {
+        let started: Vec<String> = {
+            let mut state = lock(&self.state);
+            let ended: Vec<String> = state
+                .panes
+                .keys()
+                .filter(|pane| !live.contains(pane))
+                .cloned()
+                .collect();
+            for pane in ended {
+                state.panes.remove(&pane);
+                state.unstart(&pane);
+                state.fact(ToHost::Gone { pane });
+            }
+            let started: Vec<String> = live
+                .iter()
+                .filter(|pane| !state.panes.contains_key(*pane))
+                .cloned()
+                .collect();
+            for pane in &started {
+                state.panes.insert(pane.clone(), (0, 0));
+                state.fact(ToHost::Pane(PaneSize {
+                    pane: pane.clone(),
+                    rows: 0,
+                    cols: 0,
+                }));
+            }
+            started
+        };
+        self.ready.notify_all();
+        if let Some(node) = self.node() {
+            for pane in started {
+                node.control(TerminalControl::Attach {
+                    pane,
+                    size: None,
+                    manual: false,
+                });
             }
         }
     }
@@ -335,27 +397,11 @@ impl OutputSink for TapHub {
         self.redraw(redraws);
     }
 
+    /// The node's terminal service let the pane's picture go. Whether the
+    /// pane still runs is its holder's to say ([`TapHub::live`]): the list
+    /// keeps it, and what waited of its output goes.
     fn forget(&self, pane: &str) {
-        {
-            let mut state = lock(&self.state);
-            if state.panes.remove(pane).is_none() {
-                return;
-            }
-            state.started.remove(pane);
-            state.asked.remove(pane);
-            let mut freed = 0;
-            state.queue.retain(|(waiting, bytes)| {
-                let gone = waiting.as_deref() == Some(pane);
-                if gone {
-                    freed += bytes.len();
-                }
-                !gone
-            });
-            state.bytes -= freed;
-            state.fact(ToHost::Gone {
-                pane: pane.to_owned(),
-            });
-        }
+        lock(&self.state).unstart(pane);
         self.ready.notify_all();
     }
 
@@ -376,5 +422,88 @@ impl OutputSink for TapHub {
             }
         }
         self.ready.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::peer_host::fixture::short_root;
+
+    /// A host on the hub's tap, past its hello.
+    fn host(endpoint: &std::path::Path) -> LocalStream {
+        let mut host = LocalStream::connect(endpoint).unwrap();
+        host.write_all(
+            &ToNode::Hello {
+                oldest: tap::OLDEST_TAP,
+                newest: tap::NEWEST_TAP,
+            }
+            .encode()
+            .unwrap(),
+        )
+        .unwrap();
+        host
+    }
+
+    fn told(host: &mut LocalStream) -> ToHost {
+        let mut prefix = [0u8; 4];
+        host.read_exact(&mut prefix).unwrap();
+        let mut body = vec![0u8; tap::frame_length(prefix).unwrap()];
+        host.read_exact(&mut body).unwrap();
+        ToHost::decode(body[0], &body[1..])
+            .unwrap()
+            .expect("a frame this build knows")
+    }
+
+    fn pane(pane: &str) -> PaneSize {
+        PaneSize {
+            pane: pane.to_owned(),
+            rows: 0,
+            cols: 0,
+        }
+    }
+
+    /// D-77 (5): which panes the host lists is the holders' records' to
+    /// say, not the terminal service's, which lets a pane's picture go
+    /// whenever the guest's core releases it.
+    #[test]
+    fn the_hosts_list_follows_the_panes_that_run_not_the_ones_being_drawn() {
+        let root = short_root();
+        let endpoint = root.path().join("tap.sock");
+        let listener = LocalListener::bind(&endpoint).unwrap();
+        let hub = Arc::new(TapHub::default());
+        {
+            let hub = Arc::clone(&hub);
+            std::thread::spawn(move || hub.accept(&listener));
+        }
+        let mut first = host(&endpoint);
+        assert_eq!(
+            told(&mut first),
+            ToHost::Welcome {
+                version: tap::NEWEST_TAP,
+                panes: Vec::new(),
+            }
+        );
+        hub.live(&["w1:p1".to_owned(), "w1:p2".to_owned()]);
+        assert_eq!(told(&mut first), ToHost::Pane(pane("w1:p1")));
+        assert_eq!(told(&mut first), ToHost::Pane(pane("w1:p2")));
+        // The service lets one pane's picture go; one pane ends.
+        hub.forget("w1:p1");
+        hub.live(&["w1:p1".to_owned()]);
+        assert_eq!(
+            told(&mut first),
+            ToHost::Gone {
+                pane: "w1:p2".to_owned()
+            }
+        );
+        // A host that connects next is told the pane that still runs.
+        let mut next = host(&endpoint);
+        assert_eq!(
+            told(&mut next),
+            ToHost::Welcome {
+                version: tap::NEWEST_TAP,
+                panes: vec![pane("w1:p1")],
+            }
+        );
     }
 }

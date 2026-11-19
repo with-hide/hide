@@ -229,7 +229,8 @@ pub fn run(dir: &str) -> ! {
         life.look();
         let life = Arc::clone(&life);
         let terminals = Arc::clone(&terminals);
-        std::thread::spawn(move || watch_life(&life, &terminals));
+        let hub = Arc::clone(&hub);
+        std::thread::spawn(move || watch_life(&life, &terminals, &hub));
     }
     let (sessions, next) = mpsc::sync_channel::<LocalStream>(0);
     {
@@ -436,7 +437,7 @@ fn end_now(owned: &Arc<dyn PaneHolders>) -> ! {
 
 /// Tells the host when the node becomes idle or stops being idle, and ends
 /// a node told to end with its last pane once that pane is gone.
-fn watch_life(life: &Life, terminals: &NodeTerminals) {
+fn watch_life(life: &Life, terminals: &NodeTerminals, tap: &tap::TapHub) {
     let mut told: Option<bool> = None;
     loop {
         let (linked, after_last_pane) = life.wait();
@@ -449,11 +450,14 @@ fn watch_life(life: &Life, terminals: &NodeTerminals) {
                 continue;
             }
         };
-        if live == 0 && after_last_pane {
+        // The host's list of this guest's panes follows the holders'
+        // records, whatever the guest's core holds of them.
+        tap.live(&live);
+        if live.is_empty() && after_last_pane {
             record("guest_node.last_pane_ended", json!({}));
             std::process::exit(launch::EXIT_ENDED);
         }
-        let idle = live == 0 && !linked;
+        let idle = live.is_empty() && !linked;
         if told != Some(idle) {
             say(&FromNode::Idle(idle));
             told = Some(idle);
