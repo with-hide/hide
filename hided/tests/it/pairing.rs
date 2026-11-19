@@ -608,12 +608,6 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     assert_eq!(pairing_frames, 0);
 }
 
-/// B7 for a machine that already runs its own Hide, reached over SSH: the
-/// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
-/// the target's `hide device accept-ssh` with no words to compare, and
-/// confirms over the connection. Nothing is installed on the target, and
-/// adding the same machine again says it is already connected (B51).
-#[cfg(unix)]
 /// The moved core's side of a split (PRD device-connect-iroh D-46, B45): a
 /// core that a machine dials as its node takes that machine's grant in the
 /// ask that gives its own, both settled at once with no question and no
@@ -697,6 +691,12 @@ async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machin
     assert_eq!(core.peers().len(), 1);
 }
 
+/// B7 for a machine that already runs its own Hide, reached over SSH: the
+/// guest's `hide device add <alias>` looks through a real `sshd`, pairs by
+/// the target's `hide device accept-ssh` with no words to compare, and
+/// confirms over the connection. Nothing is installed on the target, and
+/// adding the same machine again says it is already connected (B51).
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
