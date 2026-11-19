@@ -35,7 +35,7 @@ const WITHIN: Duration = Duration::from_secs(40);
 fn host_env(root: &Path) -> Env {
     let state = root.join("host-state");
     hide_platform::fs::private::create_dir_all(&state).unwrap();
-    crate::support::fixture_home(&root.join("host-home"));
+    crate::fixtures::fixture_home(&root.join("host-home"));
     Env {
         home: root.join("host-home"),
         state_dir: state,
@@ -138,9 +138,9 @@ struct Terminal {
 
 impl Terminal {
     /// A terminal of the machine whose HOME is `home`, which is made a
-    /// fixture's (`support::fixture_home`).
+    /// fixture's (`fixtures::fixture_home`).
     fn new(home: PathBuf, state: PathBuf, machine: Option<&'static str>) -> Self {
-        crate::support::fixture_home(&home);
+        crate::fixtures::fixture_home(&home);
         Self {
             home,
             state,
@@ -347,7 +347,7 @@ fn words_printed(ran: &Ran) -> Vec<String> {
 // thread of it, so it needs threads of its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
-    let root = crate::support::fixture_root("hp");
+    let root = crate::fixtures::fixture_root("hp");
     let running = hided::start_daemon(host_env(root.path())).await.unwrap();
     let host = Terminal::new(
         root.path().join("host-home"),
@@ -616,7 +616,7 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
 /// nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machine() {
-    let root = crate::support::fixture_root("hs");
+    let root = crate::fixtures::fixture_root("hs");
     let env = host_env(root.path());
     // What a move before 1.2.0 left in the core's state: the machine the
     // core was moved off, registered as a node that dials in.
@@ -702,7 +702,7 @@ async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machin
 async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     use crate::support::sshd::Sshd;
 
-    let root = crate::support::fixture_root("hp");
+    let root = crate::fixtures::fixture_root("hp");
     let _running = hided::start_daemon(host_env(root.path())).await.unwrap();
     let target = Terminal::new(
         root.path().join("host-home"),

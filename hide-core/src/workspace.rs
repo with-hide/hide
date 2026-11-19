@@ -65,6 +65,9 @@ pub fn local_device(
         peer_key: None,
         switch: None,
         needs: None,
+        switchable: false,
+        not_carried: None,
+        switch_first: false,
     }
 }
 
@@ -106,6 +109,9 @@ pub fn devices(
                 peer_key: registration.origin.peer_key().map(str::to_owned),
                 switch: None,
                 needs: None,
+                switchable: registration.origin.switches(),
+                not_carried: None,
+                switch_first: false,
             });
         }
     }

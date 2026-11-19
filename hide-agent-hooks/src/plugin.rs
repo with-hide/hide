@@ -214,9 +214,12 @@ impl Plugin {
         // Hide's trust entries go whether or not the operator edited the
         // file: they are Hide's, and nothing else takes them out. A
         // profile's account has its trust taken out by the kit, which
-        // judges that account's file first (`hide_kit` targets).
+        // judges that account's file first (`hide_kit` targets). A guest's
+        // installation leaves them: the record is the account's one, kept
+        // by the account's own Hide for the worktrees it made.
+        let guest = install.is_some_and(crate::route::is_guest_install);
         let forgotten = match self.trust {
-            Some(agent) if at.is_default() => crate::folder_trust::forget_all(
+            Some(agent) if at.is_default() && !guest => crate::folder_trust::forget_all(
                 agent,
                 at.home(),
                 crate::folder_trust::Tools::none(),

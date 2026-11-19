@@ -370,12 +370,17 @@ fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
     kit_program(&root.join("current"), "hide");
     kit_program(&root.join("current"), "hide-agent-hooks");
     let guest = KitTarget {
-        install: hide_agent_hooks::route::install_of_root(&root),
+        install: crate::layout::install_of_root(&root),
         kit_dir: root.join("current"),
         owned_roots: vec![root.clone()],
         hooks_only: true,
         ..fixture.target.clone()
     };
+    assert!(
+        hide_agent_hooks::route::is_guest_install(&guest.install),
+        "{}",
+        guest.install
+    );
     let guest_helper = root.join("current/hide-agent-hooks");
     let entries_of =
         |settings: &str, helper: &Path| settings.matches(helper.to_str().unwrap()).count();
@@ -409,6 +414,22 @@ fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
     let skills = home_tree(&fixture.home().join(".claude/skills"));
     assert!(!skills.is_empty(), "the account's own Hide wrote its skill");
 
+    // The account's own Hide trusted a worktree it made; the record of that
+    // is the account's one, whoever's entries come and go.
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let tree = fixture.root.join("repo-task");
+    std::fs::create_dir_all(tree.join(".git")).unwrap();
+    let tree = hide_platform::fs::identity::canonical(&tree).unwrap();
+    let key = hide_platform::path::to_wire(&tree).unwrap();
+    folder_trust::trust_worktree(Agent::ClaudeCode, fixture.home(), &tree, Tools::none()).unwrap();
+    let trusted = || {
+        let file = Agent::ClaudeCode.settings_path(fixture.home());
+        serde_json::from_slice::<Value>(&std::fs::read(file).unwrap()).unwrap()["projects"]
+            .get(&key)
+            .is_some()
+    };
+    assert!(trusted());
+
     // The guest is taken off this machine.
     let removed = remove(&guest);
     assert!(
@@ -425,6 +446,10 @@ fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
     assert_eq!(std::fs::read_link(&link).unwrap(), own_link);
     assert_eq!(home_tree(&fixture.home().join(".claude/skills")), skills);
     assert_eq!(other_tool_entry(&after), other_tool_entry(OTHER_TOOL));
+    assert!(
+        trusted(),
+        "the folder trust the account's own Hide recorded stays when a guest's entries go"
+    );
 }
 
 #[cfg(target_os = "macos")]

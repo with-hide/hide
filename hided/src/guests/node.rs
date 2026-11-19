@@ -267,7 +267,11 @@ pub struct GuestNode {
     /// device helper's folder: this daemon's own. The helper ran under the
     /// login this daemon runs under, so the panes it started ask in this
     /// folder, and a node given the login's variables alone would look for
-    /// them in the account's default one (D-49). A guest's own node names
+    /// them in the account's default one (D-49). That rests on one
+    /// assumption: the SSH login the helper was started over resolved the
+    /// same state folder as this daemon, which holds for the default one;
+    /// a login whose `XDG_STATE_HOME` differs from the daemon's leaves the
+    /// carried-on panes' hooks asking elsewhere. A guest's own node names
     /// its folder itself and is told none.
     process_state: Option<PathBuf>,
     phase: watch::Sender<Phase>,
@@ -625,7 +629,17 @@ impl GuestNode {
                 ));
             }
         };
-        lock(&self.control).input = child.take_stdin();
+        {
+            // Another build was asked for, or the daemon began to end,
+            // since this run was chosen: its input is let go here, which
+            // tells this node its host is gone, as the ask told the one
+            // before it. Kept, it would run until something else ended it.
+            let input = child.take_stdin();
+            let mut control = lock(&self.control);
+            if control.next.is_none() && !control.stopping {
+                control.input = input;
+            }
+        }
         let (lines, heard) = mpsc::channel::<String>();
         let readers = [
             child.take_stdout().map(|output| {

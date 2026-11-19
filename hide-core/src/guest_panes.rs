@@ -15,9 +15,9 @@ use serde::{Deserialize, Serialize};
 /// The most guests a list holds: every guest a host grants
 /// (`hide_peer::limits::MAX_GRANTS`).
 pub const MAX_GUESTS: usize = 32;
-/// The most panes of one guest a list holds: a node's holders
-/// (`hide_kit::panes::HOLDER_CAP`).
-pub const MAX_PANES: usize = 256;
+/// The most panes of one guest a list holds: the most holders a node
+/// runs.
+pub const MAX_PANES: usize = hide_kit::panes::HOLDER_CAP;
 
 const KEY_CHARS: usize = 64;
 const MAX_DEVICE_BYTES: usize = 128;

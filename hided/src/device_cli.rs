@@ -29,10 +29,19 @@ pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\n
 const WAIT_BOUND: Duration = Duration::from_secs(300);
 const WAIT_POLL: Duration = Duration::from_millis(500);
 
-/// How long `switch` waits for its answer: past ssh signing in, the target
-/// answering twice and the new connection being confirmed
-/// (`pairing::SWITCH_CONNECTS_WITHIN`).
-const SWITCH_BOUND: Duration = Duration::from_secs(240);
+/// How long `switch` waits for its answer: the sum of its parts, each
+/// bounded where it runs, and half a minute over. A login that asks the
+/// operator on the device's row can outlast it; the switch then goes on in
+/// the daemon and the row shows where it stands.
+const SWITCH_BOUND: Duration = Duration::from_secs(
+    crate::pairing_ssh::SWITCH_SSH_WITHIN.as_secs()
+        + crate::pairing::SWITCH_CONNECTS_WITHIN.as_secs()
+        + 30,
+);
+
+/// How long `projects-ssh` works: under what the machine that runs it over
+/// SSH waits for (`pairing_ssh::PROJECTS_WITHIN`).
+const PROJECTS_BOUND: Duration = Duration::from_secs(45);
 
 /// How long a share or a pasted link is followed: past the link's nine
 /// minutes and the two an answer may take.
@@ -115,14 +124,17 @@ pub enum Verb {
         /// The root of the device helper the caller dialed on this account,
         /// whose folder and terminals it asks for with the grant (D-49).
         helper: Option<String>,
-        /// The folders of this account the caller had registered as
-        /// projects on its device here, which this machine's own Hide then
-        /// lists too (D-48).
-        projects: Vec<String>,
         /// The grant the caller gives this machine, which then becomes its
         /// guest: taken only from the machine this core was moved off
         /// before 1.2.0 (D-46).
         grant: Option<String>,
+    },
+    /// What a machine that switched its device here runs once this machine
+    /// admitted it (security spec 15); not a command a person types. The
+    /// folders of this account it had registered as projects on its device
+    /// here, which this machine's own Hide then lists too (D-48).
+    ProjectsSsh {
+        projects: Vec<String>,
     },
 }
 
@@ -137,6 +149,7 @@ pub struct DeviceCli {
 pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli, String> {
     let verb = args.next().map(String::as_str);
     let accept = verb == Some("accept-ssh");
+    let hands = verb == Some("projects-ssh");
     let directed = matches!(verb, Some("pause" | "resume" | "remove"));
     let mut json = false;
     let mut wait = false;
@@ -173,7 +186,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             }
             "--helper" if accept && helper.is_none() => &mut helper,
             "--grant" if accept && grant.is_none() => &mut grant,
-            "--project" if accept && projects.len() < hide_core::SWITCHED_PROJECTS => {
+            "--project" if hands && projects.len() < hide_core::SWITCHED_PROJECTS => {
                 match args.next() {
                     Some(value) if !value.starts_with('-') => projects.push(value.clone()),
                     _ => return Err(USAGE.to_owned()),
@@ -266,11 +279,13 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 name,
                 wsl,
                 helper,
-                projects,
                 grant,
             },
             _ => return Err(USAGE.to_owned()),
         },
+        (Some("projects-ssh"), []) if name.is_none() && !projects.is_empty() => {
+            Verb::ProjectsSsh { projects }
+        }
         _ => return Err(USAGE.to_owned()),
     };
     if let Verb::Core(command) = &verb
@@ -465,7 +480,25 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
         }
         Verb::LookSsh => {
             // Read by the machine that ran it, never by a person.
-            let look = |core: bool| json!({"system": std::env::consts::OS, "core": core});
+            let look = |core: bool| {
+                let mut look = json!({"system": std::env::consts::OS, "core": core});
+                // An account with no Hide running says whether its desktop
+                // has someone logged in, which a machine reads before it
+                // starts one here (D-45, B7); left out when this system
+                // does not say.
+                let desktop = (!core)
+                    .then(|| {
+                        crate::core_install::checks::desktop_session(
+                            &env.home,
+                            &std::sync::atomic::AtomicBool::new(false),
+                        )
+                    })
+                    .flatten();
+                if let Some(desktop) = desktop {
+                    look["desktop"] = json!(desktop);
+                }
+                look
+            };
             match pairing(env, json!({"verb":"status"})) {
                 Ok(_) => {
                     println!("{}", json!({"ok":true,"value":{"look":look(true)}}));
@@ -488,10 +521,9 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             name,
             wsl,
             helper,
-            projects,
             grant,
         } => {
-            let mut value = pairing(
+            let value = pairing(
                 env,
                 json!({
                     "verb":"accept_ssh","request":request,"key":key,
@@ -499,13 +531,14 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                     "grant":grant,
                 }),
             )?;
-            // Asked of a machine that holds the folders already, not one
-            // that was only told who does.
-            if value["helper"] != "held" && !projects.is_empty() {
-                value["projects"] = json!(add_projects(env, projects));
-            }
             // Read by the machine that ran it, never by a person.
             println!("{}", json!({"ok":true,"value":value}));
+            Ok(Printed::Done)
+        }
+        Verb::ProjectsSsh { projects } => {
+            let added = add_projects(env, projects, Instant::now() + PROJECTS_BOUND);
+            // Read by the machine that ran it, never by a person.
+            println!("{}", json!({"ok":true,"value":{"projects":added}}));
             Ok(Printed::Done)
         }
     }
@@ -513,11 +546,12 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
 
 /// Registers each of `projects`, folders of this account, as a project of
 /// this machine's own Hide, and answers how many it now lists. One that is
-/// gone, outside the account's home or refused is left out and logged: the
-/// pairing it came with stands either way. A daemon that does not answer
-/// one is not asked for the rest, so the SSH login that waits on this
-/// waits for one answer at most.
-fn add_projects(env: &Env, projects: &[String]) -> usize {
+/// gone, outside the account's home or refused is left out and logged. It
+/// ends at `over`, each ask waiting for what is left of it, and a daemon
+/// that does not answer one is not asked for the rest: the SSH login that
+/// waits on this has a bound of its own (`pairing_ssh`), and the pairing
+/// it follows stands whatever is listed.
+fn add_projects(env: &Env, projects: &[String], over: Instant) -> usize {
     let Ok(Some(state)) = crate::state_file::read_state(&env.state_dir) else {
         return 0;
     };
@@ -529,7 +563,17 @@ fn add_projects(env: &Env, projects: &[String]) -> usize {
     };
     let mut added = 0;
     for path in projects {
-        match crate::workspace_cli::request_project_add_with_token(state.port, &state.token, path) {
+        let left = over.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            not_added("out_of_time");
+            break;
+        }
+        match crate::workspace_cli::request_project_add_with_token(
+            state.port,
+            &state.token,
+            path,
+            left,
+        ) {
             Ok(answer) if answer["ok"] == true => added += 1,
             Ok(answer) => not_added(answer["reason"].as_str().unwrap_or("refused")),
             Err(reason) => {
@@ -1111,12 +1155,29 @@ mod tests {
         parse(args.iter())
     }
 
-    /// `accept-ssh` takes each folder the asking machine had registered as
-    /// a project there (D-48), up to as many as a core adds at once; a
-    /// project is a folder, never a flag, and no other verb takes one.
+    /// `projects-ssh` takes each folder the asking machine had registered
+    /// as a project there (D-48), up to as many as a core adds at once; a
+    /// project is a folder, never a flag, and no other verb takes one: the
+    /// pairing's `accept-ssh` answers within one SSH answer's bound.
     #[test]
-    fn accept_ssh_takes_the_projects_the_asking_machine_registered() {
-        let base = [
+    fn projects_ssh_takes_the_projects_the_asking_machine_registered() {
+        let parsed = parse_words(&[
+            "projects-ssh",
+            "--project",
+            "/home/me/app",
+            "--project",
+            "/home/me/site",
+        ])
+        .unwrap();
+        assert!(
+            matches!(&parsed.verb, Verb::ProjectsSsh { projects } if projects == &["/home/me/app", "/home/me/site"]),
+            "{parsed:?}"
+        );
+        assert!(parse_words(&["projects-ssh"]).is_err());
+        assert!(parse_words(&["projects-ssh", "--project"]).is_err());
+        assert!(parse_words(&["projects-ssh", "--project", "--json"]).is_err());
+        assert!(parse_words(&["list", "--project", "/home/me/app"]).is_err());
+        let accept = [
             "accept-ssh",
             "--request",
             "r1",
@@ -1127,21 +1188,11 @@ mod tests {
             "--name",
             "Mac",
         ];
-        let mut words = base.to_vec();
-        words.extend(["--project", "/home/me/app", "--project", "/home/me/site"]);
-        let parsed = parse_words(&words).unwrap();
-        assert!(
-            matches!(&parsed.verb, Verb::AcceptSsh { projects, .. } if projects == &["/home/me/app", "/home/me/site"]),
-            "{parsed:?}"
-        );
-        assert!(
-            matches!(&parse_words(&base).unwrap().verb, Verb::AcceptSsh { projects, .. } if projects.is_empty())
-        );
-        let mut bare = base.to_vec();
-        bare.push("--project");
-        assert!(parse_words(&bare).is_err());
-        assert!(parse_words(&["list", "--project", "/home/me/app"]).is_err());
-        let mut many = base.to_vec();
+        assert!(parse_words(&accept).is_ok());
+        let mut with_project = accept.to_vec();
+        with_project.extend(["--project", "/home/me/app"]);
+        assert!(parse_words(&with_project).is_err());
+        let mut many = vec!["projects-ssh"];
         for _ in 0..=hide_core::SWITCHED_PROJECTS {
             many.extend(["--project", "/home/me/app"]);
         }

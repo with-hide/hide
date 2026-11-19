@@ -1209,7 +1209,6 @@ fn split_from_core(
                 me: &me,
                 key,
                 helper: None,
-                projects: &[],
                 grant,
             },
         )

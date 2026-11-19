@@ -718,6 +718,7 @@ impl EngineHandle {
                 windows: cfg!(windows),
                 definitions: Arc::new(definitions),
                 launches: Arc::new(launches),
+                switched: false,
             },
         )?;
         Ok(Self {

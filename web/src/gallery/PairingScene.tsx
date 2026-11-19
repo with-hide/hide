@@ -50,7 +50,7 @@ const GUEST_PANES = [{ device_id: "macbook", key: key("a"), panes: [{ id: "guest
 
 const LOCAL: Device = { agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
 
-const helper = (id: string, label: string, over: Partial<Device> = {}): Device => ({ ...LOCAL, id, label, kind: "remote", state: "ready", ssh_alias: id, ...over });
+const helper = (id: string, label: string, over: Partial<Device> = {}): Device => ({ ...LOCAL, id, label, kind: "remote", state: "ready", ssh_alias: id, switchable: true, ...over });
 
 /** One helper device per state its switch can be in (B35, B36, B41). */
 const HELPERS: Device[] = [
@@ -59,12 +59,15 @@ const HELPERS: Device[] = [
   helper("windows-pc", "Windows PC", { switch: { state: "failed", reason: "ssh_not_reached" } }),
 ];
 
-/** Two machines a switch started a Hide on, each with what that Hide still needs (B30); the first one's switch landed in this window (D-48). */
+/** Two machines a switch started a Hide on, each with what that Hide still needs (B30); the first one's switch landed in this window (D-48), with two terminals it could not take over (B36). */
 const LANDED: Device[] = [
-  helper("build-box", "build-box", { ssh_alias: null, peer_key: key("i"), needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } }),
-  helper("mac-mini", "Mac mini", { ssh_alias: null, peer_key: key("b"), needs: { kind: "auto_login" } }),
+  helper("build-box", "build-box", { ssh_alias: null, switchable: false, peer_key: key("i"), not_carried: 2, needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } }),
+  helper("mac-mini", "Mac mini", { ssh_alias: null, switchable: false, peer_key: key("b"), needs: { kind: "auto_login" } }),
 ];
 const LANDED_PEERS: Peer[] = [peer("i", "build-box", { opens: "active" }), peer("b", "Mac mini", { opens: "active" })];
+
+/** A device the last Add over SSH did not add: its switch stopped before anything was started there (B41). */
+const NOT_ADDED = { label: "lab-server", reason: "ssh_mac_signed_out" };
 
 /** This computer runs three terminals on the Windows PC, which a switch with a folder of its own closes (B69). */
 const HELPER_PROJECTS = [{ id: "bot", device_id: "windows-pc", removal: { pane_count: 3, running_agent_count: 0 }, checkouts: [] }];
@@ -118,7 +121,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
             ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" }
             : null,
       rest: {
-        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
+        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], device_not_added: view === "switch" ? NOT_ADDED : null, peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
         status: { remote: (switching ? HELPERS : landed ? LANDED : []).map((device) => ({ target_id: device.id, state: "connected", message: null })) },
         ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" },
       },

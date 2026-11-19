@@ -22,7 +22,7 @@ const kit = (components: KitComponent[], over: Partial<Kit> = {}): Kit => ({ una
 
 const host: DeviceHost = { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: "SHA256:abc", granted_at_unix_ms: 1, state: "ready", message: null, platform: "macos aarch64", helper_path: "~/.hide/host-helper/current/hided" };
 
-const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id, label: id === "mini" ? "Mac mini" : "Studio", kind: "remote", state: "ready", message: null, ssh_alias: id, agent_count: 0, test: null, host, kit: kit([part("cli", "installed"), part("claude_code_hook", "installed"), part("codex_hook", "installed")]), ...over });
+const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id, label: id === "mini" ? "Mac mini" : "Studio", kind: "remote", state: "ready", message: null, ssh_alias: id, agent_count: 0, test: null, host, switchable: true, kit: kit([part("cli", "installed"), part("claude_code_hook", "installed"), part("codex_hook", "installed")]), ...over });
 
 const state = (devices: Device[]) => ({
   connection: "live" as const,
@@ -56,6 +56,17 @@ async function mount(next: ReturnType<typeof state>) {
 }
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
+
+it("says in one line which device the last Add over SSH did not add, and why (B41)", async () => {
+  const shown = state([remote("mini")]);
+  (shown.rest.navigator as Record<string, unknown>).device_not_added = { label: "lab", reason: "ssh_mac_signed_out" };
+  const { q, unmount } = await mount(shown);
+  expect(q('[data-device-not-added="ssh_mac_signed_out"]')?.textContent).toBe("lab was not added · Log in on that Mac");
+  await unmount();
+  const none = await mount(state([remote("mini")]));
+  expect(none.q("[data-device-not-added]")).toBeNull();
+  await none.unmount();
+});
 
 it("says nothing about a healthy kit on a device row, and names the device by alias and platform (B54)", async () => {
   const { row, q, unmount } = await mount(state([remote("mini")]));

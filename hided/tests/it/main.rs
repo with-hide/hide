@@ -12,6 +12,7 @@ mod closed_stdout;
 mod connect_build;
 mod connect_stop;
 mod device_own_engine;
+mod fixtures;
 mod guest_node;
 mod handshake;
 mod held_letter_notice;

@@ -1058,13 +1058,10 @@ pub const COMMANDS: &[Spec] = &[
     // the request it made: the target saves a grant that opens nothing
     // until that machine confirms it over the connection, and answers its
     // own ids and addresses. Run again with the same request, it answers
-    // the same. Each `--project` is a folder of the account that machine
-    // had registered on its device there, which this machine's own Hide
-    // then lists as a project too. With --grant, the grant the asking
-    // machine gives this one, both are settled at once and this machine
-    // becomes that one's guest: taken only from a machine this core already
-    // runs work for, the node of a core moved here before 1.2.0 (PRD
-    // device-connect-iroh D-46).
+    // the same. With --grant, the grant the asking machine gives this one,
+    // both are settled at once and this machine becomes that one's guest:
+    // taken only from a machine this core already runs work for, the node
+    // of a core moved here before 1.2.0 (PRD device-connect-iroh D-46).
     Spec {
         words: &["device", "accept-ssh"],
         arguments: &[],
@@ -1077,7 +1074,6 @@ pub const COMMANDS: &[Spec] = &[
             required("--name", Text),
             switch("--wsl"),
             optional("--helper", Text),
-            repeated("--project", Text, hide_core::SWITCHED_PROJECTS),
             optional("--grant", Key),
         ],
         rest: None,
@@ -1090,6 +1086,21 @@ pub const COMMANDS: &[Spec] = &[
             "device_unknown",
             "hide_unavailable",
         ],
+    },
+    // What a machine that switched its device here runs once this machine
+    // admitted it: each `--project` is a folder of the account that machine
+    // had registered on its device, which this machine's own Hide then
+    // lists as a project too. It answers how many it lists; a folder that
+    // is gone, outside the account's home or refused is left out.
+    Spec {
+        words: &["device", "projects-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &["--project"],
+        options: &[repeated("--project", Text, hide_core::SWITCHED_PROJECTS)],
+        rest: None,
+        answers: &["device_projects_listed"],
+        refusals: &[],
     },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
@@ -2191,6 +2202,7 @@ fn answers() -> Value {
     map.insert("device_switched".into(), shape(&["device_id", "switch"]));
     map.insert("device_accepted".into(), shape(&["accepted"]));
     map.insert("device_looked".into(), shape(&["look"]));
+    map.insert("device_projects_listed".into(), shape(&["projects"]));
     map.insert(
         "device_paired".into(),
         shape(&["device_id", "name", "paired"]),

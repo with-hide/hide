@@ -1,10 +1,16 @@
 //! What puts a core on a machine and starts it there, whoever asks: the
 //! login item or fixture process that runs it (`starter`), the flags of
-//! the commands run on that machine (`flags`), and the one owned `ssh`
-//! those commands and their files go over (`remote`). A core's update over
-//! SSH (`core_update`) and the start of a Hide on a machine reached over
-//! SSH drive these (PRD device-connect-iroh D-46).
+//! the commands run on that machine (`flags`), what the machine says about
+//! itself first (`checks`), and the one owned `ssh` those commands and
+//! their files go over (`remote`). A core's update over SSH
+//! (`core_update`) drives these. The start of a Hide on a helper device's
+//! machine (PRD device-connect-iroh D-45, D-46) installs nothing through
+//! here: the device helper's kit already holds the build, `pairing_ssh`
+//! runs its `hide connect` on the device's own SSH session, and of these
+//! parts it reads one check, the desktop session the target's
+//! `hide device look-ssh` answers with (`checks::desktop_session`).
 
+pub mod checks;
 pub mod flags;
 pub mod remote;
 pub mod starter;

@@ -874,6 +874,16 @@ pub enum PaneFindRoute {
     Bar,
 }
 
+/// A device an Add over SSH did not add (`NavigatorSnapshot::device_not_added`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceNotAddedSnapshot {
+    /// The name the operator gave it.
+    pub label: String,
+    /// Why its switch stopped, as the code a device row's failed switch
+    /// carries (`DeviceSwitchSnapshot::reason`).
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NavigatorSnapshot {
     pub agent_scope: crate::agent_state::Scope,
@@ -889,6 +899,12 @@ pub struct NavigatorSnapshot {
     pub focused_workspace_id: Option<String>,
     pub focused_checkout_id: Option<String>,
     pub devices: Vec<DeviceSnapshot>,
+    /// The device the last Add over SSH did not add, with why (PRD
+    /// device-connect-iroh B41): its first switch stopped before anything
+    /// was started on that machine, and no device is left on the helper.
+    /// One at most, until the next device is added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_not_added: Option<DeviceNotAddedSnapshot>,
     /// The machines this one is paired with over the peer connection, both
     /// directions of each pair, as hided last told the core (PRD
     /// device-connect-iroh D-72). Beside `devices`, not among them: a paired
@@ -1063,6 +1079,20 @@ pub struct DeviceSnapshot {
     /// kept while this core runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs: Option<DeviceNeedsSnapshot>,
+    /// Whether the device can be switched to its machine's own connection
+    /// (PRD device-connect-iroh B35, [`LinkOrigin::switches`]): the one
+    /// rule the row's `바꾸기` and `hide device switch` both follow.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switchable: bool,
+    /// How many of the device's terminals its switch could not take up
+    /// again and closed (B36), kept while this core runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_carried: Option<u32>,
+    /// Added over SSH to be switched at once (B41): its switch is asked
+    /// when it first connects, and it is not left on the helper when that
+    /// switch stops before anything was started on its machine.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switch_first: bool,
 }
 
 /// What a machine's Hide, started over SSH, needs to stay reachable with no
@@ -5252,6 +5282,12 @@ pub struct UiStateSnapshot {
     /// it makes (`runtime::agent_choice`). The store owns it.
     #[serde(default, skip_serializing)]
     pub pane_launches: BTreeMap<String, PaneLaunch>,
+    /// The devices switched to their machine's own connection whose first
+    /// engine open on it has not ended (`runtime::device_switch`): that open
+    /// closes the panes the new link does not hold, and a core that stopped
+    /// before it still owes it. The store owns it.
+    #[serde(default, skip_serializing)]
+    pub device_switch_opens: BTreeSet<String>,
     /// Each agent pane's request-view verb and when it took it, so the time
     /// a row has waited survives a restart (PRD overview-request-view D-40).
     /// The store owns it; the shell reads it on the row.
@@ -6122,6 +6158,7 @@ impl Default for UiStateSnapshot {
             pane_read_records: BTreeMap::new(),
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
+            device_switch_opens: BTreeSet::new(),
             request_verbs: BTreeMap::new(),
             agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
@@ -6301,6 +6338,20 @@ impl LinkOrigin {
     /// has, once that machine runs a core of its own (D-46).
     pub fn becomes_peer(&self) -> bool {
         self.dials_helper() || matches!(self, Self::Inbound)
+    }
+
+    /// Whether the device can be switched to its machine's own connection
+    /// now: one the core dials over SSH that has connected, so its id is
+    /// its machine's and the paired machine's device has it too (B35). A
+    /// device that never connected is switched once it has.
+    pub fn switches(&self) -> bool {
+        matches!(
+            self,
+            Self::Dialed {
+                naming: DeviceNaming::Named,
+                ..
+            }
+        )
     }
 
     /// Whether the core brings a lost link back itself; a node that dials
@@ -8436,6 +8487,7 @@ impl Snapshot {
                     options.machine_name.as_deref(),
                     None,
                 )],
+                device_not_added: None,
                 peers: Vec::new(),
                 guest_panes: Vec::new(),
                 workspaces: Vec::new(),
