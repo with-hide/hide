@@ -168,6 +168,8 @@ type PhoneState = {
   automationsZone: string | undefined;
   /** The automations paused for a person to fix, oldest pause first: each is a line of 내 차례 on the agents tab (PRD automations D-12, B23). */
   automationAsks: string[];
+  /** The computer could not read its automation list and set it aside: one line above the list. */
+  automationsUnreadable: boolean;
   /** The automation whose page is open on the automations tab. */
   automationOpen: string | null;
   /** A press sent from the tab that hided has not answered yet; its buttons wait. */
@@ -239,6 +241,7 @@ const initial: PhoneState = {
   automationsOmitted: 0,
   automationsZone: undefined,
   automationAsks: [],
+  automationsUnreadable: false,
   automationOpen: null,
   automationPending: null,
   automationNotice: null,
@@ -317,6 +320,7 @@ export function applyFrame(frame: ServerFrame): void {
         automationsOmitted: frame.omitted ?? 0,
         automationsZone: frame.zone ?? undefined,
         automationAsks: frame.asks ?? [],
+        automationsUnreadable: frame.unreadable === true,
         // An automation that left the list takes its page and its line with it.
         automationOpen: state.automationOpen && listed.has(state.automationOpen) ? state.automationOpen : null,
         automationNotice: state.automationNotice && listed.has(state.automationNotice.id) ? state.automationNotice : null,

@@ -107,13 +107,17 @@ afterEach(() => {
 });
 
 it("shows no automations tab against a Hide that sends none, and the one empty line once it does", async () => {
-  const { container, list, click, unmount } = await connect(null);
+  const { container, list, serve, click, unmount } = await connect(null);
   try {
     expect(container.querySelector('[data-phone-tab="automations"]')).toBeNull();
     await list([]);
     expect([...container.querySelectorAll("[data-phone-tab]")].map((tab) => tab.getAttribute("data-phone-tab"))).toEqual(["agents", "missions", "automations", "prs", "settings"]);
     await click('[data-phone-tab="automations"]');
     expect(container.querySelector('[data-phone-automations-state="empty"]')!.textContent).toBe("No automations yetYou can create one by asking an agent");
+    expect(container.querySelector("[data-phone-automations-unreadable]")).toBeNull();
+    // A list the computer could not read and set aside is one line above it, until the core drops it.
+    await serve({ type: "automations", items: [], zone: ZONE, unreadable: true });
+    expect(container.querySelector("[data-phone-automations-unreadable]")!.textContent).toBe("The automation list on the computer could not be read and was set aside · see the desktop");
   } finally {
     await unmount();
   }
@@ -240,6 +244,24 @@ it("sends a press whose answer the lost connection took again under its id, and 
     const next = sent()[2]!;
     expect(next.request_id).not.toBe(first!.request_id);
     await serve({ type: "automation_result", request_id: next.request_id as string, action: "run", id: "a", ok: true, reason: null });
+  } finally {
+    await unmount();
+  }
+});
+
+it("sends a new pause after one whose answer was lost took effect and was undone elsewhere", async () => {
+  const on = [automation("a")];
+  const { click, sent, lose, reconnect, list, unmount } = await connect(on);
+  try {
+    await click('[data-phone-tab="automations"]');
+    await click('[data-phone-automation="a"] [data-phone-automation-press="pause"]');
+    await lose();
+    // The pause landed, then the desktop turned it on again: the list is back where the press saw it.
+    await reconnect([automation("a", { paused: { reason: "operator", at_unix_ms: NOW }, next_run_at_unix_ms: null })]);
+    await list(on);
+    await click('[data-phone-automation="a"] [data-phone-automation-press="pause"]');
+    const [first, second] = sent();
+    expect(second!.request_id).not.toBe(first!.request_id);
   } finally {
     await unmount();
   }

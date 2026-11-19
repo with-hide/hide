@@ -26,6 +26,7 @@ export function AutomationsScreen() {
   const omitted = usePhone((s) => s.automationsOmitted);
   const connected = usePhone((s) => s.connected);
   const unreachable = usePhone((s) => s.unreachable);
+  const unreadable = usePhone((s) => s.automationsUnreadable);
   // The last list stays, dimmed, under the unreachable line, as on the other tabs (B35).
   const dim = unreachable && !connected;
   return (
@@ -40,6 +41,7 @@ export function AutomationsScreen() {
         </div>
       ) : null}
       <div className={cn("flex-1", dim && "opacity-(--opacity-dimmed)")} aria-busy={dim}>
+        {unreadable ? <p role="status" className="break-keep px-xl py-sm text-body text-warning wrap-anywhere" data-phone-automations-unreadable="true">{t("mobile.automations.unreadable")}</p> : null}
         {automations && automations.length === 0 ? (
           <div className="flex flex-col gap-xs px-xl py-xxl text-center" data-phone-automations-state="empty">
             <p className="text-title text-muted-foreground">{t("mobile.automations.empty")}</p>
@@ -96,10 +98,10 @@ export function ScheduleLine({ automation, className }: { automation: PhoneAutom
       {scheduleText(automation.schedule, language, t)}
       {" · "}
       {next.kind === "running" ? (
-        <span className="text-agent-working">● {nextRunText(automation, Date.now(), zone, language, t)}</span>
+        <span className="whitespace-nowrap text-agent-working">● {nextRunText(automation, Date.now(), zone, language, t)}</span>
       ) : paused ? (
-        // Only the operator's own pause is quiet; the rest are a person's to fix (D-12).
-        <span className={paused.reason === "operator" ? undefined : "text-warning"} data-phone-automation-paused={paused.reason}>⏸ {pauseReasonText(paused.reason, t)}</span>
+        // Only the operator's own pause is quiet; the rest are a person's to fix (D-12). The mark and its reason wrap together.
+        <span className={cn("whitespace-nowrap", paused.reason !== "operator" && "text-warning")} data-phone-automation-paused={paused.reason}>⏸ {pauseReasonText(paused.reason, t)}</span>
       ) : (
         <span>{nextRunText(automation, Date.now(), zone, language, t)}</span>
       )}
@@ -135,7 +137,9 @@ export function AutomationAskRows() {
             <RepeatIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-warning" />
             <span className="min-w-0 flex-1 break-keep text-body wrap-anywhere">
               <span className="font-medium text-foreground">{automation.name}</span>
-              <span className="text-warning" data-phone-automation-ask-line={paused.reason}>{" · "}{t("mobile.automations.ask", { reason: pauseReasonText(paused.reason, t) })}</span>
+              <span className="text-warning">{" · "}</span>
+              {/* `<why> · 고치고` wraps as one piece, so 고치고 never stands alone on a line. */}
+              <span className="inline-block text-warning" data-phone-automation-ask-line={paused.reason}>{t("mobile.automations.ask", { reason: pauseReasonText(paused.reason, t) })}</span>
             </span>
             <ResumeButton automation={automation} connected={connected} />
           </div>

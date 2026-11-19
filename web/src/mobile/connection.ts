@@ -331,6 +331,11 @@ function connect(): void {
       settleMissionReopen();
       return;
     }
+    if (frame.type === "automations") {
+      applyFrame(frame);
+      settleLastAutomation();
+      return;
+    }
     if (frame.type === "sleep_result") {
       if (usePhone.getState().sleepAction?.requestId === frame.request_id) clearSleepTimer();
       applyFrame(frame);
@@ -912,11 +917,21 @@ export function confirmMerge(): boolean {
   return sent;
 }
 
-let lastAutomation: { intent: string; requestId: string } | null = null;
+/** The last press sent, with what it saw of its automation; while that holds, the same press again is the same request. */
+let lastAutomation: { id: string; action: AutomationAction; seen: string; requestId: string } | null = null;
 
-function newestRun(automation: PhoneAutomation | null): number | null {
+/** What a press reads of its automation: the newest run for [지금 실행], the pause for [멈춤] and [다시 켜기]. */
+function pressSees(automation: PhoneAutomation | null, action: AutomationAction): string {
+  if (action !== "run") return JSON.stringify(automation?.paused ?? null);
   const run = automation?.records.find((record) => record.kind === "run");
-  return run?.kind === "run" ? run.number : null;
+  return JSON.stringify(run?.kind === "run" ? run.number : null);
+}
+
+/** A list that moved what the last press saw ends it: whoever moved it (this press, the desktop, the CLI), the next press is a new one. */
+function settleLastAutomation(): void {
+  if (!lastAutomation) return;
+  const automation = automationOf(usePhone.getState().automations, lastAutomation.id);
+  if (pressSees(automation, lastAutomation.action) !== lastAutomation.seen) lastAutomation = null;
 }
 
 /**
@@ -926,14 +941,12 @@ function newestRun(automation: PhoneAutomation | null): number | null {
 export function pressAutomation(id: string, action: AutomationAction): boolean {
   const state = usePhone.getState();
   if (state.automationPending) return false;
-  // The intent carries what the press saw: the newest run for [지금 실행], the pause for [멈춤] and [다시 켜기]. A press that
-  // took effect moved that, so the next press is a new one under a new id; only a press that never landed is sent again
-  // under its id.
-  const automation = automationOf(state.automations, id);
-  const seen = action === "run" ? newestRun(automation) : (automation?.paused?.at_unix_ms ?? null);
-  const intent = JSON.stringify([id, action, seen]);
-  const requestId = lastAutomation?.intent === intent ? lastAutomation.requestId : newRequestId();
-  lastAutomation = { intent, requestId };
+  // Only a press that never landed is sent again under its id: one that took effect, or anything else that moved what it saw,
+  // ended it when that list arrived (`settleLastAutomation`).
+  const seen = pressSees(automationOf(state.automations, id), action);
+  const same = lastAutomation?.id === id && lastAutomation.action === action && lastAutomation.seen === seen;
+  const requestId = same ? lastAutomation!.requestId : newRequestId();
+  lastAutomation = { id, action, seen, requestId };
   const sent = send({ type: "automation", request_id: requestId, action, id });
   patch(sent ? { automationPending: { requestId, id, action }, automationNotice: null } : { automationNotice: { id, notice: automationFailure("offline") } });
   return sent;

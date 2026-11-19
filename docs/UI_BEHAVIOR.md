@@ -3405,6 +3405,7 @@ How a schedule, a next run and a record read is `web/src/automationWords.ts`, sh
 A press goes to the core as the desktop's own button does, once per press however often it is sent again; what the core did comes back on the automation, and a refusal (a run already going, an automation that is gone, the computer out of reach) is one line under the page's buttons.
 The phone has no button to make, edit or remove an automation: that is said to an agent, on the phone as on the desktop.
 With none, the tab says `자동화가 아직 없어요` and `에이전트에게 말로 만들 수 있어요`.
+When the computer could not read its automation list and set it aside, one warning line above the list says `컴퓨터의 자동화 목록을 읽지 못해 따로 두었어요 · 데스크톱에서 보세요` until the core drops it (making an automation does).
 Away from the computer the tab keeps its last list dimmed under the unreachable line, as the other tabs do, and its buttons are off; the list is filled again on reconnect.
 An automation that stopped for a person to fix (`agent_scope.automation_asks`, PRD automations D-12, B23) is also one line of the agent list's 내 차례, above the agents there and counted in its number and the 에이전트 tab's: `<name> · <why> · 고치고` with `▶ 다시 켜기`, the row's own press, and a press on the line opens its page; the line goes when the core takes the ask away.
 An automation's own folder is no project the phone lists: the start sheet and the PR tab leave out a project the core marks `unlisted`.

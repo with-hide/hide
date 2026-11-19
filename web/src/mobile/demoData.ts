@@ -293,7 +293,7 @@ function work(over: Partial<NonNullable<PhonePr["work"]>>): NonNullable<PhonePr[
 export const FAILED_PR_NUMBER = 2088;
 
 /** The sample automation whose login expired, a line of 내 차례 until it is turned on again. */
-const SIGNED_OUT = "auto-docs";
+export const SIGNED_OUT = "auto-docs";
 
 /** The sample automations: one each morning with a run history, one weekly that is paused, one daily whose login expired; a press this visit adds a manual run, pauses it or turns it on again. */
 export function automationsFrame(t: T, state: DemoState): ServerFrame {
@@ -327,7 +327,7 @@ export function automationsFrame(t: T, state: DemoState): ServerFrame {
       run(1, at(7, 8), 6),
     ]),
     sample(SIGNED_OUT, t("mobile.demo.auto3.name"), { schedule: { kind: "daily", time: "18:00" }, next_run_at_unix_ms: at(-1, 18), unseen: 1 }, [
-      { kind: "run", number: 2, trigger: "scheduled", started_at_unix_ms: at(1, 18), ended_at_unix_ms: at(1, 18) + 2 * MINUTE, state: "failed", attempt: 3, reason: "login_expired", seen: false },
+      { kind: "run", number: 2, trigger: "scheduled", started_at_unix_ms: at(1, 18), ended_at_unix_ms: at(1, 18) + 2 * MINUTE, state: "failed", attempt: 3, reason: "automation_login_expired", seen: false },
       run(1, at(2, 18), 7),
     ]),
   ];

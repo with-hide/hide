@@ -339,7 +339,7 @@ export type ServerFrame =
   /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
   | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
   /** The automations this computer's core runs, in its order; `omitted` counts the ones past the frame's caps; `zone` is the IANA zone their times are read in. */
-  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[] }
+  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; unreadable?: boolean }
   /** hided's answer to an `automation` press: whether it sent the core's event; what the core did comes back on the automation. */
   | { type: "automation_result"; request_id?: string; action: AutomationAction | null; id?: string | null; ok: boolean; reason: string | null }
   /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */

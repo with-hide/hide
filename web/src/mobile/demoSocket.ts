@@ -5,7 +5,7 @@
 
 import { clientI18n, translate } from "../i18n/translator";
 import {
-  DEMO_DEVICE, LOOK_HTML, LOOK_IMAGE, START_STATE, agentsFrame, terminalText, base64Of, conversation, looks, lookChart, lookHtml, missionsFrame, prsFrame, startCatalog, automationsFrame,
+  DEMO_DEVICE, LOOK_HTML, LOOK_IMAGE, START_STATE, agentsFrame, terminalText, base64Of, conversation, looks, lookChart, lookHtml, missionsFrame, prsFrame, startCatalog, automationsFrame, SIGNED_OUT,
   type DemoState, type Said,
 } from "./demoData";
 import type { AutomationAction, PhoneMessage, ServerFrame } from "./protocol";
@@ -210,7 +210,7 @@ export class DemoSocket implements PhoneSocket {
           this.emit(automationsFrame(translate, this.state));
         });
       } else {
-        this.state = { ...this.state, pausedAutomations: action === "pause" ? [...paused, id] : paused, docsSignedIn: this.state.docsSignedIn || action === "resume" };
+        this.state = { ...this.state, pausedAutomations: action === "pause" ? [...paused, id] : paused, docsSignedIn: this.state.docsSignedIn || (action === "resume" && id === SIGNED_OUT) };
       }
       this.emit({ type: "automation_result", request_id: requestId, action, id, ok: true, reason: null });
       this.emit(automationsFrame(translate, this.state));
