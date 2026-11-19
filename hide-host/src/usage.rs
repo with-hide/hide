@@ -19,6 +19,8 @@ const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_BINARY: &str = hide_agent_adapter::AgentId::ClaudeCode
     .adapter()
     .executables[0];
+const CREDENTIALS_UNREADABLE: &str = "credentials_unreadable";
+const CODEX_BINARY: &str = hide_agent_adapter::AgentId::Codex.adapter().executables[0];
 /// The keychain item Claude Code keeps its login in, under the login
 /// account's name, for its default configuration folder.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -53,7 +55,11 @@ pub fn fetch(
             let home = account
                 .and_then(|account| account.path(AccountPath::State))
                 .unwrap_or(root);
-            let result = codex_usage(home);
+            let result = codex_usage(home).map_err(|failure| {
+                codex_missing_or(failure, || {
+                    hide_platform::programs::find_cli(CODEX_BINARY).is_some()
+                })
+            });
             let fallback = result
                 .as_ref()
                 .err()
@@ -103,13 +109,12 @@ fn read_credentials(path: &Path) -> Result<Vec<u8>, LimitFailure> {
         .ok()
         .flatten()
         .ok_or_else(|| {
-            LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable")
+            LimitFailure::new(FailureDisposition::Authentication, CREDENTIALS_UNREADABLE)
         })
 }
 
 fn codex_credentials(home: &Path) -> Result<CodexCredentials, LimitFailure> {
-    let failure =
-        || LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable");
+    let failure = || LimitFailure::new(FailureDisposition::Authentication, CREDENTIALS_UNREADABLE);
     let bytes = read_credentials(&home.join("auth.json"))?;
     let auth = crate::credentials::object(&bytes).map_err(|_| failure())?;
     let (access_token, account_id) =
@@ -118,6 +123,21 @@ fn codex_credentials(home: &Path) -> Result<CodexCredentials, LimitFailure> {
         access_token: access_token.to_owned(),
         account_id: account_id.to_owned(),
     })
+}
+
+/// A Codex login this node cannot read, where the account's search finds no
+/// Codex either, is a Codex that is not there, as a Claude login read
+/// through a CLI that is missing is (`UsageError::NotInstalled`): what asks
+/// then says the agent is missing, not signed out. A login the server
+/// refused is signed out whether or not the program is there.
+fn codex_missing_or(failure: LimitFailure, installed: impl FnOnce() -> bool) -> LimitFailure {
+    if failure.disposition == FailureDisposition::Authentication
+        && failure.kind == CREDENTIALS_UNREADABLE
+        && !installed()
+    {
+        return LimitFailure::cli(hide_ai::UsageError::NotInstalled);
+    }
+    failure
 }
 
 fn codex_usage(home: &Path) -> Result<String, LimitFailure> {
@@ -393,7 +413,7 @@ pub(crate) fn claude_keychain_item(
 /// signed-out account: Claude Code renews it the next time it runs.
 fn claude_token(bytes: &[u8], now_ms: u64) -> Result<ClaudeToken, LimitFailure> {
     let unreadable =
-        || LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable");
+        || LimitFailure::new(FailureDisposition::Authentication, CREDENTIALS_UNREADABLE);
     let login = crate::credentials::object(bytes).map_err(|_| unreadable())?;
     let (token, expires_at) =
         crate::credentials::claude::access_token(&login).ok_or_else(unreadable)?;
@@ -556,6 +576,38 @@ mod tests {
             Err((FailureDisposition::Schema, "response_shape".to_owned()))
         );
     }
+    /// A Codex whose login cannot be read and whose program is not found
+    /// reads as not there, as a missing Claude CLI does; one with its
+    /// program reads as signed out, and a login the server refused stays
+    /// signed out either way.
+    #[test]
+    fn an_unreadable_codex_login_without_its_program_reads_as_not_installed() {
+        let read = |home: &Path, installed: bool| {
+            codex_usage(home)
+                .map_err(|failure| codex_missing_or(failure, || installed))
+                .map_err(|failure| (failure.disposition, failure.kind))
+        };
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read(home.path(), false),
+            Err((FailureDisposition::NotInstalled, "not_installed".to_owned()))
+        );
+        assert_eq!(
+            read(home.path(), true),
+            Err((
+                FailureDisposition::Authentication,
+                CREDENTIALS_UNREADABLE.to_owned()
+            ))
+        );
+        let refused = LimitFailure {
+            status: Some(401),
+            ..LimitFailure::new(FailureDisposition::Authentication, "http")
+        };
+        assert_eq!(
+            codex_missing_or(refused, || false).disposition,
+            FailureDisposition::Authentication
+        );
+    }
     #[test]
     fn a_claude_account_keeps_its_login_under_the_digest_of_its_folder_as_set() {
         assert_eq!(
@@ -592,7 +644,7 @@ mod tests {
         // Claude Code leaves items like this behind under other account names.
         let unreadable = Err((
             FailureDisposition::Authentication,
-            "credentials_unreadable".to_owned(),
+            CREDENTIALS_UNREADABLE.to_owned(),
         ));
         assert_eq!(read(login("", 0)), unreadable);
         assert_eq!(read(json!({"mcpOAuth": {}}).to_string()), unreadable);
