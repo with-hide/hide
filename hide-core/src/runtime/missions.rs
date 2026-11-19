@@ -305,7 +305,8 @@ pub struct NodeView {
     pub attention: Option<AttentionView>,
     /// What Hide itself did to the node last (D-07, D-15).
     pub hide: Option<crate::missions::HideMark>,
-    /// Its review's failures in a row (with-hide/hide-private#552).
+    /// Its review's or verification's failures in a row
+    /// (`MissionNode::review_fails`, with-hide/hide-private#552).
     pub review_fails: u32,
     /// When Hide last read a new head on one of its pull requests.
     pub pushed_at_unix_ms: Option<u64>,
@@ -1268,7 +1269,10 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             );
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => (
-                    format!("failed its review {} times in a row", node.review_fails()),
+                    format!(
+                        "failed its review or verification {} times in a row",
+                        node.review_fails()
+                    ),
                     "judge whether its worker needs another approach or the node a fresh worker; the operator is not called about this warning, so ask with `hide mission decide --node` when what is left is theirs to decide",
                 ),
                 (Some(WarningKind::NoPush), _, Some(warning)) => (

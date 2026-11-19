@@ -180,7 +180,12 @@ pub struct Conversation {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ask {
-    pub command: crate::coordination::Command,
+    /// The spawn as the coordination layer takes it, whose shape that layer
+    /// owns: one this build cannot read (written by a build whose spawn
+    /// differs) is none, which ends this start alone as a transient failure
+    /// rather than setting the whole book aside (`read_command`).
+    #[serde(deserialize_with = "read_command")]
+    pub command: Option<crate::coordination::Command>,
     /// The branch of the run's own worktree the start makes, when the
     /// automation makes one per run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,13 +193,22 @@ pub struct Ask {
 }
 
 impl Ask {
-    /// The intent the start is asked under; an ask is always a spawn.
+    /// The intent the start is asked under; an ask is always a spawn, and
+    /// one that could not be read names none.
     pub fn intent(&self) -> Option<&str> {
-        match &self.command {
+        match self.command.as_ref()? {
             crate::coordination::Command::Spawn { intent, .. } => Some(intent),
             _ => None,
         }
     }
+}
+
+/// A stored spawn command, or none when this build cannot read its shape.
+fn read_command<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::coordination::Command>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 /// A finished run's conversation opened again in a terminal (B17): it does
@@ -1400,7 +1414,7 @@ mod tests {
         // A start as the runtime makes it, each text at its longest: a
         // first prompt is the task with the last run's line and answer.
         let ask = |brief: Option<String>| Ask {
-            command: crate::coordination::Command::Spawn {
+            command: Some(crate::coordination::Command::Spawn {
                 pick: None,
                 mission: None,
                 plan_node: None,
@@ -1425,7 +1439,7 @@ mod tests {
                 }),
                 beside: false,
                 profile: Some("p".repeat(128)),
-            },
+            }),
             worktree: Some(branch.clone()),
         };
         for index in 0..RECORD_CAP {

@@ -1147,19 +1147,34 @@ pub fn bind(state_dir: &Path) -> Result<(BootstrapListener, PathBuf), String> {
     hide_node::pane_proof::bind(state_dir, new_token)
 }
 
+/// What the bootstrap socket answers with.
+pub struct Answering {
+    pub registry: Arc<Registry>,
+    pub core: Arc<CoreHandle>,
+    pub engine: Option<EngineHandle>,
+    pub port: u16,
+    pub desktop_renderers: Arc<AtomicUsize>,
+    /// What `hide device` asks about pairing (`crate::pairing`).
+    pub pairing: Arc<crate::pairing::Pairing>,
+}
+
 /// Answers bootstrap requests until `shutdown`. The listener accepts on a
 /// thread of its own, because an accept blocks; the closer frees it when the
 /// daemon stops, and a failed accept ends the bootstrap with a diagnostic.
 pub async fn serve(
     listener: BootstrapListener,
-    registry: Arc<Registry>,
-    core: Arc<CoreHandle>,
-    engine: Option<EngineHandle>,
-    port: u16,
+    answering: Answering,
     shutdown: crate::ending::Ending,
-    desktop_renderers: Arc<AtomicUsize>,
 ) {
     use tokio::sync::Semaphore;
+    let Answering {
+        registry,
+        core,
+        engine,
+        port,
+        desktop_renderers,
+        pairing,
+    } = answering;
     // Closed however this future ends, a drop included, so the accept
     // thread never outlives it.
     let closing = CloseOnDrop {
@@ -1223,6 +1238,8 @@ pub async fn serve(
         let core = Arc::clone(&core);
         let engine = engine.clone();
         let desktop_renderers = Arc::clone(&desktop_renderers);
+        let pairing = Arc::clone(&pairing);
+        let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             answer_bootstrap(
@@ -1232,6 +1249,7 @@ pub async fn serve(
                 engine.as_ref(),
                 port,
                 desktop_renderers.load(Ordering::SeqCst) > 0,
+                Some((&pairing, &runtime)),
             );
         });
     }
@@ -1270,6 +1288,7 @@ fn answer_bootstrap(
     engine: Option<&EngineHandle>,
     port: u16,
     desktop: bool,
+    pairing: Option<(&Arc<crate::pairing::Pairing>, &tokio::runtime::Handle)>,
 ) {
     use std::io::{BufRead, BufReader};
     let Some(peer) = stream
@@ -1312,6 +1331,30 @@ fn answer_bootstrap(
         {
             registry.revoke(&reference.token);
         }
+        return;
+    }
+    // What `hide device` asks about pairing (PRD device-connect-iroh B1,
+    // B24, B52): answered in this one exchange, and what only the operator
+    // may ask is refused to a caller the kernel places in a pane.
+    if let Some(request) = &parsed
+        && let Some(ask) = &request.device
+        && line.len() <= 4096
+    {
+        let answer = match (
+            pairing,
+            serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
+        ) {
+            (Some((pairing, runtime)), Ok(ask)) => {
+                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
+                    crate::pairing::Caller::Pane
+                } else {
+                    crate::pairing::Caller::Operator
+                };
+                runtime.block_on(pairing.ask(ask, caller))
+            }
+            _ => crate::pairing::refused("invalid_request"),
+        };
+        let _ = writeln!(stream, "{answer}");
         return;
     }
     if let Some(request) = &parsed
@@ -2195,6 +2238,7 @@ mod tests {
         let peer = std::process::id() as i32;
         let request = |pane_id: &str| PaneRequest {
             access: None,
+            device: None,
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,

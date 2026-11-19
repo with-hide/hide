@@ -26,6 +26,9 @@ hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }
 hide-peer = { path = "../hide-peer" }
+# The endpoint other Hides connect to (`peer_host`); iroh stays behind this
+# crate (`scripts/check-iroh-stays-behind-the-seam.py`).
+hide-peer-iroh = { path = "../hide-peer-iroh" }
 hide-platform = { path = "../hide-platform" }
 hide-relay-protocol = { path = "../hide-relay-protocol" }
 hide-kit = { path = "../hide-kit" }

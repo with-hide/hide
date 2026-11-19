@@ -483,6 +483,11 @@ impl Panes {
             if request.access.is_some() {
                 return Err("access_core_only".to_owned());
             }
+            // Pairing is asked of the core of the machine it is typed on
+            // (PRD device-connect-iroh B1); a device's node takes none.
+            if request.device.is_some() {
+                return Err("device_core_only".to_owned());
+            }
             if request
                 .hook
                 .as_ref()
