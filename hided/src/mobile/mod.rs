@@ -2525,9 +2525,10 @@ impl Mobile {
         let mut stopping = self.stopping.subscribe();
         let mut cursor = 0_u64;
         let mut rest = Value::Null;
-        // The core's automations section as last sent, reprojected when its
-        // asks in `rest` move.
+        // The core's automations section as last sent and its asks as last
+        // read from `rest`: the list is projected again only when either moves.
         let mut automations: Option<Arc<hide_core::automations::AutomationsSnapshot>> = None;
+        let mut asks: Vec<String> = Vec::new();
         // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
         let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
@@ -2538,6 +2539,7 @@ impl Mobile {
                 cursor = 0;
                 rest = Value::Null;
                 automations = None;
+                asks.clear();
                 self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
@@ -2593,18 +2595,21 @@ impl Mobile {
             };
             cursor = payload.revision;
             // The core's own section comes only when it moved past the cursor;
-            // its asks are in `rest`, so either moving reprojects the list.
+            // its asks are in `rest`, read again only when `rest` moved.
             let section_moved = payload.automations.is_some();
             if let Some(section) = &payload.automations {
                 automations = Some(Arc::clone(section));
             }
             let rest_moved =
                 projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision);
-            if section_moved || matches!(rest_moved, Ok(true)) {
-                self.publish_automations(PhoneAutomations::project(
-                    automations.as_deref(),
-                    &automation_asks(&rest),
-                ));
+            let asks_moved = matches!(rest_moved, Ok(true)) && {
+                let now = automation_asks(&rest);
+                let moved = now != asks;
+                asks = now;
+                moved
+            };
+            if section_moved || asks_moved {
+                self.publish_automations(PhoneAutomations::project(automations.as_deref(), &asks));
             }
             match rest_moved {
                 Err(error) => {

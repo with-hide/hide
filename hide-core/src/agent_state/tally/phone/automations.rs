@@ -43,6 +43,10 @@ pub struct PhoneAutomations {
     /// pause first, as the core counts them in Needs You (D-12, B23).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub asks: Vec<String>,
+    /// The book before could not be read and was set aside: one line above
+    /// the list. The file it was set aside under stays on the Mac.
+    #[serde(skip_serializing_if = "is_false")]
+    pub unreadable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -97,6 +101,10 @@ pub struct PhoneRun {
     pub seen: bool,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn is_zero(value: &usize) -> bool {
     *value == 0
 }
@@ -127,6 +135,7 @@ impl PhoneAutomations {
             omitted,
             zone: section.zone.clone(),
             asks,
+            unreadable: section.unreadable.is_some(),
         }
     }
 
@@ -207,7 +216,7 @@ fn phone_run(run: &RunSnapshot) -> PhoneRun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::automations::{AgentChoice, Folder, PauseReason};
+    use crate::automations::{AgentChoice, Folder, PauseReason, Unreadable};
     use serde_json::json;
 
     fn schedule() -> Schedule {
@@ -267,6 +276,7 @@ mod tests {
             last_choice: None,
             zone: Some("Asia/Seoul".into()),
             own_folder_root: Some("/Users/secret/hide/automations".into()),
+            unreadable: None,
         }
     }
 
@@ -290,9 +300,15 @@ mod tests {
             at_unix_ms: 7,
         });
         paused.next_run_at_unix_ms = None;
-        let projected = PhoneAutomations::project(
-            Some(&section(vec![automation("a", 2), paused])),
-            &["b".into(), "unlisted".into()],
+        let mut book = section(vec![automation("a", 2), paused]);
+        book.unreadable = Some(Unreadable {
+            file: "secret-book.json".into(),
+            at_unix_ms: 3,
+        });
+        let projected = PhoneAutomations::project(Some(&book), &["b".into(), "unlisted".into()]);
+        assert!(
+            projected.unreadable,
+            "the line above the list, without its file"
         );
         assert_eq!(projected.omitted, 0);
         assert_eq!(projected.items.len(), 2);

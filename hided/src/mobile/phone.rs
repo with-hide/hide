@@ -322,6 +322,7 @@ fn automations_frame(automations: &PhoneAutomations) -> Value {
     json!({
         "type": "automations", "items": automations.items, "omitted": automations.omitted,
         "zone": automations.zone, "asks": automations.asks,
+        "unreadable": automations.unreadable,
     })
 }
 
@@ -3320,6 +3321,7 @@ mod tests {
     fn listed_automations(running: bool) -> PhoneAutomations {
         PhoneAutomations {
             asks: Vec::new(),
+            unreadable: false,
             items: vec![hide_core::agent_state::phone::PhoneAutomation {
                 id: "auto-1".into(),
                 name: "Morning issues".into(),
