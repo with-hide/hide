@@ -85,13 +85,17 @@ export function pairedMachines(rest: SnapshotRest | null | undefined): readonly 
 const NONE: readonly Peer[] = [];
 
 /**
- * The paired machines this one opens: the ones that get a tile on the rail
- * (B3). The one place a tile's list is read, so the day a paired machine
- * becomes a device of the core the tiles move there and nothing draws it
- * twice.
+ * The paired machines this one opens that have a tile of their own on the
+ * rail (B3): the ones the core has not made a device of. A machine this one
+ * opens with a confirmed pairing is a device under its own id (hide-core
+ * `runtime/peer_devices.rs`), and that device's tile is the machine's one
+ * tile, which leads to its screen; until then (the other side has not
+ * confirmed yet) its tile here leads to Settings. The one place a tile's list
+ * is read, so one machine is never drawn twice.
  */
 export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
-  return pairedMachines(rest).filter((peer) => peer.opens != null);
+  const devices = rest?.navigator?.devices ?? [];
+  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.id === peer.device_id));
 }
 
 /** Who opens whom, in the words of the machine reading it. */

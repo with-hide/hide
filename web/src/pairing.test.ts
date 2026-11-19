@@ -47,7 +47,7 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
 });
 
 describe("the paired machines a screen reads", () => {
-  const rest = (peers: Peer[] | undefined) => ({ navigator: { peers } }) as unknown as SnapshotRest;
+  const rest = (peers: Peer[] | undefined, devices: { id: string }[] = []) => ({ navigator: { peers, devices } }) as unknown as SnapshotRest;
 
   it("is one stable empty list while nothing is paired, so a selector does not redraw", () => {
     expect(pairedMachines(rest(undefined))).toBe(pairedMachines(null));
@@ -57,6 +57,14 @@ describe("the paired machines a screen reads", () => {
     const opened = peer();
     const guest = peer({ key: "cd".repeat(32), device_id: "macbook", opens: null, opened_by: "active" });
     expect(openedMachines(rest([opened, guest]))).toEqual([opened]);
+  });
+
+  it("leaves a machine the core made a device of to that device's tile, so one machine is one tile", () => {
+    const confirmed = peer();
+    const waiting = peer({ key: "ef".repeat(32), device_id: "mini", opens: "confirming", connected: false });
+    expect(openedMachines(rest([confirmed, waiting], [{ id: "local" }, { id: "windows-pc" }]))).toEqual([waiting]);
+    // A pause keeps the device, and so its one tile.
+    expect(openedMachines(rest([peer({ opens: "paused" })], [{ id: "windows-pc" }]))).toEqual([]);
   });
 });
 

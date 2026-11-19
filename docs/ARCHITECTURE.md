@@ -2853,6 +2853,16 @@ The web shell reads the id from the navigator's own device row (`localDeviceId` 
 A device's ids are scoped to it as `remote:<device>:<kind>:<id>`, while the core's own node keeps the engine's bare ids, and one module builds and reads that form: `hide_node_link::address`, re-exported as `hide_core::address`, which `hide-node`'s router, `hided` and the core all call and nothing else formats or splits.
 It lives in `hide-node-link` because the router cannot depend on the core.
 A pane is a `PaneAddress`, either a pane of the core's own node or a device's pane by the device's own id; a typed `remote:<device>:pane:<id>` from a `hide` command parses into the same type, and a `remote:` id that names no pane is refused rather than read as a local pane.
+Three spellings name a pane that involves another machine, and they are three different things:
+
+| Address | What it names | Who answers |
+|---|---|---|
+| `remote:<device>:pane:<id>` | A pane on that machine that this core runs: its engine made it, in this core's node there | This core, through its node link |
+| `guest:<device>:pane:<id>` | A pane on this machine that the other machine's core runs: that core's work, in its guest node here ([A guest's panes on the host](#a-guests-panes-on-the-host)) | This machine's daemon, through the guest node's tap, as the host's own view of work running here, which its operator may see, type into and close |
+| `core:<device>:pane:<id>` | A pane the other machine's core owns, asked of that core over a grant | The other machine's core, which decides |
+
+`guest:` is the third variant of `PaneAddress` (`PaneAddress::Guest`), read and written only in `hide_node_link::address`; it is not `remote:` because two machines that open each other have both, and each names its panes without the other, so the same `<id>` can be either.
+A guest's pane is no pane of this core's engine, so everything that takes a pane id to the engine reads it as a pane the engine does not have.
 Two pane ids are the same pane only on the same device (`address::same_pane`), so one raw pane id on two machines is two panes.
 Each agent and pane row publishes its machine as `device_id` and the pane's id on that machine as `device_pane_id`, and each editor tab its machine as `device_id`; a raised ask names the device its pane is on as `open_device_id`, because a disconnected device publishes no rows to find it by.
 These are derived fields, written by `Runtime::stamp_row_addresses` as a snapshot is taken and never compared (`model::Derived`), so a stamp is never a change and a projection that has not stamped yet is equal to one that has.
@@ -3203,7 +3213,8 @@ The two directions are two records: pausing or removing one leaves the other and
 
 `hided/src/pairing.rs` is the daemon's side: it starts the service with the endpoint, answers every ask about pairing, and after every change it reads the paired machines again in `Pairing::paired_changed`, the one place that runs after a pairing is saved, and hands them to the core as the daemon-only `peer_machines` event.
 The core keeps them as a list of facts (`hide-core/src/peer_machines.rs`) and publishes them as `navigator.peers`: who opens whom, whether the two are connected and by which path, why not when the relay is unreachable or stopped for the month, and which side must update.
-A paired machine is not a device of the core here; the one place the web shell reads them (`web/src/pairing.ts`) is where a rail tile's list comes from, so a machine never shows twice.
+A machine this one opens becomes a device of the core once its host confirmed the pairing: `Runtime::reconcile_peer_devices` (`hide-core/src/runtime/peer_devices.rs`) registers it under its own device id with `LinkOrigin::Peer { key }` when `opens` turns `active`, keeps it through a pause, and removes it with what Hide recorded for it when the pairing ends; an id another registration already holds is left to that registration, with a `peer_device.id_taken` diagnostic.
+One machine is one tile: the one place the web shell reads a rail tile's list (`openedMachines` in `web/src/pairing.ts`) leaves a machine that is a device to that device's tile, which leads to its screen, and gives a tile of its own only to one that is not a device yet.
 An ask reaches the daemon from a window as a `pairing_<verb>` event and from `hide device` over the bootstrap socket, and both are answered by `Pairing::ask` with the caller it came from: sharing, adding, comparing, allowing, resuming, asking back, naming an address and pairing over SSH are the operator's alone, refused to a Hide pane (by what the kernel says of the caller, and by the command's own environment before it is sent) and to an external tool, and every ask is refused to a screen that is not this machine's own window, which hears the refusal alone.
 The pairings under way go to this machine's own windows as a `pairing` frame, sent when a window connects and when it changes, and the answer to a window's ask as a `pairing_result` frame to that window; neither is part of the snapshot, a relay connection is never sent either, and the link and the words are never logged.
 Reading opens nothing: only sharing, adding a machine and answering for an SSH pairing open the endpoint.
@@ -3239,6 +3250,16 @@ It carries many streams over a link that has one, as `wsl.exe`'s pipe does; it n
 
 **Diagnostics.**
 `hide-peer` writes its diagnostics through `hide_peer::log`, which `hided` points at the core's diagnostic log at start; a program that sets no sink gets them on stderr.
+
+### A guest's panes on the host
+
+A guest's work runs on this machine in the guest's own node (`hided node serve --guest`), and this machine's daemon reaches its panes only through the tap that node serves (`hided/src/guests/tap.rs`), whether or not the guest is connected.
+The tap is one local connection per guest: the node says which panes exist, each one's grid and its output, and the daemon writes back a screen's keys, sizes, redraws and a close.
+The daemon keeps each guest's pane list in the guest's `h/panes.json`, written whole on every change and held to 256 panes, hands output to the screens' hub under the pane's `guest:` address, and installs the tap in the terminal router (`Router::install_guest`) so a screen's keys and sizes for that address go to it.
+The core holds the lists as `navigator.guest_panes`, keyed by the guest's device id with its connection key as a field, from the daemon-only `guest_panes` event that replaces the list whole; `hide device list` answers it.
+The node keeps a session on every pane its holders' records say may run, so the host draws a pane whether or not the guest's core looks at it, and the guest's core's attach and release only decide whether a pane's output also goes up the node link.
+After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
+`hide pane send` types text and Enter into a guest's pane through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
 
 ### Moving the core
 
