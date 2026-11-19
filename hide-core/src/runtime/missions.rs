@@ -434,12 +434,23 @@ fn ready_at(mission: &Mission, node: &crate::missions::MissionNode) -> Option<u6
     node.depends_on
         .iter()
         .try_fold(mission.started_at_unix_ms?, |at, key| {
-            let before = mission.nodes.iter().find(|other| other.key == *key)?;
-            (before.status == NodeStatus::Done)
-                .then_some(before.finished_at_unix_ms)
-                .flatten()
-                .map(|done| at.max(done))
+            dependency_met(mission, key)?.map(|met| at.max(met))
         })
+}
+
+/// Whether the dependency `key` of a node of `mission` is met, and when:
+/// `None` while it is not, else when it was met, which is none when the
+/// record cannot say (a key naming no node holds nothing back, and a book
+/// may keep no finish time). Met is the node before done, at its finish.
+/// The one rule `waiting_on` holds a planned node by and `ready_at` times
+/// its wait from.
+fn dependency_met(mission: &Mission, key: &str) -> Option<Option<u64>> {
+    match mission.nodes.iter().find(|other| other.key == key) {
+        None => Some(None),
+        Some(before) => {
+            (before.status == NodeStatus::Done).then_some(before.finished_at_unix_ms)
+        }
+    }
 }
 
 /// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
@@ -474,13 +485,7 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             let keys: Vec<String> = view
                 .depends_on
                 .iter()
-                .filter(|key| {
-                    mission
-                        .nodes
-                        .iter()
-                        .find(|other| other.key == **key)
-                        .is_some_and(|other| other.status != NodeStatus::Done)
-                })
+                .filter(|key| dependency_met(mission, key).is_none())
                 .cloned()
                 .collect();
             Some(if keys.is_empty() {

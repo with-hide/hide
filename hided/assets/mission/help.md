@@ -297,7 +297,8 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A later push needs the next review round only when the strength allows one, and that round reads only what changed.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
 - A node whose approach fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
-  A second review or verification FAIL in the same area is such a failure: change the design or hand the node to a fresh worker, never plug the holes one at a time.
+  A serious finding that comes back in the same area in the next review or verification round is such a failure: change the design or hand the node to a fresh worker, never plug the holes one at a time.
+  Ordinary and minor findings are no reason for a fresh worker: they wait for the round limit, where they become follow-up issues (Verification strength, above).
   So is a `check` or `ci` line that fails again for the same reason after its rerun, and a worker that keeps going round the same problem with no progress.
   The same problem unsolved after two attempts goes to the operator with what you tried and what you need decided.
 - Handing a node to a fresh worker is yours to decide and needs no question to the operator; say it in one line in conversation and in `--change`. It goes the same for every kind of node, in a Git project or a plain folder:
