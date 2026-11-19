@@ -16,7 +16,7 @@ import { corePaneFocus, focusPane, focusTab, newTab, openProject, runInPaneKeepi
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { testBrowserArgs } from "../../web/e2e/browser-launch.cjs";
-import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
+import { chooseExpand, countSent, enterWorkspace, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, focusPage, hostLog, launchShell, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
@@ -1357,7 +1357,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
 
 // @platform: the room left beside Agent Views comes from the body the host
 // measures, which each system's window frame and display scale change.
-test("page width: widening leaves Agent Views 480 pinned or not, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
+test("page width: widening leaves Agent Views 480, never narrows, and leaves an expanded lane alone", { tag: "@platform" }, async () => {
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
@@ -1372,9 +1372,7 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
 
-  // Pinned and narrowed to its minimum, the next page widens it only as far again.
-  await setLanePinned(page, true);
-  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+  // Narrowed to its minimum, the next page widens it only as far again.
   const box = (await divider.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + 100);
   await page.mouse.down();

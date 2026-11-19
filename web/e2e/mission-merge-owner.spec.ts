@@ -15,7 +15,7 @@ import type { HideAnswer } from "./agent-pane";
 import { checkoutAt, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { chooseTheme, enterWorkspace, screenshot } from "./wire";
+import { chooseTheme, enterWorkspace, screenshot, showDocuments } from "./wire";
 import { initGithubRepository } from "./github-remote";
 import { fakeGh, git, writes } from "./work-prs-fixture";
 
@@ -82,6 +82,7 @@ async function readyPull(page: Page, label: string, planned: ReturnType<typeof p
       const planFile = path.join(repo, "merge-owner-plan.txt");
       fs.writeFileSync(planFile, shown);
       await ok(conductor, ["file", "open", planFile]);
+      await showDocuments(page);
       await expect(page.getByText("머지까지 · schema만 👤 내가 머지", { exact: false }).first()).toBeVisible();
       await chooseTheme(page, "dark");
       await screenshot(page, "merge-owner-plan-dark");

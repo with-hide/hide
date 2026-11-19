@@ -48,6 +48,20 @@ async function openFile(lane: Lane, paneId: string, name: string): Promise<void>
   expect(ran.status, ran.stderr).toBe(0);
 }
 
+/**
+ * Opens `name` from the pane the operator watches: it waits on this tab's
+ * desk with the lane closed, counted on the documents button (PRD
+ * lane-desk-pair-view B2, D-29), and the button brings the desk up.
+ */
+async function openOnDesk(lane: Lane, name: string): Promise<void> {
+  const page = lane.page;
+  await openFile(lane, lane.fixture.panes[0]!, name);
+  await expect(railTool(page, "documents")).toBeEnabled();
+  await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+  await railTool(page, "documents").click();
+  await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+}
+
 const resizes = (lane: Lane) => lane.sent.get("terminal_resize") ?? 0;
 
 test("an opened file comes up over Agent Views without resizing a terminal, stays through a terminal click, and Escape puts it away with its document (PRD right-lane B1, B3, B4, B16; lane-two-columns B6, B11, B17, B20) @platform", async ({ page }) => {
@@ -61,8 +75,9 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await quietFor(page, 500, "the first fit has landed before the lane opens");
     const before = resizes(lane);
 
-    await openFile(lane, lane.fixture.panes[0]!, "a.md");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    // The open waits on the desk with the lane closed, and the documents
+    // button brings it up over the agents (PRD lane-desk-pair-view B2, D-29).
+    await openOnDesk(lane, "a.md");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
@@ -198,7 +213,7 @@ test("closing the last view closes the lane when no tool shows, hands the keyboa
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-last-view");
   try {
-    await openFile(lane, lane.fixture.panes[0]!, "a.md");
+    await openOnDesk(lane, "a.md");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
 
@@ -226,7 +241,7 @@ test("the Explorer opens beside the document without narrowing it, stays through
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-explorer");
   try {
-    await openFile(lane, lane.fixture.panes[0]!, "a.md");
+    await openOnDesk(lane, "a.md");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     const width = (await documentArea(page).boundingBox())!.width;
     await expect(railTool(page, "explorer")).toHaveAttribute("aria-pressed", "false");
@@ -281,8 +296,7 @@ test("expand takes the whole body and returns on Escape without resizing a termi
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-expand");
   try {
-    await openFile(lane, lane.fixture.panes[0]!, "a.md");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await openOnDesk(lane, "a.md");
     await quietFor(page, 500, "the overlay has settled");
     const before = resizes(lane);
     await page.locator("[data-lane-more]").click();
@@ -312,7 +326,7 @@ test("the rail shows icons alone and names each tool in its hint in four languag
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-rail");
   try {
-    await openFile(lane, lane.fixture.panes[0]!, "a.md");
+    await openOnDesk(lane, "a.md");
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
     const rail = page.locator("[data-tool-rail]");
     // The rail draws no text of its own but the documents count: a tool's name

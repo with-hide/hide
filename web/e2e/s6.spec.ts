@@ -10,7 +10,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { corePaneFocus, sendKeys, withControl } from "./daemon-actions";
+import { corePaneFocus, focusPane, sendKeys, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { spawnChild } from "./fixture-agents";
 import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
@@ -163,24 +163,28 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     const laneBox = (await lane.boundingBox())!;
     expect(laneBox.x + laneBox.width).toBeCloseTo(bodyBox.x + bodyBox.width, 0);
 
-    // The agents under the lane are live: a click focuses the pane, typing
+    // The agents beside the lane are live: a click on the first pane, at the
+    // body's left where the lane leaves it uncovered, focuses it, typing
     // reaches it, and ⌘F finds in that pane; in a View area ⌘F is the
-    // document's (B23).
-    const childHost = page.locator(`[data-pane-view="${child}"] [data-terminal-host]`);
-    await childHost.click({ position: { x: 40, y: 60 } });
+    // document's (B23). The keyboard starts in the second pane, so the click
+    // is a real move.
+    await withControl(daemon!, (control) => focusPane(control, child));
     await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
-    await expect.poll(() => last.get("focus_pane")).toMatchObject({ pane_id: child, origin: "operator" });
+    const liveHost = page.locator(`[data-pane-view="${parent}"] [data-terminal-host]`);
+    await liveHost.click({ position: { x: 40, y: 60 } });
+    await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
+    await expect.poll(() => last.get("focus_pane")).toMatchObject({ pane_id: parent, origin: "operator" });
     await page.keyboard.type("typed beside the lane");
-    await expect.poll(() => fs.readFileSync(fixture.inputLogs[1], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
+    await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    const mouseReports = await trackMouse(daemon!, child, fixture.inputLogs[1]);
+    const mouseReports = await trackMouse(daemon!, parent, fixture.inputLogs[0]);
     const reportsBefore = mouseReports();
-    await childHost.click({ position: { x: 40, y: 60 } });
+    await liveHost.click({ position: { x: 40, y: 60 } });
     await expect.poll(mouseReports, { timeout: 10_000 }).toBe(reportsBefore + 2);
-    const heardBefore = fs.readFileSync(fixture.inputLogs[1], "latin1").length;
+    const heardBefore = fs.readFileSync(fixture.inputLogs[0], "latin1").length;
     await page.keyboard.press(chord("find_in_pane"));
-    await expect.poll(() => JSON.stringify(fs.readFileSync(fixture.inputLogs[1], "latin1").slice(heardBefore)), { timeout: 10_000 }).toBe(JSON.stringify("\x0f/"));
-    await expect.poll(() => last.get("pane_find_open")).toMatchObject({ pane_id: child });
+    await expect.poll(() => JSON.stringify(fs.readFileSync(fixture.inputLogs[0], "latin1").slice(heardBefore)), { timeout: 10_000 }).toBe(JSON.stringify("\x0f/"));
+    await expect.poll(() => last.get("pane_find_open")).toMatchObject({ pane_id: parent });
     await expect(page.locator(".cm-search")).toHaveCount(0);
     await expect(page.locator("[data-find-bar]")).toHaveCount(0);
     await lane.locator("[data-editor-body] .cm-content").click();
@@ -212,10 +216,10 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     await expect(documentsIcon.locator("[data-lane-badge]")).toHaveText("2");
 
     // An agent chosen from the sidebar changes no lane (B22, D-17).
-    await page.locator(`[data-agent-open="${parent}"]`).first().click();
-    await expect(page.locator(`[data-pane-view="${parent}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
+    await page.locator(`[data-agent-open="${child}"]`).first().click();
+    await expect(page.locator(`[data-pane-view="${child}"]`)).toHaveAttribute("data-focused", "true", { timeout: 15_000 });
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
-    await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === parent || undefined, `${parent} focused`, 15_000));
+    await withControl(daemon, (control) => control.until((rest) => corePaneFocus(rest) === child || undefined, `${child} focused`, 15_000));
 
 
     // A restart brings the Workspace back with its lane at its width

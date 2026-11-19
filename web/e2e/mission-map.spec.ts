@@ -112,7 +112,8 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator(`[data-pane-view="${opened.pane}"]`)).toBeVisible();
     await expect(page.locator("[data-mission-screen]")).toHaveCount(0);
-    await expect(map.locator("[data-detail-title]")).toHaveAttribute("data-detail-title", /이슈 정리/);
+    // The card's tab carries the mission's name.
+    await expect(page.locator('[role="tab"][data-tab-kind="card"][aria-selected="true"]')).toHaveAttribute("aria-label", /이슈 정리/);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     // The node that waits on another is drawn below it (down flow).

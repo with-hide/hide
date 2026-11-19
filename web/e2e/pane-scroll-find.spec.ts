@@ -22,7 +22,7 @@ type LaneUp = { page: Page; daemon: Daemon; fixture: AgentFixture; focused: stri
 
 /**
  * The fixture's two agents with long history, the lane over them with the
- * Explorer and `notes.txt` open in a View area, the keyboard in the second pane.
+ * Explorer and `notes.txt` open in a View area, the keyboard in the first pane.
  */
 async function laneWithDocument(page: Page, label: string, use: (lane: LaneUp) => Promise<void>): Promise<void> {
   await page.setViewportSize({ width: 1680, height: 900 });
@@ -31,7 +31,8 @@ async function laneWithDocument(page: Page, label: string, use: (lane: LaneUp) =
   try {
     fs.writeFileSync(path.join(fixture.root, "fixture", "notes.txt"), "notes\n");
     daemon = await startHided(fixture, label);
-    const focused = fixture.panes[1];
+    // The first pane, at the body's left, which the lane over the agents leaves uncovered.
+    const focused = fixture.panes[0];
     // Long history in both agent panes: the shim echoes what the PTY gets.
     const rows = Array.from({ length: 160 }, (_, index) => `row-${String(index + 1).padStart(3, "0")}`).join("\n");
     await withControl(daemon, async (control) => {
@@ -49,7 +50,6 @@ async function laneWithDocument(page: Page, label: string, use: (lane: LaneUp) =
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
     await page.locator(`[data-explorer-row$="/notes.txt"]`).dblclick();
     await expect(page.locator("[data-view-area]")).toBeVisible();
-    // The pane's left edge, which the lane at the body's right edge leaves uncovered.
     await page.locator(`[data-pane-view="${focused}"] [data-terminal-host]`).click({ position: { x: 40, y: 60 } });
     await expect(page.locator(`[data-pane-view="${focused}"]`)).toHaveAttribute("data-focused", "true");
     await use({ page, daemon, fixture, focused, workspace, sent, last });

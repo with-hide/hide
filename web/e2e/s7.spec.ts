@@ -617,7 +617,6 @@ test("dragging a tab reorders, moves or splits once on a valid drop and leaves e
 
     // Escape ends the drag with nothing sent, and the release after it changes nothing (B8).
     const settled = await areaBoxes(page);
-    const aBox = await boxOf(tab(area(page, 0), "a.txt"));
     const bRight = await boxOf(tab(area(page, 1), "b.txt"));
     await dragTab(
       page,
@@ -646,7 +645,9 @@ test("dragging a tab reorders, moves or splits once on a valid drop and leaves e
     });
     // The only view of an area cannot split its own area: no overlay, the
     // forbidden cursor and the reason on the floating tab (B8, B9).
-    await dragTab(page, tab(area(page, 0), "a.txt"), { x: aBox.x + 300, y: body.y + body.height / 2 }, async () => {
+    // Its own right edge zone, where a split would land for an area with two views.
+    const aBody = await boxOf(area(page, 0).locator("[data-view-body]"));
+    await dragTab(page, tab(area(page, 0), "a.txt"), { x: aBody.x + aBody.width * 0.92, y: aBody.y + aBody.height / 2 }, async () => {
       await expect(drop).toHaveCount(0);
       await expect(page.locator("html")).toHaveAttribute("data-view-drag", "forbidden");
       await expect(floating).toContainText("This is the only view in its area.");
@@ -736,14 +737,24 @@ test("a drag or a tab menu begun on one Workspace ends when another client moves
 
 /**
  * Moves the keyboard with Tab or Shift+Tab until `target` has it. An editor
- * keeps Tab for indenting; Escape first lets the next Tab leave it, as
- * CodeMirror offers.
+ * keeps Tab for indenting, and the Escape CodeMirror offers to let Tab leave
+ * it would also put the lane over the agents away (PRD right-lane B3), so the
+ * keyboard steps out of an editor to the element Tab would reach next.
  */
 async function tabTo(page: Page, target: Locator, key: "Tab" | "Shift+Tab"): Promise<void> {
   for (let step = 0; step < 40; step += 1) {
     if (await target.evaluate((node) => node === document.activeElement)) return;
-    if (await page.evaluate(() => Boolean(document.activeElement?.closest(".cm-editor")))) await page.keyboard.press("Escape");
-    await page.keyboard.press(key);
+    const left = await page.evaluate((back) => {
+      const editor = document.activeElement?.closest(".cm-editor");
+      if (!editor) return false;
+      const tabbable = [...document.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]')]
+        .filter((node) => node.getClientRects().length > 0);
+      const inside = tabbable.filter((node) => editor.contains(node));
+      const next = back ? tabbable.indexOf(inside[0]!) - 1 : tabbable.indexOf(inside[inside.length - 1]!) + 1;
+      tabbable[next]?.focus();
+      return true;
+    }, key === "Shift+Tab");
+    if (!left) await page.keyboard.press(key);
   }
   await expect(target).toBeFocused();
 }
@@ -1411,12 +1422,12 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
       await showExplorer(page);
       await explorerRow(page, stack, "b.txt").click();
       await expect.poll(() => shape(page)).toBe("@(>b.txt*)");
-      await expect.poll(() => JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")).schema_version as number).toBe(5);
+      await expect.poll(() => JSON.parse(fs.readFileSync(viewsFile(stack.daemon), "utf8")).schema_version as number).toBe(6);
     }
 
     // An S6 (schema 1) file: its tabs become one area in their order, with
     // its active tab and preview, and its lane starts closed until the
-    // documents are asked for; the next save writes schema 5 (B17, contract
+    // documents are asked for; the next save writes schema 6 (B17, contract
     // 1, PRD lane-two-columns B23). It names this machine `local`, as a
     // build of that time did, and the start converts that to the node id
     // (core-host-node D-21).

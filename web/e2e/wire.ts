@@ -116,9 +116,15 @@ export async function showSidebarPrs(page: Page): Promise<void> {
   await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
 }
 
-/** Brings the checkout's documents in front of the viewing column from the rail (B2, B11); a pressed button is left alone, since a press would fold them. */
+/**
+ * Brings the front Agent tab's desk up from the rail, as the operator does
+ * after an agent's open waited on it with the lane closed (PRD
+ * lane-desk-pair-view B2, D-29); a pressed button is left alone, since a
+ * press would fold the desk.
+ */
 export async function showDocuments(page: Page): Promise<void> {
   const button = page.locator('[data-lane-tool="documents"]');
+  await expect(button).toBeEnabled();
   if ((await button.getAttribute("aria-pressed")) !== "true") await button.click();
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
