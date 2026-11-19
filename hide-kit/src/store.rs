@@ -262,9 +262,11 @@ impl StoreItem {
 pub enum TrashCause {
     /// The operator deleted the item.
     Deleted,
-    /// An agent's own copy, set aside when the operator adopted another
-    /// copy of the same name (B21).
-    Replaced { place: String },
+    /// An agent's own copy, moved whole out of `path` (the place's folder)
+    /// when the operator adopted another copy of the same name, or the same
+    /// one holding something a copy leaves out (B21, B22). A machine leaving
+    /// Hide puts it back there (B30).
+    Replaced { place: String, path: PathBuf },
 }
 
 /// One entry of the undo list; its files are under `trash/<id>`.
@@ -281,6 +283,11 @@ pub struct TrashEntry {
 pub struct Written {
     pub item: String,
     pub digest: String,
+    /// The operator's own copy, taken over where it was (B20, B22): a
+    /// machine leaving Hide leaves it there, since Hide did not put it there
+    /// (B30).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adopted: bool,
 }
 
 /// One place Hide wrote into, as the record keeps it: enough to take its
@@ -501,7 +508,9 @@ pub struct StoreExport {
 /// under the helper's request limit.
 pub const COPY_BYTE_LIMIT: u64 = 30 * 1024 * 1024;
 
-/// Why a change was refused; nothing of it was done.
+/// Why a change was refused. Most changes refuse before anything is done;
+/// a take-over refused partway (an agent's copy it could not set aside)
+/// keeps what it had done, which the pass's report shows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StoreRefusalCause {
@@ -692,7 +701,12 @@ pub struct FoundCopy {
     /// The folder a link there leads to (D-20).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Empty when the copy could not be read.
     pub digest: String,
+    /// Why this copy cannot be taken over (too large, unreadable); the
+    /// folder's other entries are listed as ever (B19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 /// An entry agents hold that Hide does not manage ('에이전트에만 있음', B19).
@@ -701,7 +715,8 @@ pub struct Unmanaged {
     pub kind: ItemKind,
     pub name: String,
     pub copies: Vec<FoundCopy>,
-    /// Every copy has the same content; otherwise adoption asks which (B21).
+    /// Every copy was read and has the same content; otherwise adoption
+    /// asks which (B21).
     pub same: bool,
 }
 
@@ -747,20 +762,35 @@ pub struct StoreReport {
 // --- Places and the per-kind seam ------------------------------------------------
 
 /// One place a kind goes into: a skills folder, an MCP settings file, of one
-/// account, with the column whose switch governs it.
+/// account, with the columns whose switches govern it.
 #[derive(Clone, Debug)]
 pub(crate) struct Place {
-    /// `<kind>:<path>`, stable while the place is.
+    /// `<kind>:<real path>`, stable while the place is: two spellings of
+    /// one folder are one place.
     pub(crate) key: String,
+    /// The real path, links on the way followed.
     pub(crate) path: PathBuf,
-    /// The [`Column::id`] whose switch governs it.
-    pub(crate) column: String,
+    /// The [`Column::id`]s whose switches govern it: more than one when two
+    /// columns' folders are one folder (one a link to the other). The item
+    /// is there while any of them wants it.
+    pub(crate) columns: Vec<String>,
     /// The profiles whose account this is, empty for the default account.
     pub(crate) profiles: Vec<String>,
     /// Why nothing can be written here now (the agent has not made its
     /// folder, a profile account Hide does not write); the place's agents
     /// wait (`CellState::Waiting`).
     pub(crate) blocked: Option<String>,
+    /// Read every entry's content again. False only for the read every few
+    /// seconds (`crate::status`), which takes the digest an entry was last
+    /// read at while its stat fingerprint has not moved; a pass that may
+    /// change the place reads it.
+    pub(crate) fresh: bool,
+}
+
+impl Place {
+    pub(crate) fn governed_by(&self, column: &str) -> bool {
+        self.columns.iter().any(|governing| governing == column)
+    }
 }
 
 /// What a place holds under one name.
@@ -769,7 +799,14 @@ pub(crate) struct Entry {
     pub(crate) digest: String,
     /// The folder a link there leads to.
     pub(crate) link: Option<PathBuf>,
+    /// Nothing in it is left out of a copy (a `.git` folder, a link
+    /// inside): only then can Hide's copy stand for it, and only then is it
+    /// ever Hide's to replace or take out.
+    pub(crate) whole: bool,
 }
+
+/// One entry as a place's listing read it, or why it could not be read.
+pub(crate) type Listed = (String, Result<Entry, String>);
 
 /// What differs by kind. Everything else of the store is the same for each.
 pub(crate) trait Applier {
@@ -782,16 +819,16 @@ pub(crate) trait Applier {
     fn supports(&self, item: &StoreItem, column: &Column) -> Result<(), String>;
     /// What `place` holds under `name`.
     fn entry(&self, place: &Place, name: &str) -> Result<Option<Entry>, String>;
-    /// Every entry `place` holds, by name.
-    fn entries(&self, place: &Place) -> Result<Vec<(String, Entry)>, String>;
+    /// Every entry `place` holds, by name, each read on its own: one that
+    /// cannot be read answers why and leaves the others listed.
+    fn entries(&self, place: &Place) -> Result<Vec<Listed>, String>;
     /// Writes `item` at `place`, replacing what is there under its name
     /// (only ever Hide's own copy); answers the digest written.
     fn write(&self, ctx: &Ctx<'_>, place: &Place, item: &StoreItem) -> Result<String, String>;
     /// Takes `name` out of `place`.
     fn remove(&self, place: &Place, name: &str) -> Result<(), String>;
     /// Copies what `place` holds under `name` into the store folder `into`,
-    /// for an item adopted from it or a copy set aside (B20, B21): answers
-    /// its source and body.
+    /// for an item adopted from it (B20): answers its source and body.
     fn adopt(
         &self,
         ctx: &Ctx<'_>,
@@ -799,6 +836,14 @@ pub(crate) trait Applier {
         name: &str,
         into: &Path,
     ) -> Result<(Source, ItemBody), StoreRefusal>;
+    /// Moves the operator's own entry `name` out of `place` whole into the
+    /// undo list's folder `into`, nothing left behind or left out, so taking
+    /// the place over loses nothing (B21, B22); answers its body.
+    fn set_aside(&self, place: &Place, name: &str, into: &Path) -> Result<ItemBody, StoreRefusal>;
+    /// Puts back at `place` what [`Applier::set_aside`] moved to `from`,
+    /// for a machine leaving Hide (B30): false, with nothing moved, when the
+    /// place holds something of the name now.
+    fn put_back(&self, place: &Place, name: &str, from: &Path) -> Result<bool, String>;
     /// The item is deleted for good: anything of it the store keeps beside
     /// its files goes (an MCP's keys, D-11).
     fn purge(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<(), String>;
@@ -835,6 +880,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) detection: &'a Detection,
     pub(crate) record: &'a Record,
     pub(crate) scope: &'a Scope,
+    /// The pass may change places, so every entry is read again
+    /// ([`Place::fresh`]).
+    pub(crate) fresh: bool,
 }
 
 impl Ctx<'_> {
@@ -1051,6 +1099,7 @@ fn run(
         detection,
         record,
         scope,
+        fresh: mode == Mode::Apply,
     };
     let mut outcomes = Vec::new();
     if mode == Mode::Apply {
@@ -1130,6 +1179,11 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         let mut removed = false;
         let mut failure = None;
         for (name, written) in &place.entries {
+            // The operator's own copy, taken over where it was, stays there:
+            // Hide did not put it there (B30).
+            if written.adopted {
+                continue;
+            }
             match take_out_if_ours(applier(kind), &at, name, written) {
                 Ok(true) => removed = true,
                 Ok(false) => {}
@@ -1146,6 +1200,44 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         };
         outcomes.push((format!("store:{key}"), outcome));
     }
+    // An agent's own copy a take-over set aside goes back where it was, now
+    // that Hide's copy is out (B30). One that cannot keeps the store, so it
+    // is not lost.
+    let mut kept_back = None;
+    for entry in &store.trash {
+        let TrashCause::Replaced { place, path } = &entry.cause else {
+            continue;
+        };
+        let from = dir.join("trash").join(&entry.id);
+        if !from.exists() {
+            continue;
+        }
+        let at = Place {
+            key: place.clone(),
+            path: path.clone(),
+            columns: Vec::new(),
+            profiles: Vec::new(),
+            blocked: None,
+            fresh: true,
+        };
+        let reason = match applier(entry.item.kind).put_back(&at, &entry.item.name, &from) {
+            Ok(true) => continue,
+            Ok(false) => format!(
+                "{} holds another {} now, so the one Hide set aside stays in the store",
+                path.join(&entry.item.name).display(),
+                entry.item.name
+            ),
+            Err(reason) => reason,
+        };
+        log("store.put_back_failed", Some(&entry.item.id), &reason);
+        outcomes.push((
+            format!("store:{place}/{}", entry.item.name),
+            RemoveOutcome::Failed {
+                reason: reason.clone(),
+            },
+        ));
+        kept_back = Some(reason);
+    }
     // The store goes with what it applied, keys and all; while a copy Hide
     // wrote is still out there, the store stays so the next removal can
     // tell it is Hide's.
@@ -1153,6 +1245,8 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         RemoveOutcome::Kept {
             reason: "a copy Hide wrote could not be taken out".to_owned(),
         }
+    } else if let Some(reason) = kept_back {
+        RemoveOutcome::Kept { reason }
     } else {
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => RemoveOutcome::Removed,
@@ -1167,9 +1261,6 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
 
 // --- Folder sources --------------------------------------------------------------
 
-/// Brings each followed folder's changes into the store (D-20, B24): a
-/// folder whose stat fingerprint moved is read again, and one that is gone
-/// keeps the last copy and says so.
 /// Whether a folder an item follows changed since the store last took it in
 /// (D-33): a stat of each such folder and nothing written. A store that is
 /// not there follows nothing, and one that cannot be read is left to the
@@ -1195,6 +1286,9 @@ pub(crate) fn follow_due(target: &KitTarget) -> bool {
     })
 }
 
+/// Brings each followed folder's changes into the store (D-20, B24): a
+/// folder whose stat fingerprint moved is read again, and one that is gone
+/// keeps the last copy and says so.
 fn follow(ctx: &Ctx<'_>, store: &mut StoreRecord) {
     for item in &mut store.items {
         let (Source::Folder { path }, ItemKind::Skill) = (&item.source, item.kind) else {
@@ -1540,6 +1634,7 @@ pub(crate) fn export(
         detection,
         record,
         scope: &scope,
+        fresh: true,
     };
     let mut items = Vec::new();
     let mut size = 0;
@@ -1730,20 +1825,22 @@ fn adopt(
         .ok_or_else(|| not_found(format!("no item {id}")))?;
     let digest = item.digest();
     for (place, entry) in &copies {
-        if entry.digest == digest && entry.link.is_none() {
-            record_written(store, place, &item, &digest);
-        } else {
-            if entry.link.is_none() {
-                set_aside(ctx, store, place, &item)?;
-            }
+        if entry.digest == digest && entry.link.is_none() && entry.whole {
+            record_written(store, place, &item, &digest, true);
+        } else if entry.link.is_some() {
+            // A link goes as a link; what it leads to stays (D-20).
             applier.remove(place, name).map_err(failed)?;
+        } else {
+            // Other content, or a folder holding what Hide's copy leaves
+            // out (a `.git` folder): it moves whole to the undo list.
+            set_aside(ctx, store, place, &item)?;
         }
     }
     Ok(())
 }
 
-/// Copies an agent's own copy of `item`'s name into the undo list, so
-/// taking that place over loses nothing (B21).
+/// Moves an agent's own copy of `item`'s name whole into the undo list, so
+/// taking that place over loses nothing (B21, B22).
 fn set_aside(
     ctx: &Ctx<'_>,
     store: &mut StoreRecord,
@@ -1756,9 +1853,11 @@ fn set_aside(
         now_unix_ms(),
         store.trash.len()
     );
-    let (source, body) = applier(item.kind).adopt(ctx, place, &item.name, &ctx.trash_files(&id))?;
+    let body = applier(item.kind).set_aside(place, &item.name, &ctx.trash_files(&id))?;
     let copy = StoreItem {
-        source,
+        source: Source::Copy {
+            from: place.path.join(&item.name).display().to_string(),
+        },
         body,
         on: true,
         off_for: BTreeSet::new(),
@@ -1777,6 +1876,7 @@ fn set_aside(
             at_unix_ms: now_unix_ms(),
             cause: TrashCause::Replaced {
                 place: place.key.clone(),
+                path: place.path.clone(),
             },
         },
     );
@@ -1785,12 +1885,23 @@ fn set_aside(
 
 // --- Reconcile ------------------------------------------------------------------
 
-/// Whether a place's entry is the copy Hide wrote, unedited.
+/// Whether a place's entry is the copy Hide wrote, unedited and holding
+/// nothing a copy leaves out.
 fn ours(written: Option<&Written>, entry: &Entry) -> bool {
-    written.is_some_and(|written| written.digest == entry.digest) && entry.link.is_none()
+    written.is_some_and(|written| written.digest == entry.digest)
+        && entry.link.is_none()
+        && entry.whole
 }
 
-fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, digest: &str) {
+/// Records Hide's copy of `item` at `place`; an `adopted` one, or one Hide
+/// rewrote where it took the operator's over, stays adopted.
+fn record_written(
+    store: &mut StoreRecord,
+    place: &Place,
+    item: &StoreItem,
+    digest: &str,
+    adopted: bool,
+) {
     let kept = store
         .written
         .entry(place.key.clone())
@@ -1800,9 +1911,15 @@ fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, dige
             profile: !place.profiles.is_empty(),
             entries: BTreeMap::new(),
         });
+    let adopted = adopted
+        || kept
+            .entries
+            .get(&item.name)
+            .is_some_and(|written| written.item == item.id && written.adopted);
     let written = Written {
         item: item.id.clone(),
         digest: digest.to_owned(),
+        adopted,
     };
     if kept.entries.get(&item.name) != Some(&written) {
         kept.entries.insert(item.name.clone(), written);
@@ -1868,10 +1985,27 @@ fn reconcile(
     let columns = applier.columns();
     let digest = item.digest();
     for place in places {
-        let Some(column) = columns.iter().find(|column| column.id == place.column) else {
+        let governing: Vec<&Column> = columns
+            .iter()
+            .filter(|column| place.governed_by(&column.id))
+            .collect();
+        if governing.is_empty() {
             continue;
-        };
-        let want = want(ctx, applier, item, column);
+        }
+        // One folder two columns name holds the item while either wants it.
+        let want = governing
+            .iter()
+            .map(|column| want(ctx, applier, item, column))
+            .fold(
+                Want {
+                    kept: false,
+                    now: false,
+                },
+                |all, one| Want {
+                    kept: all.kept || one.kept,
+                    now: all.now || one.now,
+                },
+            );
         let held = match judge(store, applier, place, item, &digest) {
             Ok(held) => held,
             Err(reason) => {
@@ -1884,11 +2018,11 @@ fn reconcile(
         let result = if want.now && place.blocked.is_none() {
             match held {
                 Held::Missing | Held::Older => applier.write(ctx, place, item).map(|written| {
-                    record_written(store, place, item, &written);
+                    record_written(store, place, item, &written, false);
                     true
                 }),
                 Held::Current => {
-                    record_written(store, place, item, &digest);
+                    record_written(store, place, item, &digest, false);
                     Ok(false)
                 }
                 Held::Theirs => Ok(false),
@@ -1911,11 +2045,10 @@ fn reconcile(
         };
         match result {
             Ok(true) => {
-                store
-                    .changed
-                    .entry(item.id.clone())
-                    .or_default()
-                    .insert(place.column.clone(), now_unix_ms());
+                let changed = store.changed.entry(item.id.clone()).or_default();
+                for column in &place.columns {
+                    changed.insert(column.clone(), now_unix_ms());
+                }
             }
             Ok(false) => {}
             Err(reason) => {
@@ -1953,9 +2086,10 @@ fn recorded_place(key: &str, place: &PlaceRecord) -> Place {
     Place {
         key: key.to_owned(),
         path: place.path.clone(),
-        column: String::new(),
+        columns: Vec::new(),
         profiles: Vec::new(),
         blocked: None,
+        fresh: true,
     }
 }
 
@@ -2102,7 +2236,7 @@ fn item_report(
         .map(|column| {
             let mine: Vec<&(&Place, Result<Held, String>)> = held
                 .iter()
-                .filter(|(place, _)| place.column == column.id)
+                .filter(|(place, _)| place.governed_by(&column.id))
                 .collect();
             let (state, reason) = cell_state(ctx, item, applier, column, &mine);
             Cell {
@@ -2148,18 +2282,34 @@ fn cell_state(
         return (CellState::AgentOff, None);
     }
     if !item.on_for(&column.id) {
+        let still: Vec<&Place> = places
+            .iter()
+            .filter(|(_, held)| matches!(held, Ok(Held::Current | Held::Older)))
+            .map(|(place, _)| *place)
+            .collect();
+        // A folder another column's switch keeps the item in is that
+        // column's to take it out of.
+        let keeping: BTreeSet<&str> = still
+            .iter()
+            .flat_map(|place| place.columns.iter())
+            .filter(|other| **other != column.id && item.on_for(other))
+            .map(String::as_str)
+            .collect();
         // A copy Hide could not take out is still read: the cell is not off.
         return match places.iter().find_map(|(_, held)| held.as_ref().err()) {
             Some(reason) => (CellState::Failed, Some(reason.clone())),
-            None if places
-                .iter()
-                .any(|(_, held)| matches!(held, Ok(Held::Current | Held::Older))) =>
-            {
-                (
-                    CellState::Failed,
-                    Some("Hide's copy is still in place; the next pass takes it out".to_owned()),
-                )
-            }
+            None if !still.is_empty() && !keeping.is_empty() => (
+                CellState::Off,
+                Some(format!(
+                    "its folder is also the {} column's, whose switch keeps the {} there",
+                    keeping.into_iter().collect::<Vec<_>>().join(", "),
+                    item.kind.code()
+                )),
+            ),
+            None if !still.is_empty() => (
+                CellState::Failed,
+                Some("Hide's copy is still in place; the next pass takes it out".to_owned()),
+            ),
             None => (CellState::Off, None),
         };
     }
@@ -2222,27 +2372,39 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                     continue;
                 }
             };
-            for (name, entry) in entries {
+            let agents: Vec<String> = columns
+                .iter()
+                .filter(|column| place.governed_by(&column.id))
+                .flat_map(|column| column.agents.iter().cloned())
+                .collect();
+            for (name, read) in entries {
                 if hides_own(&name)
                     || !valid_name(&name)
                     || store.item(&StoreItem::id_of(*kind, &name)).is_some()
                 {
                     continue;
                 }
+                // One entry that cannot be read is listed with why, and the
+                // folder's others as ever.
+                let (digest, link, refused) = match read {
+                    Ok(entry) => (
+                        entry.digest,
+                        entry.link.as_ref().map(|link| link.display().to_string()),
+                        None,
+                    ),
+                    Err(reason) => (String::new(), None, Some(reason)),
+                };
                 found
                     .entry((*kind, name.clone()))
                     .or_default()
                     .push(FoundCopy {
                         place: place.key.clone(),
-                        agents: columns
-                            .iter()
-                            .find(|column| column.id == place.column)
-                            .map(|column| column.agents.clone())
-                            .unwrap_or_default(),
+                        agents: agents.clone(),
                         profiles: place.profiles.clone(),
                         path: place.path.join(&name).display().to_string(),
-                        link: entry.link.as_ref().map(|link| link.display().to_string()),
-                        digest: entry.digest,
+                        link,
+                        digest,
+                        refused,
                     });
             }
         }
@@ -2251,9 +2413,10 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
         .into_iter()
         .map(|((kind, name), copies)| Unmanaged {
             kind,
-            same: copies
-                .windows(2)
-                .all(|pair| pair[0].digest == pair[1].digest),
+            same: copies.iter().all(|copy| copy.refused.is_none())
+                && copies
+                    .windows(2)
+                    .all(|pair| pair[0].digest == pair[1].digest),
             name,
             copies,
         })

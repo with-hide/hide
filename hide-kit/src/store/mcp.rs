@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
-    Applier, Carried, Column, Ctx, Entry, ItemBody, ItemKind, Place, Source, StoreItem,
+    Applier, Carried, Column, Ctx, Entry, ItemBody, ItemKind, Listed, Place, Source, StoreItem,
     StoreRefusal, StoreRefusalCause, Version,
 };
 use crate::agents::ADAPTERS;
@@ -77,7 +77,7 @@ impl Applier for McpApplier {
         Ok(None)
     }
 
-    fn entries(&self, _place: &Place) -> Result<Vec<(String, Entry)>, String> {
+    fn entries(&self, _place: &Place) -> Result<Vec<Listed>, String> {
         Ok(Vec::new())
     }
 
@@ -97,6 +97,19 @@ impl Applier for McpApplier {
         _into: &Path,
     ) -> Result<(Source, ItemBody), StoreRefusal> {
         Err(StoreRefusal::new(StoreRefusalCause::Unsupported, NOT_YET))
+    }
+
+    fn set_aside(
+        &self,
+        _place: &Place,
+        _name: &str,
+        _into: &Path,
+    ) -> Result<ItemBody, StoreRefusal> {
+        Err(StoreRefusal::new(StoreRefusalCause::Unsupported, NOT_YET))
+    }
+
+    fn put_back(&self, _place: &Place, _name: &str, _from: &Path) -> Result<bool, String> {
+        Err(NOT_YET.to_owned())
     }
 
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {
