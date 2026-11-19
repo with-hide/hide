@@ -557,16 +557,16 @@ fn carry(env: &Env) -> Result<(), String> {
     if env.pane_id.is_some() || env.access.is_some() {
         return Err("device_from_pane".to_owned());
     }
+    use crate::workspace_cli::NoCarrier;
     let stream = match crate::workspace_cli::carrier(env) {
         Ok(stream) => stream,
-        Err(code)
-            if code == "hide_unavailable"
-                && hide_kit::layout::daemon_lock(&env.state_dir).exists()
+        Err(NoCarrier::NoDaemon(_))
+            if hide_kit::layout::daemon_lock(&env.state_dir).exists()
                 && crate::cli::core_started(env) =>
         {
-            crate::workspace_cli::carrier(env)?
+            crate::workspace_cli::carrier(env).map_err(NoCarrier::code)?
         }
-        Err(code) => return Err(code),
+        Err(refused) => return Err(refused.code()),
     };
     let mut to_core = stream.duplicate();
     let end = stream.shutdown_handle();
@@ -1203,6 +1203,16 @@ mod tests {
             many.extend(["--project", "/home/me/app"]);
         }
         assert!(parse_words(&many).is_err());
+    }
+
+    /// `carry` is run by a machine and writes a connection's bytes: it
+    /// takes no word, and no `--json` that would promise an answer line.
+    #[test]
+    fn carry_takes_nothing_and_answers_no_json() {
+        assert_eq!(parse_words(&["carry"]).unwrap().verb, Verb::Carry);
+        assert!(parse_words(&["carry", "Ubuntu"]).is_err());
+        assert!(parse_words(&["carry", "--json"]).is_err());
+        assert!(parse_words(&["carry", "--wait"]).is_err());
     }
 
     #[test]
