@@ -827,3 +827,77 @@ fn line_counts(old: &[u8], new: &[u8]) -> (u32, u32) {
     let removed = -counts.values().filter(|count| **count < 0).sum::<i64>();
     (added as u32, removed as u32)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(text: &str) -> (String, Option<String>, String, String) {
+        let address = parse(text).unwrap_or_else(|refusal| panic!("{text}: {refusal:?}"));
+        (address.url, address.reference, address.path, address.name)
+    }
+
+    #[test]
+    fn a_github_address_is_read_in_each_form_the_operator_pastes() {
+        let plain = (
+            "https://github.com/owner/archify.git".to_owned(),
+            None,
+            String::new(),
+            "archify".to_owned(),
+        );
+        for text in [
+            "https://github.com/owner/archify",
+            "https://github.com/owner/archify.git",
+            "https://github.com/owner/archify/",
+            "github.com/owner/archify",
+            "owner/archify",
+        ] {
+            assert_eq!(read(text), plain, "{text}");
+        }
+        assert_eq!(
+            read("https://github.com/owner/kit/tree/main/skills/archify"),
+            (
+                "https://github.com/owner/kit.git".to_owned(),
+                Some("main".to_owned()),
+                "skills/archify".to_owned(),
+                "kit".to_owned()
+            )
+        );
+        assert_eq!(
+            read("git@github.com:owner/kit.git").0,
+            "git@github.com:owner/kit.git"
+        );
+        assert_eq!(
+            read("https://gitlab.com/group/kit.git").0,
+            "https://gitlab.com/group/kit.git"
+        );
+        for text in [
+            "archify",
+            "/Users/me/skills",
+            "https://github.com/owner",
+            "a b/c",
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn git_complaints_read_as_no_access_or_an_unreachable_host() {
+        assert_eq!(
+            classify("remote: Repository not found.\nfatal: repository 'x' not found").cause,
+            StoreRefusalCause::NoAccess
+        );
+        assert_eq!(
+            classify(
+                "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+            )
+            .cause,
+            StoreRefusalCause::NoAccess
+        );
+        assert_eq!(
+            classify("fatal: unable to access 'https://github.com/x/': Could not resolve host: github.com")
+                .cause,
+            StoreRefusalCause::Unreachable
+        );
+    }
+}

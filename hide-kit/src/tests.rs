@@ -38,6 +38,7 @@ mod retired_cases;
 #[cfg(unix)]
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
+mod store_cases;
 #[path = "../../hide-platform/tests/it/widen.rs"]
 mod widen;
 
