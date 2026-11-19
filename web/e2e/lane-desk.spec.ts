@@ -5,7 +5,7 @@ import { agentPane } from "./agent-pane";
 import { focusPane, focusTab, newTab, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, showDocuments } from "./wire";
+import { enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
 
 // The desk of an Agent tab on the screen (PRD lane-desk-pair-view B2, B3,
 // B8, B9, B11, B13, B14, B30): the watched agent's open waits on a closed
@@ -30,7 +30,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(engine.root, "fixture");
-    for (const name of ["a.md", "b.md"]) fs.writeFileSync(path.join(fixture, name), `${name}\n`);
+    for (const name of ["a.md", "b.md", "c.md"]) fs.writeFileSync(path.join(fixture, name), `${name}\n`);
     daemon = await startHided(engine, "lane-desk");
     const [watched, beside] = engine.panes;
     const besideAgent = await agentPane(engine, daemon.stateDir, beside);
@@ -63,6 +63,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     // B13: the tab is its mark and name, no agent's name after it; the path line's logo names the opener.
     await expect(front(page)).toHaveText("a.md");
     await expect(page.locator(`[data-view-area] [data-view-opener="${watched}"]`)).toBeVisible();
+    await screenshot(page, "lane-desk-opened");
 
     // B3: the agent beside it opens b.md, which waits in its pane's list; a row of that list puts it on this desk in front.
     await open(besideAgent, "b.md");
@@ -97,10 +98,19 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     await expect(deskTabs(page)).toHaveCount(0);
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await expect(deskButton(page)).toHaveAttribute("aria-disabled", "true");
+    await screenshot(page, "lane-desk-second-tab");
     await agentTab(page, engine.tab).click();
     await expect(deskTabs(page)).toHaveCount(1);
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
+
+    // A file the operator opens from Explorer joins the same desk, in front.
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/c.md"]').click();
+    await expect(deskTabs(page)).toHaveCount(2);
+    await expect(front(page)).toHaveAttribute("aria-label", /\/c\.md/);
+    await expect(page.locator('[data-lane-badge="2"]')).toBeVisible();
+    await screenshot(page, "lane-desk-explorer");
 
     // B30: ⌘E closes the lane and brings the desk back.
     await terminal(page, watched).click();
@@ -108,7 +118,7 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await page.keyboard.press("Meta+KeyE");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
-    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
+    await expect(front(page)).toHaveAttribute("aria-label", /\/c\.md/);
 
     // Escape in the editor is the editor's: Tab then leaves it, and Escape from there closes the lane.
     const editor = page.locator("[data-view-area] .cm-content").first();
