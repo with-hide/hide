@@ -20,15 +20,21 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           bash scripts/verify-cargo.sh build --release -p hide-relay --bin hide-relay
+      - name: Build the pinned device relay server
+        run: bash scripts/build-iroh-relay.sh
       - name: Record source and binary digest
         run: |
           mkdir -p target/relay-artifact
           cp target/release/hide-relay target/relay-artifact/hide-relay
+          cp target/iroh-relay/bin/iroh-relay target/relay-artifact/iroh-relay
           python3 - <<'PY'
           import hashlib, json, os, pathlib
           artifact = pathlib.Path('target/relay-artifact')
-          with (artifact / 'hide-relay').open('rb') as stream:
-              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          def sha256(name):
+              with (artifact / name).open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          digest, iroh_relay = sha256('hide-relay'), sha256('iroh-relay')
+          version = pathlib.Path('deploy/relay/iroh-relay.version').read_text().strip()
           receipt = {
               'repository': os.environ['GITHUB_REPOSITORY'],
               'source': os.environ['GITHUB_SHA'],
@@ -37,9 +43,10 @@ jobs:
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'target': 'x86_64-unknown-linux-gnu',
               'sha256': digest,
+              'iroh_relay': {'version': version, 'sha256': iroh_relay},
           }
           (artifact / 'source.json').write_text(json.dumps(receipt, indent=2) + '\n')
-          (artifact / 'SHA256SUMS').write_text(digest + '  hide-relay\n')
+          (artifact / 'SHA256SUMS').write_text(digest + '  hide-relay\n' + iroh_relay + '  iroh-relay\n')
           PY
       - uses: actions/upload-artifact@v7
         with:

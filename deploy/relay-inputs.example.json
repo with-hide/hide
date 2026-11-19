@@ -1,10 +1,13 @@
 {
   "source": "REPLACE_WITH_FULL_MAIN_SHA",
   "sha256": "REPLACE_WITH_CI_BINARY_SHA256",
+  "iroh_relay_sha256": "REPLACE_WITH_CI_IROH_RELAY_SHA256",
   "project": "REPLACE_WITH_PROJECT_ID",
   "machine_id": "REPLACE_WITH_TARGET_MACHINE_ID",
   "project_number": "REPLACE_WITH_PROJECT_NUMBER",
   "instance_id": "REPLACE_WITH_VM_NUMERIC_ID",
   "channel": "projects/REPLACE_WITH_PROJECT_ID/notificationChannels/REPLACE_WITH_CHANNEL_ID",
-  "currency": "REPLACE_WITH_ACTUAL_BILLING_CURRENCY"
+  "currency": "REPLACE_WITH_ACTUAL_BILLING_CURRENCY",
+  "network": "REPLACE_WITH_VM_NETWORK",
+  "target_tag": "REPLACE_WITH_VM_NETWORK_TAG"
 }

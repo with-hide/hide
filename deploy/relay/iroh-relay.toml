@@ -1,0 +1,22 @@
+# The device relay: iroh-relay behind Caddy (device-relay.withhide.dev), which
+# terminates TLS and re-encrypts to this loopback HTTPS listener. Address
+# discovery (QUIC) is served here directly on UDP 7842 with the same
+# certificate. Anyone may relay: grants are checked at the ends, not here.
+enable_relay = true
+# Only the captive-portal check listens here; it stays on loopback.
+http_bind_addr = "127.0.0.1:3340"
+enable_quic_addr_discovery = true
+enable_metrics = false
+
+[tls]
+https_bind_addr = "127.0.0.1:3443"
+quic_bind_addr = "0.0.0.0:7842"
+cert_mode = "Manual"
+manual_cert_path = "/run/credentials/hide-iroh-relay.service/tls.crt"
+manual_key_path = "/run/credentials/hide-iroh-relay.service/tls.key"
+
+# What each client may send through the relay. iroh-relay 1.4.1 reads but does
+# not enforce accept_conn_limit/accept_conn_burst, so the new-connection rate
+# and the open-connection cap live in iroh-relay.nft instead.
+[limits.client.rx]
+bytes_per_second = 2097152

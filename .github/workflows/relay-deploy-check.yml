@@ -37,8 +37,9 @@ jobs:
           curl --fail --silent --show-error https://packages.fluentbit.io/fluentbit.key -o "$RUNNER_TEMP/fluentbit.key"
           sudo gpg --dearmor -o /usr/share/keyrings/fluentbit-keyring.gpg "$RUNNER_TEMP/fluentbit.key"
           echo 'deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/noble noble main' | sudo tee /etc/apt/sources.list.d/fluent-bit.list
-          bash scripts/ci-apt-install.sh caddy fluent-bit=5.1.5
+          bash scripts/ci-apt-install.sh caddy fluent-bit=5.1.5 nftables
           /usr/bin/caddy version
+          /usr/sbin/nft --version
           /opt/fluent-bit/bin/fluent-bit --version
       - name: Observe installation, rollback, proxy privacy and collector failure
         run: |

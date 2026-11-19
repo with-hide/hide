@@ -2,10 +2,12 @@
 //! exchange, a stream's header and the answer to it (D-62, D-65).
 
 use hide_kit::layout;
+use hide_peer::limits;
 use hide_peer::loopback::{LoopConn, Net};
-use hide_peer::protocol::StreamKind;
+use hide_peer::peers::PeerEvent;
 use hide_peer::protocol::hello::{self, GrantState, Hello, HelloFrame};
 use hide_peer::protocol::stream::{self, Status};
+use hide_peer::protocol::{CloseCode, StreamKind};
 use hide_peer::store::Via;
 use hide_peer::wire::read_message;
 use hide_peer::{MachineKey, PeerConn, PeerTransport};
@@ -125,4 +127,41 @@ async fn a_stream_is_judged_by_its_kind_and_the_generation_it_names() {
         (Status::NoGrant, 0)
     );
     drop(send);
+}
+
+/// A machine proves its key to the host and then never sends its hello,
+/// which anyone who can reach the host can do. Another machine is admitted
+/// meanwhile, before any of the time the silent one is given has passed.
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_never_sends_its_hello_holds_up_no_other_machine() {
+    let net = Net::new();
+    let mut host = Machine::new(&net, "windows-pc");
+    let guest = Machine::new(&net, "macbook");
+    let silent = net.join(MachineKey::generate().unwrap());
+    let quiet = within("the silent machine's connection", silent.dial(&host.addr()))
+        .await
+        .unwrap();
+
+    let started = tokio::time::Instant::now();
+    guest
+        .peers
+        .dial(&host.addr())
+        .await
+        .expect("the other machine is admitted");
+    let admitted = guest.key();
+    host.event("the other machine's connection", |event| {
+        matches!(event, PeerEvent::Connected { key, .. } if *key == admitted).then_some(())
+    })
+    .await;
+    assert!(
+        started.elapsed() < limits::HELLO_WITHIN,
+        "admitted while the host still waited for the silent machine's hello"
+    );
+
+    // The host was waiting for that hello all along: its time ends it.
+    tokio::time::advance(limits::HELLO_WITHIN).await;
+    assert_eq!(
+        within("the silent connection's end", quiet.closed()).await,
+        CloseCode::Protocol
+    );
 }

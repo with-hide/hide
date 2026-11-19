@@ -1222,6 +1222,10 @@ impl Runtime {
             // It is kept here, where the wake is confirmed once, because
             // the engine can show the woken agent before the start's own answer.
             if let Some(pane) = record.wake_pane_id.as_deref() {
+                self.snapshot
+                    .ui_state
+                    .agent_sleep
+                    .came_back(pane, unix_milliseconds());
                 let name =
                     agent_sleep_engine::dormant_wake_name(&agent_sleep_engine::DormantWork {
                         id: id.clone(),

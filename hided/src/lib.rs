@@ -43,6 +43,7 @@ pub mod node_pages;
 pub mod node_uploads;
 mod outside_open;
 pub mod page_forward;
+pub mod pairing;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
@@ -569,7 +570,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         peer_host::Settings {
             state_dir: env.state_dir.clone(),
             build: build_order::Release::of_this_build().version,
-            device: peer_device,
+            device: peer_device.clone(),
             release: build_order::Release::of_this_build().is_official(),
             direct: env.peer_direct,
         },
@@ -593,15 +594,32 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         ),
     )
     .serve(&peers, shutdown.clone());
+    let pairing = pairing::Pairing::new(
+        Arc::clone(&peers),
+        Arc::clone(&core),
+        hide_peer::pairing::Me {
+            name: host_name()
+                .as_deref()
+                .and_then(hide_peer::link::clean_name)
+                .unwrap_or_else(|| peer_device.clone()),
+            device: peer_device,
+        },
+        shutdown.clone(),
+    );
     {
         let peers = Arc::clone(&peers);
+        let pairing = Arc::clone(&pairing);
         tokio::spawn(async move {
-            if let Err(error) = peers.start().await {
-                hide_core::diagnostic!(serde_json::json!({
+            match peers.start().await {
+                // Paired with something: dial every known host and go on
+                // with what was not settled.
+                Ok(Some(_)) => pairing.started().await,
+                Ok(None) => {}
+                Err(error) => hide_core::diagnostic!(serde_json::json!({
                     "component": "peer_host",
                     "kind": "peer_host.open_failed",
                     "reason": error.to_string(),
-                }));
+                })),
             }
         });
     }
@@ -665,6 +683,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         })),
         mobile: Arc::clone(&mobile),
         peers: Arc::clone(&peers),
+        pairing: Arc::clone(&pairing),
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),
@@ -686,12 +705,15 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     server::renderers_drawn(&app, false);
     tokio::spawn(pane_auth::serve(
         pane_listener,
-        Arc::clone(&pane_capabilities),
-        Arc::clone(&core),
-        Some(core.engine().clone()),
-        port,
+        pane_auth::Answering {
+            registry: Arc::clone(&pane_capabilities),
+            core: Arc::clone(&core),
+            engine: Some(core.engine().clone()),
+            port,
+            desktop_renderers: Arc::clone(&app.desktop_renderers),
+            pairing,
+        },
         shutdown.clone(),
-        Arc::clone(&app.desktop_renderers),
     ));
     tokio::spawn(attach::serve(
         attach_listener,

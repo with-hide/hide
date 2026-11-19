@@ -100,7 +100,7 @@ describe("the echo each agent declares", () => {
   const echoes = AGENT_ADAPTERS.flatMap((adapter) => (adapter.bell_echo ? [{ id: adapter.id, ...adapter.bell_echo }] : []));
 
   it("is declared by the agents that type the line", () => {
-    expect(echoes.map((echo) => echo.id).sort()).toEqual(["claude-code", "codex", "grok"]);
+    expect(echoes.map((echo) => echo.id).sort()).toEqual(["antigravity", "claude-code", "codex", "grok"]);
   });
 
   for (const echo of echoes) {

@@ -24,6 +24,7 @@ mod node_link_facts;
 mod node_owner;
 mod node_session_activity;
 mod opener_lifecycle;
+mod pairing;
 mod remote_delivery;
 mod seat;
 mod shell_exec;

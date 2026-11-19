@@ -51,6 +51,85 @@ pub const SLEEP_RETRY_BACKOFF_MS: u64 = 60 * 60 * 1000;
 /// sleep, however short the chosen hours or the machine's memory.
 pub const PRESSURE_MIN_IDLE_MS: u64 = 30 * 60 * 1000;
 
+/// What keeps an agent awake whatever its idle time, read once for a minute
+/// decision: every automatic sleep (the hours, memory pressure, a finished
+/// mission node or report) asks it.
+#[derive(Clone, Copy, Debug)]
+pub struct Awake<'a> {
+    /// The panes on the operator's screen.
+    pub on_screen: &'a HashSet<String>,
+    /// The panes whose agent would not end, until when (B8).
+    pub backoff_until: &'a HashMap<String, u64>,
+    /// The agents a letter waits to be delivered to.
+    pub letters: &'a LetterWaits,
+}
+
+impl Awake<'_> {
+    /// Whether anything here keeps `agent` awake at `now_unix_ms`.
+    pub(crate) fn holds(&self, agent: &SidebarAgentSnapshot, now_unix_ms: u64) -> bool {
+        self.on_screen.contains(&agent.pane_id)
+            || self
+                .backoff_until
+                .get(&agent.pane_id)
+                .is_some_and(|until| now_unix_ms < *until)
+            || self.letters.holds(agent)
+    }
+}
+
+/// The agents a letter has yet to reach, each by its pane and the session the
+/// letter addresses (the digest `delivery::Actor` keeps), so an agent started
+/// in the pane since is not held by a letter to the one before. No automatic
+/// sleep takes one: a letter wakes its recipient once, so one that woke it
+/// would wait for a wake that never comes (with-hide/hide#2627). The hold
+/// ends when a bell names the letter in the conversation (its own, or one
+/// typed for that recipient after it was queued), a prompt hook is handed
+/// it, or it is taken in, expires or is cancelled
+/// (`delivery::ledger::Ledger::unannounced`). The pane id alone names the
+/// machine, as the sleep records' keys do: another machine's panes are
+/// address-scoped (`crate::address`), so no device id is kept beside it.
+#[derive(Clone, Debug, Default)]
+pub struct LetterWaits(HashMap<String, HashSet<Option<String>>>);
+
+impl LetterWaits {
+    /// The waits `ledger` holds: each letter no bell has named to its
+    /// recipient yet, by its recipient.
+    pub(crate) fn of(ledger: &crate::delivery::ledger::Ledger) -> Self {
+        ledger
+            .unannounced()
+            .map(|letter| {
+                (
+                    letter.recipient.pane_id.as_str(),
+                    letter.recipient.session.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether a letter waits for the agent in its row's pane and session.
+    pub fn holds(&self, agent: &SidebarAgentSnapshot) -> bool {
+        self.0.get(&agent.pane_id).is_some_and(|sessions| {
+            sessions.contains(
+                &agent
+                    .session_id
+                    .as_deref()
+                    .and_then(crate::engine::tokens::session_digest),
+            )
+        })
+    }
+}
+
+impl<'a> FromIterator<(&'a str, Option<&'a str>)> for LetterWaits {
+    fn from_iter<I: IntoIterator<Item = (&'a str, Option<&'a str>)>>(waits: I) -> Self {
+        let mut map: HashMap<String, HashSet<Option<String>>> = HashMap::new();
+        for (pane_id, session) in waits {
+            map.entry(pane_id.to_owned())
+                .or_default()
+                .insert(session.map(str::to_owned));
+        }
+        Self(map)
+    }
+}
+
 /// Why an agent was put to sleep, kept only where its row says it
 /// (`contracts/snapshot-wire-enums.json`: `sleep_cause`).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -143,7 +222,8 @@ pub struct PaneStamps {
     /// When the engine last reported this agent's state change, or when it
     /// appeared (D-04).
     pub changed_at_unix_ms: u64,
-    /// When the operator last had this pane on screen; zero for never.
+    /// When the operator last had this pane on screen, or its agent came
+    /// back from a sleep, which counts as a look (`came_back`); zero for never.
     #[serde(default)]
     pub seen_at_unix_ms: u64,
     /// The state the change stamp describes; a different one is a change.
@@ -164,7 +244,9 @@ impl PaneStamps {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// The default is no state stamped yet: an agent that came back before any
+/// stamp described it, whose next stamp reads its state as a change.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StampedState {
     pub demand: String,
     pub activity: String,
@@ -503,7 +585,6 @@ impl AgentSleepStore {
             })
             .collect::<HashMap<_, _>>();
         let mut settled = Vec::new();
-        let mut woke = Vec::new();
         self.records.retain(|pane_id, record| {
             if !scope.holds(pane_id) {
                 return true;
@@ -555,15 +636,10 @@ impl AgentSleepStore {
                     pane_id: pane_id.clone(),
                     phase: record.phase,
                 });
-                woke.push(pane_id.clone());
                 return false;
             }
             true
         });
-        // The pane's clock starts again from the agent that came back (B16).
-        for pane_id in &woke {
-            self.stamps.remove(pane_id);
-        }
         self.stamps.retain(|pane_id, _| {
             !scope.holds(pane_id) || live.contains_key(scope.session_id(pane_id))
         });
@@ -662,6 +738,24 @@ impl AgentSleepStore {
         changed | (self.stamps.len() != before)
     }
 
+    /// Starts the idle clock of the agent that came back in `pane_id` from a
+    /// sleep, in its pane or in the one its wake opened, again at
+    /// `now_unix_ms` (B16): its coming back counts as a look, because the
+    /// conversation it resumes is as old as the sleep, and counted from its
+    /// last line the agent would be due again at once (with-hide/hide#2627).
+    pub fn came_back(&mut self, pane_id: &str, now_unix_ms: u64) {
+        let stamps = self
+            .stamps
+            .entry(pane_id.to_owned())
+            .or_insert_with(|| PaneStamps {
+                changed_at_unix_ms: now_unix_ms,
+                seen_at_unix_ms: now_unix_ms,
+                state: StampedState::default(),
+            });
+        stamps.changed_at_unix_ms = now_unix_ms;
+        stamps.seen_at_unix_ms = stamps.seen_at_unix_ms.max(now_unix_ms);
+    }
+
     /// Records that the operator had these panes on screen now (B4).
     pub fn mark_seen<'a>(
         &mut self,
@@ -685,16 +779,15 @@ impl AgentSleepStore {
         &self,
         agents: &[SidebarAgentSnapshot],
         machine: SleepMachine,
-        on_screen: &HashSet<String>,
+        awake: &Awake<'_>,
         after_hours: Option<u32>,
-        backoff_until: &HashMap<String, u64>,
         now_unix_ms: u64,
     ) -> Vec<String> {
         let Some(hours) = after_hours else {
             return Vec::new();
         };
         let after_ms = u64::from(hours) * 60 * 60 * 1000;
-        self.sleepable(agents, machine, on_screen, backoff_until, now_unix_ms)
+        self.sleepable(agents, machine, awake, now_unix_ms)
             .filter(|(_, idle_since)| idle_since.saturating_add(after_ms) <= now_unix_ms)
             .map(|(agent, _)| agent.pane_id.clone())
             .collect()
@@ -709,13 +802,12 @@ impl AgentSleepStore {
         &self,
         agents: &[SidebarAgentSnapshot],
         machine: SleepMachine,
-        on_screen: &HashSet<String>,
-        backoff_until: &HashMap<String, u64>,
+        awake: &Awake<'_>,
         taken: &[String],
         now_unix_ms: u64,
     ) -> Vec<(String, u64)> {
         let mut candidates = self
-            .sleepable(agents, machine, on_screen, backoff_until, now_unix_ms)
+            .sleepable(agents, machine, awake, now_unix_ms)
             .filter(|(agent, _)| !taken.contains(&agent.pane_id))
             .filter(|(_, idle_since)| {
                 idle_since.saturating_add(PRESSURE_MIN_IDLE_MS) <= now_unix_ms
@@ -728,27 +820,21 @@ impl AgentSleepStore {
     }
 
     /// The agents an automatic sleep may end, with when each went idle:
-    /// seen, off screen, resting and of a kind that sleeps here, not asleep
-    /// already and not in a refused end's backoff. The time is each rule's.
+    /// seen, resting and of a kind that sleeps here, not asleep already and
+    /// kept awake by nothing in `awake`. The time is each rule's.
     fn sleepable<'a>(
         &'a self,
         agents: &'a [SidebarAgentSnapshot],
         machine: SleepMachine,
-        on_screen: &'a HashSet<String>,
-        backoff_until: &'a HashMap<String, u64>,
+        awake: &'a Awake<'a>,
         now_unix_ms: u64,
     ) -> impl Iterator<Item = (&'a SidebarAgentSnapshot, u64)> + 'a {
         agents
             .iter()
             .filter(move |agent| sleep_refusal(agent, machine).is_none())
             .filter(|agent| crate::agent_state::is_seen(agent))
-            .filter(move |agent| !on_screen.contains(&agent.pane_id))
             .filter(|agent| !self.records.contains_key(&agent.pane_id))
-            .filter(move |agent| {
-                backoff_until
-                    .get(&agent.pane_id)
-                    .is_none_or(|until| *until <= now_unix_ms)
-            })
+            .filter(move |agent| !awake.holds(agent, now_unix_ms))
             .filter_map(|agent| {
                 let stamps = self.stamps.get(&agent.pane_id)?;
                 Some((agent, stamps.idle_since(agent)))
@@ -948,14 +1034,45 @@ mod tests {
     }
 
     fn due_at(store: &AgentSleepStore, agents: &[SidebarAgentSnapshot], now: u64) -> Vec<String> {
-        store.due(
-            agents,
-            SleepMachine::Core,
-            &HashSet::new(),
-            Some(24),
-            &HashMap::new(),
-            now,
-        )
+        due_with(store, agents, &LetterWaits::default(), now)
+    }
+
+    /// The panes the hours rule, set to 24, sleeps at `now` while `letters`
+    /// wait, with nothing on screen and no backoff.
+    fn due_with(
+        store: &AgentSleepStore,
+        agents: &[SidebarAgentSnapshot],
+        letters: &LetterWaits,
+        now: u64,
+    ) -> Vec<String> {
+        let (on_screen, backoff_until) = (HashSet::new(), HashMap::new());
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters,
+        };
+        store.due(agents, SleepMachine::Core, &awake, Some(24), now)
+    }
+
+    /// The panes memory pressure may sleep at `now` while `letters` wait,
+    /// with nothing on screen, no backoff and none taken.
+    fn pressure_at(
+        store: &AgentSleepStore,
+        agents: &[SidebarAgentSnapshot],
+        letters: &LetterWaits,
+        now: u64,
+    ) -> Vec<String> {
+        let (on_screen, backoff_until) = (HashSet::new(), HashMap::new());
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters,
+        };
+        store
+            .pressure_candidates(agents, SleepMachine::Core, &awake, &[], now)
+            .into_iter()
+            .map(|(pane, _)| pane)
+            .collect()
     }
 
     fn payload(agents: serde_json::Value, panes: &[&str]) -> SessionSnapshotPayload {
@@ -1027,16 +1144,15 @@ mod tests {
         store.mark_seen(["w1:p1"], 10 * HOUR);
         assert!(due_at(&store, &agents, 24 * HOUR).is_empty());
         assert_eq!(due_at(&store, &agents, 34 * HOUR), ["w1:p1"]);
+        let (on_screen, backoff_until) = (HashSet::new(), HashMap::new());
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters: &LetterWaits::default(),
+        };
         assert!(
             store
-                .due(
-                    &agents,
-                    SleepMachine::Core,
-                    &HashSet::new(),
-                    None,
-                    &HashMap::new(),
-                    100 * HOUR,
-                )
+                .due(&agents, SleepMachine::Core, &awake, None, 100 * HOUR)
                 .is_empty(),
             "Never sleeps nothing"
         );
@@ -1146,15 +1262,93 @@ mod tests {
             child,
         ];
         let store = stamped(&agents);
-        let due = store.due(
-            &agents,
-            SleepMachine::Core,
-            &HashSet::from(["w1:p8".to_owned()]),
-            Some(12),
-            &HashMap::from([("w1:p9".to_owned(), 13 * HOUR)]),
-            12 * HOUR,
+        let (on_screen, backoff_until) = (
+            HashSet::from(["w1:p8".to_owned()]),
+            HashMap::from([("w1:p9".to_owned(), 13 * HOUR)]),
         );
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters: &LetterWaits::default(),
+        };
+        let due = store.due(&agents, SleepMachine::Core, &awake, Some(12), 12 * HOUR);
         assert_eq!(due, ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p10"]);
+    }
+
+    /// with-hide/hide#2627: an agent that comes back from a sleep is idle
+    /// from then, though the conversation it resumes ended long before, so
+    /// memory pressure takes it only half an hour after it came back, and
+    /// the hours rule only its hours after.
+    #[test]
+    fn the_idle_clock_of_an_agent_that_came_back_starts_at_its_wake() {
+        const MINUTE: u64 = 60 * 1000;
+        let mut agents = [agent("w1:p1")];
+        agents[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = stamped(&agents);
+        let none = LetterWaits::default();
+        let slept = 2 * HOUR;
+        assert_eq!(pressure_at(&store, &agents, &none, slept), ["w1:p1"]);
+        asleep(&mut store, &agents[0]);
+
+        // A letter wakes it 35 minutes on: its conversation's last line is
+        // older still, and the pane's look from before the sleep older.
+        let woke = slept + 35 * MINUTE;
+        store.records.remove("w1:p1");
+        store.came_back("w1:p1", woke);
+        store.stamp(&agents, SleepScope::Core, None, woke + 1_000);
+        assert!(pressure_at(&store, &agents, &none, woke + 10_000).is_empty());
+        assert!(pressure_at(&store, &agents, &none, woke + PRESSURE_MIN_IDLE_MS - 1).is_empty());
+        assert_eq!(
+            pressure_at(&store, &agents, &none, woke + PRESSURE_MIN_IDLE_MS),
+            ["w1:p1"]
+        );
+        assert!(due_at(&store, &agents, woke + 24 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, woke + 24 * HOUR), ["w1:p1"]);
+
+        // A pane its wake opened, with no stamp before, starts the same way.
+        let mut opened = [agent("w1:p2")];
+        opened[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = AgentSleepStore::default();
+        store.came_back("w1:p2", woke);
+        store.stamp(&opened, SleepScope::Core, None, woke + 1_000);
+        assert!(pressure_at(&store, &opened, &none, woke + 10_000).is_empty());
+        assert_eq!(
+            pressure_at(&store, &opened, &none, woke + PRESSURE_MIN_IDLE_MS),
+            ["w1:p2"]
+        );
+    }
+
+    /// with-hide/hide#2627: while a letter waits to be delivered to an
+    /// agent, neither memory pressure nor the hours put it to sleep, however
+    /// long it rested; a letter to an earlier session of its pane holds
+    /// nothing, and once no letter waits the agent sleeps as before.
+    #[test]
+    fn no_automatic_sleep_takes_an_agent_a_letter_waits_for() {
+        let agents = [agent("w1:p1"), agent("w1:p2")];
+        let store = stamped(&agents);
+        let session = agents[0]
+            .session_id
+            .as_deref()
+            .and_then(crate::engine::tokens::session_digest);
+        let waits = [("w1:p1", session.as_deref())]
+            .into_iter()
+            .collect::<LetterWaits>();
+        let now = 48 * HOUR;
+        assert_eq!(pressure_at(&store, &agents, &waits, now), ["w1:p2"]);
+        assert_eq!(due_with(&store, &agents, &waits, now), ["w1:p2"]);
+
+        let earlier = crate::engine::tokens::session_digest("an-earlier-session");
+        let stale = [("w1:p1", earlier.as_deref())]
+            .into_iter()
+            .collect::<LetterWaits>();
+        assert_eq!(
+            pressure_at(&store, &agents, &stale, now),
+            ["w1:p1", "w1:p2"]
+        );
+
+        let none = LetterWaits::default();
+        assert_eq!(pressure_at(&store, &agents, &none, now), ["w1:p1", "w1:p2"]);
+        assert_eq!(due_with(&store, &agents, &none, now), ["w1:p1", "w1:p2"]);
     }
 
     /// The sleeping row is drawn from the record, so the record has to carry

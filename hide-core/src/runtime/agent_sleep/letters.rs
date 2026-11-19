@@ -424,9 +424,11 @@ impl Runtime {
                 letter.state == State::Pending
                     && letter.wakes_a_sleeper()
                     && !self.letter_wakes.failed.contains_key(&letter.id)
-                    // A letter whose bell rang or that woke its recipient
-                    // once waits for it to look, as one to an awake agent.
-                    && !letter.bell_sent
+                    // A letter a prompt hook took, or that woke its
+                    // recipient once, waits for it to look, as one to an
+                    // awake agent; a bell only typed may have gone to a
+                    // screen of the agent's own (`Sleeper::pausing`).
+                    && !letter.handed
                     && !self.letter_wakes.woke.contains_key(&letter.id)
             })
             .filter_map(|letter| self.asleep_route(&letter.recipient))

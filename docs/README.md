@@ -18,7 +18,7 @@ The Android app's Google Play page, its text, form answers and screenshots made 
 
 Hosted phone releases: [upload ordering, retained protocols, secrets and CSP](BUILD.md#the-hosted-phone-release); owners are `.github/workflows/release-candidate.yml`, `scripts/phone-release.mjs` and `scripts/tests/test_phone_release.py`.
 
-Relay deployment code: owners are `deploy/relay/`, `scripts/relay-deploy.py`, `.github/workflows/relay-artifact.yml` and `.github/workflows/relay-deploy-check.yml`.
+Relay deployment code, the phone relay's and the device relay's ([BUILD.md](BUILD.md#device-relay-server)): owners are `deploy/relay/`, `scripts/relay-deploy.py`, `scripts/build-iroh-relay.sh`, `.github/workflows/relay-artifact.yml` and `.github/workflows/relay-deploy-check.yml`.
 Operating Hide's one production relay (installation, updates, logs, alerts and acceptance) is owned by a private operations document in with-hide/hide-private, not by this repository; a pull request that changes how these files deploy or run comes with a paired private pull request that updates it.
 
 Private design documents: the core design of missions and of the main services is owned by documents in with-hide/hide-private's `docs/` folder, not by this repository.

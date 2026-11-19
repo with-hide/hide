@@ -642,6 +642,15 @@
     ],
     "hook_kind": "hook",
     "account_by": "none",
-    "bell_echo": null
+    "bell_echo": {
+      "prompt": [
+        ">"
+      ],
+      "chrome": [
+        "●",
+        "⎿",
+        "┃"
+      ]
+    }
   }
 ]
