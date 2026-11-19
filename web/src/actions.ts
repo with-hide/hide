@@ -2073,17 +2073,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A press on an automation whose result the snapshot shows (PRD
-     * automations B11, B16, B17, B19, B23, B25, B27): `automation_run`,
+     * automations B11, B16, B19, B23, B25, B27): `automation_run`,
      * `automation_pause`, `automation_resume`, `automation_remove`,
-     * `automation_seen`, `automation_run_stop`, `automation_run_open` and
-     * `automation_run_viewing`, each the core's `Call` of that name. A refusal
-     * is the core's to log; the screen draws what the section then says.
+     * `automation_seen`, `automation_run_stop` and `automation_run_viewing`,
+     * each the core's `Call` of that name. A refusal is the core's to log;
+     * the screen draws what the section then says. Opening a finished run's
+     * conversation is a call the run view waits on (`callAutomations`), since
+     * its refusal is the operator's to read.
      */
     automation(kind: "run" | "pause" | "resume" | "remove" | "seen", id: string) {
       dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id } });
     },
-    automationRun(kind: "run_stop" | "run_open", id: string, run: number) {
-      dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id, run } });
+    automationRunStop(id: string, run: number) {
+      dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
     },
     /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
     automationRunViewing(id: string, run: number, on: boolean) {

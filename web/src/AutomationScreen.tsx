@@ -1,8 +1,9 @@
 import { CheckIcon, ChevronLeftIcon, FolderOpenIcon, MinusIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, SquareIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
+import { callAutomations } from "./automationCall";
 import { AutomationForm } from "./AutomationForm";
 import { lastResult, nextRun, nextRunText, recordText, scheduleText, whenText, type RecordTone } from "./automationWords";
 import { useMinuteClock } from "./components/elapsed";
@@ -434,12 +435,8 @@ function RunRow({ automation, record, actions, words }: { automation: Automation
   );
   const data = { "data-automation-record": record.kind, "data-automation-record-number": record.kind === "run" ? record.number : undefined, "data-automation-run-state": record.kind === "run" ? record.state : undefined, "data-automation-run-reason": record.kind === "run" ? record.reason : undefined };
   if (record.kind !== "run") return <div className="flex min-w-0 items-center gap-sm px-xs py-xs" {...data}>{body}</div>;
-  const open = () => {
-    const finished = record.state !== "running" && record.state !== "starting";
-    // A finished run's terminal is its conversation opened again (B17); one already open, or gone for good, is shown as it is (B18).
-    if (finished && !record.opened && !record.pane_id && record.resumable && !record.conversation_missing) actions.automationRun("run_open", automation.id, record.number);
-    actions.openAutomation(automation.id, record.number);
-  };
+  // The run's view opens a finished run's conversation again as it arrives (B17).
+  const open = () => actions.openAutomation(automation.id, record.number);
   return (
     <RowButton className="flex min-w-0 items-center gap-sm px-xs py-xs" aria-label={t("automationScreen.run.open", { when: whenWords ?? "" })} onClick={open} data-automation-run-open={record.number} {...data}>
       {body}
@@ -490,7 +487,16 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
   const live = useShellStore((s) => s.connection === "live");
   const going = run.state === "running" || run.state === "starting";
   const pane = useShellStore((s) => paneRowOf(s.rest, run.pane_id));
-  const [asked, setAsked] = useState(false);
+  const opening = useRunOpening(automation.id, run.number);
+  // Arriving at a finished run whose terminal is closed is a press on it, which opens its conversation again (B17);
+  // once here, a terminal that slept waits for [다시 열기] (B18).
+  const openable = !going && !pane && !run.pane_id && !run.opened && run.resumable && !run.conversation_missing;
+  const arrived = useRef(false);
+  useEffect(() => {
+    if (arrived.current || !live) return;
+    arrived.current = true;
+    if (openable) opening.open();
+  }, [live, openable, opening]);
   useEffect(() => {
     if (!live) return undefined;
     actions.automationRunViewing(automation.id, run.number, true);
@@ -498,25 +504,24 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
   }, [actions, automation.id, run.number, live]);
   const shown = recordText(run, words.now, words.zone, words.language, t);
   const when = whenText(run.due_unix_ms ?? run.started_at_unix_ms, words.now, words.zone, words.language, t);
-  const reopen = () => {
-    setAsked(true);
-    actions.automationRun("run_open", automation.id, run.number);
-  };
   let body: ReactNode;
   if (pane) body = <RunTerminal pane={pane} actions={actions} />;
   else if (run.conversation_missing || (!going && !run.resumable)) body = <Line data="unavailable">{run.conversation_missing ? t("automationScreen.run.conversationMissing") : t("automationScreen.run.noConversation")}</Line>;
-  else if (going || run.opened || asked) body = <Line data="opening">{t("automationScreen.run.opening")}</Line>;
+  else if (going || run.opened || opening.state.kind === "asking") body = <Line data="opening">{t("automationScreen.run.opening")}</Line>;
   else {
+    const refused = opening.state.kind === "refused" ? opening.state.code : null;
     body = (
-      <div className="flex flex-col items-start gap-sm px-lg py-md" data-automation-run-terminal="closed">
-        <p className="text-caption text-muted-foreground">{t("automationScreen.run.closed")}</p>
-        <Button variant="secondary" size="sm" onClick={reopen} data-automation-run-reopen={run.number}>{t("automationScreen.run.reopen")}</Button>
+      <div className="flex flex-col items-start gap-sm px-lg py-md" data-automation-run-terminal="closed" data-automation-run-refusal={refused ?? undefined}>
+        <p className={cn("text-caption", refused ? "text-destructive" : "text-muted-foreground")} role={refused ? "alert" : undefined}>
+          {refused === null ? t("automationScreen.run.closed") : refused === "automation_opening" ? t("automationScreen.run.openingAnother") : t("automationScreen.run.openRefused")}
+        </p>
+        <Button variant="secondary" size="sm" onClick={opening.open} data-automation-run-reopen={run.number}>{t("automationScreen.run.reopen")}</Button>
       </div>
     );
   }
   return (
     <>
-      <div className="flex shrink-0 flex-wrap items-center gap-x-sm gap-y-xs border-b border-border px-lg py-sm" data-automation-run-head={run.number}>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-sm gap-y-xs border-b border-border px-lg py-sm" data-automation-run-head={run.number} data-automation-run-state={run.state}>
         <BackButton label={automation.name} onBack={() => useUiStore.getState().setAutomations({ run: null })} />
         <h1 className="shrink-0 text-subhead font-semibold">{t("automationScreen.run.title", { when })}</h1>
         <span className="flex min-w-0 flex-1 items-center gap-xs">
@@ -524,7 +529,7 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
           <RunTags run={run} />
         </span>
         {going ? (
-          <Button variant="secondary" size="sm" onClick={() => actions.automationRun("run_stop", automation.id, run.number)} data-automation-run-stop={run.number}>
+          <Button variant="secondary" size="sm" onClick={() => actions.automationRunStop(automation.id, run.number)} data-automation-run-stop={run.number}>
             <SquareIcon aria-hidden="true" />
             {t("automationScreen.run.stop")}
           </Button>
@@ -534,6 +539,26 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
     </>
   );
 }
+
+/**
+ * Asks the core to open a finished run's conversation again (B17, B18) and
+ * waits for its answer: one opening of an automation starts at a time, so a
+ * second is refused `automation_opening`, which the run view says. While the
+ * call waits the view reads as opening; the section then says what opened.
+ */
+function useRunOpening(id: string, run: number): { state: RunOpeningState; open: () => void } {
+  const [state, setState] = useState<RunOpeningState>({ kind: "idle" });
+  const open = useCallback(() => {
+    setState({ kind: "asking" });
+    void callAutomations({ call: "run_open", id, run }).then((answer) => {
+      // A dropped socket says nothing about the run; the next press asks again.
+      setState(answer.ok || answer.code === "socket_closed" ? { kind: "idle" } : { kind: "refused", code: answer.code });
+    });
+  }, [id, run]);
+  return useMemo(() => ({ state, open }), [state, open]);
+}
+
+type RunOpeningState = { kind: "idle" } | { kind: "asking" } | { kind: "refused"; code: string };
 
 function Line({ data, children }: { data: string; children: ReactNode }) {
   return <p className="px-lg py-md text-caption text-muted-foreground" data-automation-run-terminal={data}>{children}</p>;

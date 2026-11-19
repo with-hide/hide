@@ -1,5 +1,7 @@
 // A call on this core's automations that the window waits for (PRD
-// automations B6-B8): the form's preview of a schedule, its make and its edit.
+// automations B6-B8, B17): the form's preview of a schedule, its make and its
+// edit, and a finished run's conversation opened again, whose refusal the run
+// view says.
 // One `automation_call` event per call, answered by one `automation_result`
 // frame under the same request id (`hided/src/automation_screen.rs`); a call
 // still waiting when the socket closes is refused `socket_closed`. A press
@@ -13,7 +15,8 @@ import type { DispatchFn } from "./ws";
 export type AutomationCall =
   | { call: "preview"; schedule: AutomationSchedule }
   | { call: "add"; name: string; task: string; schedule: AutomationSchedule; agent: AutomationAgent; folder?: string; worktree?: boolean; run_now?: boolean }
-  | { call: "edit"; id: string; name?: string; task?: string; schedule?: AutomationSchedule; agent?: AutomationAgent; folder?: string | null; worktree?: boolean };
+  | { call: "edit"; id: string; name?: string; task?: string; schedule?: AutomationSchedule; agent?: AutomationAgent; folder?: string | null; worktree?: boolean }
+  | { call: "run_open"; id: string; run: number };
 
 /** What a preview answers: the choice the schedule reads as and its next time, in the core's zone. */
 export type SchedulePreview = { reads_as: AutomationSchedule; next_run_at_unix_ms: number | null; zone: string | null };
@@ -21,7 +24,10 @@ export type SchedulePreview = { reads_as: AutomationSchedule; next_run_at_unix_m
 export type AutomationMade = { id: string; name: string; folder: string; next_run_at_unix_ms: number | null; run?: number; paused?: string };
 export type AutomationEdited = { id: string; next_run_at_unix_ms: number | null };
 
-type Answers = { preview: SchedulePreview; add: AutomationMade; edit: AutomationEdited };
+/** What an opening answers: the run whose conversation opens, or opened already. */
+export type RunOpening = { id: string; run: number };
+
+type Answers = { preview: SchedulePreview; add: AutomationMade; edit: AutomationEdited; run_open: RunOpening };
 
 /** The core's answer, or the code it refused the call with (`schedule_under_hour`, `automation_name_taken`, `socket_closed`, ...). */
 export type CallAnswer<T> = { ok: true; value: T } | { ok: false; code: string };
