@@ -96,8 +96,11 @@ export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
 
 /** Who opens whom, in the words of the machine reading it. */
 export function directionKey(peer: Peer): MessageKey {
-  if (peer.opens != null && peer.opened_by != null) return "pairing.direction.both";
-  return peer.opens != null ? "pairing.direction.outgoing" : "pairing.direction.incoming";
+  // A host that dropped this machine's pairing is opened no more: beside a
+  // direction that still stands, only that one is said.
+  const opens = peer.opens != null && !(peer.opens === "unpaired" && peer.opened_by != null);
+  if (opens && peer.opened_by != null) return "pairing.direction.both";
+  return opens ? "pairing.direction.outgoing" : "pairing.direction.incoming";
 }
 
 /** What the row can do about its state: nothing, or the one action its line offers. */
@@ -113,8 +116,11 @@ export function peerState(peer: Peer): { key: MessageKey; tone: "ok" | "muted" |
   if (peer.update === "there") return line("pairing.state.updateThere", "warn");
   if (peer.opens === "unpaired") return line("pairing.state.unpaired", "warn", "remove_outgoing");
   if (peer.opens === "removing") return line("pairing.state.removing", "warn");
-  if (peer.opens === "paused") return line("pairing.state.paused", "muted", "resume_outgoing");
-  if (peer.opened_by === "paused" && peer.opens == null) return line("pairing.state.pausedIncoming", "muted", "resume_incoming");
+  // A pair with two directions says which one is paused: "paused" beside
+  // "each opens the other" would leave the operator to guess.
+  const both = peer.opens != null && peer.opened_by != null;
+  if (peer.opens === "paused") return line(both ? "pairing.state.pausedOutgoing" : "pairing.state.paused", "muted", "resume_outgoing");
+  if (peer.opened_by === "paused") return line(both ? "pairing.state.pausedIncoming" : "pairing.state.paused", "muted", "resume_incoming");
   if (peer.opens === "paused_there") return line("pairing.state.pausedThere", "muted");
   if (peer.opens === "confirming") return line("pairing.state.confirming", "muted");
   if (!peer.connected) {

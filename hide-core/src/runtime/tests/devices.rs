@@ -1029,6 +1029,19 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
         }])
     );
     assert_eq!(answer["devices"], serde_json::json!([]));
+    // A window draws its rows from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["peers"].clone(),
+        )
+    };
+    let (seen, peers) = sent(&mut runtime, 0);
+    assert_eq!(peers[0]["device_id"], "windows-pc");
+    assert_eq!(peers[0]["opened_by"], "paused");
 
     // A machine paired in neither direction is not a paired machine: the
     // list is refused whole and the one before it stands.
@@ -1041,4 +1054,6 @@ fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
     // The store is the owner: an empty list clears it.
     assert!(told(&mut runtime, serde_json::json!([])));
     assert!(runtime.snapshot.navigator.peers.is_empty());
+    // A window that drew the machine is told it is gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
 }

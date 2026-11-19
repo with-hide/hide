@@ -9,6 +9,9 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     expect(directionKey(peer())).toBe("pairing.direction.outgoing");
     expect(directionKey(peer({ opens: null, opened_by: "active" }))).toBe("pairing.direction.incoming");
     expect(directionKey(peer({ opened_by: "active" }))).toBe("pairing.direction.both");
+    // A host that dropped this machine's pairing is not opened: only the direction that stands is said.
+    expect(directionKey(peer({ opens: "unpaired", opened_by: "active" }))).toBe("pairing.direction.incoming");
+    expect(directionKey(peer({ opens: "unpaired" }))).toBe("pairing.direction.outgoing");
   });
 
   it("says only how a connected machine is reached", () => {
@@ -28,7 +31,10 @@ describe("a paired machine's row (PRD device-connect-iroh B21, B24-B27, B50, B51
     expect(peerState(peer({ opens: "unpaired", connected: false }))).toMatchObject({ key: "pairing.state.unpaired", action: "remove_outgoing" });
     expect(peerState(peer({ opens: "removing", connected: false })).key).toBe("pairing.state.removing");
     expect(peerState(peer({ opens: "paused", connected: false }))).toMatchObject({ key: "pairing.state.paused", action: "resume_outgoing" });
-    expect(peerState(peer({ opens: null, opened_by: "paused" }))).toMatchObject({ key: "pairing.state.pausedIncoming", action: "resume_incoming" });
+    expect(peerState(peer({ opens: null, opened_by: "paused" }))).toMatchObject({ key: "pairing.state.paused", action: "resume_incoming" });
+    // With two directions the line names the paused one.
+    expect(peerState(peer({ opens: "active", opened_by: "paused" }))).toMatchObject({ key: "pairing.state.pausedIncoming", action: "resume_incoming" });
+    expect(peerState(peer({ opens: "paused", opened_by: "active", connected: false }))).toMatchObject({ key: "pairing.state.pausedOutgoing", action: "resume_outgoing" });
     // The other side's pause is told, and is not this machine's to undo.
     expect(peerState(peer({ opens: "paused_there" }))).toMatchObject({ key: "pairing.state.pausedThere", action: null });
     expect(peerState(peer({ opens: "confirming", connected: false })).key).toBe("pairing.state.confirming");
