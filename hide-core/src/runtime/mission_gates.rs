@@ -436,6 +436,7 @@ impl Runtime {
             action: None,
             warning: None,
             ci: None,
+            line: None,
             key: Some(format!(
                 "gate:{key}:{}:{}:{now}",
                 answer.as_str(),

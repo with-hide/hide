@@ -1002,16 +1002,16 @@ pub(crate) fn safety_net_due(
 }
 
 /// Whether `node` could start and was not: not started (`started`), the
-/// mission's own work, and every node it depends on done.
+/// mission's own work, and every dependency met
+/// (`runtime::missions::dependency_met`): a node it depends on done, or the
+/// finish line of it it names passed.
 pub(crate) fn could_start(mission: &Mission, node: &MissionNode) -> bool {
     !node.started()
         && node.kind != NodeKind::External
-        && node.depends_on.iter().all(|key| {
-            mission
-                .nodes
-                .iter()
-                .any(|other| &other.key == key && other.status == NodeStatus::Done)
-        })
+        && node
+            .depends_on
+            .iter()
+            .all(|key| crate::runtime::missions::dependency_met(mission, key).is_some())
 }
 
 /// The node's current pull request while it waits on CI, a review or the

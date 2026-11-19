@@ -354,7 +354,9 @@ pub enum WaitingOn {
     Decision,
     /// A node it depends on was dropped.
     Blocked,
-    /// The nodes it depends on that are not done, in its order.
+    /// The dependencies it names that are not met (`dependency_met`), in its
+    /// order, each as written: `<node>`, or `<node>:<line>` for a finish
+    /// line of it.
     Nodes {
         keys: Vec<String>,
     },
@@ -367,6 +369,11 @@ pub enum WaitingOn {
     Ci,
     /// The merge of its pull request.
     Merge,
+    /// The merge of the pull request under it first: it stacks on `node`
+    /// (`Mission::stacks_on`), whose work has not reached main.
+    Below {
+        node: String,
+    },
     /// Every line is met and nothing waits on GitHub: the Conductor's move.
     Conductor,
 }
@@ -812,6 +819,10 @@ pub struct PendingWake {
     /// The CI result a `ci` wake tells, on `head`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<CiNews>,
+    /// The finish line a `line_met` or `line_reopened` wake is about,
+    /// `<node>:<line>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<Dependency>,
     /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
     /// letter's intent with the mission and the recipient: the same facts
     /// evaluated again, after a restart or a lost save, are the same letter
@@ -868,6 +879,12 @@ pub enum WakeEvent {
     /// The operator's answer to a node's gate sent it back with their words
     /// as a defect: to the Conductor, and to the node's worker (`to`).
     GateFix,
+    /// The finish line `line` names passed and the node could start now,
+    /// stacked on the node that line is of (`Mission::stacks_on`).
+    LineMet,
+    /// Finish line `line` of the node opened again (failed, or opened by a
+    /// new head or a defect) after nodes that wait on it started; they go on.
+    LineReopened,
 }
 
 impl WakeEvent {
@@ -890,6 +907,8 @@ impl WakeEvent {
             Self::MaterialAsked => "material_asked",
             Self::GatePassed => "gate_passed",
             Self::GateFix => "gate_fix",
+            Self::LineMet => "line_met",
+            Self::LineReopened => "line_reopened",
         }
     }
 }
@@ -1148,7 +1167,7 @@ pub struct MissionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
     #[serde(default)]
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<Dependency>,
     pub status: NodeStatus,
     #[serde(default)]
     pub delivery: Option<Delivery>,
@@ -1282,6 +1301,12 @@ pub struct MissionNode {
     /// What Hide itself did to the node last (D-07, D-15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide: Option<HideMark>,
+    /// Its finish-line dependencies (`<node>:<line>`) Hide last saw met, so
+    /// that a line passing is told once and a line opening again after is
+    /// told once (`runtime::mission_health::follow_lines`); at most its own
+    /// dependencies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines_met: Vec<Dependency>,
     /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub woken: Vec<Woken>,
@@ -1870,6 +1895,20 @@ impl Mission {
                 .is_some_and(|question| question.names(key))
     }
 
+    /// The code node `node` starts on by one of its finish lines
+    /// (`<node>:<line>`) rather than by its merge: `node`'s branch starts
+    /// from that node's branch and its pull request takes that branch as
+    /// its base. A plan names at most one node by a line
+    /// (`mission_dependency_stack_split`); none when it names none, or a
+    /// node that leaves no branch.
+    pub(crate) fn stacks_on(&self, node: &MissionNode) -> Option<&MissionNode> {
+        node.depends_on
+            .iter()
+            .find(|dependency| dependency.line.is_some())
+            .and_then(|dependency| self.node(&dependency.node))
+            .filter(|lower| lower.kind == NodeKind::Change)
+    }
+
     /// The node a spawn's intent names as its worker's,
     /// `<mission id>:<node key>` (`hide mission help`); none for another
     /// intent, such as a checker's.
@@ -1909,8 +1948,8 @@ impl crate::dag::Node for MissionNode {
     fn key(&self) -> &str {
         &self.key
     }
-    fn depends_on(&self) -> &[String] {
-        &self.depends_on
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on.iter().map(|dependency| dependency.node.as_str())
     }
 }
 
@@ -1918,8 +1957,56 @@ impl crate::dag::Node for NodeInput {
     fn key(&self) -> &str {
         &self.key
     }
-    fn depends_on(&self) -> &[String] {
-        &self.depends_on
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on.iter().map(|dependency| dependency.node.as_str())
+    }
+}
+
+/// One entry of a node's `depends_on`, written as the plan wrote it: another
+/// node, `<node>`, met once that node is done, or one finish line of it,
+/// `<node>:<line>`, met once that line passes or is skipped, or the node is
+/// done (`Mission::met`). A node key has no `:`, so each text reads one
+/// way, and a plan of plain keys reads and writes as it did.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(from = "String", into = "String")]
+pub struct Dependency {
+    pub node: String,
+    pub line: Option<String>,
+}
+
+impl From<String> for Dependency {
+    fn from(text: String) -> Self {
+        match text.split_once(':') {
+            Some((node, line)) => Self {
+                node: node.to_owned(),
+                line: Some(line.to_owned()),
+            },
+            None => Self {
+                node: text,
+                line: None,
+            },
+        }
+    }
+}
+
+impl From<&str> for Dependency {
+    fn from(text: &str) -> Self {
+        Self::from(text.to_owned())
+    }
+}
+
+impl From<Dependency> for String {
+    fn from(dependency: Dependency) -> Self {
+        dependency.to_string()
+    }
+}
+
+impl std::fmt::Display for Dependency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.line {
+            Some(line) => write!(f, "{}:{line}", self.node),
+            None => f.write_str(&self.node),
+        }
     }
 }
 
@@ -2720,7 +2807,7 @@ pub struct NodeInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
     #[serde(default)]
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<Dependency>,
     #[serde(default)]
     pub delivery: Option<Delivery>,
     #[serde(default)]
@@ -3143,9 +3230,28 @@ pub(crate) fn apply_plan(
             }
         }
     }
+    // A node stacks on one branch: its finish-line dependencies name one node.
+    for node in &input.nodes {
+        let mut by_line = node
+            .depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_some())
+            .map(|dependency| dependency.node.as_str());
+        if let Some(first) = by_line.next()
+            && by_line.any(|other| other != first)
+        {
+            return Err(crate::coordination::refusal(
+                "mission_dependency_stack_split",
+                &node.key,
+            ));
+        }
+    }
     let edges = crate::dag::check_edges(&input.nodes);
-    if matches!(edges, Err(crate::dag::Refusal::Unknown { .. })) {
-        return Err("mission_dependency_unknown".into());
+    if let Err(crate::dag::Refusal::Unknown { node, dependency }) = &edges {
+        return Err(crate::coordination::refusal(
+            "mission_dependency_unknown",
+            &format!("{node} → {dependency}"),
+        ));
     }
     // Each node at most once, so the order is never longer than the plan.
     let mut ordered = BTreeSet::new();
@@ -3158,6 +3264,22 @@ pub(crate) fn apply_plan(
     }
     if edges.is_err() {
         return Err("mission_dependency_cycle".into());
+    }
+    // A stacked pull request merges after the one under it.
+    let merged_at = |key: &str| input.merge_order.iter().position(|named| named == key);
+    for node in &input.nodes {
+        if let Some(lower) = node
+            .depends_on
+            .iter()
+            .find(|dependency| dependency.line.is_some())
+            && let (Some(upper), Some(below)) = (merged_at(&node.key), merged_at(&lower.node))
+            && upper < below
+        {
+            return Err(crate::coordination::refusal(
+                "mission_merge_order_stack",
+                &node.key,
+            ));
+        }
     }
     // A node that ran keeps its record; one that is gone from the plan must
     // be dropped first, so a replan cannot hide work that was done (B28).
@@ -3220,6 +3342,7 @@ pub(crate) fn apply_plan(
                 round: 0,
                 hide: None,
                 woken: Vec::new(),
+                lines_met: Vec::new(),
                 launched: None,
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
@@ -3279,6 +3402,21 @@ pub(crate) fn apply_plan(
             node
         })
         .collect();
+    // A finish line a node waits on is one its node has after this plan.
+    for node in &next.nodes {
+        for dependency in &node.depends_on {
+            if let Some(line) = &dependency.line
+                && next
+                    .node(&dependency.node)
+                    .is_none_or(|lower| !lower.criteria.iter().any(|known| known.key == *line))
+            {
+                return Err(crate::coordination::refusal(
+                    "mission_dependency_line_unknown",
+                    &format!("{} → {dependency}", node.key),
+                ));
+            }
+        }
+    }
     // The question a gate asked goes with that gate when the plan changes
     // or takes it away, so the next gate can ask; a question of the
     // Conductor's own stays (PRD mission-human-gate D-15, B14).
@@ -3886,6 +4024,15 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_dependency_unknown" | "mission_dependency_cycle" => {
             "Check depends_on and merge_order: they must name other nodes of the plan, merge_order each at most once, without a cycle"
+        }
+        "mission_dependency_line_unknown" => {
+            "Name a finish line the node has, as <node>:<line> with a key hide mission show <node> lists (c1, check, review, verify); a line Hide adds later, such as ci, cannot be named before it exists"
+        }
+        "mission_dependency_stack_split" => {
+            "A node stacks on one node only: name finish lines of one node in depends_on, and wait on any other by its key alone"
+        }
+        "mission_merge_order_stack" => {
+            "Put the node a stacked node waits on by a line before it in merge_order: a stacked pull request merges after the one under it"
         }
         "mission_delivery_required" | "mission_delivery_invalid" => {
             "Give each change node a delivery (pr or direct) and no other node one"
@@ -4525,7 +4672,7 @@ pub(crate) mod tests {
             title: format!("node {key}"),
             kind: kind.into(),
             preset: None,
-            depends_on: depends.iter().map(|key| (*key).to_owned()).collect(),
+            depends_on: depends.iter().map(|key| Dependency::from(*key)).collect(),
             delivery: (kind == NodeKind::Change).then_some(Delivery::Pr),
             worker: None,
             criteria: vec![format!("{key} works")],
@@ -4567,14 +4714,93 @@ pub(crate) mod tests {
         );
         let unknown = plan(vec![node("a", NodeKind::Change, &["z"])]);
         assert_eq!(
-            apply_plan(&mission(), &unknown, 2).unwrap_err(),
-            "mission_dependency_unknown"
+            crate::coordination::split_refusal(&apply_plan(&mission(), &unknown, 2).unwrap_err()),
+            ("mission_dependency_unknown", Some("a → z"))
         );
         let mut repeated = plan(vec![node("a", NodeKind::Change, &[])]);
         repeated.merge_order = vec!["a".into(), "a".into()];
         assert_eq!(
             apply_plan(&mission(), &repeated, 2).unwrap_err(),
             "mission_dependency_unknown"
+        );
+    }
+
+    /// mission-82: a dependency on one finish line of another node is
+    /// `<node>:<line>`; a line the node does not have, line dependencies on
+    /// two nodes, or a merge order that puts a stacked node first are
+    /// refused, each naming where.
+    #[test]
+    fn a_dependency_on_a_finish_line_names_a_line_of_one_node_and_merges_after_it() {
+        let refused = |plan: PlanInput| {
+            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            let (code, detail) = crate::coordination::split_refusal(&code);
+            (code.to_owned(), detail.map(str::to_owned))
+        };
+        let stacked = plan(vec![
+            node("core", NodeKind::Change, &[]),
+            node("host", NodeKind::Change, &["core:c1"]),
+        ]);
+        let planned = apply_plan(&mission(), &stacked, 2).unwrap();
+        assert_eq!(
+            planned.nodes[1].depends_on,
+            vec![Dependency {
+                node: "core".into(),
+                line: Some("c1".into())
+            }]
+        );
+        assert_eq!(
+            refused(plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c9"]),
+            ])),
+            (
+                "mission_dependency_line_unknown".into(),
+                Some("host → core:c9".into())
+            )
+        );
+        assert_eq!(
+            refused(plan(vec![node("host", NodeKind::Change, &["gone:c1"])])),
+            (
+                "mission_dependency_unknown".into(),
+                Some("host → gone".into())
+            )
+        );
+        assert_eq!(
+            refused(plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("wire", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c1", "wire:c1"]),
+            ])),
+            ("mission_dependency_stack_split".into(), Some("host".into()))
+        );
+        let mut upside_down = stacked.clone();
+        upside_down.merge_order = vec!["host".into(), "core".into()];
+        assert_eq!(
+            refused(upside_down),
+            ("mission_merge_order_stack".into(), Some("host".into()))
+        );
+        let mut in_order = stacked;
+        in_order.merge_order = vec!["core".into(), "host".into()];
+        assert!(apply_plan(&mission(), &in_order, 2).is_ok());
+    }
+
+    /// mission-82 c2: a node written with plain keys reads and writes its
+    /// `depends_on` as it was, with nothing added, and a line key keeps its
+    /// spelling.
+    #[test]
+    fn a_plan_of_plain_keys_reads_and_writes_as_before() {
+        let written = serde_json::json!({"key": "b", "title": "B", "kind": "change", "depends_on": ["a"],
+            "status": "planned", "delivery": "pr"});
+        let node: MissionNode = serde_json::from_value(written).unwrap();
+        assert_eq!(node.depends_on, vec![Dependency::from("a")]);
+        let back = serde_json::to_value(&node).unwrap();
+        assert_eq!(back["depends_on"], serde_json::json!(["a"]));
+        assert!(back.get("lines_met").is_none());
+        let lines: Vec<Dependency> =
+            serde_json::from_value(serde_json::json!(["a", "core:c1"])).unwrap();
+        assert_eq!(
+            serde_json::to_string(&lines).unwrap(),
+            r#"["a","core:c1"]"#
         );
     }
 

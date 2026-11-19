@@ -187,6 +187,7 @@ pub(super) fn raise_for(
                 action: None,
                 warning: None,
                 ci: None,
+                line: None,
                 key: Some(raise_key.clone()),
             },
         );
@@ -281,6 +282,7 @@ pub(super) fn tell_new_conductor(mission: &mut Mission) {
                 action: None,
                 warning: None,
                 ci: None,
+                line: None,
                 key: Some(key),
             },
         );
@@ -394,6 +396,7 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 action: None,
                 warning: Some(warning.kind),
                 ci: None,
+                line: None,
                 key: Some(act_key(target, &fact)),
             };
             // A full queue refuses the rest too; it is logged once a pass.
@@ -542,6 +545,77 @@ pub(super) fn closing_report(mission: &Mission) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Brings each node's finish-line dependencies (`<node>:<line>`) to where
+/// they stand now (`MissionNode::lines_met`) and tells the Conductor what
+/// moved, once per move: a node that could start only now that the line it
+/// waits on passed (`line_met`, which names its stack), and a line that
+/// opened again after nodes waiting on it started (`line_reopened`, one
+/// letter per line naming those nodes, which go on: the Conductor decides).
+/// A stacked node holding a pull request takes the one under it as its
+/// `base_pr` once both exist, which the stack's rules read. Whether the
+/// mission changed.
+pub(super) fn follow_lines(mission: &mut Mission) -> bool {
+    let mut changed = false;
+    let mut reopened: Vec<crate::missions::Dependency> = Vec::new();
+    let mut startable = Vec::new();
+    for at in 0..mission.nodes.len() {
+        let node = &mission.nodes[at];
+        let met: Vec<crate::missions::Dependency> = node
+            .depends_on
+            .iter()
+            .filter(|key| {
+                key.line.is_some() && super::missions::dependency_met(mission, key).is_some()
+            })
+            .cloned()
+            .collect();
+        let base = super::mission_landing::stacked_below(mission, node)
+            .and_then(MissionNode::current_pr)
+            .filter(|_| node.base_pr.is_none() && node.current_pr().is_some());
+        let moved = met != node.lines_met;
+        if moved {
+            let at_work = node.started() && !node.status.finished();
+            for dependency in &node.lines_met {
+                if at_work
+                    && node.depends_on.contains(dependency)
+                    && !met.contains(dependency)
+                    && !reopened.contains(dependency)
+                {
+                    reopened.push(dependency.clone());
+                }
+            }
+            if let Some(first) = met.iter().find(|dependency| !node.lines_met.contains(dependency))
+                && crate::mission_health::could_start(mission, node)
+            {
+                startable.push((node.key.clone(), first.clone()));
+            }
+        }
+        if moved {
+            mission.nodes[at].lines_met = met;
+            changed = true;
+        }
+        if base.is_some() {
+            mission.nodes[at].base_pr = base;
+            changed = true;
+        }
+    }
+    for line in reopened {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.line_reopened",
+            "mission": mission.id, "line": line.to_string(),
+        }));
+        super::missions::record_line_wake(
+            mission,
+            line.node.clone(),
+            WakeEvent::LineReopened,
+            line,
+        );
+    }
+    for (node, line) in startable {
+        super::missions::record_line_wake(mission, node, WakeEvent::LineMet, line);
+    }
+    changed
 }
 
 impl Runtime {
@@ -1064,18 +1138,35 @@ impl Runtime {
     /// changed.
     fn mission_health(&mut self, id: &str, now: u64) -> bool {
         let ledger = self.delivery_state().ok();
+        // A running mission's finish-line dependencies are followed before
+        // the evaluation, which reads what a node could start on.
+        let mut lines_moved = false;
+        if let Some(mission) = self.missions.book.get(id)
+            && mission.status == MissionStatus::Running
+            && !self.mission_stale(mission)
+            && let Some(mission) = self.missions.book.get_mut(id)
+        {
+            lines_moved = follow_lines(mission);
+        }
         let acts = {
             let Some(mission) = self.missions.book.get(id) else {
-                return false;
+                return lines_moved;
             };
             let sleeping = self.mission_sleeping(mission, ledger.as_deref());
             let facts = self.health_facts(mission, ledger.as_deref(), &sleeping);
             evaluate(mission, &facts)
         };
         if acts.is_empty() {
-            return false;
+            if lines_moved {
+                if let Some(mission) = self.missions.book.get_mut(id) {
+                    mission.updated_at_unix_ms = now;
+                }
+                self.save_missions();
+                self.flush_mission_wakes();
+            }
+            return lines_moved;
         }
-        let mut changed = false;
+        let mut changed = lines_moved;
         let mut events = Vec::new();
         let mut close = false;
         for act in acts {
@@ -1362,6 +1453,7 @@ impl Runtime {
                 action: None,
                 warning: None,
                 ci: None,
+                line: None,
                 key: Some(act.clone()),
             },
         );
@@ -1436,6 +1528,7 @@ impl Runtime {
                         action: None,
                         warning: None,
                         ci: None,
+                        line: None,
                         key: Some(wake_key),
                     },
                 );
@@ -1755,6 +1848,7 @@ impl Runtime {
                     action: Some(payload.action),
                     warning: None,
                     ci: None,
+                    line: None,
                     key: None,
                 },
             );

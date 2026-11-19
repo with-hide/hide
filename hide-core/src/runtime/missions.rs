@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 use super::Runtime;
 use super::mission_criteria::Caller as MissionCaller;
 use super::mission_landing::{
-    NodeLanding, landing_order, node_landing, reads_branch, stack_settled, stack_waiting,
+    NodeLanding, NodeStack, landing_order, node_landing, node_stack, reads_branch, stack_settled,
+    stack_waiting,
 };
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckKind, Criterion, CriterionKind, CriterionState};
@@ -219,7 +220,7 @@ pub struct NodeView {
     pub preset: Option<crate::missions::Preset>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<&'static str>,
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<crate::missions::Dependency>,
     pub status: NodeStatus,
     pub blocked: Option<Blocked>,
     pub delivery: Option<Delivery>,
@@ -243,6 +244,11 @@ pub struct NodeView {
     /// mission-node-simple D-10): the card draws one PR mark each.
     pub prs: Vec<NodePrView>,
     pub base_pr: Option<u32>,
+    /// The node it stacks on while that one's work has not reached main
+    /// (`mission_landing::node_stack`): its branch starts there and its pull
+    /// request takes that branch as its base. Absent for a node not stacked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<NodeStack>,
     pub branch: Option<String>,
     pub pr_state: Option<PrState>,
     pub pr_url: Option<String>,
@@ -405,6 +411,35 @@ fn node_work(
     }
 }
 
+/// Whether the dependency `key` of a node of `mission` is met, and when:
+/// `None` while it is not, else when it was met, which is none when the
+/// record cannot say (a key naming no node holds nothing back, and a book
+/// may keep no finish time). A plain key is met when its node is done, at
+/// its finish; `<node>:<line>` also when that line passed or was skipped,
+/// at its record. The one rule a planned node waits by (`waiting_on`),
+/// could start by (`mission_health::could_start`) and is told about by
+/// (`mission_health::follow_lines`).
+pub(crate) fn dependency_met(
+    mission: &Mission,
+    key: &crate::missions::Dependency,
+) -> Option<Option<u64>> {
+    let Some(before) = mission.node(&key.node) else {
+        return Some(None);
+    };
+    if before.status == NodeStatus::Done {
+        return Some(before.finished_at_unix_ms);
+    }
+    let line = key.line.as_deref()?;
+    before
+        .criteria
+        .iter()
+        .find(|known| {
+            known.key == line
+                && matches!(known.state, CriterionState::Pass | CriterionState::Skipped)
+        })
+        .map(|known| known.by.as_ref().map(|by| by.at_unix_ms))
+}
+
 /// What `view`, a node of `mission`, waits on (`WaitingOn`): its raise
 /// first, then the decision that stopped it, then by its status what it has
 /// not met. A planned node waits on the nodes before it, a working one on
@@ -437,14 +472,8 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
             let keys: Vec<String> = view
                 .depends_on
                 .iter()
-                .filter(|key| {
-                    mission
-                        .nodes
-                        .iter()
-                        .find(|other| other.key == **key)
-                        .is_some_and(|other| other.status != NodeStatus::Done)
-                })
-                .cloned()
+                .filter(|key| dependency_met(mission, key).is_none())
+                .map(ToString::to_string)
                 .collect();
             Some(if keys.is_empty() {
                 WaitingOn::Start
@@ -492,7 +521,12 @@ fn waiting_on(mission: &Mission, view: &NodeView) -> Option<WaitingOn> {
                     WaitingOn::Worker
                 }
                 None if view.pr_state.is_some_and(|state| state != PrState::Merged) => {
-                    WaitingOn::Merge
+                    match &view.stack {
+                        Some(stack) => WaitingOn::Below {
+                            node: stack.on.clone(),
+                        },
+                        None => WaitingOn::Merge,
+                    }
                 }
                 None => WaitingOn::Conductor,
             })
@@ -1190,6 +1224,37 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 ),
             }
         }
+        WakeEvent::LineMet => {
+            let line = wake.line.as_ref().map_or_else(|| "-".to_owned(), ToString::to_string);
+            news(
+                format!("Node {} can start: line {line} passed", wake.node),
+                &start_words(mission, node),
+            )
+        }
+        WakeEvent::LineReopened => {
+            let line = wake.line.as_ref().map_or_else(|| "-".to_owned(), ToString::to_string);
+            let running: Vec<&str> = mission
+                .nodes
+                .iter()
+                .filter(|other| {
+                    other.started()
+                        && !other.status.finished()
+                        && wake.line.as_ref().is_some_and(|line| other.depends_on.contains(line))
+                })
+                .map(|other| other.key.as_str())
+                .collect();
+            let running = if running.is_empty() {
+                "none".to_owned()
+            } else {
+                running.join(", ")
+            };
+            news(
+                format!(
+                    "Line {line} opened again after the nodes waiting on it started ({running}); Hide did not stop them"
+                ),
+                "decide whether they go on, hold or wait for the line, and tell their workers what changed",
+            )
+        }
         WakeEvent::Attention => {
             // A node that could start but waits on the fix its start gate
             // asked for owes that fix, not a start (PRD node-presets D-14).
@@ -1198,6 +1263,14 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 .filter(|_| wake.reason == Some(crate::missions::AttentionReason::NotStarted));
             let (what, act) = match owed {
                 Some(line) => fix_owed_words(line),
+                None if wake.reason == Some(crate::missions::AttentionReason::NotStarted)
+                    && node.is_some_and(|node| mission.stacks_on(node).is_some()) =>
+                {
+                    (
+                        "it could start and was not started".to_owned(),
+                        start_words(mission, node),
+                    )
+                }
                 None => attention_words(wake.reason, &pr),
             };
             news(
@@ -1434,6 +1507,22 @@ pub(super) fn note_seen(node: &mut MissionNode, mut seen: PrSeen, now: u64) -> b
     }
 }
 
+/// How to start `node`: on its own from the destination, or stacked on the
+/// node below it while that one's work has not reached main (`node_stack`),
+/// its branch cut from that node's branch and its pull request based on it.
+fn start_words(mission: &Mission, node: Option<&MissionNode>) -> String {
+    let Some(stack) = node.and_then(|node| node_stack(mission, node)) else {
+        return "start its worker".to_owned();
+    };
+    let branch = stack.branch.as_deref().unwrap_or("<its branch>");
+    format!(
+        "start its worker stacked on node {}: cut its branch from {branch} and open its pull request with `gh pr create --base {branch}`; it merges after node {}'s pull request, and Hide names the stack in `hide mission show {}`",
+        stack.on,
+        stack.on,
+        node.map_or("-", |node| node.key.as_str()),
+    )
+}
+
 /// What a Conductor woken about a pull request of its own does.
 const PR_ACT: &str = "move a stacked PR above it onto the change, or answer the review";
 
@@ -1448,6 +1537,19 @@ pub(super) fn record_wake(
     key: Option<String>,
 ) -> Option<String> {
     record(mission, wake_about(node, pr, event, head, key))
+}
+
+/// Records one wake for `mission`'s Conductor about finish line `line`
+/// (`line_met`, `line_reopened`), as `record_wake` does.
+pub(super) fn record_line_wake(
+    mission: &mut Mission,
+    node: String,
+    event: WakeEvent,
+    line: crate::missions::Dependency,
+) -> Option<String> {
+    let mut wake = wake_about(node, None, event, None, None);
+    wake.line = Some(line);
+    record(mission, wake)
 }
 
 /// A wake for the Conductor about `event`, numbered when it is recorded.
@@ -1470,6 +1572,7 @@ fn wake_about(
         action: None,
         warning: None,
         ci: None,
+        line: None,
         key,
     }
 }
@@ -4792,6 +4895,7 @@ impl Runtime {
                     pr: node.current_pr(),
                     prs,
                     base_pr: node.base_pr,
+                    stack: node_stack(mission, node),
                     branch: node.branch.clone(),
                     pr_state,
                     pr_url: pull.map(|pull| pull.url.clone()),
