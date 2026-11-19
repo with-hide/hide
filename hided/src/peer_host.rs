@@ -60,17 +60,21 @@ pub struct Settings {
 }
 
 impl Settings {
-    fn endpoint(&self) -> Options {
+    /// The endpoint's set-up; the product's binds `port` on every
+    /// interface, the state folder's (`hide_peer::port`).
+    fn endpoint(&self, port: Option<u16>) -> Options {
         match self.direct {
             Some(address) => Options {
                 relay: None,
                 mdns: false,
                 bind: Some(address),
+                port: None,
             },
             None => Options {
                 relay: Some(DEVICE_RELAY_URL.to_owned()),
                 mdns: true,
                 bind: None,
+                port,
             },
         }
     }
@@ -202,15 +206,42 @@ impl PeerHost {
             ));
         }
         let key_file = layout::machine_key(&self.settings.state_dir);
+        let state_dir = self.settings.state_dir.clone();
         // The machine id is asked of the system, on macOS through a
-        // program, and the key is a file: neither on a runtime thread.
-        let (key, loaded) = tokio::task::spawn_blocking(move || {
+        // program, and the key and the port are files: none on a runtime
+        // thread.
+        let ((key, loaded), port) = tokio::task::spawn_blocking(move || {
             let machine = hide_platform::host::machine_id()?;
-            MachineKey::load_or_create(&key_file, &machine)
+            let key = MachineKey::load_or_create(&key_file, &machine)?;
+            io::Result::Ok((key, hide_peer::port::of(&state_dir)))
         })
         .await
         .map_err(io::Error::other)??;
-        let transport = IrohTransport::open(&key.secret(), self.settings.endpoint()).await?;
+        // The folder's port is what the Windows firewall rule lets in; a
+        // machine whose port cannot be had still connects, through the
+        // relay and the addresses it learns, and the log says why.
+        let port = port
+            .inspect_err(|error| {
+                hide_core::diagnostic!(json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.port_unavailable",
+                    "message": error.to_string(),
+                }));
+            })
+            .ok();
+        let transport = match IrohTransport::open(&key.secret(), self.settings.endpoint(port)).await
+        {
+            Err(error) if port.is_some() => {
+                hide_core::diagnostic!(json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.port_unavailable",
+                    "port": port,
+                    "message": error.to_string(),
+                }));
+                IrohTransport::open(&key.secret(), self.settings.endpoint(None)).await?
+            }
+            opened => opened?,
+        };
         let (peers, incoming) = Peers::start(
             transport,
             Config {
