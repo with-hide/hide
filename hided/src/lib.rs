@@ -60,6 +60,7 @@ pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_core;
 pub mod peer_dial;
 pub mod peer_host;
 pub mod peer_inbox;
@@ -624,6 +625,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         }),
     );
     guests.serve(&peers, shutdown.clone());
+    // What this machine's core and another's say to each other (D-72).
+    peer_core::PeerCore::serve(&core, &peers, shutdown.clone());
     // A paired machine's login item follows the peer records (PRD
     // device-connect-iroh D-41).
     let always_on = always_on::Follower::new(

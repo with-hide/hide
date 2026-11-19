@@ -87,7 +87,9 @@ pub const fn max_streams_of(kind: StreamKind) -> usize {
         | StreamKind::Revoke
         | StreamKind::Management
         | StreamKind::NodeLink
-        | StreamKind::Keys => 1,
+        | StreamKind::Keys
+        // One between the two cores each way.
+        | StreamKind::Core => 1,
         // One per pane a window attaches.
         StreamKind::Terminal => 32,
         StreamKind::File => 4,
