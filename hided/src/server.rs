@@ -5446,7 +5446,8 @@ mod tests {
             view("a1", "on-desk", true),
             view("a1", "behind-on-desk", false),
         ];
-        let takes_input = |id: &str| super::relay_facts(&views, id).map(|facts| facts["selected"] == true);
+        let takes_input =
+            |id: &str| super::relay_facts(&views, id).map(|facts| facts["selected"] == true);
         assert_eq!(takes_input("front-of-shelf"), Some(true));
         assert_eq!(takes_input("behind-on-shelf"), Some(true));
         assert_eq!(takes_input("on-desk"), Some(true));
