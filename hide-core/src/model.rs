@@ -6113,6 +6113,12 @@ pub enum LinkOrigin {
     /// A WSL distribution of the PC the core runs on, whose node the core
     /// starts through `wsl.exe` (PRD wsl-device D-01, D-07).
     Wsl { distro: String },
+    /// Another machine that runs Hide and gave this one a grant (PRD
+    /// device-connect-iroh D-61): this core's node runs there as a process
+    /// of this core's build, under that machine's Hide, on the connection
+    /// the two keep. `key` is that machine's connection key, 64 lower hex
+    /// characters; its id is that machine's own node id.
+    Peer { key: String },
 }
 
 /// Whether a device the core dials over SSH is named by its machine's own id
@@ -6158,7 +6164,7 @@ impl LinkOrigin {
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
             Self::Dialed { ssh_alias, .. } => Some(ssh_alias),
-            Self::Inbound | Self::Wsl { .. } => None,
+            Self::Inbound | Self::Wsl { .. } | Self::Peer { .. } => None,
         }
     }
 
@@ -6168,33 +6174,46 @@ impl LinkOrigin {
     pub fn naming(&self) -> Option<DeviceNaming> {
         match self {
             Self::Dialed { naming, .. } => Some(*naming),
-            Self::Inbound | Self::Wsl { .. } => None,
+            Self::Inbound | Self::Wsl { .. } | Self::Peer { .. } => None,
         }
     }
 
     pub fn wsl_distro(&self) -> Option<&str> {
         match self {
             Self::Wsl { distro } => Some(distro),
-            Self::Dialed { .. } | Self::Inbound => None,
+            Self::Dialed { .. } | Self::Inbound | Self::Peer { .. } => None,
+        }
+    }
+
+    /// The connection key of a machine paired with this one.
+    pub fn peer_key(&self) -> Option<&str> {
+        match self {
+            Self::Peer { key } => Some(key),
+            Self::Dialed { .. } | Self::Inbound | Self::Wsl { .. } => None,
         }
     }
 
     /// Whether the core brings a lost link back itself; a node that dials
     /// in comes back only by dialing again.
     pub fn core_redials(&self) -> bool {
-        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+        matches!(
+            self,
+            Self::Dialed { .. } | Self::Wsl { .. } | Self::Peer { .. }
+        )
     }
 
     /// Whether removing the registration takes Hide's kit off the machine:
     /// a device the core dials, where its helper put it. A node that dials
     /// in runs Hide itself and registers again on its next link, so the kit
-    /// the core keeps there through that link stays.
+    /// the core keeps there through that link stays, and a paired machine's
+    /// own Hide removes this core's build with the pairing.
     pub fn removes_kit(&self) -> bool {
         matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether the core's helper there waits for the operator's consent; a
-    /// node that dials in was allowed by the operator's own SSH login.
+    /// node that dials in was allowed by the operator's own SSH login, and
+    /// a paired machine by both operators at pairing.
     pub fn takes_consent(&self) -> bool {
         matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
@@ -6210,9 +6229,10 @@ impl LinkOrigin {
 }
 
 /// A registration as the store and the shell spell it: the alias of a
-/// device the core dials, the flag of a node that dials in, or the WSL
-/// distribution it is, exactly one. A build that knows only the first two
-/// reads a WSL record as naming neither and drops it alone (`persistence`).
+/// device the core dials, the flag of a node that dials in, the WSL
+/// distribution it is, or the connection key of a paired machine, exactly
+/// one. A build that knows only the first two reads a WSL or a paired
+/// machine's record as naming neither and drops it alone (`persistence`).
 #[derive(Deserialize, Serialize)]
 struct StoredDeviceRegistration {
     id: String,
@@ -6225,11 +6245,21 @@ struct StoredDeviceRegistration {
     inbound: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wsl_distro: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_key: Option<String>,
     /// A dialed device's `DeviceNaming`; absent is `Legacy`, which every
     /// registration an earlier build wrote reads as. An earlier build reads
     /// past it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     naming: Option<String>,
+}
+
+/// Whether `key` is a connection key as a registration stores it.
+pub(crate) fn peer_key_is_spelled(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
@@ -6244,13 +6274,27 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
                 stored.id
             ));
         }
-        let origin = match (stored.ssh_alias, stored.inbound, stored.wsl_distro) {
-            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias, naming },
-            (None, true, None) => LinkOrigin::Inbound,
-            (None, false, Some(distro)) => LinkOrigin::Wsl { distro },
-            (None, false, None) => {
+        let origin = match (
+            stored.ssh_alias,
+            stored.inbound,
+            stored.wsl_distro,
+            stored.peer_key,
+        ) {
+            (Some(ssh_alias), false, None, None) => LinkOrigin::Dialed { ssh_alias, naming },
+            (None, true, None, None) => LinkOrigin::Inbound,
+            (None, false, Some(distro), None) => LinkOrigin::Wsl { distro },
+            (None, false, None, Some(key)) => {
+                if !peer_key_is_spelled(&key) {
+                    return Err(format!(
+                        "device {} names a paired machine by a key that is not 64 lower hex characters",
+                        stored.id
+                    ));
+                }
+                LinkOrigin::Peer { key }
+            }
+            (None, false, None, None) => {
                 return Err(format!(
-                    "device {} names neither an SSH alias, a node that dials in nor a WSL distribution",
+                    "device {} names neither an SSH alias, a node that dials in, a WSL distribution nor a paired machine",
                     stored.id
                 ));
             }
@@ -6280,6 +6324,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             host_consent: registration.host_consent,
             inbound,
             wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
+            peer_key: registration.origin.peer_key().map(str::to_owned),
             naming: registration
                 .origin
                 .naming()

@@ -60,6 +60,9 @@ pub struct Connector {
     /// The home every SSH device's node runs with in place of its account's
     /// (`HIDE_DEV_DEVICE_HOME`), as [`parse_device_home`] read it.
     device_home: Option<String>,
+    /// What opens this core's node on another Hide's machine; none in a
+    /// process that keeps no connection to other Hides.
+    peers: Option<Arc<dyn host::peer::PeerDial>>,
 }
 
 /// The development variable that gives every SSH device's node a home of
@@ -141,7 +144,14 @@ impl Connector {
             terminals: None,
             wsl: None,
             device_home: None,
+            peers: None,
         }
+    }
+
+    /// Reaches machines paired with this one through `dial`.
+    pub fn with_peers(mut self, dial: Arc<dyn host::peer::PeerDial>) -> Self {
+        self.peers = Some(dial);
+        self
     }
 
     /// Runs every SSH device's node with `home` in place of its account's
@@ -227,6 +237,22 @@ impl DeviceConnector for Connector {
             terminals,
             link: Arc::default(),
         }))
+    }
+
+    fn peer_transport(&self, node: &str, key: &str) -> Result<Arc<dyn DialedTransport>, String> {
+        let dial = self
+            .peers
+            .clone()
+            .ok_or_else(|| "This Hide connects no paired machine".to_owned())?;
+        let (panes, terminals) = self.hooks(node);
+        Ok(Arc::new(host::peer::PeerDevice::new(
+            node,
+            key,
+            dial,
+            self.packages.clone(),
+            panes,
+            terminals,
+        )))
     }
 
     fn wsl_transport(&self, node: &str, distro: &str) -> Result<Arc<dyn DialedTransport>, String> {

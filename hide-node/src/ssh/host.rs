@@ -26,6 +26,8 @@ pub mod inbound;
 mod kit;
 #[path = "link_streams.rs"]
 mod link_streams;
+#[path = "peer.rs"]
+pub mod peer;
 #[path = "wsl.rs"]
 pub mod wsl;
 use hide_node_link::HostError;
@@ -1270,14 +1272,36 @@ pub fn over_local_stream(
     panes: Option<PaneHook>,
     on_close: Box<dyn FnOnce(String) + Send + 'static>,
 ) -> std::io::Result<RemoteHost> {
+    let shutdown = stream.shutdown_handle();
+    over_stream(
+        target,
+        Box::new(stream.duplicate()),
+        Box::new(stream),
+        Box::new(move || shutdown.shutdown()),
+        panes,
+        on_close,
+    )
+}
+
+/// A link over any blocking byte stream: a local stream's two handles, or
+/// the node link stream of a connection to another Hide (PRD
+/// device-connect-iroh D-79). `reading` is read on a thread of its own
+/// until it ends; `close` ends the stream from outside, which ends that
+/// read, and runs once as the link goes.
+pub fn over_stream(
+    target: &str,
+    mut reading: Box<dyn std::io::Read + Send>,
+    writing: Box<dyn std::io::Write + Send>,
+    close: Box<dyn FnOnce() + Send>,
+    panes: Option<PaneHook>,
+    on_close: Box<dyn FnOnce(String) + Send + 'static>,
+) -> std::io::Result<RemoteHost> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("node-link")
         .enable_all()
         .build()?;
     let runtime = Arc::new(RemoteRuntime(Some(runtime)));
-    let shutdown = stream.shutdown_handle();
-    let mut reading = stream.duplicate();
     let (chunks, arrivals) = tokio::sync::mpsc::channel::<Vec<u8>>(LOCAL_READ_CHUNKS);
     std::thread::Builder::new()
         .name("node-link-read".into())
@@ -1296,14 +1320,14 @@ pub fn over_local_stream(
                 }
             }
         })?;
-    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter::new(stream));
+    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter::new(writing));
     // The read thread ends with the stream, whichever side ended it. The
-    // stream is shut down as this closure goes, run or not: a link dropped
+    // stream is closed as this closure goes, run or not: a link dropped
     // right after its close (a refused node) tears its runtime down before
     // the reader runs it, and the peer would otherwise never read the end.
-    let shutdown = ShutdownOnDrop(shutdown);
+    let close = CloseOnDrop(Some(close));
     let ended = Box::new(move |reason: String| {
-        drop(shutdown);
+        drop(close);
         on_close(reason);
     });
     Ok(start_reader(
@@ -2065,12 +2089,14 @@ fn close_unless_writing(input: &Mutex<Option<Box<dyn std::io::Write + Send>>>) -
     }
 }
 
-/// Shuts a local link's stream down when it goes.
-struct ShutdownOnDrop(hide_platform::ipc::ShutdownHandle);
+/// Closes a link's stream when it goes.
+struct CloseOnDrop(Option<Box<dyn FnOnce() + Send>>);
 
-impl Drop for ShutdownOnDrop {
+impl Drop for CloseOnDrop {
     fn drop(&mut self) {
-        self.0.shutdown();
+        if let Some(close) = self.0.take() {
+            close();
+        }
     }
 }
 
@@ -2089,9 +2115,9 @@ struct BlockingWriter {
 }
 
 impl BlockingWriter {
-    fn new(stream: hide_platform::ipc::LocalStream) -> Self {
+    fn new(stream: Box<dyn std::io::Write + Send>) -> Self {
         Self {
-            stream: Arc::new(std::sync::Mutex::new(Some(Box::new(stream)))),
+            stream: Arc::new(std::sync::Mutex::new(Some(stream))),
             writing: None,
         }
     }

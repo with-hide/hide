@@ -2601,7 +2601,9 @@ impl Runtime {
             Event::PeerMachines(payload) => {
                 let changed = self.snapshot.navigator.peers != payload.machines;
                 if changed {
-                    self.snapshot.navigator.peers = payload.machines;
+                    let before =
+                        std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
+                    self.reconcile_peer_devices(&before);
                 }
                 changed
             }
