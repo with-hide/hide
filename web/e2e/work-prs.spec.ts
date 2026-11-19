@@ -269,7 +269,7 @@ test("the card opens as a desk tab and Merge goes out on the head it showed", as
     const cardTab = page.locator('[role="tab"][data-tab-kind="card"]');
     await expect(cardTab).toHaveText("PR #31");
     await expect(cardTab).toHaveAttribute("aria-label", /^PR #31 · \S/);
-    await expect(page.locator("[data-card] [data-card-name]")).toHaveText(/^PR #31 · \S/);
+    await expect(page.locator("[data-card] [data-card-name]")).toHaveText("PR #31 · 머지할 수 있는 PR");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
     // The other actions still assign, create an issue or copy the branch; with

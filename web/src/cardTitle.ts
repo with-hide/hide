@@ -26,7 +26,8 @@ function sessionTitle(s: ShellState, session: WorkSession): string | null {
  * A card's name, read from the shell's state now. `bare` is its name on its
  * desk tab (PRD lane-desk-pair-view D-30): the tab's mark already says the
  * kind a mission or plan title opens with, and a desk is one checkout's, so a
- * pull request leaves out its project; the full name is the tab's tooltip.
+ * pull request leaves out its project and a record is `기록` alone; the full
+ * name is the tab's tooltip.
  */
 export function cardTitle(s: ShellState, t: Translate, item: DetailItem | null, bare = false): string {
   if (!item) return "";
@@ -52,6 +53,54 @@ export function cardTitle(s: ShellState, t: Translate, item: DetailItem | null, 
     return t("projectTool.remains.title", { name: checkout?.branch ?? checkout?.label ?? "" });
   }
   const title = sessionTitle(s, item.session);
+  if (bare && item.kind === "record") return t("detail.recordUntitled");
   if (item.kind === "plan") return bare ? (title ?? t("detail.planUntitled")) : title ? t("detail.plan", { title }) : t("detail.planUntitled");
   return title ? t("detail.record", { title }) : t("detail.recordUntitled");
+}
+
+/**
+ * A card's path line (PRD lane-desk-pair-view D-30), where a file's path
+ * stands over a file: what the card points at beside its tab's short name.
+ * A pull request reads its number and title, a record or a plan its agent,
+ * a mission its title; a card whose tab already names it whole reads the
+ * place it covers instead: a project's or a worktree's folder, the week a
+ * cost counts.
+ */
+export function cardPath(s: ShellState, t: Translate, item: DetailItem): string {
+  const workspace = "workspace_id" in item ? catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id) : undefined;
+  switch (item.kind) {
+    case "pull_request": {
+      const title = workspace?.pull_requests?.find((row) => row.number === item.number)?.title;
+      return title ? t("detail.prPath", { number: item.number, title }) : cardTitle(s, t, item);
+    }
+    case "record": {
+      const title = sessionTitle(s, item.session);
+      return title ? t("detail.recordPath", { title }) : t("detail.recordPathUntitled");
+    }
+    case "worktrees":
+      return workspace?.path ?? cardTitle(s, t, item);
+    case "cost":
+      return t("detail.costPath", { project: workspace?.label ?? "" });
+    case "remains":
+      return workspace?.checkouts.find((row) => row.id === item.checkout_id)?.path ?? cardTitle(s, t, item);
+    case "branch":
+      return workspace ? [workspace.path, item.path].filter(Boolean).join(" › ") : cardTitle(s, t, item);
+    default:
+      return cardTitle(s, t, item);
+  }
+}
+
+/**
+ * The pane of the agent a card belongs to, whose logo ends the card's path
+ * line as a View's opener ends a file's: a record's or a plan's own agent, a
+ * pull request's worktree's agent. A card with no such agent here (a
+ * mission, a project's tables, a person's pull request) has none.
+ */
+export function cardOwnerPane(s: ShellState, item: DetailItem): string | null {
+  if (item.kind === "record" || item.kind === "plan") {
+    return allAgents(s.agents, s.rest?.status?.remote).find((row) => row.session_id === item.session.session_id)?.pane_id ?? null;
+  }
+  if (item.kind !== "pull_request") return null;
+  const workspace = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
+  return workspace?.checkouts.find((row) => row.pull_request?.number === item.number)?.agent_summary?.representative_pane_id ?? null;
 }
