@@ -162,7 +162,11 @@ pub(crate) fn remove(
             };
         }
     };
-    if !at.is_default() {
+    // The folder trust Hide recorded is the account's one record, kept by
+    // the account's own Hide for the worktrees it made: a profile's account
+    // is judged by its own pass, and an installation that keeps hook
+    // entries alone (a guest's) leaves the record as it is.
+    if !at.is_default() || target.hooks_only {
         return if removed > 0 {
             RemoveOutcome::Removed
         } else {

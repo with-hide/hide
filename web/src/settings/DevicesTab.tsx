@@ -19,7 +19,7 @@ import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./Core
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PairedRows } from "./PairingRows";
-import { deviceConnectOffered, ownWindow, pairedMachines } from "../pairing";
+import { deviceConnectOffered, listedDevices, ownWindow, pairedMachines } from "../pairing";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -57,7 +57,9 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const localHost = rows.find((device) => device.kind !== "remote")?.host ?? null;
   const localRoot = localHost?.helper_root ?? null;
   const localCliDir = localHost?.cli_dir ?? null;
-  const remoteRows = rows.filter((device) => device.kind === "remote");
+  // A paired machine's row is its pairing's; its device has none of its own.
+  const listed = listedDevices(rows);
+  const remoteRows = listed.filter((device) => device.kind === "remote");
   // A build that does not offer connections between two Hides shows no
   // pairing, and any screen adds an SSH device as before pairing.
   const pairs = useShellStore((s) => deviceConnectOffered(s.daemon));
@@ -124,7 +126,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       >
         {/* The Hides this computer is paired with stand in the same list as its SSH devices (B24). */}
         {pairs ? <PairedRows actions={actions} /> : null}
-        {rows.map((device) => (
+        {listed.map((device) => (
           <DeviceRow
             key={device.id}
             device={device}

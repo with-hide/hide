@@ -17,6 +17,15 @@
 //! past it a new confirmation is not kept and the miss is reported, and its
 //! letters end at their deadline as before. The same code runs on every
 //! system and in a device's hooks, under the hooks' own records folder.
+//!
+//! Two builds of one installation read this folder: the one that wrote a
+//! record and the one an update or a rollback put in its place (PRD
+//! device-connect-iroh D-65, D-77 (8)). So a field this build does not know
+//! is kept when it writes the record again, and a record it cannot read
+//! (another version, or not a record at all) is another build's: it is
+//! never handed over, replaced or removed for being unreadable, only once
+//! the file is older than a letter's deadline, when no build has a letter
+//! left to confirm by it.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -33,12 +42,15 @@ const RECORD_LIMIT: u64 = 64 * 1024;
 pub const OWED_PANES: usize = 64;
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct Record {
     version: u32,
     session: String,
     ids: Vec<String>,
     owed_at_unix_ms: u64,
+    /// What a later build of this installation wrote beside those: kept as
+    /// it is when this build writes the session's record again.
+    #[serde(flatten)]
+    later: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What a pane owes: the letters its hooks handed to the agent of
@@ -73,9 +85,10 @@ fn path(folder: &Path, pane: &str) -> PathBuf {
 /// `pane`, for that pane's next turn end. A confirmation already owed there
 /// for the same session is kept with it, one bundle at most, and keeps its
 /// first miss's time; one of another session is replaced. Refused past
-/// [`OWED_PANES`] with `owed_capacity`, and past [`RECORD_LIMIT`] with
-/// `owed_record`. Every pane's record past a letter's deadline, or damaged,
-/// is dropped first.
+/// [`OWED_PANES`] with `owed_capacity`, and with `owed_record` past
+/// [`RECORD_LIMIT`] or while the pane's place holds a record this build
+/// cannot read. Every pane's record past a letter's deadline is dropped
+/// first.
 pub fn owe(
     home: &Path,
     pane: &str,
@@ -98,16 +111,21 @@ pub fn owe_in(
 ) -> Result<(), &'static str> {
     sweep(folder, now);
     let path = path(folder, pane);
-    let (mut owed, owed_at_unix_ms) = match read(&path) {
-        Ok(Some(record)) if record.session == session => (record.ids, record.owed_at_unix_ms),
+    let (mut owed, owed_at_unix_ms, later) = match read(&path) {
+        Ok(Some(record)) if record.session == session => {
+            (record.ids, record.owed_at_unix_ms, record.later)
+        }
+        // Another build's record, still inside a letter's deadline: it
+        // keeps its place, and this miss is reported as not kept.
+        Ok(None) => return Err("owed_record"),
         Err(error)
             if error.kind() == std::io::ErrorKind::NotFound && count(folder) >= OWED_PANES =>
         {
             return Err("owed_capacity");
         }
-        // Another session's, a damaged record or one not read now is
-        // replaced in its own place.
-        _ => (Vec::new(), now),
+        // Another session's record, or one not read now, is replaced in
+        // its own place.
+        _ => (Vec::new(), now, serde_json::Map::new()),
     };
     for id in ids {
         if !owed.contains(id) {
@@ -125,6 +143,7 @@ pub fn owe_in(
         session: session.to_owned(),
         ids: owed,
         owed_at_unix_ms,
+        later,
     })
     .map_err(|_| "owed_record")?;
     if bytes.len() as u64 > RECORD_LIMIT {
@@ -139,8 +158,9 @@ pub fn owe_in(
 /// Hands over what `pane` owes, from the records in `folder`, and forgets
 /// it: the node answers the core's ask with it, and the core confirms the
 /// letters of the record's session that wait for it. `None` when nothing is
-/// owed, and for a record past a letter's deadline or damaged, which is
-/// dropped; one the system does not let it take now is left for a later ask.
+/// owed, for a record past a letter's deadline, which is dropped, and for
+/// one this build cannot read, which stays for the build that can; one the
+/// system does not let it take now is left for a later ask.
 ///
 /// The record is moved aside before it is read, so a hook that misses
 /// again meanwhile writes a record of its own for the next ask rather than
@@ -150,11 +170,13 @@ pub fn owe_in(
 pub fn take(folder: &Path, pane: &str, now: u64) -> Option<Owed> {
     let path = path(folder, pane);
     let file_name = path.file_name()?.to_str()?;
+    // Another build's record is not moved from its place.
+    read(&path).ok()??;
     let taken = folder.join(format!(".{file_name}.taken"));
     hide_platform::fs::atomic::replace_file(&path, &taken).ok()?;
     let record = match read(&taken) {
-        Ok(record) => record,
-        Err(_) => {
+        Ok(Some(record)) => record,
+        Ok(None) | Err(_) => {
             // Back under its name for a later ask, unless a new miss took
             // the name meanwhile.
             if hide_platform::fs::atomic::rename_no_replace_path(&taken, &path).is_err() {
@@ -164,26 +186,40 @@ pub fn take(folder: &Path, pane: &str, now: u64) -> Option<Owed> {
         }
     };
     let _ = std::fs::remove_file(&taken);
-    record
-        .filter(|record| !expired(record, now))
-        .map(|record| Owed {
-            session: record.session,
-            ids: record.ids,
-        })
+    (!expired(&record, now)).then_some(Owed {
+        session: record.session,
+        ids: record.ids,
+    })
 }
 
 fn expired(record: &Record, now: u64) -> bool {
     now.saturating_sub(record.owed_at_unix_ms) >= DELIVERY_EXPIRY_MS
 }
 
-/// Drops the records whose letters are past their deadline, and those that
-/// are damaged; one the system did not let it read now is left alone.
+/// Drops the records whose letters are past their deadline: one this build
+/// reads by its first miss, and one it cannot read by when its file was
+/// last written. One the system did not let it read now is left alone.
 fn sweep(folder: &Path, now: u64) {
     for path in records(folder) {
-        if read(&path).is_ok_and(|record| record.is_none_or(|record| expired(&record, now))) {
+        let past = match read(&path) {
+            Ok(Some(record)) => expired(&record, now),
+            Ok(None) => written_before_deadline(&path, now),
+            Err(_) => false,
+        };
+        if past {
             let _ = std::fs::remove_file(&path);
         }
     }
+}
+
+/// Whether the file at `path` was last written a letter's deadline ago or
+/// more; false when the system does not say when.
+fn written_before_deadline(path: &Path, now: u64) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|written| written.duration_since(std::time::UNIX_EPOCH).ok())
+        .is_some_and(|written| now.saturating_sub(written.as_millis() as u64) >= DELIVERY_EXPIRY_MS)
 }
 
 fn count(folder: &Path) -> usize {
@@ -207,9 +243,9 @@ fn records(folder: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The record at `path`; `None` for a damaged one (too large, not one this
-/// build reads, or naming what is not a letter id), and the system's error
-/// for one it could not read.
+/// The record at `path`; `None` for one this build cannot read (too large,
+/// of another version, not a record, or naming what is not a letter id),
+/// and the system's error for one it could not open.
 fn read(path: &Path) -> std::io::Result<Option<Record>> {
     let file = std::fs::File::open(path)?;
     let mut bytes = Vec::new();
@@ -269,18 +305,89 @@ mod tests {
     }
 
     /// A record past a letter's deadline has letters the core already
-    /// ended, and a damaged one names nothing to confirm: neither is handed
-    /// over, and both are gone.
+    /// ended: it is not handed over, and it is gone.
     #[test]
-    fn a_past_deadline_or_a_damaged_record_is_dropped_unsent() {
+    fn a_past_deadline_record_is_dropped_unsent() {
         let home = tempfile::tempdir().unwrap();
         owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
         assert_eq!(taken(home.path(), "w1:p1", NOW + DELIVERY_EXPIRY_MS), None);
         assert_eq!(count(&folder_of_home(home.path())), 0);
-        owe(home.path(), "w1:p1", "s1", &ids(&["letter-1"]), NOW).unwrap();
-        std::fs::write(path(&folder_of_home(home.path()), "w1:p1"), b"{").unwrap();
-        assert_eq!(taken(home.path(), "w1:p1", NOW), None);
-        assert_eq!(count(&folder_of_home(home.path())), 0);
+    }
+
+    /// PRD device-connect-iroh D-77 (8): a rollback runs an older build
+    /// over the records a newer one wrote. What this build cannot read is
+    /// the other build's: it is not handed over, a miss does not replace
+    /// it, and no sweep removes it while a letter of it can still be
+    /// confirmed.
+    #[test]
+    fn a_record_another_build_wrote_is_left_in_its_place_until_its_deadline() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = folder_of_home(home.path());
+        std::fs::create_dir_all(&folder).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let newer = br#"{"version":2,"bundles":[{"session":"s1","ids":["letter-1"]}]}"#;
+        let record = path(&folder, "w1:p1");
+        std::fs::write(&record, newer).unwrap();
+
+        assert_eq!(take(&folder, "w1:p1", now), None);
+        assert_eq!(
+            owe_in(&folder, "w1:p1", "s1", &ids(&["letter-2"]), now),
+            Err("owed_record"),
+            "the miss is reported, and the other build's record keeps its place"
+        );
+        owe_in(&folder, "w1:p2", "s1", &ids(&["letter-3"]), now).unwrap();
+        assert_eq!(std::fs::read(&record).unwrap(), newer);
+
+        // Once no letter can be confirmed by it any more, it frees its
+        // place. The file was written after `now` was read, so the deadline
+        // is counted with a minute to spare.
+        owe_in(
+            &folder,
+            "w1:p3",
+            "s1",
+            &ids(&["letter-4"]),
+            now + DELIVERY_EXPIRY_MS + 60_000,
+        )
+        .unwrap();
+        assert!(!record.exists());
+    }
+
+    /// PRD device-connect-iroh D-65: a field a later build added to a
+    /// record this build still reads is carried through this build's own
+    /// write of it, so an update, a rollback and an update again lose
+    /// nothing.
+    #[test]
+    fn a_field_a_later_build_added_is_kept_when_this_build_writes_the_record_again() {
+        let home = tempfile::tempdir().unwrap();
+        let folder = folder_of_home(home.path());
+        std::fs::create_dir_all(&folder).unwrap();
+        let record = path(&folder, "w1:p1");
+        std::fs::write(
+            &record,
+            format!(
+                r#"{{"version":1,"session":"s1","ids":["letter-1"],"owed_at_unix_ms":{NOW},"reached":{{"letter-1":"printed"}}}}"#
+            ),
+        )
+        .unwrap();
+        owe_in(&folder, "w1:p1", "s1", &ids(&["letter-2"]), NOW + 1).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
+        assert_eq!(written["ids"], serde_json::json!(["letter-1", "letter-2"]));
+        assert_eq!(
+            written["reached"],
+            serde_json::json!({"letter-1": "printed"})
+        );
+        assert_eq!(written["owed_at_unix_ms"], NOW);
+        assert_eq!(
+            take(&folder, "w1:p1", NOW + 2),
+            Some(Owed {
+                session: "s1".to_owned(),
+                ids: ids(&["letter-1", "letter-2"]),
+            })
+        );
     }
 
     /// A record being taken is moved aside first, so a hook that misses

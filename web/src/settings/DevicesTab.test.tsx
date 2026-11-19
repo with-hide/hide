@@ -207,6 +207,20 @@ it.each([
   }
 });
 
+it("shows a paired machine once, as its pairing's row, and an SSH device beside it as its own (PRD device-connect-iroh B24)", async () => {
+  const key = "ab".repeat(32);
+  // The core made a device of the machine this one opens: the rail and the panes go by it.
+  const next = state([remote("windows-pc", { label: "Windows PC", ssh_alias: null, peer_key: key }), remote("mini")]);
+  const peers = [{ key, device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: null, connected: true, path: "direct", reason: null, update: null }];
+  const { row, q, unmount } = await mount({ ...next, rest: { ...next.rest, navigator: { ...next.rest.navigator, peers } } } as never);
+  expect(document.querySelectorAll('[data-peer-row="windows-pc"]')).toHaveLength(1);
+  expect(row("windows-pc")).toBeNull();
+  expect(row("mini")).not.toBeNull();
+  // With the paired machine as the only other one, the list is not called empty.
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("Windows PC");
+  await unmount();
+});
+
 it("opens Add device from one button above the list, and shows the Add dialog only then (B50)", async () => {
   const { q, unmount } = await mount(state([remote("mini")]));
   expect(q("[data-add-device]")).toBeNull();

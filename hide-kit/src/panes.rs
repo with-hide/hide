@@ -1069,18 +1069,24 @@ impl Panes {
     /// [`HOLDER_CAP`]. A daemon of the core's own engine lives while this is
     /// above zero (PRD engine-bundle-3-core-owns D-10).
     pub fn live(&self) -> Result<usize, String> {
+        self.live_ids().map(|panes| panes.len())
+    }
+
+    /// The panes [`Self::live`] counts, in the order their records list.
+    pub fn live_ids(&self) -> Result<Vec<String>, String> {
         let _lock = self.lock()?;
         // A liveness query does not own the connection and must not prune
         // records while a previous connection's workers are draining.
         Ok(self
             .scan()?
-            .iter()
+            .into_iter()
             .filter(|(_, read)| {
                 !read
                     .as_ref()
                     .is_ok_and(|record| record.phase == Phase::Ended)
             })
-            .count())
+            .map(|(pane, _)| pane)
+            .collect())
     }
 
     /// The records not ended, and the ones that cannot be read, which may

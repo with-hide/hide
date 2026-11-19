@@ -21,6 +21,8 @@ enum Source {
     Arrived(Box<Arrived>),
     Ssh(String),
     Wsl(String),
+    /// A paired machine, by its connection key.
+    Peer(String),
 }
 
 /// How the core reaches a connected device: over a dial of its own, or over
@@ -151,9 +153,15 @@ impl Runtime {
             },
             // A core waiting for its move's link dials nothing; releasing
             // the hold connects every registration again.
-            LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } if self.effects_held() => {
+            LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } | LinkOrigin::Peer { .. }
+                if self.effects_held() =>
+            {
                 return false;
             }
+            // A paired machine whose grant is paused, or not confirmed yet,
+            // is opened when the grant is active (`peer_devices`).
+            LinkOrigin::Peer { key } if !self.peer_opens(key) => return false,
+            LinkOrigin::Peer { key } => Source::Peer(key.clone()),
             LinkOrigin::Dialed { ssh_alias, .. } => Source::Ssh(ssh_alias.clone()),
             LinkOrigin::Wsl { distro } => Source::Wsl(distro.clone()),
         };
@@ -211,6 +219,10 @@ impl Runtime {
                 }
                 Source::Wsl(distro) => (
                     DeviceReach::Dialed(self.devices.wsl_transport(&device_id, &distro)?),
+                    None,
+                ),
+                Source::Peer(key) => (
+                    DeviceReach::Dialed(self.devices.peer_transport(&device_id, &key)?),
                     None,
                 ),
                 Source::Ssh(ssh_alias) => {
@@ -1052,8 +1064,19 @@ impl Runtime {
                     .iter()
                     .map(crate::peer_machines::answer)
                     .collect::<Vec<_>>();
+                let guest_panes = self
+                    .snapshot
+                    .navigator
+                    .guest_panes
+                    .iter()
+                    .map(crate::guest_panes::answer)
+                    .collect::<Vec<_>>();
                 Ok((
-                    serde_json::json!({ "devices": devices, "peers": peers }),
+                    serde_json::json!({
+                        "devices": devices,
+                        "peers": peers,
+                        "guest_panes": guest_panes,
+                    }),
                     false,
                 ))
             }

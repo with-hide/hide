@@ -1590,6 +1590,10 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
     if let Some(next_action) = crate::access::next_action(reason) {
         return next_action;
     }
+    // A pane of another Hide's work here, while that Hide is away.
+    if let Some(next_action) = crate::guest_node::away::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" => crate::pane_auth::CHECKOUT_NEXT_ACTION,
         "caller_unavailable" => "Retry from a live shell inside a registered project checkout",
@@ -1602,6 +1606,7 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// nothing was sent, and the bootstrap's next step still applies.
 pub(crate) fn bootstrap_refused(reason: &str) -> bool {
     crate::access::next_action(reason).is_some()
+        || crate::guest_node::away::next_action(reason).is_some()
         || matches!(
             reason,
             "checkout_not_registered"

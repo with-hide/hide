@@ -39,6 +39,17 @@ impl Runtime {
             }
             _ => return Err("pane_required".into()),
         };
+        if let Some(step) = self.guest_pane_step(&command)? {
+            return Ok(Prepared {
+                engine: None,
+                step,
+                gate: None,
+                agent_kind: None,
+                noted: None,
+                caller: caller_pane.to_owned(),
+                runtime: std::sync::Weak::new(),
+            });
+        }
         let node = self.node.as_str();
         // A pane named in full stays on the machine it names; a bare one is
         // the caller's.
@@ -127,7 +138,7 @@ impl Runtime {
             ),
         };
         Ok(Prepared {
-            engine: engine_of(&machine)?,
+            engine: Some(engine_of(&machine)?),
             step,
             gate: sent.as_ref().map(|_| self.input_gate()),
             agent_kind: sent
@@ -138,6 +149,50 @@ impl Runtime {
             caller: caller_pane.to_owned(),
             runtime: std::sync::Weak::new(),
         })
+    }
+
+    /// What `command` does when it names a guest's pane of this machine
+    /// (PRD device-connect-iroh D-77 (5)); `None` for any other pane. Such a
+    /// pane is no engine's of this core: its node belongs to the guest, and
+    /// this machine holds no text of it, only the tap its screens draw and
+    /// type by. So a send types text and Enter through that tap, and a
+    /// read, a named key (which the pane's own terminal mode encodes) and a
+    /// paste (which needs the agent to be known) are refused.
+    fn guest_pane_step(&self, command: &PaneCommand) -> Result<Option<Step>, String> {
+        let pane = match command {
+            PaneCommand::ReadScreen { pane }
+            | PaneCommand::Read { pane, .. }
+            | PaneCommand::Send { pane, .. } => pane,
+            PaneCommand::AgentRead { .. }
+            | PaneCommand::Open { .. }
+            | PaneCommand::Purpose { .. } => return Ok(None),
+        };
+        if !matches!(
+            crate::address::PaneAddress::parse(pane),
+            Ok(crate::address::PaneAddress::Guest { .. })
+        ) {
+            return Ok(None);
+        }
+        let listed = self
+            .snapshot
+            .navigator
+            .guest_panes
+            .iter()
+            .any(|guest| guest.panes.iter().any(|listed| listed.id == *pane));
+        if !listed {
+            return Err("pane_unavailable".into());
+        }
+        match command {
+            PaneCommand::Send { paste: true, .. } => Err("paste_unsupported".into()),
+            PaneCommand::Send { keys, .. } if !keys.is_empty() => Err("guest_pane_keys".into()),
+            PaneCommand::Send { text, enter, .. } => Ok(Some(Step::GuestSend {
+                pane: pane.clone(),
+                terminals: std::sync::Arc::clone(&self.terminals),
+                text: text.clone(),
+                enter: *enter,
+            })),
+            _ => Err("guest_pane_read".into()),
+        }
     }
 
     /// Whether the agent in `pane` on `machine` is known to take a paste as
@@ -406,6 +461,152 @@ mod tests {
                 .run(),
             Err("pane_unavailable".into())
         );
+    }
+
+    /// The routes of a host whose guest's tap takes input or does not.
+    struct GuestRoutes {
+        tap_connected: bool,
+        typed: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
+    }
+
+    impl hide_node_link::terminal::TerminalNode for GuestRoutes {
+        fn control(&self, _control: hide_node_link::terminal::TerminalControl) {}
+        fn input_permit(
+            &self,
+            _pane: &str,
+            _bytes: usize,
+            reply: hide_node_link::terminal::InputPermitReply,
+        ) {
+            reply(if self.tap_connected {
+                Ok(())
+            } else {
+                Err(hide_node_link::terminal::InputPermitError::Unavailable)
+            });
+        }
+        fn key(&self, target: hide_node_link::terminal::KeyTarget, bytes: Vec<u8>, _at: u64) {
+            if let hide_node_link::terminal::KeyTarget::Pane(pane) = target {
+                self.typed.lock().unwrap().push((pane, bytes));
+            }
+        }
+        fn view(&self, _pane: &str, _size: hide_node_link::terminal::GridSize, _new: bool) {}
+        fn redraw(&self, _pane: &str) {}
+    }
+
+    impl hide_node_link::terminal::TerminalRoutes for GuestRoutes {
+        fn install_device(
+            &self,
+            _device: &str,
+            _node: Arc<dyn hide_node_link::terminal::TerminalNode>,
+        ) {
+        }
+        fn remove_device(&self, _device: &str) {}
+        fn terminals_unstarted(&self, _device: &str, _reason: &str) {}
+    }
+
+    /// PRD device-connect-iroh D-77 (5), B10: a guest's pane on this machine
+    /// is typed into through the guest's tap and is no pane the core reads.
+    #[test]
+    fn a_guests_pane_takes_text_and_enter_through_its_tap_and_no_read_key_or_paste() {
+        use crate::engine::keys::PaneKey;
+        const PANE: &str = "guest:macbook:pane:w1:p1";
+        let send =
+            |text: Option<&str>, keys: Vec<PaneKey>, enter: bool, paste: bool| PaneCommand::Send {
+                pane: PANE.into(),
+                text: text.map(str::to_owned),
+                keys,
+                enter,
+                paste,
+            };
+        let (mut runtime, context, _root, _fake) = fixture(false);
+        let refused = |runtime: &Runtime, command: PaneCommand| {
+            runtime
+                .prepare_pane_command(NODE, "sender", &context, command)
+                .err()
+        };
+        assert_eq!(
+            refused(&runtime, send(Some("ls"), Vec::new(), true, false)).as_deref(),
+            Some("pane_unavailable"),
+            "a guest pane this machine does not list"
+        );
+
+        runtime.snapshot.navigator.guest_panes = vec![crate::guest_panes::GuestPanes {
+            device_id: "macbook".into(),
+            key: "cd".repeat(32),
+            panes: vec![crate::guest_panes::GuestPane {
+                id: PANE.into(),
+                pane: "w1:p1".into(),
+                since_unix_ms: 1,
+            }],
+        }];
+        let routes = Arc::new(GuestRoutes {
+            tap_connected: true,
+            typed: Default::default(),
+        });
+        runtime.terminals = Arc::clone(&routes) as _;
+        for (command, code) in [
+            (
+                PaneCommand::Read {
+                    pane: PANE.into(),
+                    lines: 10,
+                },
+                "guest_pane_read",
+            ),
+            (
+                PaneCommand::ReadScreen { pane: PANE.into() },
+                "guest_pane_read",
+            ),
+            (
+                send(Some("ls"), vec![PaneKey::Up], false, false),
+                "guest_pane_keys",
+            ),
+            (
+                send(Some("a\nb"), Vec::new(), false, true),
+                "paste_unsupported",
+            ),
+        ] {
+            assert_eq!(refused(&runtime, command).as_deref(), Some(code));
+        }
+        assert!(routes.typed.lock().unwrap().is_empty());
+
+        let sent = runtime
+            .prepare_pane_command(
+                NODE,
+                "sender",
+                &context,
+                send(Some("ls"), Vec::new(), true, false),
+            )
+            .unwrap()
+            .run()
+            .unwrap();
+        assert_eq!(
+            sent,
+            json!({"pane": PANE, "text_sent": true, "keys_sent": [], "enter_sent": true})
+        );
+        assert_eq!(
+            routes.typed.lock().unwrap().as_slice(),
+            [(PANE.to_owned(), b"ls\r".to_vec())]
+        );
+
+        // The guest's node is not there to take it: nothing is typed and
+        // the send says so.
+        let away = Arc::new(GuestRoutes {
+            tap_connected: false,
+            typed: Default::default(),
+        });
+        runtime.terminals = Arc::clone(&away) as _;
+        assert_eq!(
+            runtime
+                .prepare_pane_command(
+                    NODE,
+                    "sender",
+                    &context,
+                    send(Some("ls"), Vec::new(), true, false),
+                )
+                .unwrap()
+                .run(),
+            Err("pane_unavailable".into())
+        );
+        assert!(away.typed.lock().unwrap().is_empty());
     }
 
     /// A send counts as input routed to the agent's pane, the answer that

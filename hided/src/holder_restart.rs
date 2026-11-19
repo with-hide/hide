@@ -49,18 +49,22 @@ pub fn on_holder_lost(state_dir: PathBuf) -> Arc<dyn Fn(&str) + Send + Sync> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Asked {
+pub(crate) enum Asked {
     Requested,
     /// A request was admitted within [`EVERY`].
     Waiting,
 }
+
+/// A guest's node ends itself for a lost holder as rarely as a daemon asks
+/// for its own restart.
+const _: () = assert!(EVERY.as_secs() == hide_peer::protocol::launch::HOLDER_LOST_RESTART_SECS);
 
 /// Admits one request: under the folder's lock, a request within [`EVERY`] of
 /// the last waits. Otherwise the admission is recorded first, so a helper that
 /// escapes is never without its receipt, and then `start` runs; a record that
 /// cannot be written starts nothing, and a start that fails withdraws the
 /// record so the next loss asks again.
-fn request(
+pub(crate) fn request(
     state_dir: &Path,
     now: SystemTime,
     start: &dyn Fn() -> Result<(), String>,

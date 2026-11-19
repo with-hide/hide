@@ -110,13 +110,35 @@ export function pairedMachines(rest: SnapshotRest | null | undefined): readonly 
 const NONE: readonly Peer[] = [];
 
 /**
- * The paired machines this one opens: the ones that get a tile on the rail
- * (B3). The one place a tile's list is read, so the day a paired machine
- * becomes a device of the core the tiles move there and nothing draws it
- * twice.
+ * The paired machines this one opens that have a tile of their own on the
+ * rail (B3): the ones the core has not made a device of. A machine this one
+ * opens with a confirmed pairing is a device under its own id (hide-core
+ * `runtime/peer_devices.rs`), and that device's tile is the machine's one
+ * tile, which leads to its screen; until then (the other side has not
+ * confirmed yet) its tile here leads to Settings. The one place a tile's list
+ * is read, so one machine is never drawn twice.
  */
 export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
-  return pairedMachines(rest).filter((peer) => peer.opens != null);
+  const devices = rest?.navigator?.devices ?? [];
+  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
+}
+
+/**
+ * The devices Settings lists as rows of their own: every device but a paired
+ * machine's (`Device.peer_key`), whose one row there is its pairing's
+ * (`PeerRow`: directions, pause, remove). That device still serves the rail
+ * and the panes.
+ */
+export function listedDevices<T extends { peer_key?: string | null }>(devices: readonly T[]): T[] {
+  return devices.filter((device) => device.peer_key == null);
+}
+
+/**
+ * How many terminals the machine paired under `key` runs on this computer
+ * (hide-core `guest_panes`): what a removal may end (B26).
+ */
+export function guestPaneCount(rest: SnapshotRest | null | undefined, key: string): number {
+  return rest?.navigator?.guest_panes?.find((guest) => guest.key === key)?.panes.length ?? 0;
 }
 
 /** Who opens whom, in the words of the machine reading it. */

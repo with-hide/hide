@@ -139,6 +139,7 @@ section!(whole NavigatorSections, NavigatorSnapshot, s, {
     focused_checkout_id: Option<String> => s.focused_checkout_id,
     devices: Vec<DeviceSnapshot> => s.devices,
     peers: Vec<crate::peer_machines::PeerMachine> => s.peers,
+    guest_panes: Vec<crate::guest_panes::GuestPanes> => s.guest_panes,
     workspaces: Vec<WorkspaceSnapshot> => s.workspaces,
     inactive_projects: Vec<InactiveProjectGroupSnapshot> => s.inactive_projects,
     agents: Vec<SidebarAgentSnapshot> => s.agents,
