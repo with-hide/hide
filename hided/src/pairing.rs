@@ -159,6 +159,10 @@ pub enum Ask {
         device: String,
         #[serde(default)]
         own_folder: bool,
+        /// The operator allowed a Hide to be started on a machine that
+        /// runs none of its own (D-45).
+        #[serde(default)]
+        install: bool,
     },
     /// The target's side of a pairing over SSH or `wsl.exe` (security spec
     /// 15, 17).
@@ -288,6 +292,9 @@ pub fn next_action(code: &str) -> &'static str {
             "The two machines were paired and the new connection did not open in time; the device is used as before. Try the switch again"
         }
         "switch_running" => "This device's switch is already running",
+        "ssh_core_not_started" => {
+            "Hide could not be started on that machine; the device is used as before. Try the switch again, or open Hide there"
+        }
         "switch_unsupported" => {
             "Only a device this Hide dials over SSH and has connected to once can be switched"
         }
@@ -797,7 +804,11 @@ impl Pairing {
                 lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
                 Ok(answer)
             }
-            Ask::Switch { device, own_folder } => {
+            Ask::Switch {
+                device,
+                own_folder,
+                install,
+            } => {
                 // One switch of a device at a time: a second press while
                 // the first runs changes nothing.
                 if !lock(&self.switching).insert(device.clone()) {
@@ -805,7 +816,7 @@ impl Pairing {
                 }
                 // The window that pressed reads which device its answer is for.
                 let answer = self
-                    .switch(&service, &peers, &device, own_folder)
+                    .switch(&service, &peers, &device, own_folder, install)
                     .await
                     .map(|mut answer| {
                         answer["device_id"] = json!(device);
@@ -1017,6 +1028,7 @@ impl Pairing {
         peers: &HostPeers,
         device: &str,
         own_folder: bool,
+        install: bool,
     ) -> Result<Value, &'static str> {
         let (core, row) = (Arc::clone(&self.core), device.to_owned());
         let source = tokio::task::spawn_blocking(move || core.device_switch_source(&row))
@@ -1028,6 +1040,12 @@ impl Pairing {
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
         let target = alias.to_owned();
         let (helper_root, press) = (source.helper_root.clone(), source.sign_in.clone());
+        // The install's step is told from the thread that runs ssh.
+        let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
+        let installed = device.to_owned();
+        let installing = move || {
+            runtime.block_on(steps.switch_step(&installed, "installing", json!({})));
+        };
         let switched = self
             .ssh_dial(alias, move || {
                 pairing_ssh::switch(&pairing_ssh::Switch {
@@ -1038,6 +1056,8 @@ impl Pairing {
                     key: &key,
                     helper_root: (!own_folder).then_some(helper_root.as_str()),
                     press,
+                    install,
+                    installing: &installing,
                 })
             })
             .await??;

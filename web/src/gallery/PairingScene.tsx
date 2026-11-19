@@ -9,8 +9,9 @@
 // three helper devices on the old connection (B35, B36, B41): one that
 // offers the switch, one whose switch is connecting and one whose switch
 // stopped, with the strip of the one in front (`front=`) over the list, and
-// `view=held` the question a later computer is asked first (B69). It proves
-// the rendered parts; the pairing is the daemon's.
+// `view=held` the question a later computer is asked first (B69), and
+// `view=install` what a machine with no Hide of its own would get (B36,
+// D-45). It proves the rendered parts; the pairing is the daemon's.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -24,7 +25,7 @@ import { useShellStore } from "../store";
 import { standInHost } from "../practice/mount";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
-const VIEWS = ["devices", "other", "allow", "request", "join", "failed", "switch", "held"] as const;
+const VIEWS = ["devices", "other", "allow", "request", "join", "failed", "switch", "held", "install"] as const;
 type View = (typeof VIEWS)[number];
 
 const WORDS: Record<string, string[]> = { ko: ["바다", "연필", "구름", "사과"], en: ["engine", "bicycle", "muscle", "into"] };
@@ -66,7 +67,7 @@ function pairingOf(view: View, lang: string): PairingView | null {
   const words = WORDS[lang] ?? WORDS.en!;
   const soon = Date.now() + 101_000;
   const idle: PairingView = { offer: null, asks: [], join: null, requests: [] };
-  if (view === "switch" || view === "held") return idle;
+  if (view === "switch" || view === "held" || view === "install") return idle;
   if (view === "devices") return { ...idle, offer: { link: "hide://pair#v=1&id=7f3a9c1e…&dev=windows-pc&relay=https%3A%2F%2Fdevice-relay.withhide.dev&s=4be2…", expires_unix_ms: Date.now() + 521_000 }, requests: [{ key: key("a"), state: "declined" }] };
   if (view === "allow") return { ...idle, asks: [{ id: 1, key: key("a"), device: "macbook", name: "MacBook", kind: "link", words, expires_unix_ms: soon }] };
   if (view === "request") return { ...idle, asks: [{ id: 2, key: key("c"), device: "windows-pc", name: "Windows PC", kind: "request", words: null, expires_unix_ms: soon }] };
@@ -95,13 +96,18 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
       window.hideHost = before;
     };
   }, [firewall]);
-  const switching = view === "switch" || view === "held";
+  const switching = view === "switch" || view === "held" || view === "install";
   const front = params.get("front") ?? "build-box";
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",
       pairing: pairingOf(view, lang),
-      pairingResult: view === "held" ? { verb: "switch", ok: true, switch: "held", by: lang === "ko" ? "회사 Mac" : "Office Mac", device_id: "windows-pc", request_id: "gallery" } : null,
+      pairingResult:
+        view === "held"
+          ? { verb: "switch", ok: true, switch: "held", by: lang === "ko" ? "회사 Mac" : "Office Mac", device_id: "windows-pc", request_id: "gallery" }
+          : view === "install"
+            ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" }
+            : null,
       rest: {
         navigator: { devices: switching ? [LOCAL, ...HELPERS] : [LOCAL], peers: view === "devices" || view === "other" ? PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
         status: { remote: switching ? HELPERS.map((device) => ({ target_id: device.id, state: "connected", message: null })) : [] },

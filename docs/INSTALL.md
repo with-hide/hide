@@ -591,6 +591,7 @@ Nothing is installed there and there are no words to compare, because signing in
 This works when `ssh <alias>` signs in without asking; a login that needs a password or a code pairs by a link instead.
 
 From a terminal outside Hide's panes the same steps are `hide device share`, `hide device add <link>` and `hide device allow`, then `hide device pause`, `resume` and `remove <device> [--outgoing|--incoming|--both]`, `hide device request <device>` to ask the other way, `hide device address <device> <ip:port>` to name an address to try first, and `hide device retry <device>`; `hide device list` shows who opens whom and whether the two are connected.
+`hide device switch <device>` switches an SSH device to the connection of the Hide on its machine, as `바꾸기` on its row does: `--install` starts a Hide there when that machine runs none, and `--own-folder` goes on after another computer switched the device first.
 Sharing, adding a link, allowing, resuming, asking the other way and naming an address are yours alone: an agent in a Hide pane that runs them is refused.
 
 ## Connect another Mac over SSH

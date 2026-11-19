@@ -43,6 +43,8 @@ export function switchFailureKey(reason: string | null | undefined): MessageKey 
       return "pairing.ssh.updateThere";
     case "ssh_hide_not_running":
       return "pairing.ssh.notRunning";
+    case "ssh_core_not_started":
+      return "devices.switch.failed.notStarted";
     case "switch_not_connected":
       return "devices.switch.failed.notConnected";
     case "device_already_connected":

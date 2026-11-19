@@ -821,11 +821,24 @@ impl Fixture {
         hide_platform::fs::private::create_dir_all(&device_state)?;
         let state = ipc.path().join("s");
         hide_platform::fs::private::create_dir_all(&state)?;
-        let mut local_env = Environment::new(&root.join("l"), None)?;
         // The device reports a checkout by its real path, which the journey
         // compares with the one it made, and `/tmp` is a link on macOS.
-        let device_root = ipc.path().canonicalize()?.join("r");
-        let mut remote_env = Environment::new(&device_root, Some(&device_state))?;
+        let accounts = ipc.path().canonicalize()?;
+        // Both accounts are fixture HOMEs (`hide_kit::layout::fixture_home`:
+        // under `/tmp`, with the marker), so nothing either daemon does
+        // reaches this account's real login items: a journey that pairs the
+        // two machines would otherwise have each put its core's login item
+        // in the session that runs the tests (`always_on`).
+        let mut local_env = Environment::new(&accounts.join("l"), None)?;
+        let mut remote_env = Environment::new(&accounts.join("r"), Some(&device_state))?;
+        for environment in [&local_env, &remote_env] {
+            fs::write(
+                environment.home.join(hide_kit::layout::FIXTURE_HOME_MARKER),
+                "",
+            )?;
+        }
+        // What the local agent's pane runs for a journey stays with the run.
+        fs::create_dir_all(root.join("l"))?;
         // The device installs shipped executables, which carry no debug
         // data. Stage this candidate's code with the same property: hashing
         // and uploading a CI debug image can exhaust helper setup's bound.
@@ -870,6 +883,15 @@ impl Fixture {
         // first connects, so it is added by its alias and connects as
         // `DEVICE`.
         remote_env.set(hide_platform::host::MACHINE_ID_VARIABLE, DEVICE);
+        // A Hide of the account's own, when a journey starts one, keeps
+        // its connection on this machine too, and reads no Tailscale.
+        for (name, value) in LOOPBACK_PEERS {
+            remote_env.set(name, value);
+        }
+        remote_env.set(
+            "HIDE_TAILSCALE_BIN",
+            remote_env.home.join("absent-tailscale").into_os_string(),
+        );
         let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
         fs::write(
             local_env.home.join(".ssh/config"),

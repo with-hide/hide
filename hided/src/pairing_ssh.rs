@@ -128,12 +128,36 @@ fn said(status: i32, stdout: &[u8]) -> Said {
 
 /// Runs `hide device <words>` on the target, on `upstream`'s session.
 fn run(upstream: &Upstream, reach: &Reach, words: &[&str]) -> Result<Said, SessionError> {
+    let mut device = vec!["device"];
+    device.extend(words);
+    run_hide(upstream, reach, &device)
+}
+
+/// Runs `hide <words>` on the target, on `upstream`'s session.
+fn run_hide(upstream: &Upstream, reach: &Reach, words: &[&str]) -> Result<Said, SessionError> {
     let system = upstream.system()?;
     let mut argv = program(reach, &system);
-    argv.push("device".to_owned());
     argv.extend(words.iter().map(|word| (*word).to_owned()));
     let ran = upstream.run(&argv, ANSWER_CAP, ANSWER_WITHIN)?;
     Ok(said(ran.status, &ran.stdout))
+}
+
+/// Starts a Hide of the target account's own from the `hide` this
+/// machine's device helper linked there, which runs the build beside it
+/// (D-45): the account then has a core of this machine's build on its own
+/// state folder, and that core keeps itself running from a login item once
+/// it is paired (`always_on`). What it printed is its own window's to
+/// read, and is dropped.
+fn start_core(upstream: &Upstream, reach: &Reach, alias: &str) -> Result<(), &'static str> {
+    match run_hide(upstream, reach, &["connect"]) {
+        Ok(Said::Answer(answer)) if answer["ok"] == true => Ok(()),
+        Ok(Said::NoProgram) => Err("ssh_hide_absent"),
+        Ok(_) => Err("ssh_core_not_started"),
+        Err(error) => {
+            log(alias, "start", &error);
+            Err("ssh_not_reached")
+        }
+    }
 }
 
 fn look_of(said: Said) -> Looked {
@@ -295,6 +319,11 @@ pub struct Switch<'a> {
     pub helper_root: Option<&'a str>,
     /// Where the login's questions go: the device's row.
     pub press: Option<std::sync::Arc<dyn hide_node_link::device::SignIn>>,
+    /// The operator allowed a Hide to be started on a target that runs
+    /// none of its own (D-45); without it such a target is only named.
+    pub install: bool,
+    /// Called once when that start begins, for the row's step.
+    pub installing: &'a (dyn Fn() + Sync),
 }
 
 /// Looks at the target and pairs with the Hide it runs, over one SSH login
@@ -318,6 +347,19 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
     };
     match looked {
         Looked::Ready => {}
+        Looked::Absent if switch.install => {
+            (switch.installing)();
+            start_core(upstream, switch.reach, switch.alias)?;
+            // The core that was started answers for the account now.
+            match run(upstream, switch.reach, &["look-ssh"]).map(look_of) {
+                Ok(Looked::Ready) => {}
+                Ok(_) => return Err("ssh_core_not_started"),
+                Err(error) => {
+                    log(switch.alias, "look", &error);
+                    return Err("ssh_not_reached");
+                }
+            }
+        }
         Looked::Absent => {
             let system = upstream.system().map_err(|_| "ssh_not_reached")?;
             return Ok(Switched::InstallNeeded { system });
@@ -360,9 +402,7 @@ fn switch_on(upstream: &Upstream, switch: &Switch<'_>) -> Result<Switched, &'sta
     };
     let paired = match &answer["accepted"] {
         Value::Null if switch.helper_root.is_some() => None,
-        accepted => {
-            Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?)
-        }
+        accepted => Some(paired(accepted, upstream.direct_host()).ok_or("ssh_update_there")?),
     };
     Ok(Switched::Paired { paired, folder })
 }

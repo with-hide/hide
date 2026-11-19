@@ -1008,6 +1008,8 @@ pub const COMMANDS: &[Spec] = &[
     // the two are paired over the device's SSH login, and the device keeps
     // its id, its name and its running terminals. `held` names the machine
     // that switched it first; `--own-folder` goes on without its terminals.
+    // `install_needed` is a machine that runs no Hide of its own, where
+    // `--install` starts one from this machine's helper build.
     Spec {
         words: &["device", "switch"],
         arguments: &[Arg {
@@ -1018,7 +1020,11 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[switch("--own-folder"), switch("--json")],
+        options: &[
+            switch("--install"),
+            switch("--own-folder"),
+            switch("--json"),
+        ],
         rest: None,
         answers: &["device_switched"],
         refusals: &[
@@ -1027,6 +1033,7 @@ pub const COMMANDS: &[Spec] = &[
             "switch_unsupported",
             "switch_running",
             "switch_not_connected",
+            "ssh_core_not_started",
             "ssh_not_reached",
             "ssh_update_there",
             "ssh_hide_not_running",

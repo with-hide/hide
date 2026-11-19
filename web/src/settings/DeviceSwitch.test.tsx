@@ -111,3 +111,19 @@ it("leaves the device as it was when the question is cancelled, and does not ask
   expect(switches(events)).toHaveLength(1);
   await unmount();
 });
+
+it("says what would be put on a machine with no Hide of its own, and starts it only on Allow and install (B36, D-45)", async () => {
+  const { events, q, answer, unmount } = await mount(helper());
+  await act(async () => { q('[data-device-switch="mini"]')?.click(); });
+  await answer({ ok: true, switch: "install_needed", system: "linux", device_id: "mini" });
+  const dialog = q('[data-device-switch-install="mini"]')!;
+  expect(dialog.textContent).toContain("Install Hide on Mac mini?");
+  // Linger is named for a Linux machine only.
+  expect(q("[data-device-switch-install-parts]")?.getAttribute("data-device-switch-install-parts")).toBe("core,autostart,linger");
+  expect(dialog.textContent).toContain("This computer's Hide program and agent hooks are installed in that account");
+  expect(switches(events)).toHaveLength(1);
+  await act(async () => { q('[data-device-switch-install-go="true"]')?.click(); });
+  expect(switches(events).map((event) => event.payload.install)).toEqual([undefined, true]);
+  expect(q("[data-device-switch-install]")).toBeNull();
+  await unmount();
+});

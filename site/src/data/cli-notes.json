@@ -167,7 +167,7 @@
     "example": "hide device retry mini --wait"
   },
   "device switch": {
-    "line": "Switches an SSH device to the connection of the Hide on its machine: the two are paired over the device's saved SSH login with no link and no words, and the device keeps its id, its name and its running terminals. When another computer switched the device first it changes nothing and names that computer; --own-folder then goes on, closing the terminals this machine ran there. Only the operator may run it, outside Hide's panes.",
+    "line": "Switches an SSH device to the connection of the Hide on its machine: the two are paired over the device's saved SSH login with no link and no words, and the device keeps its id, its name and its running terminals. On a machine that runs no Hide of its own it changes nothing and says so; --install then starts one there from this machine's Hide program, which the device already has. When another computer switched the device first it changes nothing and names that computer; --own-folder then goes on, closing the terminals this machine ran there. Only the operator may run it, outside Hide's panes.",
     "example": "hide device switch mini"
   },
   "access request": {

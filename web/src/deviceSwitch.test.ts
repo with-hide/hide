@@ -32,6 +32,7 @@ describe("what a switch reads as (B36, B41)", () => {
     expect(switchFailureKey("ssh_update_there")).toBe("pairing.ssh.updateThere");
     expect(switchFailureKey("ssh_hide_not_running")).toBe("pairing.ssh.notRunning");
     expect(switchFailureKey("switch_not_connected")).toBe("devices.switch.failed.notConnected");
+    expect(switchFailureKey("ssh_core_not_started")).toBe("devices.switch.failed.notStarted");
     expect(switchFailureKey("a_code_of_a_newer_daemon")).toBe("devices.switch.failed.other");
     expect(switchFailureKey(null)).toBe("devices.switch.failed.other");
   });

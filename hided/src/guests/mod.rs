@@ -242,10 +242,7 @@ impl Guests {
     fn helper_root(&self, spelled: &str) -> Option<PathBuf> {
         let root = layout::expand_home(spelled, &self.home);
         let built = std::fs::read_dir(&root).ok()?.flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(build::is_id)
+            entry.file_name().to_str().is_some_and(build::is_id)
                 && entry
                     .path()
                     .join(format!("hided{}", std::env::consts::EXE_SUFFIX))
@@ -278,13 +275,15 @@ impl Guests {
             key: guest.to_hex(),
             root,
         };
-        match serde_json::to_vec(&taken).map_err(io::Error::other).and_then(|bytes| {
-            atomic::write_file(
-                &layout::device_node_guest(&self.home),
-                &bytes,
-                Access::Private,
-            )
-        }) {
+        match serde_json::to_vec(&taken)
+            .map_err(io::Error::other)
+            .and_then(|bytes| {
+                atomic::write_file(
+                    &layout::device_node_guest(&self.home),
+                    &bytes,
+                    Access::Private,
+                )
+            }) {
             Ok(_) => {
                 record("guests.helper_taken", guest, json!({}));
                 HelperFolder::Taken
@@ -324,9 +323,7 @@ impl Guests {
             Some(holder) if holder == *guest => HelperFolder::Taken,
             Some(holder)
                 if paired(&holder)
-                    || lock(&self.hosted)
-                        .get(&holder)
-                        .is_some_and(Hosted::at_work) =>
+                    || lock(&self.hosted).get(&holder).is_some_and(Hosted::at_work) =>
             {
                 HelperFolder::HeldBy(holder)
             }
@@ -843,8 +840,7 @@ impl Guests {
             if self.remembered(guest).is_some() {
                 gone.push(place.node);
                 gone.push(place.install);
-            } else if let Err(error) =
-                std::fs::remove_file(layout::device_node_guest(&self.home))
+            } else if let Err(error) = std::fs::remove_file(layout::device_node_guest(&self.home))
                 && error.kind() != io::ErrorKind::NotFound
             {
                 record(
@@ -1767,7 +1763,10 @@ mod tests {
             "a folder with no build of Hide's is no helper root"
         );
 
-        assert_eq!(guests.take_helper(&key(1), root, paired), HelperFolder::Taken);
+        assert_eq!(
+            guests.take_helper(&key(1), root, paired),
+            HelperFolder::Taken
+        );
         assert_eq!(
             guests.take_helper(&key(1), root, paired),
             HelperFolder::Taken,

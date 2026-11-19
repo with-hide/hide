@@ -10,19 +10,25 @@ import { useState } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Status } from "../components/settings-rows";
 import { deviceTerminalCount, SWITCH_STEP_KEY, switchFailureKey, switchOffered, switchStep } from "../deviceSwitch";
 import { frontDeviceId } from "../devices";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { ownWindow } from "../pairing";
-import { machineName } from "../screenMachine";
+import { machineName, windowDeviceId } from "../screenMachine";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 
-/** One press: hided switches the device, and answers this window if it has to ask first. */
-export function askSwitch(actions: Actions, deviceId: string, ownFolder = false) {
-  actions.pairing("switch", { device: deviceId, request_id: `switch-${Date.now()}`, ...(ownFolder ? { own_folder: true } : {}) });
+/**
+ * One press: hided switches the device, and answers this window if it has to
+ * ask first. `install` and `ownFolder` are what the operator then allowed: a
+ * Hide started on a machine that runs none, and going on without the
+ * terminals another computer took over.
+ */
+export function askSwitch(actions: Actions, deviceId: string, allowed: { install?: boolean; ownFolder?: boolean } = {}) {
+  actions.pairing("switch", { device: deviceId, request_id: `switch-${Date.now()}`, ...(allowed.install ? { install: true } : {}), ...(allowed.ownFolder ? { own_folder: true } : {}) });
 }
 
 /** The button of a device that can be switched; gone while its switch runs. */
@@ -97,30 +103,67 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
 }
 
 /**
- * What a press is asked before it goes on (B69, D-75): another computer
- * switched this device first, so this one gets a folder of its own and the
- * terminals it ran there close. Cancel leaves the device as it was.
+ * What a press is asked before it goes on. A machine that runs no Hide of
+ * its own (B36, D-45): what would be put there, and `허용하고 설치` starts it.
+ * A device another computer switched first (B69, D-75): this one gets a
+ * folder of its own and the terminals it ran there close. Closing either
+ * leaves the device as it was.
  */
 export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && s.pairingResult.switch === "held" ? s.pairingResult : null));
+  const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && (s.pairingResult.switch === "held" || s.pairingResult.switch === "install_needed") ? s.pairingResult : null));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const count = useShellStore((s) => (answer?.device_id ? deviceTerminalCount(s.rest, answer.device_id) : 0));
   // The answer stays in the store after its question was closed.
   const [closed, setClosed] = useState<string | null>(null);
   const deviceId = answer?.device_id;
   if (!answer || !deviceId || !answer.request_id || answer.request_id === closed) return null;
+  const close = () => setClosed(answer.request_id ?? null);
+  const name = machineName(devices, deviceId, t);
+  if (answer.switch === "install_needed") {
+    const parts: InstallPart[] = answer.system === "linux" ? ["core", "autostart", "linger"] : ["core", "autostart"];
+    return (
+      <Dialog open onOpenChange={(next) => { if (!next) close(); }}>
+        <DialogContent data-device-switch-install={deviceId}>
+          <DialogHeader>
+            <DialogTitle>{t("devices.installTitle", { name })}</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="space-y-sm">
+            <p className="text-body text-subtle-foreground">{t("devices.switch.installWhat")}</p>
+            <ul className="list-disc space-y-xs pl-md text-body text-subtle-foreground" data-device-switch-install-parts={parts.join(",")}>
+              {parts.map((part) => (
+                <li key={part}>{t(INSTALL_PART_KEY[part])}</li>
+              ))}
+            </ul>
+            <p className="break-keep text-body text-foreground">{t("devices.switch.install.grant", { name: machineName(devices, windowDeviceId(devices), t) })}</p>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="secondary" onClick={close}>{t("common.cancel")}</Button>
+            <Button
+              data-device-switch-install-go="true"
+              onClick={() => {
+                close();
+                askSwitch(actions, deviceId, { install: true });
+              }}
+            >
+              {t("devices.allowInstall")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
   const by = answer.by ?? "";
   return (
-    <AlertDialog open onOpenChange={(next) => { if (!next) setClosed(answer.request_id ?? null); }}>
+    <AlertDialog open onOpenChange={(next) => { if (!next) close(); }}>
       <AlertDialogContent data-device-switch-held={deviceId}>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t("devices.switch.heldTitle", { name: machineName(devices, deviceId, t) })}</AlertDialogTitle>
+          <AlertDialogTitle>{t("devices.switch.heldTitle", { name })}</AlertDialogTitle>
           <AlertDialogDescription>{count > 0 ? t("devices.switch.held", { by, count }) : t("devices.switch.heldNone", { by })}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-          <AlertDialogAction data-device-switch-held-go="true" onClick={() => askSwitch(actions, deviceId, true)}>
+          <AlertDialogAction data-device-switch-held-go="true" onClick={() => askSwitch(actions, deviceId, { ownFolder: true })}>
             {t("devices.switch.go")}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -128,3 +171,12 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
     </AlertDialog>
   );
 }
+
+/** What is put on a machine that runs no Hide of its own; linger is Linux's alone. */
+type InstallPart = "core" | "autostart" | "linger";
+
+const INSTALL_PART_KEY = {
+  core: "devices.switch.install.core",
+  autostart: "devices.switch.install.autostart",
+  linger: "devices.switch.install.linger",
+} as const satisfies Record<InstallPart, string>;

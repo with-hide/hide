@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--own-folder] [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device share [--json]\nhide device add <link or ssh alias> [--name <name>] [--json]\nhide device allow [--json]\nhide device pause <device> [--outgoing|--incoming|--both] [--json]\nhide device resume <device> [--outgoing|--incoming|--both] [--json]\nhide device remove <device> [--outgoing|--incoming|--both] [--json]\nhide device request <device> [--json]\nhide device address <device> <ip:port> [--json]\nhide device retry <device> [--wait] [--json]\nhide device switch <device> [--install] [--own-folder] [--json]";
 
 /// How long `retry --wait` waits for an attempt to connect, reach the
 /// operator's turn or fail: past ssh connecting and a first install of
@@ -92,10 +92,12 @@ pub enum Verb {
         device: String,
     },
     /// An SSH device switched to the connection of the Hide on its machine
-    /// (D-49). `own_folder` goes on after another machine switched it first
-    /// (D-75).
+    /// (D-49). `install` starts a Hide on a machine that runs none of its
+    /// own (D-45); `own_folder` goes on after another machine switched the
+    /// device first (D-75).
     Switch {
         device: String,
+        install: bool,
         own_folder: bool,
     },
     /// What a machine about to pair over SSH runs on its target first: it
@@ -132,6 +134,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut wait = false;
     let mut wsl = false;
     let mut own_folder = false;
+    let mut install = false;
     let mut helper = None;
     let mut direction = None;
     let (mut name, mut request, mut key, mut device) = (None, None, None, None);
@@ -148,6 +151,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
             }
             "--own-folder" if verb == Some("switch") && !own_folder => {
                 own_folder = true;
+                continue;
+            }
+            "--install" if verb == Some("switch") && !install => {
+                install = true;
                 continue;
             }
             "--wsl" if accept && !wsl => {
@@ -229,6 +236,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         },
         (Some("switch"), [device]) => Verb::Switch {
             device: named(device)?,
+            install,
             own_folder,
         },
         (Some("look-ssh"), []) if name.is_none() => Verb::LookSsh,
@@ -399,9 +407,15 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             ),
             Err(refused) => Err(refused),
         },
-        Verb::Switch { device, own_folder } => {
+        Verb::Switch {
+            device,
+            install,
+            own_folder,
+        } => {
             operators(env)?;
-            let ask = json!({"verb":"switch","device":device,"own_folder":own_folder});
+            let ask = json!({
+                "verb":"switch","device":device,"own_folder":own_folder,"install":install,
+            });
             let mut answer = crate::workspace_cli::pairing_ask_within(env, ask, SWITCH_BOUND)
                 .map_err(Refused::Unreachable)?;
             if answer["ok"] != true {
@@ -421,7 +435,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                     answer["by"].as_str().unwrap_or("Another computer"),
                 ),
                 Some("install_needed") => format!(
-                    "{device} runs no Hide of its own. Install Hide there, then run hide device switch {device} again.\n"
+                    "{device} runs no Hide of its own. Run hide device switch {device} --install to start one there from this machine's Hide program, which is already installed in that account, or install Hide there yourself and run the switch again.\n"
                 ),
                 _ => format!(
                     "Switched {device} to the new connection. Its running terminals carry on.\n"

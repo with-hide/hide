@@ -1307,7 +1307,10 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
     dispatch(&mut runtime, "peer_machines", machines("confirming"));
     assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
     assert_eq!(
-        device(&runtime, "build-box-id").switch.as_ref().map(|switch| switch.state),
+        device(&runtime, "build-box-id")
+            .switch
+            .as_ref()
+            .map(|switch| switch.state),
         Some(DeviceSwitchState::Connecting)
     );
 
@@ -1321,7 +1324,10 @@ fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
             switched: true
         }
     );
-    assert_eq!(switched.label, "build-box", "the name its operator gave stays");
+    assert_eq!(
+        switched.label, "build-box",
+        "the name its operator gave stays"
+    );
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
     let row = device(&runtime, "build-box-id");
     assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));

@@ -374,7 +374,11 @@ pub fn run(dir: &str) -> ! {
     // as it asks any device's kit (D-77 (4)); a copy anywhere else, a
     // development build among them, installs nothing. On a helper's folder
     // the installation is the helper's, kept as the helper kept it.
-    let kit = match (&helper, &install_root, program.parent().and_then(Path::file_name)) {
+    let kit = match (
+        &helper,
+        &install_root,
+        program.parent().and_then(Path::file_name),
+    ) {
         (Some(helper), _, _) if helper.placed => KitPlace::Installed,
         (None, Some(root), Some(version)) => KitPlace::Guest {
             root: root.clone(),
