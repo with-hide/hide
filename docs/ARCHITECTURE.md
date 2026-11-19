@@ -2099,6 +2099,11 @@ The following table describes Hide's current macOS startup path, not an operator
 
 The local executable authorities are `desktop/src/main/{host,spawn}.ts`, `hided/src/{cli,env,lib,server}.rs`, `hide-node/src/ssh/host.rs` and `hide-host/src/serve.rs` with `hided/src/node_cli.rs`.
 Which of these a `hided` process is comes from its arguments, read once before anything else runs (`hided/src/role.rs`): no argument at all is the daemon, `core-login`, alone or with an absolute `--state-dir`, is the daemon as a login item starts it (a moved core's or a paired machine's), each other role in the table takes its own words and refuses the ones it does not know, `--version` and `--help` print and end without reading the environment, and any other argument is refused with exit 2 before an owner watch, a state folder, a lock or a log is touched, so a stray argument on a device can never start a second core there (`hided/tests/it/arguments.rs`).
+One `hided` process runs one role at a time and may run two in its life (`hided/src/supervisor.rs`): a core that a Herdr import starts again, and a node that becomes its machine's own core once it is split from the core it dialed ([Splitting a moved core's two machines](#splitting-a-moved-cores-two-machines)).
+A role's end and the process's stop request are each level-triggered (`hided/src/ending.rs`), because the process outlives its roles: a `Notify` dropped what no task was waiting for, so a stop that came while the supervisor was busy was lost and the old role's listeners and their core outlived the role.
+The signal handlers are installed once, before the first role runs, every wait of the supervisor selects on the stop, and `hided` waits at most a second at its exit for blocking work a stop left behind.
+The role that ends closes each of its sockets with 1012 (`role_ended`, through `AppState::role_ended`), so a window reconnects to the role mounted next on the same seat, address and token.
+A core is stopped or counted as running only by a pid its state proves by the start the kernel reports for it now (`DaemonState::is_proven_running`), so a pid another process took since is never signalled; a state that proves nothing leaves the instance lock to decide.
 The one-release kit retirement stage is `hide-kit/src/coordination_retirement.rs`; it does not start a resident service.
 It reads legacy v1 and current Hide-only v2 Sasu registries without importing them, checks their retained run states, and refuses if the authoritative revision disappears after selection.
 After reboot, hided and its watches start with the app; no login automatic start is added.
@@ -3153,6 +3158,39 @@ Each label worker asks the node of the machine that runs its engine for the lock
 | A core update's build, uploaded by SSH from the newer node or app into a version folder beside the core's, and `hided core-update` run there (`Upstream::install_build`) | |
 | Project Memory read and written by an agent hook on M: the `memory` request through M's node to the one store C keeps, and the receipts C's label reads find in M's sessions (`hide_core::memory_hook`, `Runtime::linked_node`) | M's session files, which M's node reads for C (`ProjectSessions`, `SessionConversation`, `SessionText`) |
 | A held letter: C keeps it while M is not linked and its wait counts only while M is (`delivery.md`), and hands it to M's agent through M's node when the agent's hook pulls | |
+
+### Splitting a moved core's two machines
+
+A node and the core it dials become two Hides, each with a core of its own and paired both ways (PRD device-connect-iroh D-46, B45), the first time M's node reaches C's core on M's own build.
+M's node asks before it serves a link: at the handshake, once C's hello shows the same build (an older core is updated first, [Updating the core](#updating-the-core)), the attach is ended without a node hello and the split runs on the same SSH connection (`node_role::split_from_core`, `LinkFailure::SplitDue`), asking nobody.
+The move was the consent, so no link, words or allow window are shown on either machine.
+
+The split is `moved_core::split`, and every step before its last leaves M the node it was and is the same when run again:
+
+1. M makes or reads its machine key and asks C's Hide for a grant with `hide device accept-ssh`, run as the `hide` beside the core's program the placement record names, under one request id per machine key, so a repeat is answered the grant C saved the first time.
+   An answer that does not name the placement's core is refused.
+2. M saves C as a host it confirms with (`KnownState::Confirming`) and gives C an active grant in its own peer records, with no core running to hold them: the core role M starts next opens its endpoint on those records (`peer_host::endpoint_wanted`).
+3. M records the folder its node ran panes in, `~/.hide/device-node`, as C's work on M (`HelperGuest` with `panes`, the installation those panes name; a folder another paired machine already took stays that machine's).
+4. M asks C again with `--grant <id>`: C settles its grant for M and adopts M as a host by that grant (`Ask::AcceptSsh` in `hided/src/pairing.rs`).
+   C takes a grant this way only from a machine its core already runs work for, one registered as a node that dials in (`hide_core::dialing_nodes`) or one it already opens, and refuses any other with `device_unknown`.
+5. M sets `core-placement.json` aside as `moved-out/core-placement.json` (`placement::set_aside`), which is the commit: nothing the move left is deleted.
+
+The link thread then ends and the supervisor's `node_turn` starts the core role in the same process, on the same seat, so M's windows reconnect to M's own core; their address loses the node's name once `/health` answers `core` (`addressForRole` in `web/src/ws.ts`).
+M's core dials C and confirms, C's core registers M's connection, and on C the registration M held as a node that dials in becomes the paired machine's device in place (`reconcile_peer_devices`, `LinkOrigin::becomes_peer`, `switch_device_link`): the id, the name and every record that names the device stay.
+C's work on M then runs in C's own node there, a `hided` of C's build that M's daemon starts from C's guest install root on the handed-over folder ([A guest's panes on the host](#a-guests-panes-on-the-host)), which takes up the holders as on any new link, so the terminals carry on and nothing closes.
+C keeps everything a core holds: projects, missions, letters, work started from M's window while the core was moved, and the phone pairing, which names C's core.
+No work is divided between the two cores, since no record says which machine started it.
+
+The panes handed over name M's own installation (`HIDE_INSTALL=app`), not a guest's, so two things keep their `hide` and hooks reaching the node that holds them.
+C's node answers as the installation the record names (`hide_host::kit::answer_as`, set once before the node binds its bridge or starts a pane), so its bridge declares it, its answers carry it and the panes it starts name it.
+M's own daemon, asked first by such a pane, finds no pane of its own; before it falls back to binding the caller by its checkout it asks whether the caller runs under a live holder of the handed-over folder (`pane_auth::guests_pane`, `hide_kit::panes::live_holders`) and, when it does, refuses the request as another installation's, which sends the caller on to the node's bridge (`hook_request::install`).
+Without that, a hook report from one of C's agents on M would be recorded by M's core, which does not run that session.
+
+C's login item is kept through this: `always_on::paired` counts a core that a node still dials as kept on, so the item a move placed is not taken out as an unpaired machine's before M can reach it, and once the two are paired it is kept as any paired machine's.
+
+A split that fails is tried once per connection, as a core update is (`State::split_failed`): M links as before, a screen the core draws is told the cause once (`core_link` frame with phase `live` and `split_failed`: `split_not_reached`, `split_refused` or `split_not_saved`), M's own row in Settings › Devices says it with Retry, and the Retry ends the link and tries again (`NodeRole::connect_again` with a screen).
+While C is not reached at all, the link waits as it always did and the split follows the first link that finds C on this build.
+A move that was cut short before 1.2.0 is not split: `moved_core::unfinished` refuses the start and names the release that finishes it.
 
 ### The peer connection
 
