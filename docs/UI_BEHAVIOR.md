@@ -1262,9 +1262,12 @@ Web owner: `web/src/AutomationScreen.tsx`, `web/src/AutomationForm.tsx`, `web/sr
 The automations of the window's own core are listed on a screen of the page's own beside the mission screen (PRD automations D-02).
 
 The sidebar's `자동화` row sits under the `미션` row with the repeat mark, the number of finished runs not looked at on its right (none at 0), and its hint `안 본 회차 N개`; pressing it replaces the center with the table and draws the row selected while the screen shows (B1).
-With no automation the screen says `자동화가 아직 없어요`, [+ 새 자동화], and one line that an agent can make one when asked in words (B2).
-The table's head reads `자동화 · N개` with [+ 새 자동화]; each row draws the unseen dot, the name, the schedule (`매일 09:00`), the next run (`내일 09:00`, `● 도는 중` or `⏸ 멈춤`), the last result (`✓ 12분`, `✗ <reason>`, `– 건너뜀 · <reason>`), the folder and agent, and ▶ to run it now, which is off with its reason while a run goes; a paused row is dimmed (B3).
-A window narrower than the mission screen's split (`missions-split`) leaves out the schedule and the folder and agent, which the detail names.
+With no automation the screen welcomes as other empty screens do (`EmptyWelcome`): the Hide AI owl, `자동화가 아직 없어요` over `매일 아침, 평일, 매주처럼 정해 둔 시간에 에이전트가 할 일을 대신 해요.`, [+ 새 자동화], then `이렇게 시작해 볼 수 있어요` with three starting points, each with its mark and schedule (`아침 이슈 정리` · 평일 09:00, `의존성 점검` · 매주 월 10:00, `실패한 CI 살펴보기` · 6시간마다), and last the line that an agent can make one when asked in words (B2).
+A starting point opens the new automation's form filled with its name, task and schedule, which the operator reads, changes and makes like any other (B4).
+The head reads `자동화` with the count as a badge and `이 기기에서 정해 둔 시간에 도는 에이전트` under it, and [+ 새 자동화] once there is one.
+The automations are one bordered list; each row draws the agent's logo, the name with the unseen dot and a state badge beside it (`● 도는 중`, `⏸ 멈춤`, or a pause the operator fixes, such as `로그인 만료`, in red), and under it the schedule (`↻ 매일 09:00`), the folder (`기본 폴더` or the project's, with `· 새 워크트리` when asked) and the task in one muted line.
+Then `다음 실행` reads its time and how long until it (`내일 09:00 · 9시간 뒤`, `곧` in its last minute, `—` while paused), `최근 회차` the newest five results as marks (✓ ✗ – ■, ● while one goes) with the last one's words (`✓ 12분`, `✗ <reason>`, `– 건너뜀 · <reason>`), and ▶ runs it now, off with its reason while a run goes; a row the operator paused is dimmed (B3).
+A window narrower than the mission screen's split (`missions-split`) leaves out `최근 회차`, which the detail lists.
 When the core set its saved book aside as unreadable (`automations.unreadable`), one warning line above the table names the file it kept, until an automation is made.
 ↑ and ↓ move between rows and Enter opens one; every icon-only button has a name (B38).
 

@@ -104,13 +104,13 @@ mod tests {
     fn the_core_s_refusal_reaches_the_window_as_its_code() {
         let frame = answer(
             &event(
-                json!({"request_id": "r2", "call": {"call": "preview", "schedule": {"kind": "cron", "expr": "*/5 * * * *"}}}),
+                json!({"request_id": "r2", "call": {"call": "preview", "schedule": {"kind": "cron", "expr": "*/4 * * * *"}, "name": "점검"}}),
             ),
-            |_| Err("schedule_under_hour".to_owned()),
+            |_| Err("schedule_too_often".to_owned()),
         );
         assert_eq!(
             frame["payload"],
-            json!({"request_id": "r2", "ok": false, "code": "schedule_under_hour"})
+            json!({"request_id": "r2", "ok": false, "code": "schedule_too_often"})
         );
     }
 

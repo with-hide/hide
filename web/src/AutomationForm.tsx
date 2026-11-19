@@ -46,7 +46,12 @@ export const EXAMPLE_WORDS = {
   deps: { name: "automationScreen.example.deps.name", task: "automationScreen.example.deps.task" },
   ci: { name: "automationScreen.example.ci.name", task: "automationScreen.example.ci.task" },
 } as const satisfies Record<AutomationExample, { name: string; task: string }>;
-/** The core's `EVERY_MINUTES`: each divides the hour, so every hour runs alike (D-06). */
+/**
+ * The minutes the form offers, a copy of `EVERY_MINUTES` in
+ * `hide-core/src/automations/schedule.rs` (D-06), which neither the preview
+ * nor the section names; a value the core stops offering is refused under the
+ * schedule (`schedule_minutes_out_of_range`).
+ */
 const MINUTES = [5, 10, 15, 30];
 const HOURS = Array.from({ length: 12 }, (_, index) => index + 1);
 /** How long typing waits before the core reads the schedule, so a cron line is read once it is written, not per key. */
@@ -221,14 +226,17 @@ function PreviewLine({ preview }: { preview: Preview }) {
 
 /**
  * The core's reading of the schedule and the name as they are typed (B5-B7);
- * a newer draft's answer replaces an older one. The own folder is the last one
- * the core named, kept while the next is read or the schedule is refused, so
- * the folder line does not come and go with each key.
+ * a newer draft's answer replaces an older one. The schedule's reading is
+ * kept while only the name moves, so its line, a refusal too, stays as a name
+ * is typed; the own folder is the last one the core named, kept while the next
+ * is read or the schedule is refused, so the folder line does not come and go
+ * with each key.
  */
 function usePreview(schedule: ScheduleDraft, name: string): { preview: Preview; ownFolder: string | null } {
   const live = useShellStore((s) => s.connection === "live");
+  const scheduleKey = JSON.stringify(draftSchedule(schedule));
   const key = JSON.stringify({ schedule: draftSchedule(schedule), name: name.trim() });
-  const [preview, setPreview] = useState<{ key: string; value: Preview }>({ key: "", value: { state: "reading" } });
+  const [preview, setPreview] = useState<{ scheduleKey: string; value: Preview }>({ scheduleKey: "", value: { state: "reading" } });
   const [ownFolder, setOwnFolder] = useState<string | null>(null);
   const latest = useRef(key);
   latest.current = key;
@@ -240,13 +248,13 @@ function usePreview(schedule: ScheduleDraft, name: string): { preview: Preview; 
         if (latest.current !== key) return;
         // A call the socket dropped says nothing about the schedule; the next connection reads it again.
         if (!answer.ok && answer.code === "socket_closed") return;
-        setPreview({ key, value: answer.ok ? { state: "read", value: answer.value } : { state: "refused", code: answer.code } });
+        setPreview({ scheduleKey: JSON.stringify(draft.schedule), value: answer.ok ? { state: "read", value: answer.value } : { state: "refused", code: answer.code } });
         if (answer.ok) setOwnFolder(answer.value.own_folder);
       });
     }, PREVIEW_WAIT_MS);
     return () => clearTimeout(timer);
   }, [key, live]);
-  return { preview: preview.key === key ? preview.value : { state: "reading" }, ownFolder };
+  return { preview: preview.scheduleKey === scheduleKey ? preview.value : { state: "reading" }, ownFolder };
 }
 
 /** The agent with its profile and model as an agent start picks them, and its effort (B4, D-07). */

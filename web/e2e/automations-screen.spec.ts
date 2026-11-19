@@ -165,10 +165,12 @@ test("a run started now is live in the screen and typed into, asks in Needs You 
   const stack = await start(page, "automations-run");
   try {
     await page.locator("[data-sidebar-automations]").click();
-    await page.locator("[data-automation-new]").first().click();
+    // B2, B4: a starting point of the empty screen opens the form filled with its name, task and schedule.
+    await page.locator('[data-automation-example="issues"]').click();
+    await expect(page.locator('[data-automation-field="name"]')).toHaveValue("Morning issue triage");
+    await expect(page.locator("[data-automation-preview]")).toContainText("Weekdays 09:00");
     await page.locator('[data-automation-field="name"]').fill("야간 점검");
     await page.locator('[data-automation-field="task"]').fill("의존성 점검");
-    await expect(page.locator("[data-automation-preview]")).toBeVisible();
     // B8, B16: made and run at once, it opens on the manual run's terminal, live and taking keys.
     await page.locator("[data-automation-create-run]").click();
     await expect(screen(page)).toHaveAttribute("data-automation-screen", "run");

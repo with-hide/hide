@@ -14,7 +14,7 @@ import { translate } from "./i18n/client";
 import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { hideAiPlace, originLine, type AutomationNames } from "./hideAiOrigin";
+import { hideAiPlace, type AutomationNames } from "./hideAiOrigin";
 import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
 import { startAnswer } from "./startAnswer";
@@ -152,8 +152,8 @@ export function agentPlaces(
  * Where each pane sits, as `project › branch` (Home, or the project alone for
  * a plain folder), keyed by pane id. A pane whose agent Hide AI started names
  * its task where the branch would stand (`project › Memory 반영하기 · m72`);
- * one in an automation's own folder, which is no project, names the task
- * alone (`↻ 자동화: <이름>`, PRD automations B15, B30).
+ * one in an automation's own folder, which is no project, has no place: its
+ * row names the automation it ran for instead (PRD automations B15, B30).
  */
 export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<string, HideAi>, names?: AutomationNames): Map<string, string> {
   const places = new Map<string, string>();
@@ -162,10 +162,7 @@ export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<str
       const checkout = workspace.checkouts.find((c) => c.id === value.checkout_id);
       if (!checkout) throw new Error(`Missing place checkout: ${value.checkout_id}`);
       const started = hideAi?.get(pane);
-      if (workspace.unlisted) {
-        if (started) places.set(pane, originLine(translate, started, names));
-        continue;
-      }
+      if (workspace.unlisted) continue;
       places.set(pane, value.kind === "folder" ? workspace.label : started ? hideAiPlace(translate, workspace.label, started, names) : `${workspace.label} › ${checkout.branch ?? checkout.label}`);
     }
   }

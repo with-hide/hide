@@ -4,7 +4,7 @@ import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentProductName } from "./agentAdapters";
 import { callAutomations } from "./automationCall";
-import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, type AutomationExample } from "./automationDraft";
+import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, shownOwnFolder, type AutomationExample } from "./automationDraft";
 import { AutomationForm, EXAMPLE_WORDS } from "./AutomationForm";
 import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
@@ -266,7 +266,8 @@ function NextTime({ automation, words }: { automation: Automation; words: Words 
   return (
     <span className="flex min-w-0 items-baseline gap-xs text-caption" data-automation-next="at">
       <span className="shrink-0 tabular-nums text-foreground">{whenText(at, words.now, words.zone, words.language, words.t)}</span>
-      <span className="min-w-0 truncate text-muted-foreground">{words.t("automationScreen.inTime", { time: formatElapsed(words.language, at - words.now) })}</span>
+      {/* The clock moves by the minute, so the last minute, and a time the core is about to take, read as soon rather than a count that stands still. */}
+      <span className="min-w-0 truncate text-muted-foreground">{at - words.now < 60_000 ? words.t("automationScreen.soon") : words.t("automationScreen.inTime", { time: formatElapsed(words.language, at - words.now) })}</span>
     </span>
   );
 }
@@ -408,6 +409,8 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
   const canOpenFolder = hostBridge() !== null && actions.onCoreMachine();
   const agent = [agentProductName(automation.agent.kind), automation.agent.model ?? t("automationScreen.detail.agentDefault"), automation.agent.effort].filter(Boolean).join(" · ");
   const runCount = automation.records.filter((record) => record.kind === "run").length;
+  // Its own folder reads `~/hide/automations/<이름>-<id>` as the form named it, so the name at its end is not cut (B5).
+  const ownRoot = useShellStore((s) => s.automations?.own_folder_root);
   const back = useRef<HTMLDivElement>(null);
   // Opened from the table, the keys land in the detail, so Escape-less keyboard use goes on from its first action (B38).
   useEffect(() => {
@@ -466,7 +469,7 @@ function Facts({ automation, actions }: { automation: Automation; actions: Actio
           <Fact label={t("automationScreen.detail.folder")}>
             <span className="flex min-w-0 flex-col">
               <span className="truncate">{automation.folder.default ? t("automationScreen.ownFolder") : lastName(automation.folder.path)}{automation.folder.worktree ? ` · ${t("automationScreen.worktree")}` : ""}</span>
-              <span className="truncate font-mono text-micro text-muted-foreground" title={automation.folder.path} data-automation-folder-path="true">{automation.folder.path}</span>
+              <span className="truncate font-mono text-micro text-muted-foreground" title={automation.folder.path} data-automation-folder-path="true">{shownOwnFolder(ownRoot, automation.folder.path)}</span>
             </span>
           </Fact>
           <Fact label={t("automationScreen.detail.agent")}>
