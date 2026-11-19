@@ -350,6 +350,31 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   expect(await inPage(form, "innerWidth")).toBe((await viewOf(form)).bounds.width);
   await compositorPresents(page);
   await windowShot(`off-desk-page-on-desk-${width}`, process.platform === "darwin");
+  if (width !== 1500) return;
+
+  // A relaunch loads none of the pages that loaded on no desk before it: the
+  // core still holds their loads, and they load when shown or driven. The
+  // operator goes back to their own tab, so the agent's next page lands on no desk.
+  await page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`).click();
+  await expect(page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`)).toHaveAttribute("aria-selected", "true");
+  const later = await asAgent(["browser", "open", `${origin}/b.html`, "--wait"]);
+  expect(later).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
+  const b = (later.result as { view_id: string }).view_id;
+  expect((await viewOf(`${origin}/b.html`)).visible).toBe(false);
+  const offScreenLoads = () => hostLog(run.env).filter((line) => line.event === "browser.loaded_off_screen").length;
+  const before = offScreenLoads();
+  await app.close();
+  app = await relaunch(run.env);
+  const again = await shellPage(app);
+  await enterWorkspace(again, "fixture");
+  // A page drawn on a desk means the shell has sent the core's inventory.
+  await expect.poll(async () => (await views()).some((view) => view.visible), { timeout: 20_000 }).toBe(true);
+  expect((await views()).some((view) => view.url === `${origin}/b.html`)).toBe(false);
+  expect(offScreenLoads()).toBe(before);
+  // Its agent's next command loads it again where it is.
+  const read = await agent(["browser", "snapshot", b]);
+  expect(read.status, read.out).toBe(0);
+  expect((await viewOf(`${origin}/b.html`)).visible).toBe(false);
 });
 }
 

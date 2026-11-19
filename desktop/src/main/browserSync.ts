@@ -90,7 +90,8 @@ function device(value: unknown): BrowserDevicePlacement | null | undefined {
 /** A sync message, or null when any part of it is out of shape. */
 export function parseSync(value: unknown): BrowserSync | null {
   if (typeof value !== "object" || value === null) return null;
-  const { workspace, displays, retained, attachment_epoch, authorized_scopes, node, external_grants } = value as Record<string, unknown>;
+  const { workspace, displays, retained, attachment_epoch, authorized_scopes, node, external_grants, inventoried } = value as Record<string, unknown>;
+  if (inventoried !== undefined && inventoried !== true) return null;
   if (external_grants !== undefined && (!Array.isArray(external_grants) || external_grants.length > MAX_EXTERNAL_LISTED || !external_grants.every(externalGrant))) return null;
   if (attachment_epoch !== undefined && (typeof attachment_epoch !== "string" || attachment_epoch.length === 0 || attachment_epoch.length > 64 || /[^A-Za-z0-9-]/.test(attachment_epoch))) return null;
   if (workspace !== null && !workspaceIdentity(workspace)) return null;
@@ -149,6 +150,7 @@ export function parseSync(value: unknown): BrowserSync | null {
     ...(authorized_scopes === undefined ? {} : { authorized_scopes: scopes }),
     ...(node === undefined ? {} : { node: node as string }),
     ...(external_grants === undefined ? {} : { external_grants: external_grants as string[] }),
+    ...(inventoried ? { inventoried: true as const } : {}),
   };
 }
 
@@ -362,18 +364,6 @@ export const OFF_SCREEN_WIDTH = 900;
  */
 export function offScreenBounds(content: { width: number; height: number }): BrowserRect {
   return { x: 0, y: 0, width: Math.max(1, Math.min(OFF_SCREEN_WIDTH, Math.round(content.width))), height: Math.max(1, Math.round(content.height)) };
-}
-
-/**
- * Whether the core asked for a load of a retained page that no slot shows
- * and that has no live page here: its load stamp moved past the one this
- * window last saw for it, or it appeared with one after this window's first
- * sync. A page the first sync finds was opened before this window, and loads
- * when shown or driven, so a relaunch never loads every saved page at once.
- */
-export function offScreenAsked(seen: number | undefined, load: number, seeded: boolean): boolean {
-  if (!seeded || load <= 0) return false;
-  return seen === undefined || load > seen;
 }
 
 /**

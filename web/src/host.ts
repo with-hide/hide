@@ -62,6 +62,13 @@ export type BrowserSync = {
    * the host loads hidden when no slot shows it.
    */
   retained: { workspace: string; id: string; area_id: string; url?: string; load?: number }[];
+  /**
+   * Present once `retained` is the core's inventory. A shell's first sync
+   * goes before its snapshot does, with an empty list; the host takes the
+   * newest load of the first inventory it is sent as asked before this
+   * shell, so a relaunch or a reload loads none of the saved pages (B32).
+   */
+  inventoried?: true;
   /** Changes on controller mount or reconnect so the host replays actual attachment facts once. */
   attachment_epoch?: string;
   /** Positive core area authority, including empty areas; absent grants no debugger access. Incarnation changes on revoke/regrant. */

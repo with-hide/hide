@@ -211,6 +211,8 @@ class BrowserSyncLoop {
   private authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]> = [];
   /** The outside-file grants tabs stand on; null until the shell has the core's tabs. */
   private externalGrants: string[] | null = null;
+  /** Whether `retained` is the core's inventory, which it is not before the first snapshot. */
+  private inventoried = false;
   private retainedKeys = new Set<string>();
   /** Each display's slot, the element its page is laid over, with the device size the slot draws it at. */
   private readonly slots = new Map<string, { element: HTMLElement; device: BrowserDevicePlacement | null }>();
@@ -318,8 +320,9 @@ class BrowserSyncLoop {
     return this.visible;
   }
 
-  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null = null): void {
+  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null, inventoried: boolean): void {
     this.externalGrants = externalGrants;
+    this.inventoried = inventoried;
     const frontIds = new Set(front?.rows.map((row) => row.id));
     this.retainedKeys = new Set(retained
       .filter((row) => row.workspace !== front?.workspace || frontIds.has(row.id))
@@ -439,6 +442,7 @@ class BrowserSyncLoop {
       ...(this.attachmentEpoch === undefined ? {} : { attachment_epoch: this.attachmentEpoch }),
       ...nodeField(windowDeviceId(useShellStore.getState().rest?.navigator?.devices)),
       ...(this.externalGrants === null ? {} : { external_grants: this.externalGrants }),
+      ...(this.inventoried ? { inventoried: true as const } : {}),
     };
     this.visible = sync.displays.flatMap((row) => (row.visible && row.rect ? [row.rect] : []));
     const text = JSON.stringify(sync);
@@ -583,11 +587,16 @@ export function retainedRow(row: NonNullable<SnapshotRest["browser_views"]>[numb
 }
 
 /** The core's browser displays and positive area authority, whenever the snapshot changes them. */
-export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: NonNullable<SnapshotRest["browser_views"]>, scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null): void {
+/**
+ * Sends the host the front Workspace's pages and the core's inventory.
+ * `inventoried` says the inventory is the core's, which it is not before the
+ * shell's first snapshot.
+ */
+export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: NonNullable<SnapshotRest["browser_views"]>, scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null, inventoried = true): void {
   syncLoop()?.setFront(workspace ? { workspace: workspaceKey(workspace), rows: browserDisplays(layout) } : null,
     inventory.map(retainedRow),
     scopes.map((row) => ({ workspace: workspaceKey(row), area_id: row.area_id, incarnation: row.incarnation })),
-    externalGrants);
+    externalGrants, inventoried);
 }
 
 /** One controller mount and connection observer; its owner releases both on unmount. */

@@ -403,7 +403,7 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   useEffect(() => {
     // The grants the core's tabs stand on are named only once this window
     // has the core's tabs, so a reload lets go of none (PRD outside-path-in-hide B15).
-    syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? [], syncedGrants(haveRest ? (grants ?? []) : null));
+    syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? [], syncedGrants(haveRest ? (grants ?? []) : null), haveRest);
     // A display the core no longer keeps takes its device size with it.
     if (inventory) useUiStore.getState().keepBrowserDevices(new Set(inventory.map((row) => hostKey(workspaceKey(row), row.view_id))));
   }, [front, layout, inventory, scopes, haveRest, grants, pending]);
