@@ -142,6 +142,47 @@ fn diagnostic(value: serde_json::Value) {
     });
 }
 
+/// A node whose `--guest` folder is the account's device helper folder
+/// (`hide_kit::layout::device_node_state`): the machine that dialed a
+/// helper here was paired, and its node goes on in the helper's places
+/// (PRD device-connect-iroh D-49). The panes that already run there name
+/// the helper's installation and ask in the account's state folder, so the
+/// node keeps both: it leaves the process's state folder as it is, runs its
+/// holders from the account's version folders and applies the helper's kit
+/// under the helper root. What a guest's node adds, its endpoints, its box
+/// and its ownership of the panes across links, sits in that same folder.
+struct Helper {
+    home: PathBuf,
+    /// Whether this program runs from a build folder of the helper root,
+    /// where the host placed it: only then is it the helper's installation.
+    placed: bool,
+}
+
+impl Helper {
+    fn of(dir: &Path, program: &Path) -> Option<Self> {
+        let home = hide_platform::host::home_dir().ok()?;
+        if dir != hide_kit::layout::device_node_state(&home) {
+            return None;
+        }
+        // The host's record of the machine that took the folder names the
+        // root its helper ran from.
+        let root = hide_kit::layout::HelperGuest::read(dir).map(|taken| taken.root);
+        let placed = program
+            .parent()
+            .is_some_and(|build| hide_peer::protocol::build::is_id(&build_name(build)))
+            && root.is_some()
+            && program.parent().and_then(Path::parent) == root.as_deref();
+        Some(Self { home, placed })
+    }
+}
+
+fn build_name(build: &Path) -> String {
+    build
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// The words after `serve` were `--guest <dir>`: runs the node over `dir`
 /// until it is told to end or its input ends.
 pub fn run(dir: &str) -> ! {
@@ -178,12 +219,18 @@ pub fn run(dir: &str) -> ! {
     {
         refused(error);
     }
+    let program = std::env::current_exe().unwrap_or_else(|error| refused(error));
+    let helper = Helper::of(&dir, &program);
     // Everything below reads the node's state folder from the process, as
     // a device's node does, and a pane inherits it: its `hide` and its
-    // hooks then reach this node and no other Hide of the account.
-    // SAFETY: no other thread of this process runs yet.
-    unsafe {
-        std::env::set_var("HIDE_STATE_DIR", &dir);
+    // hooks then reach this node and no other Hide of the account. A
+    // helper's folder keeps the helper's places instead, so the panes that
+    // already run there go on reaching their node (D-49).
+    if helper.is_none() {
+        // SAFETY: no other thread of this process runs yet.
+        unsafe {
+            std::env::set_var("HIDE_STATE_DIR", &dir);
+        }
     }
     hide_node::diagnostics::install(diagnostic);
     let bind = |name: &str| -> LocalListener {
@@ -212,17 +259,20 @@ pub fn run(dir: &str) -> ! {
         }
     };
 
-    let program = std::env::current_exe().unwrap_or_else(|error| refused(error));
     let install_root = launch::runs_from_install_root(&dir, &program);
     let hub = Arc::new(tap::TapHub::default());
     let terminals = Arc::new(NodeTerminals::resident(
         Arc::clone(&hub) as Arc<dyn hide_node::terminal::OutputSink>,
         ResidentFolders {
             state_dir: dir.clone(),
-            // A node that does not run from a guest's install root (a
-            // development build) keeps its holders' version folders in its
-            // own folder, never in the account's.
-            holders_home: install_root.clone().unwrap_or_else(|| dir.clone()),
+            holders_home: match &helper {
+                // Where the helper's holders already run from.
+                Some(helper) => helper.home.clone(),
+                // A node that does not run from a guest's install root (a
+                // development build) keeps its holders' version folders in
+                // its own folder, never in the account's.
+                None => install_root.clone().unwrap_or_else(|| dir.clone()),
+            },
         },
     ));
     // The node owns its panes from its start to its end: it takes them
@@ -267,7 +317,10 @@ pub fn run(dir: &str) -> ! {
     say(&Ready {
         guest_node: launch::GUEST_NODE,
         build: crate::build_order::Release::of_this_build().version,
-        build_id: build_id(&program, install_root.is_some()),
+        build_id: build_id(
+            &program,
+            install_root.is_some() || helper.as_ref().is_some_and(|helper| helper.placed),
+        ),
         pid: std::process::id(),
         link: launch::LINK_ENDPOINT.to_owned(),
         tap: launch::TAP_ENDPOINT.to_owned(),
@@ -309,13 +362,25 @@ pub fn run(dir: &str) -> ! {
         std::thread::spawn(move || accept_links(&link, &life, &sessions));
     }
 
-    let worktree_facts = hide_kit::layout::worktree_facts(&dir);
+    let worktree_facts = match &helper {
+        // Where the helper kept them.
+        Some(helper) => hide_kit::layout::worktree_facts(
+            &hide_kit::layout::state_dir_from_process(&helper.home),
+        ),
+        None => hide_kit::layout::worktree_facts(&dir),
+    };
     // A node that runs from its guest's install root keeps that
     // installation's hook entries on this account, which its core asks for
     // as it asks any device's kit (D-77 (4)); a copy anywhere else, a
-    // development build among them, installs nothing.
-    let kit = match (&install_root, program.parent().and_then(Path::file_name)) {
-        (Some(root), Some(version)) => KitPlace::Guest {
+    // development build among them, installs nothing. On a helper's folder
+    // the installation is the helper's, kept as the helper kept it.
+    let kit = match (
+        &helper,
+        &install_root,
+        program.parent().and_then(Path::file_name),
+    ) {
+        (Some(helper), _, _) if helper.placed => KitPlace::Installed,
+        (None, Some(root), Some(version)) => KitPlace::Guest {
             root: root.clone(),
             version: version.to_string_lossy().into_owned(),
         },

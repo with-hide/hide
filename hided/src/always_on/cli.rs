@@ -6,6 +6,10 @@
 //!   marker are in place, its UDP port, and its firewall rules.
 //! - `remove`: the login item, its marker and the install root's builds go;
 //!   an uninstaller runs it after `hide stop`.
+//! - `linger [--json]`: has the account's core run with no one logged in
+//!   (Linux's linger), or says the command an administrator runs when the
+//!   account may not turn it on itself; a machine that starts a Hide here
+//!   over SSH asks it and shows that command on its screen (B30).
 //! - `firewall ask-allow`: the desktop app's one ask for the rules of the
 //!   folder's UDP port (chosen once): Windows's permission prompt runs
 //!   `firewall allow --port <n>` elevated, and one line says whether the
@@ -22,6 +26,7 @@ use serde_json::json;
 
 pub const USAGE: &str = "usage: hide always-on status [--json]
        hide always-on remove
+       hide always-on linger [--json]
        hide always-on firewall ask-allow
        hide always-on firewall allow --port <n> [--retire <n>]
        hide always-on firewall remove
@@ -31,6 +36,7 @@ pub const USAGE: &str = "usage: hide always-on status [--json]
 pub enum Command {
     Status { json: bool },
     Remove,
+    Linger { json: bool },
     FirewallAskAllow,
     FirewallAllow { port: u16, retired: Option<u16> },
     FirewallRemove,
@@ -44,6 +50,8 @@ pub fn parse(words: &[String]) -> Result<Command, String> {
         ["status"] => Ok(Command::Status { json: false }),
         ["status", "--json"] => Ok(Command::Status { json: true }),
         ["remove"] => Ok(Command::Remove),
+        ["linger"] => Ok(Command::Linger { json: false }),
+        ["linger", "--json"] => Ok(Command::Linger { json: true }),
         ["firewall", "ask-allow"] => Ok(Command::FirewallAskAllow),
         ["firewall", "allow", "--port", port] => port
             .parse()
@@ -85,6 +93,19 @@ pub fn run(command: &Command, home: &Path, state_dir: &Path) -> Result<(), Strin
             Ok(())
         }
         Command::Remove => remove(home, state_dir),
+        Command::Linger { json } => {
+            let linger = linger(&super::agents_for(home), home)?;
+            if *json {
+                // The line a machine reading it over SSH takes as an answer.
+                println!("{}", json!({ "ok": true, "value": linger }));
+            } else {
+                match linger["command"].as_str() {
+                    Some(command) => println!("linger: an administrator runs {command}"),
+                    None => println!("linger: {}", linger["linger"].as_str().unwrap_or_default()),
+                }
+            }
+            Ok(())
+        }
         Command::FirewallAskAllow => {
             println!("{}", json!({ "answer": ask_to_allow(state_dir)? }));
             Ok(())
@@ -186,6 +207,27 @@ fn status(home: &Path, state_dir: &Path) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// Asks for linger as the login item does when it is put in
+/// (`always_on::reconcile`): `on`, `needs_administrator` with the command
+/// that turns it on, or `not_used` on a system whose items need no linger
+/// and for a HOME that has no login items.
+fn linger(
+    agents: &hide_platform::user_agents::UserAgents,
+    home: &Path,
+) -> Result<serde_json::Value, String> {
+    use hide_platform::user_agents::Linger;
+    match agents.linger(home, &std::sync::atomic::AtomicBool::new(false)) {
+        Ok(Linger::On) => Ok(json!({ "linger": "on" })),
+        Ok(Linger::NeedsAdministrator { command }) => {
+            Ok(json!({ "linger": "needs_administrator", "command": command }))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            Ok(json!({ "linger": "not_used" }))
+        }
+        Err(error) => Err(format!("linger: {error}")),
+    }
+}
+
 /// The login item and its marker, then the install root's builds; the core
 /// they ran was stopped first (`hide stop`), so nothing runs from them.
 fn remove(home: &Path, state_dir: &Path) -> Result<(), String> {
@@ -229,8 +271,13 @@ mod tests {
                 retired: Some(50000)
             })
         );
+        assert_eq!(
+            parse(&words(&["linger", "--json"])),
+            Ok(Command::Linger { json: true })
+        );
         for refused in [
             &["firewall", "allow"][..],
+            &["linger", "now"],
             &["firewall", "allow", "--port", "x"],
             &["firewall", "allow", "--port", "51234", "--retire", "x"],
             &["remove", "--all"],
@@ -238,6 +285,52 @@ mod tests {
         ] {
             assert_eq!(parse(&words(refused)), Err(USAGE.to_owned()), "{refused:?}");
         }
+    }
+
+    /// A HOME with no login items, and a system whose items need no
+    /// linger, answer that linger is not used; nothing is asked of the
+    /// system.
+    #[test]
+    fn linger_is_not_used_where_no_login_item_needs_it() {
+        let home = tempfile::tempdir().unwrap();
+        let none = hide_platform::user_agents::UserAgents::none();
+        assert_eq!(
+            linger(&none, home.path()).unwrap(),
+            json!({ "linger": "not_used" })
+        );
+        assert_eq!(
+            linger(&crate::always_on::agents_for(home.path()), home.path()).unwrap(),
+            json!({ "linger": "not_used" })
+        );
+    }
+
+    /// Linux: an account that may not turn linger on itself is told the
+    /// command an administrator runs, and one that lingers is `on`.
+    #[cfg(unix)]
+    #[test]
+    fn linger_names_the_command_an_administrator_runs() {
+        use hide_platform::user_agents::{Kind, UserAgents};
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let stand_in = |script: &str| {
+            let loginctl = home.path().join("loginctl");
+            std::fs::write(&loginctl, script).unwrap();
+            std::fs::set_permissions(&loginctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+            UserAgents::fixture_of(Kind::Systemd, home.path())
+        };
+        let refused = stand_in(
+            "#!/bin/sh\ncase \"$1\" in\n  show-user) echo no ;;\n  enable-linger) exit 1 ;;\nesac\n",
+        );
+        let answer = linger(&refused, home.path()).unwrap();
+        assert_eq!(answer["linger"], "needs_administrator");
+        assert!(
+            answer["command"]
+                .as_str()
+                .is_some_and(|command| command.starts_with("sudo loginctl enable-linger ")),
+            "{answer}"
+        );
+        let on = stand_in("#!/bin/sh\n[ \"$1\" = show-user ] && echo yes\nexit 0\n");
+        assert_eq!(linger(&on, home.path()).unwrap(), json!({ "linger": "on" }));
     }
 
     /// `remove` takes the item, its marker and the builds; a folder that

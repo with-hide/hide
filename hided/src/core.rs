@@ -272,6 +272,10 @@ enum Command {
         device: String,
         reply: Sender<MoveSourceAnswer>,
     },
+    DeviceSwitchSource {
+        device: String,
+        reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
+    },
     InboundNode {
         node: String,
         label: String,
@@ -859,7 +863,6 @@ impl CoreHandle {
     /// is over (`project_open_unconfirmed`). The same request id asked
     /// again joins its first receipt; `unheld` says whether a folder no
     /// registered checkout holds may be registered.
-    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
     pub fn project_open(
         &self,
         device: &str,
@@ -867,7 +870,6 @@ impl CoreHandle {
         request_id: &str,
         unheld: hide_core::project_open::Unheld,
     ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
-        use hide_core::project_open::ProjectOpenReceipt;
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::ProjectOpen {
@@ -881,6 +883,41 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "project_open_unavailable".to_owned())??;
+        self.project_receipt(request_id)
+    }
+
+    /// Registers this machine's folder `path` as a project and brings
+    /// nothing forward, as a row of Add a project's importable list does
+    /// (`create_workspace` with a request id), then waits for its receipt
+    /// as [`Self::project_open`] does. The same request id asked again
+    /// joins its first receipt.
+    pub fn project_add(
+        &self,
+        path: &str,
+        label: &str,
+        request_id: &str,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        let event = serde_json::json!({
+            "schema_version": hide_core::SCHEMA_VERSION,
+            "kind": "create_workspace",
+            "payload": {
+                "path": path, "label": label, "initialize_git": false,
+                "request_id": request_id,
+            },
+        });
+        self.dispatch(event.to_string().into_bytes())
+            .map_err(|_| "project_open_unavailable".to_owned())?;
+        self.project_receipt(request_id)
+    }
+
+    /// The receipt of the request `request_id` once it settles, read again
+    /// every `PROJECT_OPEN_POLL` until `PROJECT_OPEN_WAIT` is over.
+    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
+    fn project_receipt(
+        &self,
+        request_id: &str,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        use hide_core::project_open::ProjectOpenReceipt;
         let deadline = std::time::Instant::now() + PROJECT_OPEN_WAIT;
         loop {
             let (reply, result) = mpsc::channel();
@@ -1201,6 +1238,22 @@ impl CoreHandle {
             .map_err(|_| "core owner thread is gone".to_owned())?;
         rx.recv()
             .map_err(|_| "core owner thread dropped the release source".to_owned())
+    }
+
+    /// What `device`'s switch to its machine's own connection starts from;
+    /// see `Core::device_switch_source`.
+    pub fn device_switch_source(
+        &self,
+        device: &str,
+    ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::DeviceSwitchSource {
+                device: device.to_owned(),
+                reply,
+            })
+            .map_err(|_| "hide_unavailable")?;
+        rx.recv().map_err(|_| "hide_unavailable")?
     }
 
     pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
@@ -1939,6 +1992,9 @@ fn owner_loop(
             }
             Command::MoveSource { device, reply } => {
                 let _ = reply.send(core.move_source(&device));
+            }
+            Command::DeviceSwitchSource { device, reply } => {
+                let _ = reply.send(core.device_switch_source(&device));
             }
             Command::ReleaseSource { node, reply } => {
                 let _ = reply.send(core.release_source(&node));

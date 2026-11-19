@@ -229,7 +229,163 @@ impl hide_node::terminal::OutputSink for NoScreens {
     fn clipboard(&self, _pane: &str, _text: &[u8]) {}
 }
 
+/// Where one guest's node keeps its state and runs its builds from.
+struct Place {
+    /// The node's `--guest` folder.
+    node: PathBuf,
+    /// The folder its builds are placed in.
+    install: PathBuf,
+    /// Whether they are the device helper's folders, which this guest took
+    /// over ([`Guests::take_helper`]), and not folders of the guest's own.
+    helper: bool,
+}
+
+/// What became of a guest's ask for the device helper's folder on this
+/// machine (PRD device-connect-iroh D-49, D-75).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HelperFolder {
+    /// The guest's node runs on the helper's panes from now on.
+    Taken,
+    /// No helper ever ran on this account: there is nothing to take.
+    Absent,
+    /// The guest's work already runs here from a folder of its own, which
+    /// it keeps.
+    Kept,
+    /// Another paired machine took the folder first.
+    HeldBy(PeerKey),
+}
+
 impl Guests {
+    /// The paired machine that took the device helper's folder over, with
+    /// the helper root, as the record in that folder says.
+    fn helper_taken(&self) -> Option<(PeerKey, PathBuf)> {
+        let taken = layout::HelperGuest::read(&layout::device_node_state(&self.home))?;
+        let key = PeerKey::from_hex(&taken.key).ok()?;
+        taken.root.is_absolute().then_some((key, taken.root))
+    }
+
+    /// The paired machine that took the device helper's folder over.
+    pub fn helper_holder(&self) -> Option<PeerKey> {
+        self.helper_taken().map(|(key, _)| key)
+    }
+
+    /// The helper root `spelled` names on this account (`~/` is its home),
+    /// when a device helper was installed there: a folder with a build of
+    /// Hide's in it. Any other folder is not one a guest may name as its
+    /// install root.
+    fn helper_root(&self, spelled: &str) -> Option<PathBuf> {
+        let root = layout::expand_home(spelled, &self.home);
+        let built = std::fs::read_dir(&root).ok()?.flatten().any(|entry| {
+            entry.file_name().to_str().is_some_and(build::is_id)
+                && entry
+                    .path()
+                    .join(format!("hided{}", std::env::consts::EXE_SUFFIX))
+                    .is_file()
+        });
+        (root.is_absolute() && built).then_some(root)
+    }
+
+    /// Gives `guest` the device helper's folder when no other paired
+    /// machine holds it: the first to ask keeps it, and a later one gets a
+    /// folder of its own like any guest (D-75). `paired` says whether a
+    /// machine still holds a grant here; the record of one that does not,
+    /// and has nothing running here, is a pairing that never finished and
+    /// is replaced. Blocking.
+    pub fn take_helper(
+        &self,
+        guest: &PeerKey,
+        root: &str,
+        paired: impl Fn(&PeerKey) -> bool,
+    ) -> HelperFolder {
+        match self.helper_for(guest, root, paired) {
+            // Free: nobody holds it, and `guest` runs nothing here yet.
+            HelperFolder::Kept if !self.runs_here(guest) => {}
+            found => return found,
+        }
+        let Some(root) = self.helper_root(root) else {
+            return HelperFolder::Absent;
+        };
+        let taken = layout::HelperGuest {
+            key: guest.to_hex(),
+            root,
+        };
+        match serde_json::to_vec(&taken)
+            .map_err(io::Error::other)
+            .and_then(|bytes| {
+                atomic::write_file(
+                    &layout::device_node_guest(&self.home),
+                    &bytes,
+                    Access::Private,
+                )
+            }) {
+            Ok(_) => {
+                record("guests.helper_taken", guest, json!({}));
+                HelperFolder::Taken
+            }
+            Err(error) => {
+                record(
+                    "guests.helper_not_taken",
+                    guest,
+                    json!({"reason": error.to_string()}),
+                );
+                HelperFolder::Kept
+            }
+        }
+    }
+
+    /// Whether a node of `guest` ever ran on this machine, from a folder
+    /// of its own.
+    fn runs_here(&self, guest: &PeerKey) -> bool {
+        lock(&self.hosted).contains_key(guest) || self.remembered(guest).is_some()
+    }
+
+    /// What `guest` would find if it asked for the device helper's folder
+    /// now, and nothing changes: [`HelperFolder::Kept`] for a folder it
+    /// does not hold, which it may take unless its node already ran here
+    /// from a folder of its own. Blocking.
+    pub fn helper_for(
+        &self,
+        guest: &PeerKey,
+        root: &str,
+        paired: impl Fn(&PeerKey) -> bool,
+    ) -> HelperFolder {
+        let folder = layout::device_node_state(&self.home);
+        if !layout::pane_records(&folder).is_dir() || self.helper_root(root).is_none() {
+            return HelperFolder::Absent;
+        }
+        match self.helper_holder() {
+            Some(holder) if holder == *guest => HelperFolder::Taken,
+            Some(holder)
+                if paired(&holder)
+                    || lock(&self.hosted).get(&holder).is_some_and(Hosted::at_work) =>
+            {
+                HelperFolder::HeldBy(holder)
+            }
+            _ => HelperFolder::Kept,
+        }
+    }
+
+    /// The folders of `guest`'s node: the device helper's when the guest
+    /// took them over, and its own below its guest folder otherwise. The
+    /// one place that chooses, so the node, its builds and their removal
+    /// agree.
+    fn place(&self, guest: &PeerKey) -> Place {
+        if let Some((holder, root)) = self.helper_taken()
+            && holder == *guest
+        {
+            return Place {
+                node: layout::device_node_state(&self.home),
+                install: root,
+                helper: true,
+            };
+        }
+        Place {
+            node: layout::guest_node_side(&self.state_dir, guest),
+            install: layout::guest_install_root(&self.state_dir, guest),
+            helper: false,
+        }
+    }
+
     /// Called on the daemon's runtime, whose tasks follow each guest's
     /// node.
     pub fn new(
@@ -351,7 +507,7 @@ impl Guests {
         }
         let mut phase = node.phase();
         let record = layout::guest_node_record(&self.state_dir, guest);
-        let builds = layout::guest_install_root(&self.state_dir, guest);
+        let builds = self.place(guest).install;
         let following = Arc::clone(&tap);
         let guests = Arc::downgrade(self);
         let followed = *guest;
@@ -508,7 +664,7 @@ impl Guests {
     /// Starts the guest's node from the build it last ran, when that build
     /// is still placed. Blocking.
     fn start_remembered(&self, guest: &PeerKey, node: &Arc<GuestNode>) -> bool {
-        let root = layout::guest_install_root(&self.state_dir, guest);
+        let root = self.place(guest).install;
         let program = self.remembered(guest).and_then(|remembered| {
             guest_build::placed(&root, &remembered.build_id, std::env::consts::OS)
         });
@@ -719,7 +875,7 @@ impl Guests {
     /// (`hide_kit::remove_guest`), and leaves the account's `hide` command,
     /// its skills and every other installation's entries. Blocking.
     fn unhook(&self, guest: &PeerKey) {
-        let root = layout::guest_install_root(&self.state_dir, guest);
+        let root = self.place(guest).install;
         let report = hide_kit::remove_guest(&root, &self.home);
         let outcomes = report
             .components
@@ -752,14 +908,38 @@ impl Guests {
     }
 
     fn remove_folder(&self, guest: &PeerKey) {
-        if let Err(error) = std::fs::remove_dir_all(layout::guest_dir(&self.state_dir, guest))
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            record(
-                "guests.folder_not_removed",
-                guest,
-                json!({"reason": error.to_string()}),
-            );
+        let place = self.place(guest);
+        // The node of a guest that took the device helper's folder ran
+        // there, so that folder and the helper root go with the guest as a
+        // folder of its own would. A guest whose pairing never finished ran
+        // nothing there: only its record goes, and the helper's panes stay
+        // for the machine that still dials them.
+        let mut gone = Vec::new();
+        if place.helper {
+            if self.remembered(guest).is_some() {
+                gone.push(place.node);
+                gone.push(place.install);
+            } else if let Err(error) = std::fs::remove_file(layout::device_node_guest(&self.home))
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                record(
+                    "guests.folder_not_removed",
+                    guest,
+                    json!({"reason": error.to_string()}),
+                );
+            }
+        }
+        gone.push(layout::guest_dir(&self.state_dir, guest));
+        for folder in gone {
+            if let Err(error) = std::fs::remove_dir_all(&folder)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                record(
+                    "guests.folder_not_removed",
+                    guest,
+                    json!({"reason": error.to_string()}),
+                );
+            }
         }
     }
 
@@ -863,7 +1043,7 @@ impl Guests {
             return Err((NodeStop::Other, format!("{id:?} names no build")));
         }
         self.folder(guest)?;
-        let root = layout::guest_install_root(&self.state_dir, guest);
+        let root = self.place(guest).install;
         if let Some(program) = guest_build::placed(&root, id, std::env::consts::OS) {
             return Ok(program);
         }
@@ -931,10 +1111,12 @@ impl Guests {
                 limits::MAX_GRANTS
             ));
         }
+        let place = self.place(guest);
         let node = GuestNode::new(
             *guest,
-            layout::guest_node_side(&self.state_dir, guest),
+            place.node,
             self.home.clone(),
+            place.helper.then(|| self.state_dir.clone()),
         );
         let tap = self.tap_of(guest, device, &node);
         hosted.insert(
@@ -1239,7 +1421,7 @@ impl Guests {
         };
         let placed = tokio::task::spawn_blocking(move || {
             guests.folder(&guest).map_err(|refusal| refusal.1)?;
-            let root = layout::guest_install_root(&guests.state_dir, &guest);
+            let root = guests.place(&guest).install;
             guests.make_room(&guest, &root, &named);
             guest_build::place(&root, &named, &files, &mut upload)
         })
@@ -1711,6 +1893,83 @@ mod tests {
 
     fn key(byte: u8) -> PeerKey {
         PeerKey::from_hex(&format!("{byte:02x}").repeat(32)).unwrap()
+    }
+
+    /// D-49, D-75: the folder a device helper ran in goes to the first
+    /// paired machine that asks for it with the helper's root, a later one
+    /// is told who holds it and keeps a folder of its own, and a holder
+    /// whose pairing never finished is replaced.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_first_paired_machine_to_ask_takes_the_helpers_folder_and_a_later_one_is_told_who_holds_it()
+     {
+        let state = short_root();
+        let home = tempfile::tempdir().unwrap();
+        let guests = Guests::new(
+            state.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        );
+        let root = "~/.hide/host-helper";
+        let paired = |_: &PeerKey| true;
+        assert_eq!(
+            guests.take_helper(&key(1), root, paired),
+            HelperFolder::Absent,
+            "no helper ever ran on this account"
+        );
+        // What an SSH device left: its node's folder with its panes'
+        // records, and a build under the root its core was allowed.
+        let node = layout::device_node_state(home.path());
+        std::fs::create_dir_all(layout::pane_records(&node)).unwrap();
+        let build = home.path().join(".hide/host-helper/0123456789abcdef");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(
+            build.join(format!("hided{}", std::env::consts::EXE_SUFFIX)),
+            b"",
+        )
+        .unwrap();
+        assert_eq!(
+            guests.take_helper(&key(1), "~/elsewhere", paired),
+            HelperFolder::Absent,
+            "a folder with no build of Hide's is no helper root"
+        );
+
+        assert_eq!(
+            guests.take_helper(&key(1), root, paired),
+            HelperFolder::Taken
+        );
+        assert_eq!(
+            guests.take_helper(&key(1), root, paired),
+            HelperFolder::Taken,
+            "the same machine asks again"
+        );
+        let place = guests.place(&key(1));
+        assert!(place.helper);
+        assert_eq!(place.node, node);
+        assert_eq!(place.install, home.path().join(".hide/host-helper"));
+
+        assert_eq!(
+            guests.helper_for(&key(2), root, paired),
+            HelperFolder::HeldBy(key(1))
+        );
+        assert_eq!(
+            guests.take_helper(&key(2), root, paired),
+            HelperFolder::HeldBy(key(1)),
+            "a later machine changes nothing"
+        );
+        assert!(guests.place(&key(1)).helper);
+        let own = guests.place(&key(2));
+        assert!(!own.helper);
+        assert!(own.node.starts_with(state.path()), "{:?}", own.node);
+
+        // The holder holds no grant here and runs nothing: its pairing
+        // never finished, and the next machine takes the folder.
+        assert_eq!(
+            guests.take_helper(&key(2), root, |_| false),
+            HelperFolder::Taken
+        );
+        assert!(guests.place(&key(2)).helper);
+        assert!(!guests.place(&key(1)).helper);
     }
 
     /// A copy of a released state folder as the release left it: every file

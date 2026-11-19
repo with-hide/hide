@@ -2841,6 +2841,12 @@ fn handle_client_text(
                 .map_err(str::to_owned)?;
             return Ok(ClientAction::Replies(Vec::new()));
         }
+        // A device's switch is the daemon's own pairing with its machine; a
+        // client that named a step would hand the device to a key nobody
+        // paired.
+        Some("device_switch") => {
+            return Err("device_switch is sent by the daemon only".to_owned());
+        }
         Some(kind) if kind.starts_with("pairing_") => {
             return Ok(ClientAction::Pairing(event));
         }

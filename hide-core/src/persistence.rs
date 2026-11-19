@@ -220,6 +220,10 @@ struct StoredUiState {
     /// defaults, as it did.
     #[serde(default)]
     pane_launches: BTreeMap<String, crate::model::PaneLaunch>,
+    /// Absent in a store written before a helper device could be switched,
+    /// and whenever no switched device waits for its first open.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    device_switch_opens: BTreeSet<String>,
     /// Absent in a store written before the request view; loads empty, and
     /// each row's wait starts over once.
     #[serde(default)]
@@ -792,6 +796,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             pane_read_records: stored.pane_read_records,
             pane_completions: stored.pane_completions,
             pane_launches: stored.pane_launches,
+            device_switch_opens: stored.device_switch_opens,
             request_verbs: stored.request_verbs,
             agent_sleep_after_hours: crate::agent_sleep::loaded_after_hours(
                 stored.agent_sleep_hours,
@@ -992,6 +997,7 @@ pub fn save(
         pane_read_records: state.pane_read_records.clone(),
         pane_completions: state.pane_completions.clone(),
         pane_launches: state.pane_launches.clone(),
+        device_switch_opens: state.device_switch_opens.clone(),
         request_verbs: state.request_verbs.clone(),
         pane_terminal_sizes: pane_terminal_sizes.clone(),
         agent_sleep_hours: Some(crate::agent_sleep::stored_after_hours(
@@ -1231,7 +1237,8 @@ mod tests {
                 (
                     "windows-pc",
                     crate::model::LinkOrigin::Peer {
-                        key: "ab".repeat(32)
+                        key: "ab".repeat(32),
+                        switched: false,
                     }
                 ),
             ]

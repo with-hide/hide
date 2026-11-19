@@ -263,6 +263,17 @@ pub struct GuestNode {
     node_dir: PathBuf,
     /// The account's home, as this daemon read it at its start.
     home: PathBuf,
+    /// The state folder the node's process is told, for the node of the
+    /// device helper's folder: this daemon's own. The helper ran under the
+    /// login this daemon runs under, so the panes it started ask in this
+    /// folder, and a node given the login's variables alone would look for
+    /// them in the account's default one (D-49). That rests on one
+    /// assumption: the SSH login the helper was started over resolved the
+    /// same state folder as this daemon, which holds for the default one;
+    /// a login whose `XDG_STATE_HOME` differs from the daemon's leaves the
+    /// carried-on panes' hooks asking elsewhere. A guest's own node names
+    /// its folder itself and is told none.
+    process_state: Option<PathBuf>,
     phase: watch::Sender<Phase>,
     control: Mutex<Control>,
     wake: Condvar,
@@ -276,11 +287,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl GuestNode {
-    pub fn new(guest: PeerKey, node_dir: PathBuf, home: PathBuf) -> Arc<Self> {
+    pub fn new(
+        guest: PeerKey,
+        node_dir: PathBuf,
+        home: PathBuf,
+        process_state: Option<PathBuf>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             guest,
             node_dir,
             home,
+            process_state,
             phase: watch::Sender::new(Phase::ended()),
             control: Mutex::default(),
             wake: Condvar::new(),
@@ -591,6 +608,9 @@ impl GuestNode {
         // `sshd` that names it.
         if let Ok(shell) = hide_platform::host::default_shell() {
             command.env("SHELL", shell);
+        }
+        if let Some(state) = &self.process_state {
+            command.env("HIDE_STATE_DIR", state);
         }
         command
             .env("HOME", &self.home)

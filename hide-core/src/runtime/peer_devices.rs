@@ -146,11 +146,14 @@ impl Runtime {
             .device_registrations
             .iter()
             .filter(|registration| {
-                registration.origin.peer_key().is_some_and(|key| {
-                    !peers
-                        .iter()
-                        .any(|machine| machine.key == key && held(machine))
-                })
+                // A switch whose save is not acknowledged is still the
+                // helper's device: its save settles it either way.
+                !self.device_switch_saving.contains_key(&registration.id)
+                    && registration.origin.peer_key().is_some_and(|key| {
+                        !peers
+                            .iter()
+                            .any(|machine| machine.key == key && held(machine))
+                    })
             })
             .map(|registration| registration.id.clone())
             .collect();
@@ -170,6 +173,13 @@ impl Runtime {
             if machine.device_id == self.node.as_str() {
                 continue;
             }
+            // A helper device that is being switched to this machine's
+            // connection takes it now, under the registration it has
+            // (`device_switch`).
+            if let Some(device) = self.switching_to(&machine.key) {
+                changed |= self.switch_device_link(&device, &machine.key);
+                continue;
+            }
             let registered =
                 self.snapshot
                     .ui_state
@@ -184,13 +194,15 @@ impl Runtime {
                 continue;
             };
             let registration = &mut self.snapshot.ui_state.device_registrations[index];
-            if registration.id != machine.device_id
-                || registration.origin.peer_key() != Some(machine.key.as_str())
-            {
-                // Another registration holds this machine's id, or this
+            // A device switched from a helper keeps the id it had, which
+            // need not be the one its machine names itself by.
+            let same_id = registration.id == machine.device_id || registration.origin.switched();
+            if !same_id || registration.origin.peer_key() != Some(machine.key.as_str()) {
+                // Another registration holds this machine's id (a helper
+                // device the operator has not switched, D-49), or this
                 // machine's key came back under another id: neither is
                 // replaced here, and the machine shows as paired without a
-                // device until that registration is removed.
+                // device until that registration is switched or removed.
                 crate::diagnostic!(serde_json::json!({
                     "component": "peer_devices",
                     "kind": "peer_device.id_taken",
@@ -199,7 +211,8 @@ impl Runtime {
                 }));
                 continue;
             }
-            if registration.label != machine.name {
+            // A switched device keeps the name its operator gave it (B36).
+            if !registration.origin.switched() && registration.label != machine.name {
                 registration.label = machine.name.clone();
                 self.rebuild_device_rows();
                 self.persist_current_ui_state();
@@ -233,6 +246,7 @@ impl Runtime {
             label: machine.name.clone(),
             origin: LinkOrigin::Peer {
                 key: machine.key.clone(),
+                switched: false,
             },
             host_consent: Some(self.new_host_consent()),
         };
