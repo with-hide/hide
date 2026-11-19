@@ -7,6 +7,7 @@ import { callAutomations } from "./automationCall";
 import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, type AutomationExample } from "./automationDraft";
 import { AutomationForm, EXAMPLE_WORDS } from "./AutomationForm";
 import { settledPlace } from "./automationPlace";
+import { viewRun } from "./automationRunView";
 import { lastResult, pauseReasonText, recordText, scheduleText, whenText, type RecordTone } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
 import { formatElapsed, useMinuteClock } from "./components/elapsed";
@@ -582,9 +583,6 @@ function paneRowOf(rest: SnapshotRest | null, paneId: string | undefined): PaneR
   return null;
 }
 
-/** How often a showing run terminal tells the core again that it shows: the core holds a viewing for 30 minutes (`VIEWING_HOLD_MS`). */
-const VIEWING_REPEAT_MS = 5 * 60_000;
-
 /**
  * A run's terminal in the automation screen (B16-B18): the run going, live
  * and typed into, with [■ 멈추기]; a finished one's conversation opened
@@ -608,16 +606,7 @@ function RunView({ automation, run, actions }: { automation: Automation; run: Ex
     if (openable) opening.open();
   }, [live, openable, opening]);
   // Said again well inside the core's hold, so a terminal watched longer than it stays open (B15).
-  useEffect(() => {
-    if (!live) return undefined;
-    const say = () => actions.automationRunViewing(automation.id, run.number, true);
-    say();
-    const again = window.setInterval(say, VIEWING_REPEAT_MS);
-    return () => {
-      window.clearInterval(again);
-      actions.automationRunViewing(automation.id, run.number, false);
-    };
-  }, [actions, automation.id, run.number, live]);
+  useEffect(() => (live ? viewRun((on) => actions.automationRunViewing(automation.id, run.number, on)) : undefined), [actions, automation.id, run.number, live]);
   const shown = recordText(run, words.now, words.zone, words.language, t);
   const when = whenText(run.due_unix_ms ?? run.started_at_unix_ms, words.now, words.zone, words.language, t);
   let body: ReactNode;
