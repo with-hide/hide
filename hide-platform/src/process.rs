@@ -5,7 +5,8 @@
 //! so ending it ends everything it started, and dropping the owner ends it
 //! too (engineering rule 14; practice `process.md`). On Windows the job also
 //! ends the child when the owner dies without running a destructor
-//! (`KILL_ON_JOB_CLOSE`). [`OwnedChild::spawn_guarded`] adds an acknowledged
+//! (`KILL_ON_JOB_CLOSE`). A resident child ([`start_resident`]) the owned
+//! child starts leaves its group (Unix) or job (Windows), and only it. [`OwnedChild::spawn_guarded`] adds an acknowledged
 //! independent Unix owner channel for cooperative children that retain an
 //! [`OwnerWatch`], without using or replacing stdin.
 //!
@@ -5112,7 +5113,7 @@ mod sys {
     };
     use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectAssociateCompletionPortInformation, JobObjectBasicAccountingInformation,
@@ -5381,7 +5382,11 @@ mod sys {
         }
         // SAFETY: an all-zero limit structure is a valid value.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // A resident start (`start_resident`) asks to leave the job and is
+        // let go, as a resident leaves the process group on Unix; every
+        // other process the child starts stays in it.
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         static NEXT_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let name = deadline.map(|_| {
             format!(

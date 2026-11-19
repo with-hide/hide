@@ -532,6 +532,38 @@ fn a_resident_child_outlives_what_ends_its_starter() {
     assert!(resident.is_running(), "the resident ended with its starter");
 }
 
+/// A program run as an owned child (`OwnedChild`, as `run_to_end` runs
+/// `hided core-update`) places a resident and ends; ending the owned
+/// child's tree, its group on Unix and its kill-on-close job on Windows,
+/// leaves the resident running.
+#[test]
+fn a_resident_child_outlives_the_owned_child_that_started_it() {
+    let mut command = role_command("starter");
+    let mut starter = hide_platform::process::OwnedChild::spawn(&mut command).unwrap();
+    let stdout = starter.take_stdout().unwrap();
+    let (sender, heard) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            for marker in ["STARTED ", "REFUSED "] {
+                if let Some((_, rest)) = line.split_once(marker) {
+                    let _ = sender.send(format!("{marker}{rest}"));
+                    return;
+                }
+            }
+        }
+    });
+    let line = heard
+        .recv_timeout(HANG_LIMIT)
+        .expect("the starter answered nothing");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let resident = Started::new(field(&line, "pid").parse().unwrap());
+    starter.kill_tree().unwrap();
+    assert!(
+        resident.is_running(),
+        "the resident ended with the owned child's tree"
+    );
+}
+
 /// The job the desktop app's daemon runs in: Electron starts it with
 /// Node's `child_process.spawn`, whose libuv job ends its processes when the
 /// app closes it and lets each leave, silently. A resident started there
