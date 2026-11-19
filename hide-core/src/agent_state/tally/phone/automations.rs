@@ -274,13 +274,20 @@ mod tests {
         assert_eq!(first.records.len(), 2);
         assert!(matches!(&first.records[0], PhoneRecord::Run(run) if run.number == 1));
         assert_eq!(
-            projected.find("b").unwrap().paused.map(|pause| pause.reason),
+            projected
+                .find("b")
+                .unwrap()
+                .paused
+                .map(|pause| pause.reason),
             Some(PauseReason::LoginExpired)
         );
         assert_eq!(projected.zone.as_deref(), Some("Asia/Seoul"));
         let sent = serde_json::to_string(&projected).unwrap();
         for private in ["secret", "folder", "task", "pane", "branch"] {
-            assert!(!sent.contains(private), "{private} reached the phone: {sent}");
+            assert!(
+                !sent.contains(private),
+                "{private} reached the phone: {sent}"
+            );
         }
     }
 

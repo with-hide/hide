@@ -3336,14 +3336,13 @@ mod tests {
     /// phone has no button for is refused before anything is claimed.
     #[tokio::test]
     async fn a_phone_automation_press_is_the_desktop_event_claimed_once_per_press() {
-        let press = |action: &str, id: &str, request: &str| {
-            json!({"type": "automation", "request_id": request, "action": action, "id": id})
-        };
+        let press = |action: &str, id: &str, request: &str| json!({"type": "automation", "request_id": request, "action": action, "id": id});
         let listed = listed_automations(false);
         for action in ["run", "pause", "resume"] {
-            let event: Value =
-                serde_json::from_slice(&automation_event(&press(action, "auto-1", "r"), &listed).unwrap())
-                    .unwrap();
+            let event: Value = serde_json::from_slice(
+                &automation_event(&press(action, "auto-1", "r"), &listed).unwrap(),
+            )
+            .unwrap();
             assert_eq!(event["kind"], format!("automation_{action}"));
             assert_eq!(event["payload"], json!({"id": "auto-1"}));
         }
@@ -3359,7 +3358,9 @@ mod tests {
             automation_event(&press("run", "auto-1", "r"), &listed_automations(true)),
             Err("running")
         );
-        assert!(automation_event(&press("pause", "auto-1", "r"), &listed_automations(true)).is_ok());
+        assert!(
+            automation_event(&press("pause", "auto-1", "r"), &listed_automations(true)).is_ok()
+        );
 
         let directory = tempfile::tempdir().unwrap();
         let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
@@ -3374,7 +3375,12 @@ mod tests {
                 first["action"].as_str(),
                 first["ok"].as_bool()
             ),
-            (Some("automation_result"), Some("a"), Some("run"), Some(true)),
+            (
+                Some("automation_result"),
+                Some("a"),
+                Some("run"),
+                Some(true)
+            ),
             "{first}"
         );
         assert!(matches!(
