@@ -929,6 +929,27 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
         // refuse to (`shipped::place_guest_build`).
         let programs = fixture.hide.parent().context("the staged build")?;
         crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
+        // A letter waits for the device's agent when the switch starts: no
+        // prompt of the agent's has taken it yet.
+        let send = format!(
+            "{} request send remote-child --intent switch-1 --body {}",
+            quote(&fixture.hide),
+            quote("SWITCH_PENDING_ONCE")
+        );
+        let letter = fixture.local.run_in_pane(&send)?.json()?;
+        let letter = letter["id"].as_str().context("sent letter ID")?.to_owned();
+        let waits = |fixture: &Fixture, state: State| -> Result<bool> {
+            Ok(fixture
+                .ledger()?
+                .letters
+                .iter()
+                .any(|sent| sent.id == letter && sent.state == state))
+        };
+        ensure!(
+            waits(fixture, State::Pending)?,
+            "the letter does not wait for the device's agent before the switch"
+        );
+        let remote_hooks = fixture.remote.hooks.clone();
         let journey = (|| -> Result<()> {
             // Allowed: a Hide of the account's own is started over the
             // same SSH login, from the helper's build, and paired with.
@@ -1025,6 +1046,44 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
             ensure!(
                 before == after,
                 "the pane's program was started again: {before} then {after}"
+            );
+
+            // The letter that waited through the switch was neither lost
+            // nor taken by it, and reaches the agent once: by its pane's
+            // own prompt hook, which finds this core through the node that
+            // took the helper's folder.
+            ensure!(
+                waits(fixture, State::Pending)?,
+                "the switch changed a letter that waited for the device's agent"
+            );
+            let bell = fixture.rung(&letter)?;
+            let prompt = hook(&remote_hooks, "fixture-remote-session", &bell);
+            let delivered = fixture.remote.run_in_pane(&prompt)?;
+            let intake = context(&delivered.stdout)?;
+            ensure!(
+                delivered.status == 0
+                    && intake.contains(&letter)
+                    && intake.contains("SWITCH_PENDING_ONCE"),
+                "the agent's prompt after the switch did not take the letter: {:?}, stderr {:?}",
+                delivered.stdout,
+                delivered.stderr
+            );
+            wait_for("the letter confirmed as delivered", || {
+                Ok(waits(fixture, State::Delivered)?.then_some(()))
+            })?;
+            let again = fixture.remote.run_in_pane(&prompt)?;
+            ensure!(
+                again.status == 0 && context(&again.stdout)?.is_empty(),
+                "the letter reached the agent a second time: {:?}",
+                again.stdout
+            );
+            ensure!(
+                fixture
+                    .remote
+                    .run_in_pane(&stop(&remote_hooks, "fixture-remote-session"))?
+                    .status
+                    == 0,
+                "the device agent's stop hook failed after the switch"
             );
             Ok(())
         })();
