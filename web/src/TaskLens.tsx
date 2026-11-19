@@ -46,7 +46,7 @@ import { sessionOfAgent } from "./sessionWork";
 import { commandLabel } from "./shortcutLabels";
 import { revealRow, sidebarFocusPane } from "./sidebarFocus";
 import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
-import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
+import { catalogWorkspaces, listedCatalog, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
 import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
@@ -112,7 +112,8 @@ export function TaskLens({ actions }: { actions: Actions }) {
   // Lineage crosses devices, so a row's children are read from every device's agents.
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
-  const projects = useMemo(() => catalogWorkspaces(rest), [rest]);
+  // A run in an automation's own folder stands under no project (PRD automations B30).
+  const projects = useMemo(() => listedCatalog(rest), [rest]);
   const archived = useMemo(() => {
     const rows = archivedRows(rest, deviceId);
     return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.workspace_id) : rows;

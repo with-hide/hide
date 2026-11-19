@@ -3884,6 +3884,11 @@ export function listedWorkspaces(workspaces: Workspace[]): Workspace[] {
   return listed;
 }
 
+/** `catalogWorkspaces` as a person picks from it: every project but an automation's own folder (`listedWorkspaces`). */
+export function listedCatalog(rest: SnapshotRest | null): Workspace[] {
+  return listedWorkspaces(catalogWorkspaces(rest));
+}
+
 /** `catalogWorkspaces` from the two fields it reads, for a component that subscribes to those alone. */
 export function catalogOf(workspaces: Workspace[] | undefined, remote: RemoteStatus[] | undefined): Workspace[] {
   return [...(workspaces ?? []), ...(remote ?? []).flatMap((row) => row.session?.workspaces ?? [])];

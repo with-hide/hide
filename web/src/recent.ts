@@ -24,7 +24,7 @@ import { allProjectsCount } from "./navigation";
 import { translate } from "./i18n/client";
 import { remoteContext, remoteView } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { type AgentRow, type Checkout, type PaneRow, type SnapshotRest, type Tab, type ViewDisplaySnapshot, type Workspace } from "./snapshot";
+import { listedWorkspaces, type AgentRow, type Checkout, type PaneRow, type SnapshotRest, type Tab, type ViewDisplaySnapshot, type Workspace } from "./snapshot";
 import type { Screen } from "./ui";
 import { activeDisplay, areasOf } from "./viewLayout";
 import { workspaceViewOf } from "./workspace";
@@ -101,12 +101,13 @@ type DeviceCheckout = { deviceId: string; workspace: Workspace; checkout: Checko
  */
 function allCheckouts(rest: SnapshotRest | null): DeviceCheckout[] {
   const local = localDeviceId(rest);
-  const rows: DeviceCheckout[] = (rest?.navigator?.workspaces ?? [])
+  // An automation's own folder is no project to move to (PRD automations B30).
+  const rows: DeviceCheckout[] = listedWorkspaces(rest?.navigator?.workspaces ?? [])
     .filter((workspace) => workspace.device_id === local)
     .flatMap((workspace) => workspace.checkouts.map((checkout) => ({ deviceId: local, workspace, checkout })));
   for (const status of rest?.status?.remote ?? []) {
     if (status.state !== "connected") continue;
-    for (const workspace of status.session?.workspaces ?? []) {
+    for (const workspace of listedWorkspaces(status.session?.workspaces ?? [])) {
       for (const checkout of workspace.checkouts) rows.push({ deviceId: status.target_id, workspace, checkout });
     }
   }

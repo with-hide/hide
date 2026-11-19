@@ -14,7 +14,7 @@ import { thisMachineKey } from "./devices";
 import { machineName } from "./screenMachine";
 import { remoteContext } from "./remote";
 import type { Checkout, Device, SnapshotRest, Workspace } from "./snapshot";
-import { frontCheckout, localDeviceId } from "./snapshot";
+import { frontCheckout, listedWorkspaces, localDeviceId } from "./snapshot";
 import type { Screen } from "./ui";
 import { projectSettings, settingsTarget } from "./projectSettings";
 
@@ -80,9 +80,9 @@ function groupOf(rest: SnapshotRest, device: Pick<Device, "id" | "kind">, name: 
   // Only the front device's items go unprefixed: the trigger already sits where that device is.
   const prefix = front ? "" : `${name} · `;
   const projects: StartProject[] = [];
-  for (const workspace of workspaces) {
-    // An automation's own folder is no project to start in (PRD automations B30).
-    if (workspace.temporary || workspace.unlisted) continue;
+  // An automation's own folder is no project to start in (PRD automations B30).
+  for (const workspace of listedWorkspaces(workspaces)) {
+    if (workspace.temporary) continue;
     const branches: StartTarget[] = [];
     for (const checkout of workspace.checkouts) {
       if (!checkout.exists) continue;
