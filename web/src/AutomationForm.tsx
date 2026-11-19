@@ -31,11 +31,12 @@ import { useUiStore } from "./ui";
 
 const OWN_FOLDER = "__own";
 const DEFAULT_EFFORT = "__default";
-const KINDS: readonly ScheduleKind[] = ["daily", "weekdays", "weekly", "every_hours", "cron"];
+const KINDS: readonly ScheduleKind[] = ["daily", "weekdays", "weekly", "every_minutes", "every_hours", "cron"];
 const KIND_KEY = {
   daily: "automationScreen.form.kind.daily",
   weekdays: "automationScreen.form.kind.weekdays",
   weekly: "automationScreen.form.kind.weekly",
+  every_minutes: "automationScreen.form.kind.everyMinutes",
   every_hours: "automationScreen.form.kind.everyHours",
   cron: "automationScreen.form.kind.cron",
 } as const satisfies Record<ScheduleKind, string>;
@@ -45,6 +46,8 @@ export const EXAMPLE_WORDS = {
   deps: { name: "automationScreen.example.deps.name", task: "automationScreen.example.deps.task" },
   ci: { name: "automationScreen.example.ci.name", task: "automationScreen.example.ci.task" },
 } as const satisfies Record<AutomationExample, { name: string; task: string }>;
+/** The core's `EVERY_MINUTES`: each divides the hour, so every hour runs alike (D-06). */
+const MINUTES = [5, 10, 15, 30];
 const HOURS = Array.from({ length: 12 }, (_, index) => index + 1);
 /** How long typing waits before the core reads the schedule, so a cron line is read once it is written, not per key. */
 const PREVIEW_WAIT_MS = 200;
@@ -276,7 +279,7 @@ function AgentFields({ draft, change, actions }: { draft: FormDraft; change: (pa
   );
 }
 
-/** 매일 / 평일 / 매주 with its days / N시간마다 with its interval, each with its time, or a cron line (B6). */
+/** 매일 / 평일 / 매주 with its days / N시간마다 with its interval, each with its time; N분마다 from each hour's start; or a cron line (B6). */
 function ScheduleFields({ schedule, change, language }: { schedule: ScheduleDraft; change: (patch: Partial<ScheduleDraft>) => void; language: ReturnType<typeof requireInterfaceLanguage> }) {
   const { t } = useInterfaceTranslation();
   return (
@@ -288,15 +291,23 @@ function ScheduleFields({ schedule, change, language }: { schedule: ScheduleDraf
             {KINDS.map((kind) => <SelectItem key={kind} value={kind} data-automation-schedule-kind={kind}>{t(KIND_KEY[kind])}</SelectItem>)}
           </SelectContent>
         </Select>
+        {schedule.kind === "every_minutes" ? (
+          <Select value={String(schedule.minutes)} onValueChange={(value) => change({ minutes: Number(value) })}>
+            <SelectTrigger aria-label={t("automationScreen.form.interval")} className="w-auto shrink-0" data-automation-field="minutes"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {MINUTES.map((minutes) => <SelectItem key={minutes} value={String(minutes)} data-automation-minutes={minutes}>{t("automationScreen.form.minutesValue", { minutes })}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        ) : null}
         {schedule.kind === "every_hours" ? (
           <Select value={String(schedule.hours)} onValueChange={(value) => change({ hours: Number(value) })}>
-            <SelectTrigger aria-label={t("automationScreen.form.hours")} className="w-auto shrink-0" data-automation-field="hours"><SelectValue /></SelectTrigger>
+            <SelectTrigger aria-label={t("automationScreen.form.interval")} className="w-auto shrink-0" data-automation-field="hours"><SelectValue /></SelectTrigger>
             <SelectContent>
               {HOURS.map((hours) => <SelectItem key={hours} value={String(hours)}>{t("automationScreen.form.hoursValue", { count: hours })}</SelectItem>)}
             </SelectContent>
           </Select>
         ) : null}
-        {schedule.kind === "cron" ? (
+        {schedule.kind === "every_minutes" ? null : schedule.kind === "cron" ? (
           <Input mono className="min-w-0 flex-1" value={schedule.expr} placeholder={t("automationScreen.form.cronPlaceholder")} aria-label={t("automationScreen.form.kind.cron")} onChange={(event) => change({ expr: event.target.value })} data-automation-field="cron" />
         ) : (
           <Input type="time" step={60} className="w-auto shrink-0" value={schedule.time} aria-label={t("automationScreen.form.time")} onChange={(event) => change({ time: event.target.value })} data-automation-field="time" />

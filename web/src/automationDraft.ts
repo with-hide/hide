@@ -12,7 +12,7 @@ import type { Automation, AutomationAgent, AutomationSchedule, AutomationWeekday
 export type ScheduleKind = AutomationSchedule["kind"];
 
 /** Every schedule field the form keeps, so switching the kind back finds what was typed (B6). */
-export type ScheduleDraft = { kind: ScheduleKind; time: string; days: AutomationWeekday[]; hours: number; expr: string };
+export type ScheduleDraft = { kind: ScheduleKind; time: string; days: AutomationWeekday[]; minutes: number; hours: number; expr: string };
 
 export type FormDraft = {
   name: string;
@@ -24,7 +24,7 @@ export type FormDraft = {
   schedule: ScheduleDraft;
 };
 
-const NEW_SCHEDULE: ScheduleDraft = { kind: "daily", time: "09:00", days: ["mon"], hours: 1, expr: "0 9 * * 1-5" };
+const NEW_SCHEDULE: ScheduleDraft = { kind: "daily", time: "09:00", days: ["mon"], minutes: 30, hours: 1, expr: "0 9 * * 1-5" };
 
 function scheduleDraft(schedule: AutomationSchedule): ScheduleDraft {
   switch (schedule.kind) {
@@ -33,6 +33,8 @@ function scheduleDraft(schedule: AutomationSchedule): ScheduleDraft {
       return { ...NEW_SCHEDULE, kind: schedule.kind, time: schedule.time };
     case "weekly":
       return { ...NEW_SCHEDULE, kind: "weekly", time: schedule.time, days: schedule.days };
+    case "every_minutes":
+      return { ...NEW_SCHEDULE, kind: "every_minutes", minutes: schedule.minutes };
     case "every_hours":
       return { ...NEW_SCHEDULE, kind: "every_hours", time: schedule.time, hours: schedule.hours };
     case "cron":
@@ -87,6 +89,8 @@ export function draftSchedule(schedule: ScheduleDraft): AutomationSchedule {
       return { kind: schedule.kind, time: schedule.time };
     case "weekly":
       return { kind: "weekly", days: schedule.days, time: schedule.time };
+    case "every_minutes":
+      return { kind: "every_minutes", minutes: schedule.minutes };
     case "every_hours":
       return { kind: "every_hours", hours: schedule.hours, time: schedule.time };
     case "cron":
@@ -161,9 +165,10 @@ export function refusalField(code: string): "name" | "task" | "agent" | "folder"
 const REFUSAL_KEYS = {
   schedule_time_invalid: "automationScreen.refusal.schedule_time_invalid",
   schedule_days_missing: "automationScreen.refusal.schedule_days_missing",
+  schedule_minutes_out_of_range: "automationScreen.refusal.schedule_minutes_out_of_range",
   schedule_hours_out_of_range: "automationScreen.refusal.schedule_hours_out_of_range",
   schedule_cron_invalid: "automationScreen.refusal.schedule_cron_invalid",
-  schedule_under_hour: "automationScreen.refusal.schedule_under_hour",
+  schedule_too_often: "automationScreen.refusal.schedule_too_often",
   schedule_never: "automationScreen.refusal.schedule_never",
   automation_name_missing: "automationScreen.refusal.automation_name_missing",
   automation_name_invalid: "automationScreen.refusal.automation_name_invalid",

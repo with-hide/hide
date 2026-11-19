@@ -21,6 +21,14 @@ describe("the automation form's values", () => {
     });
   });
 
+  it("sends every N minutes with no time, and opens it again on its minutes", () => {
+    const draft = { ...draftOf(null, undefined), name: "n", task: "t" };
+    expect(addCall({ ...draft, schedule: { ...draft.schedule, kind: "every_minutes", minutes: 15 } }, false, false)).toMatchObject({ schedule: { kind: "every_minutes", minutes: 15 } });
+    const every10 = automation({ schedule: { kind: "every_minutes", minutes: 10 } });
+    expect(draftOf(every10, undefined).schedule).toMatchObject({ kind: "every_minutes", minutes: 10 });
+    expect(editCall(every10, draftOf(every10, undefined), false)).toBeNull();
+  });
+
   it("asks for a new worktree only in a Git project's folder", () => {
     const draft = { ...draftOf(null, undefined), name: "n", task: "t", folder: "/p", worktree: true };
     expect(addCall(draft, true, false)).toMatchObject({ folder: "/p", worktree: true });
@@ -42,11 +50,11 @@ describe("the automation form's values", () => {
   });
 
   it("puts each refusal under the field it names and words an unknown one as not now", () => {
-    expect(refusalField("schedule_under_hour")).toBe("schedule");
+    expect(refusalField("schedule_too_often")).toBe("schedule");
     expect(refusalField("automation_name_taken")).toBe("name");
     expect(refusalField("automation_worktree_needs_git")).toBe("folder");
     expect(refusalField("automations_unavailable")).toBe("form");
-    expect(refusalKey("schedule_under_hour")).toBe("automationScreen.refusal.schedule_under_hour");
+    expect(refusalKey("schedule_too_often")).toBe("automationScreen.refusal.schedule_too_often");
     expect(refusalKey("socket_closed")).toBe("automationScreen.refusal.other");
   });
 

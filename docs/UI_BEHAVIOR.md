@@ -1270,8 +1270,8 @@ When the core set its saved book aside as unreadable (`automations.unreadable`),
 
 [+ 새 자동화] and [편집] open the form in the screen: name, task, the agent, model and effort from the list an agent's start uses (the last choice by default), the folder, and the schedule (B4, B26).
 The folder is `폴더 없음 · 기본 폴더에서` by default with `~/hide/automations/<name>-…` under it, or one of this machine's listed projects; a Git project adds `회차마다 새 워크트리에서` (B5).
-The schedule is 매일, 평일, 매주 (days), N시간마다 (1 to 12) or a cron line; 200 ms after typing stops, the core reads it back as `<schedule> · 다음: <when> · 이 기계 시간대` (B6).
-What the core refuses (a cron under an hour or unreadable, a week with no day, an empty task, a name taken) is a red line under its field, and [만들기] is off (B7); an empty name or task has its line once the field is left.
+The schedule is 매일, 평일, 매주 (days), N분마다 (5, 10, 15 or 30, from each hour's start, with no time), N시간마다 (1 to 12) or a cron line; 200 ms after typing stops, the core reads it back as `<schedule> · 다음: <when> · 이 기계 시간대` (B6).
+What the core refuses (a cron that runs two times closer than five minutes or is unreadable, a week with no day, an empty task, a name taken) is a red line under its field, and [만들기] is off (B7); an empty name or task has its line once the field is left.
 [만들기] opens the new automation's detail, and [만들고 지금 실행] opens the manual run it started (B8), waiting for the snapshot that holds them when the answer comes first; an answer after the form was cancelled moves nothing, and back on the table the keys are on its first row.
 An edit sends only what changed: the worktree choice is sent only when the folder or the box moved.
 The preview, the make, the edit and a run's reopen are one `automation_call` each, answered to that window alone by an `automation_result` frame; every other press is a window event whose result the snapshot shows.

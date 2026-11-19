@@ -82,17 +82,20 @@ test("the 자동화 row opens an empty table, the form refuses what the core ref
     await expect(page.locator("[data-automation-preview]")).toBeVisible();
     await expect(create).toBeEnabled();
 
-    // B7: a cron under an hour and a week with no day are refused under the schedule, and nothing can be made.
+    // B6: every N minutes reads back as itself.
+    await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="every_minutes"]'));
+    await expect(page.locator("[data-automation-preview]")).toContainText("30분마다");
+
+    // B7: a cron that runs closer than five minutes and a week with no day are refused under the schedule, and nothing can be made.
     await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="cron"]'));
-    await page.locator('[data-automation-field="cron"]').fill("*/5 * * * *");
-    await expect(page.locator('[data-automation-refusal="schedule_under_hour"]')).toBeVisible();
+    await page.locator('[data-automation-field="cron"]').fill("*/4 * * * *");
+    await expect(page.locator('[data-automation-refusal="schedule_too_often"]')).toBeVisible();
     await expect(create).toBeDisabled();
     await choose(page, "schedule-kind", page.locator('[data-automation-schedule-kind="weekly"]'));
     await page.locator('[data-automation-day="mon"]').click();
     await expect(page.locator('[data-automation-refusal="schedule_days_missing"]')).toBeVisible();
     await expect(create).toBeDisabled();
     await page.locator('[data-automation-day="wed"]').click();
-    await expect(page.locator("[data-automation-preview]")).toBeVisible();
     await expect(create).toBeEnabled();
 
     // B5: a Git project offers a new worktree per run; the own folder does not.

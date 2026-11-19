@@ -3261,6 +3261,7 @@ export type AutomationSchedule =
   | { kind: "daily"; time: string }
   | { kind: "weekdays"; time: string }
   | { kind: "weekly"; days: AutomationWeekday[]; time: string }
+  | { kind: "every_minutes"; minutes: number }
   | { kind: "every_hours"; hours: number; time: string }
   | { kind: "cron"; expr: string };
 

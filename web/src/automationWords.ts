@@ -24,7 +24,7 @@ export function weekdayText(language: InterfaceLanguage, day: AutomationWeekday)
   return new Intl.DateTimeFormat(language, { weekday: "short", timeZone: "UTC" }).format(A_SUNDAY + DAY_INDEX[day] * 86_400_000);
 }
 
-/** `매일 09:00`, `평일 09:00`, `매주 월·수 09:00`, `3시간마다 · 09:00 기준`, or the cron line itself when it equals no choice (B3, B6). */
+/** `매일 09:00`, `평일 09:00`, `매주 월·수 09:00`, `15분마다`, `3시간마다 · 09:00 기준`, or the cron line itself when it equals no choice (B3, B6). */
 export function scheduleText(schedule: AutomationSchedule, language: InterfaceLanguage, t: Translate): string {
   switch (schedule.kind) {
     case "daily":
@@ -35,6 +35,8 @@ export function scheduleText(schedule: AutomationSchedule, language: InterfaceLa
       const days = WEEKDAYS.filter((day) => schedule.days.includes(day)).map((day) => weekdayText(language, day));
       return t("automation.schedule.weekly", { days: days.join("·"), time: schedule.time });
     }
+    case "every_minutes":
+      return t("automation.schedule.everyMinutes", { minutes: schedule.minutes });
     case "every_hours":
       return t("automation.schedule.everyHours", { count: schedule.hours, time: schedule.time });
     case "cron":

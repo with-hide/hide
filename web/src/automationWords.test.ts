@@ -25,9 +25,11 @@ function automation(fields: Partial<Automation>): Automation {
 }
 
 describe("an automation's words", () => {
-  it("reads each schedule choice, the days in the week's order and the hours by count", () => {
+  it("reads each schedule choice, the days in the week's order and the minutes and hours by count", () => {
     expect(scheduleText({ kind: "weekdays", time: "09:00" }, "ko", ko)).toBe("평일 09:00");
     expect(scheduleText({ kind: "weekly", days: ["wed", "mon"], time: "10:00" }, "ko", ko)).toBe("매주 월·수 10:00");
+    expect(scheduleText({ kind: "every_minutes", minutes: 15 }, "ko", ko)).toBe("15분마다");
+    expect(scheduleText({ kind: "every_minutes", minutes: 5 }, "en", en)).toBe("Every 5 minutes");
     expect(scheduleText({ kind: "every_hours", hours: 1, time: "00:30" }, "en", en)).toBe("Every hour · from 00:30");
     expect(scheduleText({ kind: "every_hours", hours: 3, time: "09:00" }, "en", en)).toBe("Every 3 hours · from 09:00");
     expect(scheduleText({ kind: "cron", expr: "0 9 1 * *" }, "ko", ko)).toBe("cron 0 9 1 * *");
