@@ -20,3 +20,33 @@ relay.withhide.dev {
 		respond 404
 	}
 }
+
+# The device relay (iroh-relay) on its own host name. Caddy holds this
+# certificate; the relay reads the same files to answer address discovery on
+# UDP 7842 itself, so the issuer is pinned to keep their path fixed.
+device-relay.withhide.dev {
+	tls {
+		issuer acme
+	}
+	# The meter stopped the relay for the rest of the month: say why.
+	@stopped file {
+		root /var/lib/hide-iroh-relay-meter
+		try_files /stopped
+	}
+	handle @stopped {
+		respond "device relay stopped: monthly limit reached" 503
+	}
+	# Re-encrypted to the relay's own loopback HTTPS; never plain HTTP behind
+	# the proxy, which iroh-relay allows only with dangerous_http_only.
+	@relay path /relay /ping
+	handle @relay {
+		reverse_proxy https://127.0.0.1:3443 {
+			transport http {
+				tls_server_name device-relay.withhide.dev
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}
