@@ -34,7 +34,7 @@ use hide_agent_hooks::mcp::{self, Keys, McpFile, Pin, Reach, Secret, Server, Tra
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Applier, Carried, Column, Ctx, Entry, ItemBody, ItemKind, Place, Source, StoreItem,
+    Applier, Carried, Column, Ctx, Entry, ItemBody, ItemKind, Listed, Place, Source, StoreItem,
     StoreRecord, StoreRefusal, StoreRefusalCause, Version, failed, name_free, not_found,
     now_unix_ms,
 };
@@ -161,42 +161,56 @@ pub struct PastedPick {
 
 pub(crate) struct McpApplier;
 
-/// The key a place of `agent`'s at `path` is recorded under: the agent
-/// names the file's shape, so a place the record rebuilds after its account
-/// went (`store::recorded_place`, whose column is empty) still reads it.
+/// The key a place of `agent`'s at the real path `path` is recorded under:
+/// the agent names the file's shape, so a place the record rebuilds after
+/// its account went (`store::recorded_place`, which names no column) still
+/// reads it.
 fn key(agent: &str, path: &Path) -> String {
     format!("mcp:{agent}:{}", path.display())
 }
 
 /// `place`'s file in its agent's shape.
 fn file_of(place: &Place) -> Result<McpFile, String> {
-    let agent = if place.column.is_empty() {
-        place
+    let agent = match place.columns.first() {
+        Some(column) => column.as_str(),
+        None => place
             .key
             .strip_prefix("mcp:")
             .and_then(|rest| rest.split_once(':'))
-            .map_or("", |(agent, _)| agent)
-    } else {
-        place.column.as_str()
+            .map_or("", |(agent, _)| agent),
     };
     crate::agents::adapter(agent)
         .and_then(|adapter| McpFile::at(adapter.declaration(), place.path.clone()))
         .ok_or_else(|| format!("{} is no MCP file Hide knows", place.path.display()))
 }
 
-fn place(
+/// Lists `adapter`'s file at the real path `path`, or adds `profiles` to the
+/// place already listed for it (a profile's file that is a link to the
+/// default one); that file is blocked only while every spelling of it is.
+fn join(
+    places: &mut Vec<Place>,
+    ctx: &Ctx<'_>,
     adapter: &AgentAdapter,
     path: PathBuf,
     profiles: Vec<String>,
     blocked: Option<String>,
-) -> Place {
-    Place {
-        key: key(adapter.id, &path),
+) {
+    let key = key(adapter.id, &path);
+    if let Some(listed) = places.iter_mut().find(|listed| listed.key == key) {
+        listed.profiles.extend(profiles);
+        if blocked.is_none() {
+            listed.blocked = None;
+        }
+        return;
+    }
+    places.push(Place {
+        key,
         path,
-        column: adapter.id.to_owned(),
+        columns: vec![adapter.id.to_owned()],
         profiles,
         blocked,
-    }
+        fresh: ctx.fresh,
+    });
 }
 
 fn body_of(item: &StoreItem) -> Result<&McpBody, String> {
@@ -238,6 +252,7 @@ fn entry_of(found: &mcp::Found) -> Entry {
             .as_ref()
             .map_or_else(|| "unreadable".to_owned(), |(server, _)| server.digest()),
         link: None,
+        whole: found.server.is_some(),
     }
 }
 
@@ -276,12 +291,14 @@ impl Applier for McpApplier {
                 "its agent has not set itself up here yet; the server goes in once it has"
                     .to_owned()
             });
-            places.push(place(
+            join(
+                &mut places,
+                ctx,
                 adapter,
                 file.path().to_path_buf(),
                 Vec::new(),
                 blocked,
-            ));
+            );
         }
         for account in ctx.accounts.list() {
             let Some(file) = account.mcp_file(home) else {
@@ -291,12 +308,14 @@ impl Applier for McpApplier {
                 Ok(real) => (real, None),
                 Err(reason) => (file.path().to_path_buf(), Some(reason)),
             };
-            places.push(place(
+            join(
+                &mut places,
+                ctx,
                 account.adapter(),
                 path,
                 account.profiles().to_vec(),
                 blocked,
-            ));
+            );
         }
         places
     }
@@ -315,12 +334,21 @@ impl Applier for McpApplier {
             .map(|found| entry_of(&found)))
     }
 
-    fn entries(&self, place: &Place) -> Result<Vec<(String, Entry)>, String> {
+    fn entries(&self, place: &Place) -> Result<Vec<Listed>, String> {
         let file = file_of(place)?;
         Ok(mcp::entries(&file)
             .map_err(|failure| failure.message())?
             .iter()
-            .map(|found| (found.name.clone(), entry_of(found)))
+            .map(|found| {
+                let read = match found.server {
+                    Some(_) => Ok(entry_of(found)),
+                    None => Err(format!(
+                        "Hide cannot read it as a server in {}",
+                        place.path.display()
+                    )),
+                };
+                (found.name.clone(), read)
+            })
             .collect())
     }
 
@@ -387,6 +415,22 @@ impl Applier for McpApplier {
             },
             ItemBody::Mcp(McpBody { server }),
         ))
+    }
+
+    fn set_aside(
+        &self,
+        _place: &Place,
+        _name: &str,
+        _into: &Path,
+    ) -> Result<ItemBody, StoreRefusal> {
+        Err(StoreRefusal::new(
+            StoreRefusalCause::Unsupported,
+            "Hide cannot set an MCP server aside yet",
+        ))
+    }
+
+    fn put_back(&self, _place: &Place, _name: &str, _from: &Path) -> Result<bool, String> {
+        Err("Hide cannot put an MCP server back yet".to_owned())
     }
 
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {

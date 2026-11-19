@@ -1264,7 +1264,7 @@ impl Runtime {
     ) -> Result<(), &'static str> {
         let device_id = registration.id.as_str();
         self.device_kit_pending.remove(device_id);
-        self.stores.forget(device_id);
+        self.forget_store(device_id);
         self.forget_start_passes(device_id);
         self.kit_states.remove(device_id);
         self.refresh_ai_items();
@@ -1558,7 +1558,7 @@ impl Runtime {
     pub(super) fn forget_device_kit_work(&mut self, device_id: &str) {
         self.forget_device_connect(device_id);
         self.device_kit_pending.remove(device_id);
-        self.stores.forget(device_id);
+        self.forget_store(device_id);
         self.forget_start_passes(device_id);
         self.codex_daemon_off_running.remove(device_id);
         self.end_codex_daemon_off_unanswered(device_id);

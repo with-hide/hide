@@ -485,11 +485,43 @@ fn clone(
     let into_text = into.display().to_string();
     let depth = depth.to_string();
     let mut args = vec!["clone", "--quiet", "--no-tags", "--depth", depth.as_str()];
-    if let Some(reference) = &address.reference {
+    // The files as the commit holds them, whatever the account's git says
+    // about line endings (Git for Windows turns LF into CRLF by default):
+    // the same commit is then the same skill, digest and all, on every
+    // machine. A repository's own `.gitattributes` still applies.
+    args.extend(["--config", "core.autocrlf=false", "--config", "core.eol=lf"]);
+    // A `/tree/<commit>` address names a commit, which `--branch` does not
+    // take: the clone fetches it by itself after.
+    let pinned = address.reference.as_deref().filter(|reference| {
+        matches!(reference.len(), 40 | 64) && reference.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    if let Some(reference) = &address.reference
+        && pinned.is_none()
+    {
         args.extend(["--branch", reference.as_str()]);
     }
     args.extend(["--", address.url.as_str(), into_text.as_str()]);
     git.run(&args, CLONE_DEADLINE)?;
+    if let Some(commit) = pinned {
+        let into = into_text.as_str();
+        git.run(
+            &[
+                "-C",
+                into,
+                "fetch",
+                "--quiet",
+                "--depth",
+                depth.as_str(),
+                "origin",
+                commit,
+            ],
+            CLONE_DEADLINE,
+        )?;
+        git.run(
+            &["-C", into, "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+            ASK_DEADLINE,
+        )?;
+    }
     let commit = git.run(
         &["-C", into_text.as_str(), "rev-parse", "HEAD"],
         ASK_DEADLINE,

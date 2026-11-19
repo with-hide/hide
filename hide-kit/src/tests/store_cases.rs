@@ -78,8 +78,14 @@ fn skill_md(name: &str, line: &str) -> String {
 }
 
 /// A repository with two skills under `skills/`, one with a script, and
-/// its address.
+/// its address. The account's git turns line endings into the system's on
+/// checkout, as Git for Windows does by default; the store still takes the
+/// files as the commit holds them.
 fn repository(fixture: &Fixture) -> (PathBuf, String) {
+    write(
+        &fixture.home().join(".gitconfig"),
+        "[core]\n\tautocrlf = true\n",
+    );
     let repo = fixture.root.join("upstream");
     write(
         &repo.join("skills/archify/SKILL.md"),
@@ -793,6 +799,126 @@ fn removing_the_machine_takes_hides_copies_and_the_store_out() {
 }
 
 #[test]
+fn removing_the_machine_leaves_the_operators_adopted_skills_where_they_were() {
+    let fixture = every_agent();
+    let claude = fixture.home().join(".claude/skills");
+    write(&claude.join("mine/SKILL.md"), &skill_md("mine", "Mine."));
+    // A skill the operator cloned: its `.git` is no part of Hide's copy.
+    let cloned = claude.join("cloned");
+    write(&cloned.join("SKILL.md"), &skill_md("cloned", "Clone."));
+    write(&cloned.join(".git/HEAD"), "ref: refs/heads/main\n");
+    let adopt = |name: &str| StoreChange::Adopt {
+        kind: ItemKind::Skill,
+        name: name.to_owned(),
+        from: None,
+    };
+    let adopted = store(&fixture, vec![adopt("mine"), adopt("cloned")]);
+    assert_eq!(cells(&adopted, "skill:mine"), all(CellState::On));
+    assert_eq!(cells(&adopted, "skill:cloned"), all(CellState::On));
+    // The clone went to the undo list whole, and Hide's copy stands there.
+    assert!(!cloned.join(".git").exists());
+    assert!(
+        adopted
+            .trash
+            .iter()
+            .any(|entry| entry.name == "cloned"
+                && matches!(entry.cause, TrashCause::Replaced { .. }))
+    );
+    // Claude's column off and on again: Hide's copy goes and comes back.
+    let set = |on: bool| StoreChange::Set {
+        item: "skill:cloned".to_owned(),
+        column: Some("claude".to_owned()),
+        on,
+    };
+    store(&fixture, vec![set(false)]);
+    assert!(!cloned.exists());
+    store(&fixture, vec![set(true)]);
+    assert!(cloned.join("SKILL.md").is_file());
+
+    let removed = remove(&fixture.target);
+
+    // Hide put the other folders' copies there; the operator's stay.
+    assert_eq!(
+        std::fs::read_to_string(claude.join("mine/SKILL.md")).unwrap(),
+        skill_md("mine", "Mine.")
+    );
+    assert_eq!(
+        std::fs::read_to_string(cloned.join(".git/HEAD")).unwrap(),
+        "ref: refs/heads/main\n"
+    );
+    assert!(cloned.join("SKILL.md").is_file());
+    for folder in &folders(&fixture)[1..] {
+        assert!(!folder.join("mine").exists(), "{}", folder.display());
+        assert!(!folder.join("cloned").exists(), "{}", folder.display());
+    }
+    assert!(
+        removed
+            .agents
+            .iter()
+            .any(|(name, outcome)| name == "store" && *outcome == RemoveOutcome::Removed),
+        "{removed:?}"
+    );
+    assert!(!crate::layout::store_dir(fixture.home()).exists());
+}
+
+#[test]
+fn a_skill_folder_too_large_to_read_is_listed_with_why_and_the_others_stay_adoptable() {
+    let fixture = every_agent();
+    let claude = fixture.home().join(".claude/skills");
+    write(&claude.join("small/SKILL.md"), &skill_md("small", "Small."));
+    write(&claude.join("big/SKILL.md"), &skill_md("big", "Big."));
+    for index in 0..crate::store::SKILL_FILE_LIMIT {
+        write(&claude.join(format!("big/node_modules/{index}.js")), "x\n");
+    }
+
+    let listed = store(&fixture, Vec::new());
+
+    let found = |name: &str| {
+        listed
+            .unmanaged
+            .iter()
+            .find(|found| found.name == name)
+            .unwrap_or_else(|| panic!("no {name} in {listed:#?}"))
+    };
+    assert!(found("small").same);
+    assert_eq!(found("small").copies[0].refused, None);
+    assert!(!found("big").same);
+    let refused = found("big").copies[0].refused.as_deref().unwrap();
+    assert!(refused.contains("1000 files"), "{refused}");
+}
+
+#[test]
+fn a_shared_folder_linked_to_claudes_is_one_place_both_columns_switch() {
+    let fixture = every_agent();
+    let home = fixture.home();
+    std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
+    std::fs::create_dir_all(home.join(".agents")).unwrap();
+    super::symlink(&home.join(".claude/skills"), &home.join(".agents/skills"));
+    let (_, url) = repository(&fixture);
+
+    let installed = install(&fixture, SourceSpec::Git { url }, &["archify"]);
+
+    assert_eq!(cells(&installed, "skill:archify"), all(CellState::On));
+    let again = store(&fixture, Vec::new());
+    assert_eq!(cells(&again, "skill:archify"), all(CellState::On));
+    assert!(again.unmanaged.is_empty(), "{:#?}", again.unmanaged);
+
+    // The shared column off: Claude's column still keeps it in the folder.
+    let off = store(
+        &fixture,
+        vec![StoreChange::Set {
+            item: "skill:archify".to_owned(),
+            column: Some("agents".to_owned()),
+            on: false,
+        }],
+    );
+    let mut expected = all(CellState::On);
+    expected.insert("agents".to_owned(), CellState::Off);
+    assert_eq!(cells(&off, "skill:archify"), expected);
+    assert!(home.join(".claude/skills/archify/SKILL.md").is_file());
+}
+
+#[test]
 fn a_repository_without_a_skill_or_access_says_so_and_asks_nobody() {
     let fixture = every_agent();
     let empty = fixture.root.join("empty");
@@ -894,10 +1020,11 @@ fn a_copy_carries_each_skill_with_its_files_to_another_machines_store_once() {
             std::fs::read_to_string(folder.join("writer/SKILL.md")).unwrap(),
             skill_md("writer", "Write.")
         );
-        assert!(
-            hide_platform::fs::permissions::is_executable(&folder.join("writer/scripts/run.sh"))
-                .unwrap()
-        );
+        let run = folder.join("writer/scripts/run.sh");
+        assert_eq!(std::fs::read(&run).unwrap(), b"#!/bin/sh\necho hi\n");
+        // Runnable where the system keeps a bit; Windows reads the extension.
+        #[cfg(unix)]
+        assert!(hide_platform::fs::permissions::is_executable(&run).unwrap());
     }
     assert!(!there.home().join(".gemini/config/skills/writer").exists());
 
