@@ -112,6 +112,10 @@ impl Applier for McpApplier {
         Err(NOT_YET.to_owned())
     }
 
+    fn leave_copy(&self, _place: &Place, _name: &str, _files: &Path) -> Result<(), String> {
+        Err(NOT_YET.to_owned())
+    }
+
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {
         Ok(())
     }

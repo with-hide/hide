@@ -212,6 +212,13 @@ pub struct StoreItem {
     /// follow pass reads the files only when something changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// The operator's own copy, taken over from an agent's folder on this
+    /// machine (B20) with a [`Source::Copy`]: unless the undo list still
+    /// holds the folder it replaced there, the store holds the only
+    /// original, so a machine leaving Hide leaves a copy where it was
+    /// (B30). A copy another machine carried is not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub adopted: bool,
     pub body: ItemBody,
 }
 
@@ -283,11 +290,6 @@ pub struct TrashEntry {
 pub struct Written {
     pub item: String,
     pub digest: String,
-    /// The operator's own copy, taken over where it was (B20, B22): a
-    /// machine leaving Hide leaves it there, since Hide did not put it there
-    /// (B30).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub adopted: bool,
 }
 
 /// One place Hide wrote into, as the record keeps it: enough to take its
@@ -844,6 +846,10 @@ pub(crate) trait Applier {
     /// for a machine leaving Hide (B30): false, with nothing moved, when the
     /// place holds something of the name now.
     fn put_back(&self, place: &Place, name: &str, from: &Path) -> Result<bool, String>;
+    /// Writes a copy of the store's own files `files` of an item at
+    /// `place` under `name`, where nothing stands, for a machine leaving
+    /// Hide while the store holds the operator's only original (B30).
+    fn leave_copy(&self, place: &Place, name: &str, files: &Path) -> Result<(), String>;
     /// The item is deleted for good: anything of it the store keeps beside
     /// its files goes (an MCP's keys, D-11).
     fn purge(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<(), String>;
@@ -1158,8 +1164,37 @@ impl StoreReport {
     }
 }
 
-/// Takes every copy Hide wrote out of every place, then the store itself
-/// with its keys, for a machine leaving Hide (B30): one outcome per place.
+/// The items whose only original the store holds (B30), with where each
+/// was taken over: an [`StoreItem::adopted`] one whose own folder there is
+/// not in the undo list, forgotten or past its limit.
+fn sole_originals<'a>(dir: &Path, store: &'a StoreRecord) -> Vec<(&'a StoreItem, PathBuf)> {
+    let set_aside: BTreeSet<PathBuf> = store
+        .trash
+        .iter()
+        .filter(|entry| dir.join("trash").join(&entry.id).exists())
+        .filter_map(|entry| match &entry.cause {
+            TrashCause::Replaced { path, .. } => Some(path.join(&entry.item.name)),
+            TrashCause::Deleted => None,
+        })
+        .collect();
+    store
+        .items
+        .iter()
+        .filter(|item| item.adopted)
+        .filter_map(|item| match &item.source {
+            Source::Copy { from } => Some((item, PathBuf::from(from))),
+            _ => None,
+        })
+        .filter(|(_, from)| !set_aside.contains(from))
+        .collect()
+}
+
+/// Takes the copies Hide put into every place out, leaves or writes back a
+/// copy of each item whose only original the store holds where the
+/// operator had it, puts each folder a take-over set aside back, then
+/// removes the store with its keys, for a machine leaving Hide (B30): one
+/// outcome per place, and the store kept, with why, while anything of the
+/// operator's could not be left where it was.
 pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> {
     use crate::RemoveOutcome;
     let dir = match store_dir(&target.home, false) {
@@ -1173,15 +1208,16 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
     };
     let mut outcomes = Vec::new();
     let mut failed = false;
+    let originals = sole_originals(&dir, &store);
+    // Each such copy Hide holds where the operator had it stays there.
+    let stays: BTreeSet<&Path> = originals.iter().map(|(_, from)| from.as_path()).collect();
     for (key, place) in &store.written {
         let Some(kind) = place.kind else { continue };
         let at = recorded_place(key, place);
         let mut removed = false;
         let mut failure = None;
         for (name, written) in &place.entries {
-            // The operator's own copy, taken over where it was, stays there:
-            // Hide did not put it there (B30).
-            if written.adopted {
+            if stays.contains(place.path.join(name).as_path()) {
                 continue;
             }
             match take_out_if_ours(applier(kind), &at, name, written) {
@@ -1232,6 +1268,45 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         log("store.put_back_failed", Some(&entry.item.id), &reason);
         outcomes.push((
             format!("store:{place}/{}", entry.item.name),
+            RemoveOutcome::Failed {
+                reason: reason.clone(),
+            },
+        ));
+        kept_back = Some(reason);
+    }
+    // Where a switch took the copy out, the store's copy is written back.
+    for (item, from) in &originals {
+        let (Some(folder), Some(_)) = (from.parent(), from.file_name()) else {
+            continue;
+        };
+        let at = Place {
+            key: String::new(),
+            path: folder.to_path_buf(),
+            columns: Vec::new(),
+            profiles: Vec::new(),
+            blocked: None,
+            fresh: true,
+        };
+        let applier = applier(item.kind);
+        let reason = match applier.entry(&at, &item.name) {
+            Ok(Some(entry)) if entry.digest == item.digest() => continue,
+            Ok(Some(_)) => format!(
+                "{} holds another {} now, so the store keeps the one it took over",
+                from.display(),
+                item.name
+            ),
+            Ok(None) => {
+                let files = dir.join("items").join(folder_name(&item.id));
+                match applier.leave_copy(&at, &item.name, &files) {
+                    Ok(()) => continue,
+                    Err(reason) => reason,
+                }
+            }
+            Err(reason) => reason,
+        };
+        log("store.leave_copy_failed", Some(&item.id), &reason);
+        outcomes.push((
+            format!("store:{}", from.display()),
             RemoveOutcome::Failed {
                 reason: reason.clone(),
             },
@@ -1476,6 +1551,7 @@ fn install(
             added_at_unix_ms: now_unix_ms(),
             latest: None,
             folder_missing: false,
+            adopted: false,
             body: ItemBody::Skill(body),
         });
     }
@@ -1581,6 +1657,7 @@ fn receive(
         latest: carried.latest.clone(),
         folder_missing: false,
         fingerprint: None,
+        adopted: false,
         body,
     };
     if let Some(existing) = store.item(&id) {
@@ -1810,6 +1887,7 @@ fn adopt(
                 Source::Folder { path } => skill::fingerprint(Path::new(path)).ok().flatten(),
                 _ => None,
             },
+            adopted: matches!(source, Source::Copy { .. }),
             source,
             on: true,
             off_for: BTreeSet::new(),
@@ -1826,7 +1904,7 @@ fn adopt(
     let digest = item.digest();
     for (place, entry) in &copies {
         if entry.digest == digest && entry.link.is_none() && entry.whole {
-            record_written(store, place, &item, &digest, true);
+            record_written(store, place, &item, &digest);
         } else if entry.link.is_some() {
             // A link goes as a link; what it leads to stays (D-20).
             applier.remove(place, name).map_err(failed)?;
@@ -1865,6 +1943,8 @@ fn set_aside(
         latest: None,
         folder_missing: false,
         added_at_unix_ms: now_unix_ms(),
+        // Put back as an item, it is the operator's original again.
+        adopted: true,
         ..item.clone()
     };
     push_trash(
@@ -1893,15 +1973,7 @@ fn ours(written: Option<&Written>, entry: &Entry) -> bool {
         && entry.whole
 }
 
-/// Records Hide's copy of `item` at `place`; an `adopted` one, or one Hide
-/// rewrote where it took the operator's over, stays adopted.
-fn record_written(
-    store: &mut StoreRecord,
-    place: &Place,
-    item: &StoreItem,
-    digest: &str,
-    adopted: bool,
-) {
+fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, digest: &str) {
     let kept = store
         .written
         .entry(place.key.clone())
@@ -1911,15 +1983,9 @@ fn record_written(
             profile: !place.profiles.is_empty(),
             entries: BTreeMap::new(),
         });
-    let adopted = adopted
-        || kept
-            .entries
-            .get(&item.name)
-            .is_some_and(|written| written.item == item.id && written.adopted);
     let written = Written {
         item: item.id.clone(),
         digest: digest.to_owned(),
-        adopted,
     };
     if kept.entries.get(&item.name) != Some(&written) {
         kept.entries.insert(item.name.clone(), written);
@@ -2018,11 +2084,11 @@ fn reconcile(
         let result = if want.now && place.blocked.is_none() {
             match held {
                 Held::Missing | Held::Older => applier.write(ctx, place, item).map(|written| {
-                    record_written(store, place, item, &written, false);
+                    record_written(store, place, item, &written);
                     true
                 }),
                 Held::Current => {
-                    record_written(store, place, item, &digest, false);
+                    record_written(store, place, item, &digest);
                     Ok(false)
                 }
                 Held::Theirs => Ok(false),

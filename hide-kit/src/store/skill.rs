@@ -147,43 +147,17 @@ impl Applier for SkillApplier {
     }
 
     fn write(&self, ctx: &Ctx<'_>, place: &Place, item: &StoreItem) -> Result<String, String> {
-        let from = ctx.item_files(&item.id);
-        std::fs::create_dir_all(&place.path)
-            .map_err(|error| format!("{} could not be created: {error}", place.path.display()))?;
-        let to = place.path.join(&item.name);
-        let half_written = format!(".{}.hide-incoming-", item.name);
-        let incoming = place
-            .path
-            .join(format!("{half_written}{}", std::process::id()));
-        // A copy a stopped pass left half written goes first: passes run one
-        // at a time under the account's lock, so no other is writing it.
-        if let Ok(found) = std::fs::read_dir(&place.path) {
-            for stale in found.flatten() {
-                if stale
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(&half_written)
-                {
-                    let _ = std::fs::remove_dir_all(stale.path());
-                }
-            }
-        }
-        copy_tree(&from, &incoming).inspect_err(|_| {
-            let _ = std::fs::remove_dir_all(&incoming);
-        })?;
         // Only Hide's own copy is ever there to replace (`store::reconcile`).
-        if std::fs::symlink_metadata(&to).is_ok() {
-            remove_at(&to)?;
-        }
-        std::fs::rename(&incoming, &to).map_err(|error| {
-            let _ = std::fs::remove_dir_all(&incoming);
-            format!("{} could not be written: {error}", to.display())
-        })?;
-        digest(&to)
+        copy_into(&ctx.item_files(&item.id), &place.path, &item.name, true)?;
+        digest(&place.path.join(&item.name))
     }
 
     fn remove(&self, place: &Place, name: &str) -> Result<(), String> {
         remove_at(&place.path.join(name))
+    }
+
+    fn leave_copy(&self, place: &Place, name: &str, files: &Path) -> Result<(), String> {
+        copy_into(files, &place.path, name, false)
     }
 
     fn adopt(
@@ -356,6 +330,40 @@ fn write_carried(files: &[CarriedFile], root: &Path) -> Result<(), StoreRefusal>
         }
     }
     Ok(())
+}
+
+/// Copies the store's folder `from` into `folder` as `name`, written
+/// beside its final name and renamed into place, so an agent never reads
+/// half a skill. With `replace`, what stands there goes first.
+fn copy_into(from: &Path, folder: &Path, name: &str, replace: bool) -> Result<(), String> {
+    std::fs::create_dir_all(folder)
+        .map_err(|error| format!("{} could not be created: {error}", folder.display()))?;
+    let to = folder.join(name);
+    let half_written = format!(".{name}.hide-incoming-");
+    let incoming = folder.join(format!("{half_written}{}", std::process::id()));
+    // A copy a stopped pass left half written goes first: passes run one
+    // at a time under the account's lock, so no other is writing it.
+    if let Ok(found) = std::fs::read_dir(folder) {
+        for stale in found.flatten() {
+            if stale
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&half_written)
+            {
+                let _ = std::fs::remove_dir_all(stale.path());
+            }
+        }
+    }
+    copy_tree(from, &incoming).inspect_err(|_| {
+        let _ = std::fs::remove_dir_all(&incoming);
+    })?;
+    if replace && std::fs::symlink_metadata(&to).is_ok() {
+        remove_at(&to)?;
+    }
+    std::fs::rename(&incoming, &to).map_err(|error| {
+        let _ = std::fs::remove_dir_all(&incoming);
+        format!("{} could not be written: {error}", to.display())
+    })
 }
 
 fn key(path: &Path) -> String {
