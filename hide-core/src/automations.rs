@@ -667,9 +667,12 @@ pub enum Call {
     Show {
         id: String,
     },
-    /// What a schedule reads as and when it runs next, for the form (B6).
+    /// What a schedule reads as and when it runs next, and the own folder
+    /// an automation of `name` works in, for the form (B5, B6).
     Preview {
         schedule: Schedule,
+        #[serde(default)]
+        name: String,
     },
 }
 
@@ -1095,6 +1098,10 @@ fn base36(mut value: u64) -> String {
     out.reverse();
     String::from_utf8(out).unwrap_or_default()
 }
+
+/// What stands in an own folder's name for the id an automation gets only
+/// when it is made, in the folder the form shows (B5).
+pub const ID_TO_COME: &str = "…";
 
 /// The automation's own folder's name, `<name>-<id>` (D-08): the name with
 /// what no system takes in a folder name left out, so two automations of the

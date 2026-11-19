@@ -2042,7 +2042,9 @@ impl Runtime {
                     .ok_or_else(|| "automation_unknown".to_owned());
                 return (found, false);
             }
-            Call::Preview { schedule } => return (self.preview(&schedule, now), false),
+            Call::Preview { schedule, name } => {
+                return (self.preview(&schedule, &name, now), false);
+            }
         };
         match answer {
             Ok(value) => {
@@ -2093,13 +2095,23 @@ impl Runtime {
         Ok(json!({"id": id, "run": number, "on": on}))
     }
 
-    fn preview(&self, schedule: &crate::automations::Schedule, now: u64) -> Result<Value, String> {
+    /// The form's preview (B5, B6). `own_folder` is where an automation of
+    /// `name` with no folder of its own works, its id still to come
+    /// (`ID_TO_COME`), so the form names it by the core's rule; none while
+    /// the home is not known.
+    fn preview(
+        &self,
+        schedule: &crate::automations::Schedule,
+        name: &str,
+        now: u64,
+    ) -> Result<Value, String> {
         let zone = self.zone();
         schedule.validate(&zone).map_err(str::to_owned)?;
         Ok(json!({
             "reads_as": schedule.meaning().reads_as,
             "next_run_at_unix_ms": schedule.next_after(now, &zone),
             "zone": zone.iana_name(),
+            "own_folder": self.own_folder(name, crate::automations::ID_TO_COME).ok(),
         }))
     }
 

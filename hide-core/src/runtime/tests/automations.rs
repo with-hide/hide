@@ -346,6 +346,41 @@ fn a_run_made_with_its_automation_is_judged_before_it_starts() {
     assert_eq!(show(&mut runtime, &id)["paused"]["reason"], "login_expired");
 }
 
+/// B5: the form names the own folder an automation of its name would work
+/// in by the core's rule, the id still to come; the automation made gets
+/// that folder with its id in that place.
+#[test]
+fn the_preview_names_the_own_folder_the_automation_gets() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    let preview = |runtime: &mut Runtime, name: &str| {
+        call(
+            runtime,
+            json!({
+                "call": "preview", "name": name,
+                "schedule": {"kind": "daily", "time": later()},
+            }),
+        )
+        .unwrap()["own_folder"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let shown = preview(&mut runtime, " 아침 이슈: 정리 ");
+    assert!(
+        shown.ends_with("/hide/automations/아침-이슈-정리-…"),
+        "{shown}"
+    );
+
+    let (id, _) = add(&mut runtime, " 아침 이슈: 정리 ");
+    let made = show(&mut runtime, &id)["folder"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(made, shown.replace('…', &id));
+    assert!(preview(&mut runtime, "").ends_with("/hide/automations/…"));
+}
+
 /// B32: the daemon's idle hold follows whether any automation is on.
 #[test]
 fn the_idle_hold_follows_whether_any_automation_is_on() {
