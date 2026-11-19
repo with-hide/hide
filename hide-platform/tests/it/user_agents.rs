@@ -446,6 +446,60 @@ fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
     );
 }
 
+/// A systemd unit adopted over its own run is rewritten and enabled, never
+/// stopped and not started again: the process asking may be that run. One
+/// not running is started.
+#[cfg(unix)]
+#[test]
+fn a_systemd_adopt_never_stops_a_running_unit() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    crate::stand_ins::program(&home.join("systemctl"), RECORDING_SYSTEMCTL);
+    let agents = UserAgents::fixture_of(Kind::Systemd, home);
+    let stop = AtomicBool::new(false);
+    let agent = LoginAgent {
+        label: "example.agent",
+        program: Path::new("/opt/hide/hided"),
+        arguments: &["core-login"],
+        environment: &[],
+        log: &home.join("agent.log"),
+    };
+    let marker = home.join("keep-alive");
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    agents.forget("example.agent", home, &stop).unwrap();
+    std::fs::remove_file(home.join("calls")).unwrap();
+
+    agents.adopt(&agent, &marker, home, &stop).unwrap();
+    assert!(agents.is_installed("example.agent", home).unwrap());
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    let calls = |home: &Path| -> Vec<String> {
+        std::fs::read_to_string(home.join("calls"))
+            .unwrap()
+            .lines()
+            .filter(|call| !call.starts_with("show "))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        calls(home),
+        ["daemon-reload", "enable example.agent.service"],
+        "the running unit was stopped or started again"
+    );
+
+    std::fs::remove_file(home.join("active")).unwrap();
+    std::fs::remove_file(home.join("calls")).unwrap();
+    agents.adopt(&agent, &marker, home, &stop).unwrap();
+    assert_eq!(
+        calls(home),
+        [
+            "daemon-reload",
+            "enable example.agent.service",
+            "start --no-block example.agent.service"
+        ]
+    );
+}
+
 /// The account lingers once `loginctl` says it does; a refusal names the
 /// command an administrator runs.
 #[cfg(unix)]

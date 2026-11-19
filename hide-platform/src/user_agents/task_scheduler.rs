@@ -352,7 +352,11 @@ mod tests {
         let agent = LoginAgent {
             label: "dev.withhide.core",
             program: Path::new("C:\\Users\\example\\a&b\\.hide\\core\\0123\\hided.exe"),
-            arguments: &["core-login", "--state-dir", "C:\\Users\\example\\a&b\\.hide\\state"],
+            arguments: &[
+                "core-login",
+                "--state-dir",
+                "C:\\Users\\example\\a&b\\.hide\\state",
+            ],
             environment: &[],
             log: Path::new("C:\\unused"),
         };
