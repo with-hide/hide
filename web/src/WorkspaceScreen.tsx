@@ -191,7 +191,7 @@ function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, a
   if (event.key !== "Escape" || escapeConsumed(event)) return;
   if (frame.mode === "expanded") useUiStore.getState().setLaneExpanded(false);
   else if (frame.mode === "overlay") {
-    if (event.target instanceof Element && event.target.closest(".cm-editor")) return;
+    if (event.target instanceof Element && event.target.closest("[data-editor-body]")) return;
     actions.closeLane();
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
