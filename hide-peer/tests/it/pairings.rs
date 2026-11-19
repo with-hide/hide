@@ -302,7 +302,7 @@ async fn two_minutes_without_an_answer_end_a_pairing_and_nine_end_a_link() {
     mac.shows("the words", |view| view.join.as_ref()?.words)
         .await;
     // Nobody answers.
-    tokio::time::sleep(limits::ANSWER_WITHIN + Duration::from_secs(1)).await;
+    tokio::time::sleep(limits::ANSWER_WITHIN + Duration::from_secs(1)).await; // wait-ok: the two minutes an answer may take run out, on the test's paused clock
     let join = mac.view.borrow().join.clone().unwrap();
     assert_eq!(
         (join.phase, join.failure, join.words),
@@ -314,9 +314,9 @@ async fn two_minutes_without_an_answer_end_a_pairing_and_nine_end_a_link() {
 
     // A link nobody used is over after nine minutes.
     let offer = pc.pairings.share(WordList::English).unwrap();
-    tokio::time::sleep(limits::OFFER_FOR - Duration::from_secs(1)).await;
+    tokio::time::sleep(limits::OFFER_FOR - Duration::from_secs(1)).await; // wait-ok: one second before the link's nine minutes end, on the test's paused clock
     assert!(pc.view.borrow().offer.is_some());
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await; // wait-ok: the link's nine minutes are over, on the test's paused clock
     assert!(pc.view.borrow().offer.is_none());
     mac.pairings.join(&offer.link).unwrap();
     assert_eq!(
@@ -619,7 +619,7 @@ async fn a_request_the_other_way_says_how_it_ended() {
     pc.pairings.request(guest).unwrap();
     mac.shows("the PC's request", |view| view.asks.first().cloned())
         .await;
-    tokio::time::sleep(limits::ANSWER_WITHIN + Duration::from_secs(1)).await;
+    tokio::time::sleep(limits::ANSWER_WITHIN + Duration::from_secs(1)).await; // wait-ok: the two minutes an answer may take run out, on the test's paused clock
     assert_eq!(ended(&pc.view.borrow()), Some(RequestState::Unanswered));
     assert!(mac.view.borrow().asks.is_empty());
 
@@ -746,7 +746,7 @@ async fn the_seventh_confirm_or_removal_in_a_minute_goes_unanswered() {
     assert!(matches!(ended, Ok(None)));
 
     // A minute later the same machine is answered again.
-    tokio::time::sleep(limits::RATE_WINDOW).await;
+    tokio::time::sleep(limits::RATE_WINDOW).await; // wait-ok: the rate window passes, on the test's paused clock
     let mut pairing = link.open(StreamKind::Pairing).await.unwrap();
     let confirm = Pairing::Confirm {
         grant: "nope".into(),

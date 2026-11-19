@@ -166,10 +166,6 @@
     "line": "Dials a paired machine that is not connected again now. For an SSH device, starts a new attempt to connect it, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt. With --wait it waits until the SSH device connects, needs the operator, the attempt fails or five minutes pass.",
     "example": "hide device retry mini --wait"
   },
-  "device accept-ssh": {
-    "line": "Run by a Hide that pairs over SSH or wsl.exe, on the machine it pairs with, never typed by a person: it saves a grant that opens nothing until that Hide confirms it over the connection, and answers this machine's ids and addresses. Run again with the same request, it answers the same.",
-    "example": "hide device accept-ssh --request 7f3a9c --key <connection id> --device <device id> --name 'MacBook'"
-  },
   "access request": {
     "line": "Asks the operator to let this program, outside Hide's panes, use hide, and waits up to ten minutes for the answer in Settings > External tools (--no-wait answers at once); once approved the program's later hide commands run as it, at View only or Act, with no second request.",
     "example": "hide access request --name nightly-bot"
