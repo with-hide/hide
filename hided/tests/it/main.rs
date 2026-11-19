@@ -5,6 +5,7 @@
 
 mod access;
 mod agent_exec;
+mod always_on_update;
 mod arguments;
 mod browser_control;
 mod closed_stdout;
