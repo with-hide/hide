@@ -934,8 +934,9 @@ impl Runtime {
     }
 
     /// The node with registration `id` bound to its next free `kind`
-    /// checker of the same agent (B3, B4); the node's own worker is never
-    /// its checker.
+    /// checker of the same agent (B3, B4), else in the place of one whose
+    /// registration ended or is gone (`Criterion::bind`); the node's own
+    /// worker is never its checker.
     pub(super) fn bind_checker(
         &self,
         node: &MissionNode,
@@ -967,7 +968,17 @@ impl Runtime {
             .iter_mut()
             .find(|line| line.kind == kind.kind())
             .ok_or("mission_checker_unknown")?
-            .bind(id, hide_agent_adapter::canonical_kind(&record.actor.kind))?;
+            .bind(
+                id,
+                hide_agent_adapter::canonical_kind(&record.actor.kind),
+                |bound| {
+                    ledger
+                        .agents
+                        .iter()
+                        .find(|row| row.id == bound)
+                        .is_none_or(|row| row.ended)
+                },
+            )?;
         Ok(next)
     }
 

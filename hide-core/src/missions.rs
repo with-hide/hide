@@ -560,8 +560,9 @@ pub struct Woken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
-    /// The review line failed `mission_health::REVIEW_FAILS_THAT_WARN` times
-    /// in a row.
+    /// The review or verification line failed
+    /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
+    /// (`MissionNode::review_fails`).
     ReviewFails,
     /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
     /// request does not just wait on others.
@@ -586,7 +587,7 @@ impl WarningKind {
     /// stall (`warning_stood`): the one rule raising and keeping that stall
     /// read. A warning the worker's own move takes off (a push, the stopped
     /// worker at work again) stands only while no move came. A failed review
-    /// goes only once a review passes, which a worker fixing the findings
+    /// or verification goes only once that line passes, which a worker fixing the findings
     /// does not reach for a whole round, so standing says nothing of a move:
     /// it stays the Conductor's warning and never reaches the operator.
     pub fn stalls(self) -> bool {
@@ -1578,11 +1579,14 @@ impl MissionNode {
         }
     }
 
-    /// The node's review line's failures in a row; 0 with no review line.
+    /// The failures in a row of the node's review or verification line, the
+    /// more of the two (`CriterionKind::checker_judges`); 0 with neither. The
+    /// name and the wire field `review_fails` predate the verification
+    /// counting too.
     pub fn review_fails(&self) -> u32 {
         self.criteria
             .iter()
-            .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
+            .filter(|line| line.kind.checker_judges())
             .map(|line| line.fails_in_a_row)
             .max()
             .unwrap_or(0)

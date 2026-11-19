@@ -136,12 +136,12 @@ fn line_of<'a>(node: &'a Value, kind: &str) -> Option<&'a Value> {
         .find(|line| line["kind"] == kind)
 }
 
-/// The node's failed reviews in a row, marked when they warn.
+/// The node's failed reviews or verifications in a row, marked when they warn.
 fn review_words(node: &Value) -> Option<String> {
     let fails = node["review_fails"].as_u64().filter(|fails| *fails > 0)?;
     Some(marked(
         warning(node, "review_fails").is_some(),
-        format!("리뷰 FAIL {fails}연속"),
+        format!("리뷰·검증 FAIL {fails}연속"),
     ))
 }
 
@@ -525,7 +525,7 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     for warning in node["warnings"].as_array().into_iter().flatten() {
         let what = match warning["kind"].as_str() {
             Some("review_fails") => format!(
-                "리뷰 FAIL {}연속",
+                "리뷰·검증 FAIL {}연속",
                 node["review_fails"].as_u64().unwrap_or(0)
             ),
             Some("no_push") => format!(
@@ -671,7 +671,7 @@ mod tests {
             draw(&mission(), NOW).unwrap(),
             "mission-33 · Show summary · 진행 중 · 끝 1/4 · 빠짐 1 · 열린 결정 1 · 경고 2\n\
              결정 · Merge order?\n\
-             ⚠ show · 작업 중 · ⚠리뷰 FAIL 2연속 · ⚠push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
+             ⚠ show · 작업 중 · ⚠리뷰·검증 FAIL 2연속 · ⚠push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
              \x20 ci · 작업 중 · push 12분 전 · #8 대기 · CI 통과 · 기다림 운영자 결정\n\
              \x20 docs · 끝 · #6 머지됨 외 1\n\
              \x20 later · 계획 · 기다림 show\n\
@@ -845,7 +845,7 @@ mod tests {
              PR #7 실패 · https://github.com/acme/hide/pull/7\n\
              브랜치 feat/show\n\
              ⚠push 95분 전\n\
-             경고 ⚠ 리뷰 FAIL 2연속 · 지휘자에게 알림 20분 전\n\
+             경고 ⚠ 리뷰·검증 FAIL 2연속 · 지휘자에게 알림 20분 전\n\
              경고 ⚠ push 없이 95분 · 지휘자에게 알릴 차례\n\
              완료 줄 1/3\n\
              \x20 c1 통과 · show reads as text · 근거 unit test · w 30분 전\n\
