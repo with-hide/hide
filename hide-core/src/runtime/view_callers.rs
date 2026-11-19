@@ -3,15 +3,15 @@
 use super::workspace_view::WorkspaceKey;
 use super::*;
 use crate::workspace_control::Caller;
+use crate::workspace_views::Place;
 
-/// The selection a caller outside the operator's pane must leave as it found
-/// it (PRD lane-files-checkout-views B7): the area in use, the View in front
-/// of each area and the editor's active tab.
+/// The selection an open the operator does not watch leaves as it found it
+/// (PRD lane-desk-pair-view B1): on each tree of the checkout, the area in
+/// use and the View in front of each area, and the editor's active tab.
 pub(super) struct Kept {
     key: WorkspaceKey,
     editor_active: Option<String>,
-    active_area: String,
-    fronts: Vec<String>,
+    trees: Vec<(Place, String, Vec<String>)>,
 }
 
 impl Runtime {
@@ -55,22 +55,25 @@ impl Runtime {
             .and_then(|tab| tab.id.clone())
     }
 
-    /// Whether a Workspace command's caller leaves the selection as it found
-    /// it. On the Workspace in front, every caller but the pane the operator
-    /// is in does: another pane of the same tab, and a shell bound only to
-    /// the checkout, which no pane vouches for. On a Workspace not on screen,
-    /// a pane of a tab other than its active one does (B7); the active tab's
-    /// panes and a checkout shell change what only that Workspace shows, so
-    /// a page they open is in front and can be driven (D-04, D-10). A
-    /// window's browser gateway never does: a page a CDP client creates
-    /// loads only in front.
-    pub(super) fn caller_stays_behind(&self, key: &WorkspaceKey, caller_id: &str) -> bool {
-        let on_screen = self.front_workspace_key().as_ref() == Some(key);
+    /// Where a Workspace command's open or select lands (PRD
+    /// lane-desk-pair-view B1, B2, D-05, D-36): the tray of the tab of the
+    /// pane the operator watches, the selected pane of the Workspace in
+    /// front, when the caller is that pane; for any other caller, on no
+    /// tray, where the View waits in its pane's list with the To look at
+    /// mark. A Workspace not on screen has no watched pane (conductor
+    /// decision 5). A window's browser gateway opens on the tray in front:
+    /// a page a CDP client creates is driven there.
+    pub(super) fn control_place(&self, key: &WorkspaceKey, caller_id: &str) -> Place {
         match Caller::parse(caller_id) {
-            Caller::Checkout { gateway: true, .. } | Caller::Desk => false,
-            Caller::Checkout { .. } | Caller::Access { .. } => on_screen,
-            Caller::Pane(pane_id) if on_screen => self.operator_pane(&key.0) != Some(pane_id),
-            Caller::Pane(_) => self.background_caller_tab(key, caller_id).is_some(),
+            Caller::Checkout { gateway: true, .. } | Caller::Desk => self.front_place(key),
+            Caller::Pane(pane)
+                if self.front_workspace_key().as_ref() == Some(key)
+                    && self.operator_pane(&key.0) == Some(pane) =>
+            {
+                self.control_caller_tab(key, caller_id)
+                    .map_or(Place::Shelf, Place::Tray)
+            }
+            Caller::Pane(_) | Caller::Checkout { .. } | Caller::Access { .. } => Place::Shelf,
         }
     }
 
@@ -91,56 +94,132 @@ impl Runtime {
             .and_then(|session| session.focused_pane_id.as_deref())
     }
 
-    /// The tab of a caller that is not looking at the Workspace's front: a
-    /// pane of an Agent tab other than the active one. A checkout and the
-    /// active tab's panes are in front (D-04, D-10).
-    pub(super) fn background_caller_tab(
-        &self,
-        key: &WorkspaceKey,
-        caller_id: &str,
-    ) -> Option<String> {
-        let tab = self.control_caller_tab(key, caller_id)?;
-        (self.workspace_active_tab(key).as_deref() != Some(tab.as_str())).then_some(tab)
-    }
-
-    /// What a background caller's open leaves as it was (B7).
+    /// What an open the operator does not watch leaves as it was (B1): the
+    /// fronts of every tree of the checkout, so a View it takes from a tray
+    /// or adds to one never comes in front.
     pub(super) fn keep_front(&self, key: &WorkspaceKey) -> Kept {
-        let empty = crate::view_layout::Layout::default();
-        let layout = self.view_layout_of(key).unwrap_or(&empty);
+        let trees = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+            .map(|view| {
+                view.layouts()
+                    .map(|(place, layout)| {
+                        (
+                            place,
+                            layout.active_area.clone(),
+                            layout
+                                .areas()
+                                .into_iter()
+                                .filter_map(|area| area.active.clone())
+                                .collect(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Kept {
             key: key.clone(),
             editor_active: self.snapshot.editor.active_tab_id.clone(),
-            active_area: layout.active_area.clone(),
-            fronts: layout
-                .areas()
-                .into_iter()
-                .filter_map(|area| area.active.clone())
-                .collect(),
+            trees,
         }
     }
 
-    /// Puts the selection back after a background open: the new View stays
-    /// where it landed, in no area's front and never in the keyboard's.
+    /// Puts the selection back after an open the operator does not watch:
+    /// the View stays where it landed, in no area's front and never in the
+    /// keyboard's.
     pub(super) fn restore_front(&mut self, kept: Kept) {
         self.snapshot.editor.active_tab_id = kept.editor_active;
-        let outcome = self.change_view_layout(&kept.key, |layout, stamp| {
-            let mut changed = false;
-            for display in &kept.fronts {
-                changed |= layout.show(display, stamp).unwrap_or(false);
+        for (place, active_area, fronts) in kept.trees {
+            if self.view_layout_at(&kept.key, &place).is_none() {
+                continue;
             }
-            if layout.area(&kept.active_area).is_some() && layout.active_area != kept.active_area {
-                layout.active_area = kept.active_area.clone();
-                changed = true;
+            let outcome = self.change_view_layout(&kept.key, &place, |layout, stamp| {
+                let mut changed = false;
+                for display in &fronts {
+                    if layout.display(display).is_some() {
+                        changed |= layout.show(display, stamp).unwrap_or(false);
+                    }
+                }
+                if layout.area(&active_area).is_some() && layout.active_area != active_area {
+                    layout.active_area = active_area.clone();
+                    changed = true;
+                }
+                Ok(((), changed))
+            });
+            if let Err(error) = outcome {
+                self.push_diagnostic("view_layout.front_not_restored", error.message());
             }
-            Ok(((), changed))
-        });
-        if let Err(error) = outcome {
-            self.push_diagnostic("view_layout.front_not_restored", error.message());
         }
     }
 
-    /// A tab that left the engine takes only its pending reads with it.
+    /// The engine listed the Agent tabs `tabs` of `key`: a tab that left
+    /// takes its pending reads and its tray with it, its agents' Views
+    /// staying in their panes' lists and every other tab leaving; a document
+    /// it showed lands on the tray in front, as any document no View shows
+    /// does. A pair view whose left pane left the tab ends (PRD
+    /// lane-desk-pair-view B28), without a notice. Whether anything changed.
     pub(super) fn prune_view_callers(&mut self, key: &WorkspaceKey, tabs: &[&str]) -> bool {
-        self.prune_gui_reads(key, tabs)
+        let reads = self.prune_gui_reads(key, tabs);
+        let panes_of = |tab: &str| -> Vec<String> {
+            self.catalog_workspaces()
+                .filter(|workspace| workspace.device_id == key.0)
+                .flat_map(|workspace| &workspace.checkouts)
+                .filter(|checkout| checkout.path == key.1)
+                .flat_map(|checkout| &checkout.tabs)
+                .filter(|held| held.id.as_deref() == Some(tab))
+                .flat_map(|held| held.panes.iter().map(|pane| pane.id.clone()))
+                .collect()
+        };
+        let Some(view) = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+        else {
+            return reads;
+        };
+        let gone: Vec<String> = view
+            .trays
+            .iter()
+            .filter(|tray| {
+                tray.tab != crate::workspace_views::PENDING_TRAY
+                    && !tabs.contains(&tray.tab.as_str())
+            })
+            .map(|tray| tray.tab.clone())
+            .collect();
+        let unpaired: Vec<(String, String)> = view
+            .trays
+            .iter()
+            .filter(|tray| tabs.contains(&tray.tab.as_str()))
+            .filter_map(|tray| {
+                let pair = tray.pair.as_ref()?;
+                (!panes_of(&tray.tab).contains(&pair.pane))
+                    .then(|| (tray.tab.clone(), pair.pane.clone()))
+            })
+            .collect();
+        if gone.is_empty() && unpaired.is_empty() {
+            return reads;
+        }
+        let store = self.workspace_views.as_mut().expect("read above");
+        let view = store.views.entry(&key.0, &key.1);
+        for tab in &gone {
+            let moved = view.retire_tray(tab);
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_layout", "kind": "tray.tab_gone",
+                "device": key.0, "tab": tab, "shelved": moved,
+            }));
+        }
+        for (tab, pane) in &unpaired {
+            if let Some(tray) = view.tray_mut(tab) {
+                tray.pair = None;
+            }
+            crate::diagnostic!(serde_json::json!({
+                "component": "pair_view", "kind": "pair_view.ended",
+                "device": key.0, "tab": tab, "pane": pane, "cause": "pane_gone",
+            }));
+        }
+        store.generation += 1;
+        self.persist_workspace_views();
+        true
     }
 }

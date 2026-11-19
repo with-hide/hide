@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use super::view_areas::Reconciled;
 use super::*;
+use crate::workspace_views::Place;
 use crate::model::{
     BrowserAreaScopeRow, BrowserViewInventoryRow, LaneCallSide, WorkspaceViewSnapshot,
 };
@@ -140,6 +141,12 @@ pub(super) struct WorkspaceViewStore {
     save_pending: bool,
     save_active: bool,
     save_worker: Option<thread::JoinHandle<()>>,
+    /// The card whose data is being read: the tray in front's card tab in
+    /// front, as `sync_card_reads` last saw it (PRD lane-desk-pair-view,
+    /// conductor decision 3), and whether a press asked it to be read again.
+    /// Runtime only.
+    pub(super) card_read: Option<crate::model::DetailItem>,
+    pub(super) card_read_again: bool,
 }
 
 /// What an event asks of a Workspace's lane once it has moved the screen
@@ -177,15 +184,14 @@ impl AreaIntent {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkspaceViewPayload {
-    /// `true` opens a closed lane in the shape it had, or on the documents
-    /// when it has some and else on the Explorer when it had no column
-    /// (B15); `false` closes the whole lane, keeping both columns' shape
-    /// for the next open. The 보기 slot stops being drawn either way.
+    /// `true` opens a closed lane in the shape it had, or on the tray of the
+    /// tab in front when it has tabs and else on the Explorer when it had no
+    /// column (B15); `false` closes the whole lane, keeping both columns'
+    /// shape for the next open (PRD lane-desk-pair-view B30).
     #[serde(default)]
     pub(super) open: Option<bool>,
-    /// `true` shows the checkout's documents in the viewing column, in front
-    /// of the 보기 slot, which stays on the rail (B10, B11); `false` folds
-    /// the viewing column.
+    /// `true` shows the tray of the Agent tab in front (B14); `false` folds
+    /// it.
     #[serde(default)]
     pub(super) documents: Option<bool>,
     /// `project`, `memory`, `explorer` or `changes` shows that tool in the tool
@@ -194,15 +200,9 @@ pub(super) struct WorkspaceViewPayload {
     /// left as it is.
     #[serde(default, deserialize_with = "present")]
     pub(super) tool: Option<Option<String>>,
-    /// Whether the lane is pinned beside Agent Views (right-lane D-03).
-    #[serde(default)]
-    pub(super) pinned: Option<bool>,
-    /// The viewing column's width with the documents, in CSS pixels.
+    /// The tray's width, in CSS pixels.
     #[serde(default)]
     pub(super) document_width: Option<u32>,
-    /// The viewing column's width with the 보기 slot, in CSS pixels.
-    #[serde(default)]
-    pub(super) detail_width: Option<u32>,
     /// The tool column's width with the Explorer, in CSS pixels.
     #[serde(default)]
     pub(super) explorer_width: Option<u32>,
@@ -347,6 +347,8 @@ impl WorkspaceViewStore {
                 save_pending: false,
                 save_active: false,
                 save_worker: None,
+                card_read: None,
+                card_read_again: false,
             },
             diagnostics,
         )
@@ -394,24 +396,81 @@ impl Runtime {
             .map(|(workspace, checkout)| (workspace.device_id.clone(), checkout.path.clone()))
     }
 
-    /// The operator closed a view of `key`'s documents (lane-two-columns
-    /// B12): when none is left the viewing column closes, and the lane with
-    /// it when there is no tool column either; a tool column stays. The
-    /// displays of a document that just closed leave first.
+    /// The operator closed a tab of the tray in front (PRD
+    /// lane-desk-pair-view B11, B26): when none is left the tray folds, and
+    /// the pair view on it ends; a tool column stays. The displays of a
+    /// document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        let Some(entry) = self
+        let Place::Tray(tab) = self.front_place(key) else {
+            return;
+        };
+        let Some(tray) = self
             .workspace_views
             .as_mut()
             .and_then(|store| store.views.get_mut(&key.0, &key.1))
+            .and_then(|entry| entry.tray_mut(&tab))
         else {
             return;
         };
-        if !entry.documents || entry.layout.display_count() > 0 {
+        if tray.layout.display_count() > 0 || (!tray.shown && tray.pair.is_none()) {
             return;
         }
-        entry.documents = false;
+        tray.shown = false;
+        if let Some(pair) = tray.pair.take() {
+            crate::diagnostic!(serde_json::json!({
+                "component": "pair_view", "kind": "pair_view.ended",
+                "device": key.0, "tab": tab, "pane": pair.pane, "cause": "tray_emptied",
+            }));
+        }
         self.persist_workspace_views();
+    }
+
+    /// Gives the tray a migration or a launch could not yet name to the
+    /// Agent tab `key` shows, once it shows one (PRD lane-desk-pair-view
+    /// D-18): one lookup while there is none.
+    fn adopt_pending_tray(&mut self, key: &WorkspaceKey) {
+        let pending = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+            .is_some_and(|view| view.tray(workspace_views::PENDING_TRAY).is_some());
+        if !pending {
+            return;
+        }
+        let Some(tab) = self.workspace_active_tab(key) else {
+            return;
+        };
+        let store = self.workspace_views.as_mut().expect("read above");
+        if store.views.entry(&key.0, &key.1).adopt_pending_tray(&tab) {
+            store.generation += 1;
+            crate::diagnostic!(serde_json::json!({
+                "component": "view_layout", "kind": "tray.pending_adopted",
+                "device": key.0, "tab": tab,
+            }));
+            self.persist_workspace_views();
+        }
+    }
+
+    /// Opens `key`'s lane on the tray at `place` when the operator opened a
+    /// tab there: a closed lane opens on it alone (`open_on`), a folded
+    /// tray unfolds, and the call is numbered as the tray's. A View on no
+    /// tray opens no lane.
+    pub(super) fn open_tray_for(&mut self, key: &WorkspaceKey, place: &Place) {
+        let Place::Tray(tab) = place else {
+            return;
+        };
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let entry = store.views.entry(&key.0, &key.1);
+        let before = (entry.open, entry.tool, entry.tray(tab).is_some_and(|tray| tray.shown));
+        entry.show_tray(tab);
+        let changed = before != (entry.open, entry.tool, true);
+        store.call_lane(key, LaneCallSide::View);
+        if changed {
+            self.persist_workspace_views();
+        }
     }
 
     pub(super) fn front_workspace_key(&self) -> Option<WorkspaceKey> {
@@ -690,30 +749,18 @@ impl Runtime {
     }
 
     pub(super) fn show_project_memory_at(&mut self, key: &WorkspaceKey, workspace: String) {
+        let tab = self.workspace_active_tab(key);
         if let Some(store) = self.workspace_views.as_mut() {
             let entry = store.views.entry(&key.0, &key.1);
-            let before = (entry.open, entry.documents, entry.tool);
-            let opened = entry.show_tool(Tool::Memory);
-            let changed = before != (entry.open, entry.documents, entry.tool);
+            let before = entry.clone();
+            entry.show_tool(Tool::Memory, tab.as_deref());
+            let changed = *entry != before;
             store.call_lane(key, LaneCallSide::Tool);
             if changed {
                 self.persist_workspace_views();
             }
-            if opened {
-                self.leave_detail_at(key);
-            }
         }
         self.open_project_memory(Some(workspace));
-    }
-
-    /// A tool opened `key`'s closed lane on itself alone (`open_on`), so the
-    /// front tab's 보기 slot, which ⌘E's close left shown, stops being drawn
-    /// there and stays on the rail to come back to. Only the lane in front
-    /// gives way.
-    fn leave_detail_at(&mut self, key: &WorkspaceKey) {
-        if self.front_workspace_key().as_ref() == Some(key) {
-            self.leave_detail();
-        }
     }
 
     /// The device refused the request, or its answer was lost: a later move
@@ -735,38 +782,29 @@ impl Runtime {
         }
     }
 
-    /// Applies an area intent to one Workspace, in front or about to be.
+    /// Applies an area intent to one Workspace, in front or about to be:
+    /// a View the operator opened shows the tray of the tab in front, a
+    /// folder the Explorer.
     pub(super) fn apply_area_intent_to(&mut self, key: &WorkspaceKey, intent: AreaIntent) {
-        let Some(store) = self.workspace_views.as_mut() else {
-            return;
-        };
-        let entry = store.views.entry(&key.0, &key.1);
-        let before = (entry.open, entry.documents, entry.tool);
-        let tool_opened = match intent {
+        match intent {
             AreaIntent::Documents => {
-                entry.show_documents();
-                false
+                let place = self.front_place(key);
+                self.open_tray_for(key, &place);
             }
-            AreaIntent::Explorer => entry.show_tool(Tool::Explorer),
-        };
-        let changed = before != (entry.open, entry.documents, entry.tool);
-        store.call_lane(
-            key,
-            match intent {
-                AreaIntent::Documents => LaneCallSide::View,
-                AreaIntent::Explorer => LaneCallSide::Tool,
-            },
-        );
-        if changed {
-            self.persist_workspace_views();
-        }
-        // A file or diff opened from the card shows as a document in front
-        // of the card, which keeps its rail slot to come back to (PRD
-        // sidebar-task-lens B49, lane-two-columns B10). The slot is the
-        // window's, so only the lane in front gives way: an open in a
-        // Workspace behind it leaves the card or record the operator reads.
-        if intent == AreaIntent::Documents || tool_opened {
-            self.leave_detail_at(key);
+            AreaIntent::Explorer => {
+                let tab = self.workspace_active_tab(key);
+                let Some(store) = self.workspace_views.as_mut() else {
+                    return;
+                };
+                let entry = store.views.entry(&key.0, &key.1);
+                let before = (entry.open, entry.tool);
+                entry.show_tool(Tool::Explorer, tab.as_deref());
+                let changed = before != (entry.open, entry.tool);
+                store.call_lane(key, LaneCallSide::Tool);
+                if changed {
+                    self.persist_workspace_views();
+                }
+            }
         }
     }
 
@@ -827,40 +865,41 @@ impl Runtime {
             );
             return true;
         }
-        let detail_shown =
-            self.snapshot.ui_state.detail.shown && !self.snapshot.ui_state.detail.items.is_empty();
+        let Place::Tray(tab) = self.front_place(&key) else {
+            unreachable!("the place in front is a tray");
+        };
         let store = self.workspace_views.as_mut().expect("checked above");
         let entry = store.views.entry(&key.0, &key.1);
         let before = entry.clone();
-        // Whether a tool opened the closed lane on itself alone (`open_on`).
-        let mut tool_opened = false;
         match tool {
-            Some(Some(tool)) => tool_opened = entry.show_tool(tool),
+            Some(Some(tool)) => {
+                entry.show_tool(tool, Some(&tab));
+            }
             Some(None) => entry.close_tool(),
             None => {}
         }
         match payload.documents {
-            Some(true) => entry.show_documents(),
-            Some(false) => entry.documents = false,
+            Some(true) => entry.show_tray(&tab),
+            Some(false) => {
+                if let Some(tray) = entry.tray_mut(&tab) {
+                    tray.shown = false;
+                }
+            }
             None => {}
-        }
-        if let Some(pinned) = payload.pinned {
-            entry.pinned = pinned;
         }
         // A reveal is the Explorer's: the tool column shows it.
         if payload.reveal.is_some() {
-            tool_opened |= entry.show_tool(Tool::Explorer);
+            entry.show_tool(Tool::Explorer, Some(&tab));
         }
         match payload.open {
             Some(false) => entry.open = false,
             Some(true) => {
                 entry.open = true;
-                // A lane that had no column comes back on the documents when
-                // there are some, else on the Explorer (B15); the window's
-                // 보기 slot, still shown, is a column of its own.
-                if !entry.has_column() && !detail_shown {
-                    if entry.layout.display_count() > 0 {
-                        entry.documents = true;
+                // A lane that had no column comes back on the tray when it
+                // has tabs, else on the Explorer (B15).
+                if !entry.has_column(Some(&tab)) {
+                    if entry.tray(&tab).is_some_and(|tray| tray.layout.display_count() > 0) {
+                        entry.tray_entry(&tab).shown = true;
                     } else {
                         entry.tool = Some(Tool::Explorer);
                     }
@@ -870,9 +909,6 @@ impl Runtime {
         }
         if let Some(width) = payload.document_width {
             entry.document_width = Some(workspace_views::clamp_width(width));
-        }
-        if let Some(width) = payload.detail_width {
-            entry.detail_width = Some(workspace_views::clamp_width(width));
         }
         if let Some(width) = payload.explorer_width {
             entry.explorer_width = Some(workspace_views::clamp_width(width));
@@ -895,13 +931,7 @@ impl Runtime {
             };
             store.call_lane(&key, side);
         }
-        // The documents brought in front stand before the 보기 slot, which
-        // stays on the rail (B10, B11); a lane closed whole keeps the slot
-        // shown, so ⌘E brings it back (B15), and a tool that opens it
-        // instead stands alone (`leave_detail_at`).
-        let leaves_detail = payload.documents == Some(true) || tool_opened;
         let width_request_changed = if payload.document_width.is_some()
-            || payload.detail_width.is_some()
             || payload.explorer_width.is_some()
             || payload.panel_width.is_some()
         {
@@ -915,8 +945,7 @@ impl Runtime {
         let revealed = payload
             .reveal
             .is_some_and(|path| self.unfold_to(&key, &path));
-        let detail_left = leaves_detail && self.leave_detail();
-        if !entry_changed && !called && !revealed && !width_request_changed && !detail_left {
+        if !entry_changed && !called && !revealed && !width_request_changed {
             return false;
         }
         if entry_changed {
@@ -1057,15 +1086,20 @@ impl Runtime {
             }
         }
         self.restore_front_when_ready();
-        // The strip follows the session whose pane has the keyboard before
-        // the editor's active tab is derived from it (PRD session-files).
-        self.settle_view_sessions();
+        // The tray a migration could not yet name goes to the tab the
+        // Workspace shows once it shows one (PRD lane-desk-pair-view D-18).
+        if let Some(key) = front.as_ref() {
+            self.adopt_pending_tray(key);
+        }
         self.reconcile_view_displays();
         // What is in front of the operator now is seen, and the rows follow
         // whatever the View lists did (PRD unseen-agent-views D-07, D-09).
         self.settle_unseen_views();
         // The open record's gallery follows the View lists (D-40).
         self.settle_record_views();
+        // Only the card in front of the tray drawn is read (conductor
+        // decision 3).
+        self.sync_card_reads();
         self.sync_agent_selection();
         if let Some(store) = &self.workspace_views {
             for workspace in &mut self.snapshot.navigator.workspaces {
@@ -1119,7 +1153,14 @@ impl Runtime {
                     .iter()
                     .any(|key| key.0 == view.device_id && key.1 == view.path)
             }) {
-                for area in view.layout.areas() {
+                // A page on no tray is still held, loaded off screen by the
+                // host (PRD lane-desk-pair-view D-37, B32).
+                for (place, layout) in view.layouts() {
+                let tray = match &place {
+                    Place::Tray(tab) => Some(tab.clone()),
+                    Place::Shelf => None,
+                };
+                for area in layout.areas() {
                     scopes.push(BrowserAreaScopeRow {
                         device_id: view.device_id.clone(),
                         path: view.path.clone(),
@@ -1149,8 +1190,10 @@ impl Runtime {
                                 path: view.path.clone(),
                                 area_id: area.id.clone(),
                                 view_id: display.id.clone(),
+                                tray: tray.clone(),
                             }),
                     );
+                }
                 }
             }
             // Every Workspace's, connected or not: a grant ends only when no
@@ -1159,7 +1202,7 @@ impl Runtime {
                 .views
                 .workspaces
                 .iter()
-                .flat_map(|view| view.layout.displays())
+                .flat_map(|view| view.views())
                 .filter_map(|display| display.external.as_ref().map(|file| file.grant.clone()))
                 .collect();
             self.snapshot.browser_views = displays;
@@ -1297,17 +1340,27 @@ impl Runtime {
             None => None,
         };
         let published = front.zip(view).map(|(key, view)| {
-            let layout = self.view_layout_snapshot(key, &view.layout);
+            let place = self.front_place(key);
+            let Place::Tray(tab) = &place else {
+                unreachable!("the place in front is a tray");
+            };
+            let empty = crate::view_layout::Layout::default();
+            let tray = view.tray(tab);
+            let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
+            let layout = self.view_layout_snapshot(key, tray_layout);
+            let pair_of = |tray: &crate::workspace_views::Tray| {
+                tray.pair.as_ref().map(|pair| crate::model::PairViewSnapshot {
+                    tab_id: tray.tab.clone(),
+                    pane_id: pair.pane.clone(),
+                })
+            };
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),
                 path: view.path.clone(),
                 git: self.checkout_header_snapshot(key),
                 open: view.open,
-                documents: view.documents,
                 tool: view.tool,
-                pinned: view.pinned,
                 document_width: view.document_width,
-                detail_width: view.detail_width,
                 explorer_width: view.explorer_width,
                 panel_width: view.panel_width,
                 width_request_id: store
@@ -1322,13 +1375,21 @@ impl Runtime {
                     .map_or(LaneCallSide::View, |(_, side)| *side),
                 lane_calls: store.lane_calls,
                 resumed: Some(key) == store.resumable.as_ref(),
-                // A pane's `N views` lists what its session opened, drawn in
-                // the strip or not (B8).
-                feedback: self.view_feedback_snapshot(
-                    key,
-                    &self.view_layout_projection(key, &view.layout, false),
-                ),
-                session_drafts: self.session_drafts(key, &view.layout),
+                tray: crate::model::TraySnapshot {
+                    tab_id: if tab == crate::workspace_views::PENDING_TRAY {
+                        String::new()
+                    } else {
+                        tab.clone()
+                    },
+                    shown: tray.is_some_and(|tray| tray.shown),
+                    count: tray_layout.display_count(),
+                    pair: tray.and_then(pair_of),
+                },
+                pairs: view.trays.iter().filter_map(pair_of).collect(),
+                // A pane's `N views` lists what its session opened, on a
+                // tray or not (PRD lane-desk-pair-view D-04, D-19).
+                feedback: self.view_feedback_snapshot(key, &self.every_view_snapshot(key)),
+                session_drafts: self.session_drafts(key),
                 layout,
                 agent_layout: self
                     .arranges_agent_areas(&key.0)

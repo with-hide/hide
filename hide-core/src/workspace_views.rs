@@ -1,18 +1,22 @@
 //! Each Workspace's presentation in a shell that draws Agent and View areas
 //! side by side (PRD S6 D-10, B8, B19, B20; S7 D-09, D-10, B14, B17; PRD
-//! right-lane D-01, D-03, D-05, D-11; PRD lane-two-columns D-01, D-02, D-09,
-//! D-10, D-20).
+//! right-lane D-01, D-05, D-11; PRD lane-two-columns D-01, D-02, D-09, D-10,
+//! D-20; PRD lane-desk-pair-view D-05, D-06, D-15, D-18, D-20).
 //!
 //! A Workspace is one checkout on one device, keyed by the device id and the
 //! checkout path, because an engine workspace id names a workspace, not a checkout,
 //! and one checkout can hold tabs from several engine workspaces. The
-//! state is Hide's own presentation - the right lane's two columns (the
-//! viewing column with the checkout's documents, the tool column beside the
-//! rail), its pin, the four widths, and the View area tree with its
-//! displays ([`crate::view_layout`]) - and never a terminal layout: the engine
-//! keeps panes, splits and zoom. Whether an unpinned lane is floating over
-//! the agents right now, and an expanded lane, are the shell's own moment
-//! and are never stored (D-11).
+//! state is Hide's own presentation - the right lane (whether it is open,
+//! the tool column beside the rail, the three widths), each Agent tab's tray
+//! (its View areas with their displays, [`crate::view_layout`], and its pair
+//! view), the shelf of the checkout's Views on no desk - and never a
+//! terminal layout: the engine keeps panes, splits and zoom. Whether an open
+//! lane is floating over the agents right now, and an expanded lane, are the
+//! shell's own moment and are never stored (D-11).
+//!
+//! A tray is what PRD lane-desk-pair-view calls a desk (책상): one Agent tab's
+//! Views in front of the operator. The code name keeps clear of the Desk
+//! feature (`crate::desk`, D-35).
 //!
 //! It lives in its own versioned file, apart from `core-state.json`, so a
 //! shell that does not know it never reads it and an older build's settings
@@ -21,12 +25,13 @@
 //! side panel and layouts before them) and a schema 3 file (one lane showing
 //! one tool, with the file tree as a column of its Files tool) load their
 //! View lists, Agent layouts, groups and comments and start their lane
-//! closed at the default widths (lane-two-columns D-10: the old lane state
-//! is not carried over). A schema 4 file (the two columns with Memory and
-//! PRs among the tools) loads whole, a tool that is gone reading as no tool
-//! column. All are written as schema 5 by the next save. A
-//! file this build cannot read, of another version or one whose migration
-//! fails, is moved aside, never overwritten, and the defaults load.
+//! closed at the default widths (lane-two-columns D-10). A schema 4 or 5
+//! file (one lane and one View list per checkout) moves once (lane-desk-pair-
+//! view D-18): the checkout's View list becomes the desk of the Agent tab
+//! the checkout showed last, a pinned lane opens unpinned, and a tool that is
+//! gone reads as no tool column. All are written as schema 6 by the next
+//! save. A file this build cannot read, of another version or one whose
+//! migration fails, is moved aside, never overwritten, and the defaults load.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::view_layout::{DisplayKind, Layout};
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// The Workspaces remembered at once. The least recently used is forgotten
 /// first, so the file stays bounded however many checkouts come and go.
@@ -94,30 +99,21 @@ enum LegacyMode {
 pub struct WorkspaceView {
     pub device_id: String,
     pub path: String,
-    /// Whether the lane is open: its columns are drawn as `documents` and
-    /// `tool` say. A close keeps both, so ⌘E brings the lane back in the
-    /// shape it had (lane-two-columns B15). An unpinned lane the operator hid
-    /// by going back to a terminal stays open: hiding it is the shell's
-    /// moment, not a close.
+    /// Whether the lane is open: the front Agent tab's desk is drawn while
+    /// that desk is `shown`, and the tool column while there is a `tool`. A
+    /// close keeps both, so ⌘E brings the lane back in the shape it had
+    /// (lane-two-columns B15, lane-desk-pair-view B30). It stays the
+    /// Workspace's because the tool column it closes with the desk is the
+    /// Workspace's (D-14). A lane the operator hid by going back to a
+    /// terminal stays open: hiding it is the shell's moment, not a close.
     pub open: bool,
-    /// Whether the viewing column shows the checkout's documents, the View
-    /// areas (D-01, D-04). The front tab's 보기 slot, while it is shown, stands
-    /// in front of them; the rail's document button brings them back.
-    pub documents: bool,
-    /// The tool column's tool, or `None` while there is no tool column.
+    /// The tool column's tool, or `None` while there is no tool column. It
+    /// stays as it is when the operator moves between Agent tabs (D-14).
     pub tool: Option<Tool>,
-    /// Whether the lane is pinned: docked beside Agent Views, taking its
-    /// width from them, rather than floating over them (right-lane D-03).
-    pub pinned: bool,
-    /// The viewing column's width while it shows the documents, in CSS
-    /// pixels, once the operator resized it; until then the shell's default.
-    /// The same width floats and docks (right-lane B6).
+    /// The desk's width, in CSS pixels, once the operator resized it; until
+    /// then the shell's default. Every tab's desk is drawn at it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub document_width: Option<u32>,
-    /// The viewing column's width while it shows the 보기 slot, the same way,
-    /// so a page widened to 900 leaves a card as it was (D-09).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail_width: Option<u32>,
     /// The tool column's width while it shows the Explorer, the same way.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explorer_width: Option<u32>,
@@ -131,11 +127,16 @@ pub struct WorkspaceView {
     /// made for a checkout nobody has opened yet, such as a project just
     /// added, is not the first one forgotten (`WorkspaceViews::entry`).
     pub made_unix_ms: u64,
-    /// The checkout's one View list, split and selection, whichever Agent tab
-    /// is in front. Stored as `view_layout`: the keys earlier builds kept per
-    /// tab (a schema 3 file's `layout`, `view_owner`, `view_presentations`) are never read.
-    #[serde(rename = "view_layout")]
-    pub layout: Layout,
+    /// Each Agent tab's desk (PRD lane-desk-pair-view D-06): the Views the
+    /// operator put in front of that tab, with their View areas, and its
+    /// pair view. One per tab, at most [`MAX_TRAYS`].
+    pub trays: Vec<Tray>,
+    /// The checkout's Views on no desk (D-19): what an agent the operator
+    /// was not watching opened, kept in its pane's list until the operator
+    /// puts it on a desk or it closes. One area, never drawn; at most
+    /// [`crate::view_layout::MAX_VIEW_DISPLAYS`], the View looked at longest
+    /// ago closing first.
+    pub shelf: Layout,
     pub agent_layout: crate::agent_layout::Layout,
     /// Named collections are additive: the original tree remains ungrouped.
     pub agent_groups: crate::agent_groups::Groups,
@@ -149,9 +150,141 @@ pub struct WorkspaceView {
     pub feedback: crate::view_feedback::Feedback,
 }
 
-/// A stored schema 5 or schema 4 entry. A tool this build no longer has (a
-/// schema 4 file's `prs`, or the retired `mission`) reads as no tool column;
-/// the rest of the lane is the same shape.
+/// The most trays one checkout keeps: one per Agent tab, which the Agent
+/// layout caps at the same number. A desk past it is one of a tab the engine
+/// no longer lists, pruned as the topology arrives.
+pub const MAX_TRAYS: usize = 64;
+
+/// The tab id a desk carries before its Agent tab is known: an older file's
+/// checkout documents whose Agent layout named no tab (D-18). The first tab
+/// the Workspace shows takes it (`WorkspaceView::adopt_pending_tray`).
+pub const PENDING_TRAY: &str = "";
+
+/// One Agent tab's desk (PRD lane-desk-pair-view D-05, D-06, D-07): the Views
+/// the operator opened there, and those the agent they watched opened, as
+/// tabs in View areas, in the order they were opened.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Tray {
+    /// The engine's id of the Agent tab whose desk this is.
+    pub tab: String,
+    /// The desk's View areas and their tabs.
+    pub layout: Layout,
+    /// Whether the lane shows this desk while it is open: an open the
+    /// operator makes shows it, its last tab closing or the desk button
+    /// folding it hides it (D-07, B11).
+    #[serde(default)]
+    pub shown: bool,
+    /// Pair view (D-08, D-15): the pane drawn beside the desk, filling the
+    /// body; absent while the tab shows its own pane layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair: Option<PairView>,
+}
+
+/// The left side of a pair view: one pane of the desk's own Agent tab.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PairView {
+    pub pane: String,
+}
+
+/// Where one of a checkout's Views sits: on one Agent tab's desk, or on the
+/// shelf of Views on no desk (D-19, D-20). A View is in exactly one place.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Place {
+    Tray(String),
+    Shelf,
+}
+
+impl Tray {
+    /// An empty desk whose area takes the next id of the checkout, so area
+    /// and View ids stay unique across every desk and the shelf.
+    fn new(tab: &str, next_id: u64) -> Self {
+        Self {
+            tab: tab.to_owned(),
+            layout: fresh_layout(next_id),
+            shown: false,
+            pair: None,
+        }
+    }
+}
+
+/// One empty area numbered from `next_id`.
+fn fresh_layout(next_id: u64) -> Layout {
+    let mut layout = Layout {
+        next_id: next_id.max(1),
+        ..Layout::default()
+    };
+    let area = layout.mint('a');
+    if let crate::view_layout::Node::Area(root) = &mut layout.root {
+        root.id = area.clone();
+    }
+    layout.active_area = area;
+    layout
+}
+
+/// A stored schema 6 entry: the lane, its trays and its shelf.
+#[derive(Deserialize)]
+struct StoredTrays {
+    device_id: String,
+    path: String,
+    #[serde(default)]
+    open: bool,
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    document_width: Option<u32>,
+    #[serde(default)]
+    explorer_width: Option<u32>,
+    #[serde(default)]
+    panel_width: Option<u32>,
+    #[serde(default)]
+    last_used_unix_ms: u64,
+    #[serde(default)]
+    made_unix_ms: u64,
+    #[serde(default)]
+    trays: Vec<Tray>,
+    #[serde(default)]
+    shelf: Option<Layout>,
+    #[serde(default)]
+    agent_layout: crate::agent_layout::Layout,
+    #[serde(default)]
+    agent_groups: crate::agent_groups::Groups,
+    #[serde(default)]
+    agent_starts: std::collections::BTreeMap<String, crate::runtime::group_starts::StartIntent>,
+    #[serde(default)]
+    pane_moves: std::collections::BTreeMap<String, crate::runtime::pane_move::Intent>,
+    #[serde(default)]
+    feedback: crate::view_feedback::Feedback,
+}
+
+impl StoredTrays {
+    fn into_view(self) -> WorkspaceView {
+        WorkspaceView {
+            device_id: self.device_id,
+            path: self.path,
+            open: self.open,
+            tool: self.tool.as_deref().and_then(Tool::parse),
+            document_width: self.document_width,
+            explorer_width: self.explorer_width,
+            panel_width: self.panel_width,
+            last_used_unix_ms: self.last_used_unix_ms,
+            made_unix_ms: self.made_unix_ms,
+            trays: self.trays,
+            shelf: self.shelf.unwrap_or_default(),
+            agent_layout: self.agent_layout,
+            agent_groups: self.agent_groups,
+            agent_starts: self.agent_starts,
+            pane_moves: self.pane_moves,
+            feedback: self.feedback,
+        }
+    }
+}
+
+/// A stored schema 5 or schema 4 entry: one lane per checkout, with the
+/// checkout's one View list. It moves once (PRD lane-desk-pair-view D-18):
+/// the View list becomes the desk of the Agent tab the checkout showed last,
+/// shown when the documents were, and a pinned lane opens unpinned; the 보기
+/// slot's width is dropped. A tool this build no longer has (a schema 4
+/// file's `prs`, or the retired `mission`) reads as no tool column.
 #[derive(Deserialize)]
 struct StoredLane {
     device_id: String,
@@ -163,11 +296,7 @@ struct StoredLane {
     #[serde(default)]
     tool: Option<String>,
     #[serde(default)]
-    pinned: bool,
-    #[serde(default)]
     document_width: Option<u32>,
-    #[serde(default)]
-    detail_width: Option<u32>,
     #[serde(default)]
     explorer_width: Option<u32>,
     #[serde(default)]
@@ -192,26 +321,23 @@ struct StoredLane {
 
 impl StoredLane {
     fn into_view(self) -> WorkspaceView {
-        WorkspaceView {
-            device_id: self.device_id,
-            path: self.path,
+        let mut view = WorkspaceView {
             open: self.open,
-            documents: self.documents,
             tool: self.tool.as_deref().and_then(Tool::parse),
-            pinned: self.pinned,
             document_width: self.document_width,
-            detail_width: self.detail_width,
             explorer_width: self.explorer_width,
             panel_width: self.panel_width,
             last_used_unix_ms: self.last_used_unix_ms,
             made_unix_ms: self.made_unix_ms,
-            layout: self.layout,
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
             pane_moves: self.pane_moves,
             feedback: self.feedback,
-        }
+            ..WorkspaceView::new(&self.device_id, &self.path)
+        };
+        view.adopt_checkout_documents(self.layout, self.documents);
+        view
     }
 }
 
@@ -241,16 +367,17 @@ struct StoredOneToolLane {
 
 impl StoredOneToolLane {
     fn into_view(self) -> WorkspaceView {
-        WorkspaceView {
+        let mut view = WorkspaceView {
             last_used_unix_ms: self.last_used_unix_ms,
-            layout: self.layout,
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
             pane_moves: self.pane_moves,
             feedback: self.feedback,
             ..WorkspaceView::new(&self.device_id, &self.path)
-        }
+        };
+        view.adopt_checkout_documents(self.layout, false);
+        view
     }
 }
 
@@ -273,33 +400,32 @@ struct StoredColumns {
 
 impl StoredColumns {
     fn into_view(self) -> WorkspaceView {
-        WorkspaceView {
+        let mut view = WorkspaceView {
             last_used_unix_ms: self.last_used_unix_ms,
-            layout: self.layout,
             agent_layout: self.agent_layout,
             ..WorkspaceView::new(&self.device_id, &self.path)
-        }
+        };
+        view.adopt_checkout_documents(self.layout, false);
+        view
     }
 }
 
 impl WorkspaceView {
     /// A Workspace seen for the first time shows Agent Views alone: the
-    /// lane closed, unpinned, no column and the default widths (B1, B23).
+    /// lane closed, no tool, no desk and the default widths (B1, B23).
     pub fn new(device_id: &str, path: &str) -> Self {
         Self {
             device_id: device_id.to_owned(),
             path: path.to_owned(),
             open: false,
-            documents: false,
             tool: None,
-            pinned: false,
             document_width: None,
-            detail_width: None,
             explorer_width: None,
             panel_width: None,
             last_used_unix_ms: 0,
             made_unix_ms: 0,
-            layout: Layout::default(),
+            trays: Vec::new(),
+            shelf: Layout::default(),
             agent_layout: crate::agent_layout::Layout::default(),
             agent_groups: Default::default(),
             agent_starts: Default::default(),
@@ -312,56 +438,273 @@ impl WorkspaceView {
         self.device_id == device_id && self.path == path
     }
 
+    /// An older file's checkout documents move once onto the desk of the
+    /// Agent tab the checkout showed last, shown when the documents were
+    /// (PRD lane-desk-pair-view D-18, B34); with no tab named they wait on
+    /// the pending desk the first tab shown takes. Every View keeps its id,
+    /// opener marks, unseen mark and comments.
+    fn adopt_checkout_documents(&mut self, layout: Layout, shown: bool) {
+        if layout.display_count() == 0 {
+            return;
+        }
+        let tab = self
+            .group_layout(self.agent_groups.selected.as_deref())
+            .and_then(|agents| agents.active())
+            .or_else(|| self.agent_layout.active())
+            .unwrap_or(PENDING_TRAY)
+            .to_owned();
+        let next_id = layout.next_id;
+        self.trays.push(Tray {
+            tab,
+            layout,
+            shown,
+            pair: None,
+        });
+        // The shelf numbers after the documents, so no id repeats.
+        self.shelf = fresh_layout(next_id);
+    }
+
+    /// The next id no tree of the checkout has minted: every desk and the
+    /// shelf number from one count, so a View, area or divider id names one
+    /// thing in the checkout (`hide view split <view> --area <area>`).
+    pub fn next_id(&self) -> u64 {
+        self.trays
+            .iter()
+            .map(|tray| tray.layout.next_id)
+            .chain(std::iter::once(self.shelf.next_id))
+            .max()
+            .unwrap_or(1)
+    }
+
+    /// Brings the tree at `place` up to the checkout's count before it
+    /// mints anything.
+    pub fn align_ids(&mut self, place: &Place) {
+        let next = self.next_id();
+        if let Some(layout) = self.layout_mut(place) {
+            layout.next_id = layout.next_id.max(next);
+        }
+    }
+
+    pub fn tray(&self, tab: &str) -> Option<&Tray> {
+        self.trays.iter().find(|tray| tray.tab == tab)
+    }
+
+    pub fn tray_mut(&mut self, tab: &str) -> Option<&mut Tray> {
+        self.trays.iter_mut().find(|tray| tray.tab == tab)
+    }
+
+    /// `tab`'s desk, made empty on first use.
+    pub fn tray_entry(&mut self, tab: &str) -> &mut Tray {
+        if let Some(index) = self.trays.iter().position(|tray| tray.tab == tab) {
+            return &mut self.trays[index];
+        }
+        let tray = Tray::new(tab, self.next_id());
+        self.trays.push(tray);
+        self.trays.last_mut().expect("just pushed")
+    }
+
+    /// The tree at `place`; a desk not made yet has none.
+    pub fn layout(&self, place: &Place) -> Option<&Layout> {
+        match place {
+            Place::Tray(tab) => self.tray(tab).map(|tray| &tray.layout),
+            Place::Shelf => Some(&self.shelf),
+        }
+    }
+
+    pub fn layout_mut(&mut self, place: &Place) -> Option<&mut Layout> {
+        match place {
+            Place::Tray(tab) => self.tray_mut(tab).map(|tray| &mut tray.layout),
+            Place::Shelf => Some(&mut self.shelf),
+        }
+    }
+
+    /// Every tree of the checkout with its place: each desk, then the shelf.
+    pub fn layouts(&self) -> impl Iterator<Item = (Place, &Layout)> {
+        self.trays
+            .iter()
+            .map(|tray| (Place::Tray(tray.tab.clone()), &tray.layout))
+            .chain(std::iter::once((Place::Shelf, &self.shelf)))
+    }
+
+    pub fn layouts_mut(&mut self) -> impl Iterator<Item = &mut Layout> {
+        self.trays
+            .iter_mut()
+            .map(|tray| &mut tray.layout)
+            .chain(std::iter::once(&mut self.shelf))
+    }
+
+    /// Every View of the checkout, on a desk or not.
+    pub fn views(&self) -> impl Iterator<Item = &crate::view_layout::Display> {
+        self.trays
+            .iter()
+            .flat_map(|tray| tray.layout.displays())
+            .chain(self.shelf.displays())
+    }
+
+    pub fn views_mut(&mut self) -> Vec<&mut crate::view_layout::Display> {
+        let mut views = Vec::new();
+        for layout in self.layouts_mut() {
+            views.extend(layout.displays_mut());
+        }
+        views
+    }
+
+    pub fn view_count(&self) -> usize {
+        self.trays
+            .iter()
+            .map(|tray| tray.layout.display_count())
+            .sum::<usize>()
+            + self.shelf.display_count()
+    }
+
+    pub fn view(&self, id: &str) -> Option<&crate::view_layout::Display> {
+        self.views().find(|display| display.id == id)
+    }
+
+    pub fn view_mut(&mut self, id: &str) -> Option<&mut crate::view_layout::Display> {
+        self.views_mut().into_iter().find(|display| display.id == id)
+    }
+
+    /// Where the View `id` sits.
+    pub fn place_of(&self, id: &str) -> Option<Place> {
+        self.layouts()
+            .find(|(_, layout)| layout.display(id).is_some())
+            .map(|(place, _)| place)
+    }
+
+    /// Moves the View `id` to `to`, at the end of its area in use, and
+    /// returns where it was (D-20: one View, one desk). A View already there
+    /// stays where it is in its tree. The tree it leaves collapses an area it
+    /// emptied, as a close does.
+    pub fn move_view(&mut self, id: &str, to: &Place) -> Option<Place> {
+        let from = self.place_of(id)?;
+        if &from == to {
+            return Some(from);
+        }
+        if let Place::Tray(tab) = to {
+            self.tray_entry(tab);
+        }
+        let display = self.layout_mut(&from)?.remove(id)?;
+        let target = self.layout_mut(to).expect("made above");
+        let area = target.active_area().id.clone();
+        if target.append(&area, display.clone()).is_err() {
+            // Past the target's cap: the View stays where it was.
+            let back = self.layout_mut(&from).expect("it was there");
+            let area = back.active_area().id.clone();
+            let _ = back.append(&area, display);
+            return None;
+        }
+        Some(from)
+    }
+
+    /// The pending desk an older file's documents wait on goes to `tab`,
+    /// the first Agent tab the Workspace shows (D-18): taken whole when the
+    /// tab has no desk yet, else its Views join the tab's. Whether it moved.
+    pub fn adopt_pending_tray(&mut self, tab: &str) -> bool {
+        if tab == PENDING_TRAY {
+            return false;
+        }
+        let Some(index) = self.trays.iter().position(|tray| tray.tab == PENDING_TRAY) else {
+            return false;
+        };
+        let pending = self.trays.remove(index);
+        match self.trays.iter().position(|tray| tray.tab == tab) {
+            None => self.trays.push(Tray {
+                tab: tab.to_owned(),
+                ..pending
+            }),
+            Some(at) => {
+                let tray = &mut self.trays[at];
+                tray.shown |= pending.shown;
+                for display in pending.layout.displays().cloned().collect::<Vec<_>>() {
+                    let area = tray.layout.active_area().id.clone();
+                    if tray.layout.append(&area, display.clone()).is_err() {
+                        let area = self.shelf.active_area().id.clone();
+                        let _ = self.shelf.append(&area, display);
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Takes away the tray of a tab the engine no longer lists: its agents'
+    /// Views go on no tray, to stay in their panes' lists, while room is
+    /// left there; every other tab leaves with it. How many Views stayed.
+    pub fn retire_tray(&mut self, tab: &str) -> usize {
+        let Some(index) = self.trays.iter().position(|tray| tray.tab == tab) else {
+            return 0;
+        };
+        let tray = self.trays.remove(index);
+        let mut kept = 0;
+        for display in tray.layout.displays() {
+            if display.operator || display.openers.is_empty() {
+                continue;
+            }
+            let area = self.shelf.active_area().id.clone();
+            if self.shelf.append(&area, display.clone()).is_ok() {
+                kept += 1;
+            }
+        }
+        kept
+    }
+
     /// Opens a closed lane on the column a call brings forward, the other
-    /// column closed: a tool pressed, a file opened or the 보기 slot called
+    /// column closed: a tool pressed, or a View opened onto `tab`'s desk,
     /// into a lane ⌘E closed shows that alone, and only ⌘E's `open: true`
     /// brings back the columns it closed with (B15; operator decision
-    /// 2026-10-23, replacing the mockup's reopen of the other column).
-    /// Whether the lane was closed.
-    pub fn open_on(&mut self, side: crate::model::LaneCallSide) -> bool {
+    /// 2026-10-23). Whether the lane was closed.
+    pub fn open_on(&mut self, side: crate::model::LaneCallSide, tab: Option<&str>) -> bool {
         if self.open {
             return false;
         }
         self.open = true;
         match side {
             crate::model::LaneCallSide::View => self.tool = None,
-            crate::model::LaneCallSide::Tool => self.documents = false,
+            crate::model::LaneCallSide::Tool => {
+                if let Some(tray) = tab.and_then(|tab| self.tray_mut(tab)) {
+                    tray.shown = false;
+                }
+            }
         }
         true
     }
 
     /// Shows a tool in the tool column (B14), a closed lane opening on it
-    /// alone (`open_on`). Whether the lane was closed.
-    pub fn show_tool(&mut self, tool: Tool) -> bool {
-        let opened = self.open_on(crate::model::LaneCallSide::Tool);
+    /// alone (`open_on`), `tab`'s desk folded. Whether the lane was closed.
+    pub fn show_tool(&mut self, tool: Tool, tab: Option<&str>) -> bool {
+        let opened = self.open_on(crate::model::LaneCallSide::Tool, tab);
         self.tool = Some(tool);
         opened
     }
 
-    /// Closes the tool column alone (B14); the viewing column stays.
+    /// Closes the tool column alone (B14); the desk stays.
     pub fn close_tool(&mut self) {
         self.tool = None;
     }
 
-    /// Shows the documents in the viewing column (B6, B11), a closed lane
-    /// opening on them alone (`open_on`).
-    pub fn show_documents(&mut self) {
-        self.open_on(crate::model::LaneCallSide::View);
-        self.documents = true;
+    /// Shows `tab`'s desk (B5, B6), a closed lane opening on it alone
+    /// (`open_on`).
+    pub fn show_tray(&mut self, tab: &str) {
+        self.open_on(crate::model::LaneCallSide::View, Some(tab));
+        self.tray_entry(tab).shown = true;
     }
 
-    /// Whether anything of the Workspace's own is drawn while the lane is
-    /// open: the documents (with a view to show) or a tool. The window's
-    /// 보기 slot is drawn besides.
-    pub fn has_column(&self) -> bool {
-        (self.documents && self.layout.display_count() > 0) || self.tool.is_some()
+    /// Whether `tab`'s desk is drawn: the lane is open with it shown, and it
+    /// has a tab to show.
+    pub fn draws_tray(&self, tab: &str) -> bool {
+        self.open
+            && self
+                .tray(tab)
+                .is_some_and(|tray| tray.shown && tray.layout.display_count() > 0)
     }
 
-    /// Whether the viewing column holds the View areas: the lane is open
-    /// with the documents shown, whether or not the front tab's 보기 slot
-    /// stands in front of them.
-    pub fn shows_documents(&self) -> bool {
-        self.open && self.documents
+    /// Whether anything is drawn while the lane is open with `tab` in front:
+    /// its desk (with a tab to show) or a tool.
+    pub fn has_column(&self, tab: Option<&str>) -> bool {
+        tab.and_then(|tab| self.tray(tab))
+            .is_some_and(|tray| tray.shown && tray.layout.display_count() > 0)
+            || self.tool.is_some()
     }
 
     /// Whether the tool column shows the Explorer: the readers that gate on
@@ -440,6 +783,14 @@ struct StoredWorkspaceViews<'a> {
     workspaces: &'a [WorkspaceView],
 }
 
+#[derive(Deserialize)]
+struct StoredWorkspaces {
+    #[serde(default)]
+    workspaces: Vec<StoredTrays>,
+}
+
+/// Schemas 4 and 5: one lane and one View list per checkout. Read only to
+/// migrate.
 #[derive(Deserialize)]
 struct StoredLanes {
     #[serde(default)]
@@ -522,11 +873,12 @@ impl V1View {
             area.displays = displays;
             area.active = active.or_else(|| area.displays.last().map(|display| display.id.clone()));
         }
-        WorkspaceView {
+        let mut view = WorkspaceView {
             last_used_unix_ms: self.last_used_unix_ms,
-            layout,
             ..WorkspaceView::new(&self.device_id, &self.path)
-        }
+        };
+        view.adopt_checkout_documents(layout, false);
+        view
     }
 }
 
@@ -569,6 +921,19 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
         }
     };
     let reason = match serde_json::from_slice::<StoredVersion>(&bytes) {
+        Ok(StoredVersion { schema_version: 6 }) => {
+            match serde_json::from_slice::<StoredWorkspaces>(&bytes) {
+                Ok(stored) => {
+                    let views = stored
+                        .workspaces
+                        .into_iter()
+                        .map(StoredTrays::into_view)
+                        .collect();
+                    return settle(views, None);
+                }
+                Err(error) => format!("the file is not valid: {error}"),
+            }
+        }
         Ok(StoredVersion {
             schema_version: version @ (4 | 5),
         }) => match serde_json::from_slice::<StoredLanes>(&bytes) {
@@ -578,9 +943,9 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
                     .into_iter()
                     .map(StoredLane::into_view)
                     .collect();
-                return settle(views, (version == 4).then_some(4));
+                return settle(views, Some(version));
             }
-            Err(error) => format!("the file is not valid: {error}"),
+            Err(error) => format!("the schema {version} file could not be migrated: {error}"),
         },
         Ok(StoredVersion { schema_version: 3 }) => {
             match serde_json::from_slice::<serde_json::Value>(&bytes).and_then(|mut value| {
@@ -598,7 +963,7 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
                         && let LoadOutcome::Loaded { repairs, .. } = &mut outcome
                     {
                         repairs.push(format!(
-                            "{dropped} pull request cards stored as views were dropped; a card opens in the lane's View slot"
+                            "{dropped} pull request cards stored as views were dropped"
                         ));
                     }
                     return (views, outcome);
@@ -645,11 +1010,11 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
     )
 }
 
-/// Takes out every display an older build stored as a pull request's card
-/// (PRD sidebar-task-lens B51, D-50): a card opens in the lane's View slot
-/// now and is no kind of View. The other displays of the same area, and
-/// their arrangement, stay; an area left empty is collapsed by `settle`'s
-/// repair like any other. Returns how many it took out.
+/// Takes out every display a schema 3 build stored as a pull request's card
+/// (PRD sidebar-task-lens B51, D-50), a kind no build reads since. The other
+/// displays of the same area, and their arrangement, stay; an area left
+/// empty is collapsed by `settle`'s repair like any other. Returns how many
+/// it took out.
 fn drop_retired_cards(value: &mut serde_json::Value) -> usize {
     match value {
         serde_json::Value::Object(object) => {
@@ -677,28 +1042,41 @@ fn settle(
     let mut repairs = Vec::new();
     for view in &mut workspaces {
         view.document_width = view.document_width.map(clamp_width);
-        view.detail_width = view.detail_width.map(clamp_width);
         view.explorer_width = view.explorer_width.map(clamp_width);
         view.panel_width = view.panel_width.map(clamp_width);
+        let mut notes = Vec::new();
+        if view.trays.len() > MAX_TRAYS {
+            notes.push(format!(
+                "{} trays were kept past the {MAX_TRAYS} a checkout holds",
+                view.trays.len() - MAX_TRAYS
+            ));
+            view.trays.truncate(MAX_TRAYS);
+        }
+        let mut tabs = std::collections::HashSet::new();
+        let before = view.trays.len();
+        view.trays.retain(|tray| tabs.insert(tray.tab.clone()));
+        if view.trays.len() != before {
+            notes.push(format!("{} trays named a tab twice", before - view.trays.len()));
+        }
         // No build writes an outside file's tab; one in the file has no grant
         // behind it.
-        let external = view.layout.remove_external(|_| false);
+        let external: usize = view
+            .layouts_mut()
+            .map(|layout| layout.remove_external(|_| false))
+            .sum();
         if external > 0 {
-            repairs.push(format!(
-                "{} on {}: {external} outside-file views had no grant",
-                view.path, view.device_id
-            ));
+            notes.push(format!("{external} outside-file views had no grant"));
         }
-        for note in view
-            .layout
-            .repair()
-            .into_iter()
-            .chain(view.repair_agent_groups())
-        {
-            repairs.push(format!("{} on {}: {note}", view.path, view.device_id));
+        for layout in view.layouts_mut() {
+            notes.extend(layout.repair());
+            notes.extend(remove_cardless(layout));
         }
-        for note in view.feedback.repair() {
-            repairs.push(format!("{} on {}: {note}", view.path, view.device_id));
+        notes.extend(view.repair_shelf());
+        notes.extend(view.repair_ids());
+        notes.extend(view.repair_agent_groups());
+        notes.extend(view.feedback.repair());
+        for text in notes {
+            repairs.push(format!("{} on {}: {text}", view.path, view.device_id));
         }
     }
     workspaces.truncate(MAX_WORKSPACES);
@@ -709,6 +1087,96 @@ fn settle(
             repairs,
         },
     )
+}
+
+/// A card display that names no card shows nothing and goes.
+fn remove_cardless(layout: &mut Layout) -> Option<String> {
+    let gone: Vec<String> = layout
+        .displays()
+        .filter(|display| display.kind == DisplayKind::Card && display.card.is_none())
+        .map(|display| display.id.clone())
+        .collect();
+    for id in &gone {
+        layout.remove(id);
+    }
+    (!gone.is_empty()).then(|| format!("{} card views named no card", gone.len()))
+}
+
+impl WorkspaceView {
+    /// The shelf is one area and holds no card or outside file: a View on
+    /// no desk is an agent's file, diff or page (D-19). A crafted file's
+    /// split shelf is flattened, and a card on it goes.
+    fn repair_shelf(&mut self) -> Vec<String> {
+        let mut notes = Vec::new();
+        let cards: Vec<String> = self
+            .shelf
+            .displays()
+            .filter(|display| display.kind == DisplayKind::Card)
+            .map(|display| display.id.clone())
+            .collect();
+        for id in &cards {
+            self.shelf.remove(id);
+        }
+        if !cards.is_empty() {
+            notes.push(format!("{} cards on no desk went", cards.len()));
+        }
+        if self.shelf.area_count() > 1 {
+            let displays: Vec<_> = self.shelf.displays().cloned().collect();
+            let mut flat = fresh_layout(self.shelf.next_id);
+            let area = flat.active_area.clone();
+            for display in displays {
+                let _ = flat.append(&area, display);
+            }
+            self.shelf = flat;
+            notes.push("the Views on no desk were in more than one area".to_owned());
+        }
+        notes
+    }
+
+    /// Every View, area and divider id names one thing in the checkout: an
+    /// id a second tree repeats takes a new one there, and every tree mints
+    /// past the highest.
+    fn repair_ids(&mut self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut next = self.next_id();
+        let mut renamed = 0usize;
+        for layout in self.layouts_mut() {
+            let mut ids: Vec<String> = layout.areas().iter().map(|area| area.id.clone()).collect();
+            ids.extend(layout.displays().map(|display| display.id.clone()));
+            for id in ids {
+                if seen.insert(id.clone()) {
+                    continue;
+                }
+                let prefix = id.chars().next().unwrap_or('d');
+                let fresh = format!("{prefix}{next}");
+                next += 1;
+                renamed += 1;
+                if let Some(area) = layout.area_mut(&id) {
+                    area.id = fresh.clone();
+                    if layout.active_area == id {
+                        layout.active_area = fresh.clone();
+                    }
+                } else if let Some(display) = layout.display_mut(&id) {
+                    display.id = fresh.clone();
+                    let area = layout.area_of(&fresh).map(|area| area.id.clone());
+                    if let Some(area) = area.and_then(|area| layout.area_mut(&area))
+                        && area.active.as_deref() == Some(id.as_str())
+                    {
+                        area.active = Some(fresh.clone());
+                    }
+                }
+                seen.insert(fresh);
+            }
+        }
+        for layout in self.layouts_mut() {
+            layout.next_id = layout.next_id.max(next);
+        }
+        if renamed == 0 {
+            Vec::new()
+        } else {
+            vec![format!("{renamed} ids repeated across trays and were renumbered")]
+        }
+    }
 }
 
 fn preserved_path(path: &Path, now_unix_ms: u64) -> PathBuf {
@@ -729,8 +1197,7 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
     // ends with the app: it is never written (PRD outside-path-in-hide D-07).
     let kept: Vec<WorkspaceView>;
     let workspaces = if views.workspaces.iter().any(|view| {
-        view.layout
-            .displays()
+        view.views()
             .any(|display| display.kind == crate::view_layout::DisplayKind::External)
     }) {
         kept = views
@@ -738,7 +1205,9 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
             .iter()
             .cloned()
             .map(|mut view| {
-                view.layout.remove_external(|_| false);
+                for layout in view.layouts_mut() {
+                    layout.remove_external(|_| false);
+                }
                 view
             })
             .collect();

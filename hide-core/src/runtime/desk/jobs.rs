@@ -580,13 +580,8 @@ impl Runtime {
                 .collect(),
             missions,
             displays: self
-                .every_view_layout()
-                .flat_map(|(key, layout)| {
-                    layout
-                        .displays()
-                        .filter(|display| super::super::view_sessions::is_output(display))
-                        .map(move |display| (key.clone(), display))
-                })
+                .every_view()
+                .filter(|(_, display)| super::super::view_sessions::is_output(display))
                 .collect(),
         }
     }

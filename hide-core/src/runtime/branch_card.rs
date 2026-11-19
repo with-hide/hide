@@ -42,7 +42,7 @@ impl Runtime {
             workspace_id,
             row,
             path: Some(path),
-        }) = self.snapshot.ui_state.detail.top()
+        }) = self.shown_card()
         {
             wanted.push((workspace_id.clone(), row.clone(), path.clone()));
         }
