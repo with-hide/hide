@@ -2326,6 +2326,7 @@ mod tests {
             access: None,
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+            peer_direct: None,
             search_path: None,
         }
     }

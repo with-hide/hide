@@ -139,6 +139,8 @@ pub struct AppState {
     pub daemon_info: Arc<Value>,
     /// Settings > Mobile and the phones it pairs (`mobile/`).
     pub mobile: Arc<crate::mobile::Mobile>,
+    /// This machine's endpoint for other Hides (`peer_host`).
+    pub peers: Arc<crate::peer_host::PeerHost>,
     /// The desktop windows' agent notifications (`desktop_notices.rs`).
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).

@@ -3138,7 +3138,10 @@ Each label worker asks the node of the machine that runs its engine for the lock
 ### The peer connection
 
 Two machines that each run Hide keep one connection between them, and three crates hold it.
-No daemon opens one yet: in this build the crates, their contract file and their tests exist, and the only part that runs in a daemon is the link multiplexer below.
+The core role opens this machine's end of it in `hided/src/peer_host.rs`, and only when it is needed: at the daemon's start when a grant or a known host is saved (`peer_host::paired`), and otherwise at the moment the operator shares this machine or adds one (`PeerHost::open`).
+A machine that is paired with nothing binds no socket, attaches to no relay and asks macOS nothing about the local network; once open the endpoint stays open until the daemon ends, which closes it.
+Every stream a peer opens is handed to the one handler its kind's owner registered at the daemon's start (`PeerHost::handle`), each in a task of its own, and a stream of a kind no one handles is dropped, which closes it for the peer.
+`HIDE_PEER_DIRECT=<ip>:<port>` binds that one address with no relay and no local network search, for development and tests (`hided/src/env.rs`).
 The security and ownership specification this connection is built to (the threat model, pairing, who owns a guest's work, the relay's limits) is with-hide/hide-private's `docs/device-connection-security.md`; this section is the runtime contract the code keeps.
 
 | Crate | What it holds | What it may link |
