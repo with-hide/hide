@@ -4682,6 +4682,37 @@ The kit part read is the one for the dialect that counts for the pane's agent (`
 `desktop/e2e/device-kit.spec.ts` proves a device's kit over a real SSH connection: the install, each part's row, the installed hook's SessionStart in a device pane, a part the operator took out staying out until Reinstall, and removal leaving another tool's entries and retained records.
 The isolated sshd logs in as the account running the suite, so `desktop/e2e/device-home.ts` proves its private HOME before registering the device; otherwise kit writes would reach the operator's own files.
 
+#### The store of skills and MCP items
+
+The skills and MCP servers the operator adds live in one store per machine, `~/.hide/store` (`hide_kit::layout::store_dir`), with its record `store.json`, each item's files under `items/`, the undo list under `trash/` and fetches under `staging/` (`hide-kit/src/store.rs`, PRD skill-mcp-manager).
+An item is a kind (`skill` or `mcp`) and a name, `<kind>:<name>`, with its source, its body, whether it is on, the columns it is switched off for, and the latest version its source was found at.
+What differs by kind is one `Applier` (`store/skill.rs`, `store/mcp.rs`): its columns, the places one column writes, and how one entry is read, written, taken out and taken in; the loop, the switches, the undo list, the take-over and the report are the store's and know no kind.
+The MCP applier lists no place yet, so every MCP cell reads `unsupported` until its half lands.
+
+A skill switches per folder, not per agent, because an agent reads a folder and several agents read the same one: three columns, `claude` (`~/.claude/skills`), `agents` (`~/.agents/skills`, read by Codex, Grok, OpenCode, Pi and omp) and `antigravity` (`~/.gemini/config/skills`), from each adapter's `SkillLocation`.
+`Column.agents` names the agents that read the column's folder and `Column.also` the agents that read it besides their own (`AgentAdapter::skill_also_reads`: Grok and omp also read `~/.claude/skills`); the screen joins `Column.agents` with `KitSnapshot.agents` to show only the agents installed and switched on there, so the store makes no install check of its own.
+An MCP server switches per agent, one column for each, since each agent keeps its own settings file.
+A column's places are its default folder and the same folder in each profile account of its agents (`targets::accounts`, judged for links and ownership as the kit's profile pieces are), so a profile added later, or an agent switched on later, gets every item that is on with no input, and a profile that went has Hide's copies taken out of its folder.
+A folder an agent has not made yet is not made for it: the cell reads `waiting` and the item goes in once the agent makes it.
+
+The store's record names every entry Hide wrote, with a digest of its files (`StoreRecord.written`); an entry of the same name that the record does not name, or whose content changed since Hide wrote it, is the operator's.
+Hide never overwrites or deletes the operator's entry: its cell reads `hand_written`, and the entry is listed under what only an agent has until the operator takes it over (`Adopt`), which copies one copy into the store (the one the operator picks when they differ), records the matching copies as Hide's, and sets the others aside in the undo list; a linked skill is taken over from the folder its link leads to, which becomes a followed source.
+A skill is written whole into a hidden incoming folder and renamed into place, so an agent never reads half a skill, and a pass that finds every copy current writes nothing.
+Hide's own stubs (`hide`, `hide-mission`, `hide-issue`) are the kit's and never appear in the store.
+A deleted item, or an operator's copy a take-over replaced, goes to the undo list, which keeps the newest twenty and purges the oldest past that (engineering rule 15).
+
+A GitHub source, or any git address, is read with the account's own git as an owned child with a deadline, with `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never` so it never asks, and with the account's SSH agent; Hide stores no token.
+A fetch runs before the account lock into `staging/.fetch-<id>` and is renamed in under it, so a slow host holds no other pass up; staging keeps the newest four previews and four update diffs, and a pass clears what none of them names, a fetch still under way only once it is an hour old.
+The version beside an item's name is its tag, or the short commit with none; `CheckUpdates` asks each repository for its newest commit when the screen opens and once a day, which shows `update`, and an update is never taken on its own: `PreviewUpdate` fetches it and lists the files with their added and removed lines, the files that became executable and the commits' subjects, and only `Update` with that commit applies it.
+A folder source is followed: `hide_kit::follow_store` compares each followed folder's file sizes and times with what the store took in and runs a pass only when one changed, so it can run every few seconds; a folder that went keeps the last copy and marks the item.
+
+The core carries the store as kit work of its own (`runtime/kit_store.rs`): the screen's `kit_store { device_id, request_id, changes }` queues the changes for that machine beside its kit job, never merged into it, since a kit read asks the machine's Codex, and the machine's one kit worker (`KitPump` here, the device's kit worker on a device) runs it once no kit job waits, as the helper protocol's `kit` `store` (`hide_kit::apply_store`) or `follow_store` (protocol 99).
+The answer lands in `KitSnapshot.store` (columns with their agents, items with their source, version, update and one cell per column with its state and when it last changed, what only an agent has, the undo list, previews and update diffs, and when versions were last checked) and in `status.store_answer` (the request id, `pending`, `done` or `refused`, and each change's outcome with its cause), matched by the request's changes being the last of the pass that carried them; the same request id again is the same intent.
+The kit pump's tick queues the follow every three seconds for each machine whose store follows a folder, and the daily check for each whose store holds a git item and was last checked a day ago, on this Mac and every connected device; a device that is not connected is not asked to connect for them.
+`KitSnapshot.store_new_session` lists the cells whose change landed while an agent session of their column ran, until each such session ends (B17).
+A full kit report carries the store too (`KitReport.store`), and removing a machine's kit takes Hide's copies out of every folder and then the store, unless another installation of Hide on the account still uses it (`Record::others_installed`).
+The store's string enums (`store_item_kind`, `store_cell_state`, `store_refusal_cause`, `store_file_change`) are in `contracts/snapshot-wire-enums.json`.
+
 ### Device catalogs
 
 A device's projects are grouped by the same rule as this machine's (`device_catalog.rs`): a project is a repository identified by its main worktree on that device, and each checkout a tab sits in is a row under it, so two engine workspaces in one repository are one project, two workspaces with tabs in one folder are one checkout row, and a workspace whose tabs sit in two repositories is split between them.
