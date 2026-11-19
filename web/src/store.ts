@@ -2,7 +2,7 @@ import type { StoredBuffer } from "./buffers";
 import type { TerminalFrame, UsageSnapshot } from "./generated/hided-ws";
 import { create } from "zustand";
 import type { ConnectionState } from "./connection";
-import type { CoreLink, MoveView } from "./coreMove";
+import type { CoreLink } from "./coreLink";
 import { frontDeviceId, localDeviceId } from "./devices";
 import { appliedAfter } from "./operatorFocus";
 import { remoteContext, remoteView } from "./remote";
@@ -156,10 +156,6 @@ type Store = {
   pairing: PairingView | null;
   /** The daemon's answer to the last `pairing_*` event this window sent. */
   pairingResult: PairingResult | null;
-  /** The core move as the process's supervisor reports it (`core_move` frame); null until the first one. */
-  coreMove: MoveView | null;
-  /** Why the last `core_move` event was refused (`move_busy`, ...); cleared by the next frame of the move. */
-  coreMoveRefusal: string | null;
   /** Where this node's link to its core stands while its screen waits (`core_link` frame); null once the core draws it. */
   coreLink: CoreLink | null;
   revision: number;
@@ -375,8 +371,6 @@ export const useShellStore = create<Store>((set, get) => ({
   mobile: null,
   pairing: null,
   pairingResult: null,
-  coreMove: null,
-  coreMoveRefusal: null,
   coreLink: null,
   revision: 0,
   terminalSequence: null,
@@ -677,10 +671,6 @@ export const useShellStore = create<Store>((set, get) => ({
       set({ pairingResult: frame.payload as unknown as PairingResult });
       return [];
     }
-    if (frame.type === "core_move") {
-      set({ coreMove: frame.payload as unknown as MoveView, coreMoveRefusal: null });
-      return [];
-    }
     if (frame.type === "core_link") {
       set({ coreLink: frame.payload as unknown as CoreLink });
       return [];
@@ -700,8 +690,6 @@ export const useShellStore = create<Store>((set, get) => ({
       return [];
     }
     if (frame.type === "error") {
-      const refused = frame.payload as { kind?: string; reason?: string } | undefined;
-      if (refused?.kind === "core_move" && refused.reason) set({ coreMoveRefusal: refused.reason });
       get().noteDiagnostic(`hided error: ${frame.message ?? "unknown"}`);
       return [];
     }

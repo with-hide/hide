@@ -2,7 +2,6 @@ import type { Actions } from "../actions";
 import { Button } from "../components/ui/button";
 import { Group, Row, Status } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
-import { checkCommand } from "../coreMove";
 import { coreMachineAway } from "../screenMachine";
 import { githubAccess, githubAccessLine } from "../settings";
 import { readsHere } from "../devices";
@@ -24,7 +23,7 @@ export function GithubTab({ actions }: { actions: Actions }) {
   const line = access ? githubAccessLine(access, t, coreMachine) : null;
   // Signed out: the command that signs gh in, and the core's machine to run it on when this window is on another.
   const signedOut = access?.state === "failed" && access.category === "not_logged_in";
-  const ghCommand = checkCommand("gh");
+  const ghCommand = "gh auth login";
   return (
     <Group data-settings-group="github">
       <Row

@@ -102,7 +102,7 @@ function tileFacts(connected: boolean, counts: TileCounts, t: TFunction<"transla
 
 /** What a tile is called for assistive technology: the name, `core` on the core's machine, then its connection or its counts (B4). */
 export function tileName(label: string, connected: boolean, counts: TileCounts, t: TFunction<"translation">, core = false): string {
-  return [label, ...(core ? [t("coreMove.railCore")] : []), ...tileFacts(connected, counts, t)].join(", ");
+  return [label, ...(core ? [t("coreLink.railCore")] : []), ...tileFacts(connected, counts, t)].join(", ");
 }
 
 /**
@@ -111,7 +111,7 @@ export function tileName(label: string, connected: boolean, counts: TileCounts, 
  * then its connection or its counts (`Mac mini · core · Needs You 3`).
  */
 export function tileHint(label: string, connected: boolean, counts: TileCounts, t: TFunction<"translation">, core = false): string {
-  return [label, ...(core ? [t("coreMove.railCore")] : []), ...tileFacts(connected, counts, t)].join(" · ");
+  return [label, ...(core ? [t("coreLink.railCore")] : []), ...tileFacts(connected, counts, t)].join(" · ");
 }
 
 /**

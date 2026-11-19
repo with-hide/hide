@@ -2,9 +2,8 @@ import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { windowStrip } from "./connection";
 import { useInterfaceTranslation } from "./i18n/client";
-import { coreMachineName, moveMachines } from "./screenMachine";
+import { coreMachineName } from "./screenMachine";
 import { useShellStore } from "./store";
-import { useUiStore } from "./ui";
 import { cn } from "./lib/utils";
 import { FixCommand } from "./settings/FixCommand";
 import { SignInPrompt } from "./settings/SignInPrompt";
@@ -13,10 +12,9 @@ export function ConnectionBadge({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const connection = useShellStore((s) => s.connection);
   const refused = useShellStore((s) => s.refused);
-  const move = useShellStore((s) => s.coreMove);
   const link = useShellStore((s) => s.coreLink);
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
-  const strip = windowStrip({ connection, refused, move, link, machines: move ? moveMachines(devices, move, t) : null, coreMachine: coreMachineName(devices, t) }, t);
+  const strip = windowStrip({ connection, refused, link, coreMachine: coreMachineName(devices, t) }, t);
   if (!strip) return null;
   const line = (
     <div
@@ -33,7 +31,7 @@ export function ConnectionBadge({ actions }: { actions: Actions }) {
       {strip.action ? <span aria-hidden="true">·</span> : null}
       {strip.action === "reconnect" ? (
         <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-caption" data-core-reconnect="true" onClick={() => actions.coreLink("reconnect")}>
-          {t("coreMove.reconnect")}
+          {t("coreLink.reconnect")}
         </Button>
       ) : null}
       {strip.command ? <FixCommand command={strip.command} what="ssh command" actions={actions} data-core-link-command={strip.command} /> : null}
@@ -41,12 +39,6 @@ export function ConnectionBadge({ actions }: { actions: Actions }) {
         // A sign-in's Retry reads Sign in, as the device row's does: it starts the dial that may ask.
         <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-caption" data-core-retry={strip.action} onClick={() => actions.coreLink("retry")}>
           {strip.action === "sign_in" ? t("devices.signIn.start") : t("common.retry")}
-        </Button>
-      ) : null}
-      {strip.action === "give_up" ? (
-        // It only opens the move dialog at its confirm; nothing is given up from the strip.
-        <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-caption" data-core-move-strip-give-up="true" onClick={() => useUiStore.getState().openMoveGiveUp()}>
-          {move?.direction === "back" ? t("coreMove.takeHere.take") : t("coreMove.giveUp.stop")}
         </Button>
       ) : null}
     </div>

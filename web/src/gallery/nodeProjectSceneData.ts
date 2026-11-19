@@ -6,7 +6,7 @@
 // scene draws it. Every name is example data.
 
 import type { DiskCleanup, ProjectTasks, SnapshotRest, Task, Workspace } from "../snapshot";
-import { coreMoveRest, NODE_DEVICE } from "./coreMoveSceneData";
+import { coreLinkRest, NODE_DEVICE } from "./coreLinkSceneData";
 import type { SceneContent } from "./sceneData";
 
 /** The MacBook's project the scene and the test open. */
@@ -86,11 +86,11 @@ function nodeProject(project: Workspace, source: NodeIssueSource, reviewed: bool
 
 /**
  * The window's snapshot with the MacBook's `web` project reading `source`,
- * and its cleanup review once `reviewed`: the core-move scene's node side,
+ * and its cleanup review once `reviewed`: the core-link scene's node side,
  * whose `mini` device stands for the MacBook dialing in.
  */
-export function nodeProjectRest(source: NodeIssueSource, reviewed: boolean, content: SceneContent, nowMs: number): { rest: SnapshotRest; agents: ReturnType<typeof coreMoveRest>["agents"] } {
-  const scene = coreMoveRest("node", content, nowMs);
+export function nodeProjectRest(source: NodeIssueSource, reviewed: boolean, content: SceneContent, nowMs: number): { rest: SnapshotRest; agents: ReturnType<typeof coreLinkRest>["agents"] } {
+  const scene = coreLinkRest("node", content, nowMs);
   const remote = (scene.rest.status?.remote ?? []).map((row) =>
     row.target_id === NODE_DEVICE && row.session
       ? { ...row, session: { ...row.session, workspaces: row.session.workspaces.map((project) => (project.id === NODE_PROJECT ? nodeProject(project, source, reviewed, nowMs) : project)) } }

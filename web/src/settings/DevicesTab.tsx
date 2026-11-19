@@ -7,15 +7,13 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTi
 import { Group, Note, Row } from "../components/settings-rows";
 import { latestDraft } from "../editor/draft";
 import { useInterfaceTranslation } from "../i18n/client";
-import { deviceConnected, frontDeviceId } from "../devices";
-import type { MoveView } from "../coreMove";
+import { frontDeviceId } from "../devices";
 import { coreMachineName, isCoreMachine, machineName, registeredName, windowDeviceId, windowFirst } from "../screenMachine";
 import { deviceRemovalLines, draftExported, kitRemovalLine, unstoredDeviceDrafts } from "../settings";
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { AddByLink, AddDevice } from "./AddDevice";
-import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./CoreMoveDialog";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PairedRows } from "./PairingRows";
@@ -33,9 +31,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const [allowing, setAllowing] = useState<Device | null>(null);
   const [revoking, setRevoking] = useState<Device | null>(null);
   const [details, setDetails] = useState<Device | null>(null);
-  // The move the operator opened, and the frame it was asked beside (B3 to B5).
-  // `opened` counts the strip's requests, so each opens a fresh dialog at its confirm.
-  const [move, setMove] = useState<{ request: MoveRequest; asked: MoveView | null; giveUp?: boolean; opened?: number } | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   // The device count when the Add dialog opened: a new row means the device was added, which closes it.
   const [adding, setAdding] = useState<number | null>(null);
@@ -53,7 +48,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const own = windowDeviceId(devices);
   const windowIsNode = !isCoreMachine(devices, own);
   const coreName = coreMachineName(devices, t);
-  const connectedIds = useShellStore((s) => (s.rest?.navigator?.devices ?? []).filter((device) => deviceConnected(s.rest, device.id)).map((device) => device.id).join("\n"));
   const localHost = rows.find((device) => device.kind !== "remote")?.host ?? null;
   const localRoot = localHost?.helper_root ?? null;
   const localCliDir = localHost?.cli_dir ?? null;
@@ -83,28 +77,12 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   useEffect(() => {
     if (adding !== null && rows.length > adding) setAdding(null);
   }, [adding, rows.length]);
-  // Settings opened from the window's strip to give up a move's wait: the move dialog opens once, at its confirm.
-  const giveUpRequested = useUiStore((s) => s.moveGiveUpRequested);
-  useEffect(() => {
-    if (!giveUpRequested) return;
-    useUiStore.getState().clearMoveGiveUpRequest();
-    const view = useShellStore.getState().coreMove;
-    if (view) setMove((current) => ({ request: requestOfView(view), asked: null, giveUp: true, opened: (current?.opened ?? 0) + 1 }));
-  }, [giveUpRequested]);
   const handlers: DeviceRowHandlers = {
     onAct: () => setActedAt(Date.now()),
     onDetails: setDetails,
     onAllow: setAllowing,
     onRevoke: setRevoking,
     onRemove: setRemoving,
-    onMove: (device) => {
-      const request: MoveRequest = { direction: "forward", device: device.id };
-      setMove({ request, asked: askMove(actions, request, false) });
-    },
-    onMoveBack: () => {
-      const request: MoveRequest = { direction: "back" };
-      setMove({ request, asked: askMove(actions, request, false) });
-    },
     onDisconnect: () => setDisconnecting(true),
   };
   return (
@@ -133,7 +111,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
               core: isCoreMachine(devices, device.id),
               own: device.id === own,
               windowIsNode,
-              connected: connectedIds.split("\n").includes(device.id),
               coreName,
             }}
             actions={actions}
@@ -159,28 +136,17 @@ export function DevicesTab({ actions }: { actions: Actions }) {
           </DialogContent>
         </Dialog>
       ) : null}
-      {move ? (
-        <CoreMoveDialog
-          key={move.opened ?? 0}
-          request={move.request}
-          asked={move.asked}
-          giveUp={move.giveUp}
-          actions={actions}
-          onClose={() => setMove(null)}
-          onRequest={(request) => setMove((current) => (current ? { ...current, request } : current))}
-        />
-      ) : null}
       {disconnecting ? (
         <AlertDialog open onOpenChange={(next) => { if (!next) setDisconnecting(false); }}>
           <AlertDialogContent data-core-disconnect-confirm="true">
             <AlertDialogHeader>
-              <AlertDialogTitle>{t("coreMove.disconnectTitle", { machine: coreName })}</AlertDialogTitle>
-              <AlertDialogDescription>{t("coreMove.disconnectDescription", { machine: coreName })}</AlertDialogDescription>
+              <AlertDialogTitle>{t("coreLink.disconnectTitle", { machine: coreName })}</AlertDialogTitle>
+              <AlertDialogDescription>{t("coreLink.disconnectDescription", { machine: coreName })}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
               <AlertDialogAction data-core-disconnect-go="true" onClick={() => actions.coreLink("disconnect")}>
-                {t("coreMove.disconnectGo")}
+                {t("coreLink.disconnectGo")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

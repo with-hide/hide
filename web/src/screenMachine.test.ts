@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { awayDevice, coreMachineName, coreShared, machineName, moveMachines, screenNodeFromHash, systemMachineKey, windowFirst } from "./screenMachine";
+import { awayDevice, coreMachineName, coreShared, machineName, screenNodeFromHash, systemMachineKey, windowFirst } from "./screenMachine";
 
 describe("the screen's own machine (PRD core-host-node-remote-core B13)", () => {
   it("is the node the hash names beside the token", () => {
@@ -61,7 +61,6 @@ describe("what this window calls each machine (PRD core-host-node-move B2, N1)",
     expect(coreMachineName(devices, t)).toBe("Mac mini");
     expect(windowFirst(devices).map((row) => (row as { id: string }).id)).toEqual(["mbp", "core", "box"]);
     expect(coreShared([devices[0], devices[2]] as never)).toBe(true);
-    expect(moveMachines(devices, { direction: "back", device: null }, t)).toEqual({ from: "Mac mini", to: "이 Mac" });
   });
 
   it("names this window's machine as its own system does, whichever machine the core runs on", () => {
@@ -110,13 +109,5 @@ describe("a window on the machine the core moved off", () => {
     window.location.hash = "#token=t";
     expect(awayDevice(rest("mini-node"))).toBeNull();
     expect((awayDevice(rest("mbp")) as { id: string } | null)?.id).toBe("mbp");
-  });
-
-  it("names the machine a forward move went to once its device row became the core's", () => {
-    // The move's frame names the device by the registration id the old core gave it, which the new core no longer lists.
-    expect(moveMachines(moved, { direction: "forward", device: "mini-ssh", alias: "mini-ssh" }, t)).toEqual({ from: "This Mac", to: "Mac mini" });
-    // Before the move the old core still lists the device by that id.
-    const before = [{ id: "mbp", kind: "local", label: null }, { id: "mini-ssh", kind: "remote", label: "Mac mini", ssh_alias: "mini-ssh" }] as never;
-    expect(moveMachines(before, { direction: "forward", device: "mini-ssh", alias: "mini-ssh" }, t)).toEqual({ from: "This Mac", to: "Mac mini" });
   });
 });

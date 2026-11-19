@@ -13,7 +13,7 @@ import { OverviewPage } from "../Overview";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { WorkspaceDialogs } from "../WorkspaceDialogs";
-import { NODE_DEVICE } from "./coreMoveSceneData";
+import { NODE_DEVICE } from "./coreLinkSceneData";
 import { NODE_PROJECT, nodeProjectRest } from "./nodeProjectSceneData";
 
 export const NODE_PROJECT_STATES = ["backlog-github", "backlog-local", "cleanup"] as const;
