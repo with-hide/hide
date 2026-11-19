@@ -56,13 +56,13 @@ const GOAL_MARK = "/goal";
 
 /**
  * Where a record is drawn (PRD overview-device-tasks D-07, B17-B21): the
- * lane's 보기 slot, under the slot's head, or the Overview's panel, whose head the
+ * card tab on a desk, under its path line, or the Overview's panel, whose head the
  * panel gives (✕ and the ways to the work). Both draw the same record in the
  * same order and the same loading, failed and disconnected states.
  */
 export type RecordFrame = {
   kind: "lane" | "overview";
-  /** The Overview panel's head; the 보기 slot draws its own. */
+  /** The Overview panel's head; a card tab has its path line instead. */
   head?: ReactNode;
   /** A line above the record (the dashed card's B14 note). */
   note?: string | null;
@@ -78,9 +78,9 @@ export type RecordFrame = {
 };
 
 /**
- * The 보기 slot's record (PRD sidebar-task-lens D-44, B16): the slot's head
- * is the panel's, a child opens as the slot's next item so ← comes back to
- * its parent, and the core reads what the slot shows.
+ * A record's card tab (PRD sidebar-task-lens D-44, B16; lane-desk-pair-view
+ * D-13): a child opens as another tab of the same desk, the parent's tab
+ * staying beside it, and the core reads the desk's front card.
  */
 export function SlotSessionRecord({ actions, target }: { actions: Actions; target: WorkSession }) {
   const frame = useMemo<RecordFrame>(() => ({
@@ -91,7 +91,7 @@ export function SlotSessionRecord({ actions, target }: { actions: Actions; targe
       if (child) actions.openChildRecord(child);
     },
     onRead: () => actions.openChildRecord(target),
-    // The core starts and stops the slot's read with the slot itself.
+    // The core starts and stops the card's read as it comes in front and leaves.
     onLeave: () => undefined,
   }), [actions, target]);
   return <SessionRecord actions={actions} target={target} frame={frame} />;
@@ -147,8 +147,8 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   const leave = useRef(frame.onLeave);
   leave.current = frame.onLeave;
   useEffect(() => () => leave.current(), []);
-  // Read again on a reconnect, and once per connection when the slot draws a
-  // record with no read behind it: one restored after a relaunch, or kept
+  // Read again on a reconnect, and once per connection when the desk's front
+  // card draws a record with no read behind it: one restored after a relaunch, or kept
   // across a core that moved, was opened by no event. The Overview's panel
   // starts its own read when it opens.
   useEffect(() => {

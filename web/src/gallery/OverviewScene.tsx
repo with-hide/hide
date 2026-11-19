@@ -2,7 +2,7 @@
 // in the production screens over invented device data
 // (`overviewSceneData.ts`): the backlog with ⌘⇧M open, Projects after the
 // disk sweep, a session's record beside the tabs at Home, and an agent pane
-// whose head showed its record in the lane's 보기 slot. No daemon runs; the
+// whose head showed its record as a card tab on a desk. No daemon runs; the
 // isolated daemon tests own runtime policy.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";

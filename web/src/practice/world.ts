@@ -27,7 +27,7 @@ export const PRACTICE_OUTSIDE = "practice_outside";
 /**
  * What the core sends beside the snapshot: the ⌘P index's answer, the open
  * editor tabs and their documents, ⌘K's session search, the record and link
- * record the lane's 보기 slot shows, the Explorer's folder listings (keyed by
+ * record a desk's card tab shows, the Explorer's folder listings (keyed by
  * folder path) and the checkout's Git changes, and the Memory tool's Project
  * with the Hide AI tool's 제안 section it is drawn under.
  */

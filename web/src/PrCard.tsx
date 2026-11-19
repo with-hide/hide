@@ -31,7 +31,7 @@ import { RowButton } from "./components/ui/row-button";
 
 /**
  * Whether the operator opened the files line, per card. The card leaves the
- * screen when a changed file turns the lane to Files, and the 보기 slot
+ * screen when a changed file turns the lane to Files, and a desk
  * brings it back as it was left (B49); the page keeps it while it runs,
  * never stored.
  */
@@ -416,7 +416,7 @@ function PartState({ part, card, actions, projectId, number }: { part: "body" | 
  * 바뀐 파일 N (B11, B36, B49): one folded line between the timeline and the
  * body, +/- at the right; opened, the files with generated ones folded into
  * one line. A file opens as D-27 says: the diff in this checkout's Files,
- * where the lane turns while the 보기 slot stays on the rail, or GitHub's
+ * where the lane turns while a desk stays on the rail, or GitHub's
  * files page.
  */
 function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequest; project: Workspace; card: PrCard | null; actions: Actions; open: boolean; onToggle: () => void }) {

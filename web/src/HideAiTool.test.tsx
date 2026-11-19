@@ -282,7 +282,7 @@ describe("the Hide AI tool", () => {
     },
   });
 
-  it("offers a ready branch a PR, and a merge and push only while GitHub's base takes one, where GitHub is connected, and opens its card, or its one file's diff, in the 보기 slot (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
+  it("offers a ready branch a PR, and a merge and push only while GitHub's base takes one, where GitHub is connected, and opens its card, or its one file's diff, as a card tab on a desk (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
     await render(suggestionsProject({ rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2", ready(null, 1)),

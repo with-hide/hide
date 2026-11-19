@@ -2,7 +2,7 @@
 // carried from the learner's request to the report, as a mission, at the pace
 // an agent works: moving sign-in to email links, six parts two workers at a
 // time. The learner asks a Conductor for a plan with `/hide-mission`, opens it
-// from the pane's mission chip as a card in the lane's 보기 slot, the pane
+// from the pane's mission chip as a card tab on a desk, the pane
 // staying beside it, and approves it in the terminal; the pane head's
 // second row lists the child agents the Conductor starts; when it has a question
 // it lands in the sidebar's 내 차례, where the learner opens it and answers on the

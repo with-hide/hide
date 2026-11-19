@@ -240,7 +240,7 @@ describe("a project chip while a mission shows (B10)", () => {
   });
 });
 
-describe("what the detail opens in the 보기 slot (D-09)", () => {
+describe("what the detail opens as a card tab on a desk (D-09)", () => {
   it("leaves the screen for the Workspace in front, where the slot draws a node's plan or a worker's record", async () => {
     const { actions, events } = await mount({ place: { selected: "mission-1" } });
     act(() => useShellStore.setState((state) => ({

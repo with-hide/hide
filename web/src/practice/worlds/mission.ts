@@ -112,7 +112,7 @@ export const showsMemory = (model: MissionModel) => model.tool === "memory";
 /** The pane holding the keyboard. */
 export const focusedOn = (model: MissionModel) => focusedPane(model.desk);
 
-/** Whether the 보기 slot shows this chapter's mission as a card beside the pane. */
+/** Whether a desk shows this chapter's mission as a card beside the pane. */
 export const missionShown = (model: MissionModel) => model.card;
 
 /** Whether the mission's card was put away again. */
