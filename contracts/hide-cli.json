@@ -1848,6 +1848,17 @@
             ],
             "type": "object"
         },
+        "device_projects_listed": {
+            "properties": {
+                "projects": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "projects"
+            ],
+            "type": "object"
+        },
         "device_removed": {
             "properties": {
                 "device_id": {
@@ -5639,7 +5650,27 @@
                     "value": {
                         "type": "text"
                     }
-                },
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "invalid_request",
+                "device_already_connected",
+                "device_limit"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_projects_listed"
+            ],
+            "arguments": [],
+            "command": "device projects-ssh",
+            "needs_one_of": [
+                "--project"
+            ],
+            "options": [
                 {
                     "name": "--project",
                     "repeats_at_most": 32,
@@ -5649,12 +5680,6 @@
                         "type": "text"
                     }
                 }
-            ],
-            "refusals": [
-                "device_from_pane",
-                "invalid_request",
-                "device_already_connected",
-                "device_limit"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7576,7 +7601,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:014fadff8fb04cb89622b8fe9bfe424b0a12a994cddf499a70ae20784050ac97",
+    "digest": "sha256:e7d9eb96391e9423b6269cd68bd8881d44e5278cb845cc57df433000a2d20ceb",
     "envelopes": {
         "access": {
             "answer": "value",

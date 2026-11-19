@@ -1047,6 +1047,15 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
                 before == after,
                 "the pane's program was started again: {before} then {after}"
             );
+            // Its first open on the new connection closed nothing: every
+            // terminal was taken up, so the row counts none it could not.
+            let row = fixture
+                .snapshot()
+                .and_then(|snapshot| device_row(&snapshot))?;
+            ensure!(
+                row["not_carried"].is_null(),
+                "the switch says it could not take a terminal up: {row}"
+            );
 
             // The letter that waited through the switch was neither lost
             // nor taken by it, and reaches the agent once: by its pane's
