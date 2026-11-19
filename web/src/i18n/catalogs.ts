@@ -49,6 +49,7 @@ import { issuesCatalogs, issuesEnglish } from "./resources/issues";
 import { mobileCatalogs, mobileEnglish } from "./resources/mobile";
 import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup";
 import { externalToolsCatalogs, externalToolsEnglish } from "./resources/externalTools";
+import { pairingCatalogs, pairingEnglish } from "./resources/pairing";
 import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
@@ -123,6 +124,7 @@ export const english = {
   ...wakeReasonsEnglish,
   ...mobileSetupEnglish,
   ...externalToolsEnglish,
+  ...pairingEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
   ...checkoutGitEnglish,
@@ -203,6 +205,7 @@ export const catalogs = {
     ...wakeReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
     ...externalToolsCatalogs.ko,
+    ...pairingCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
     ...checkoutGitCatalogs.ko,
@@ -278,6 +281,7 @@ export const catalogs = {
     ...wakeReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
     ...externalToolsCatalogs["zh-CN"],
+    ...pairingCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
     ...checkoutGitCatalogs["zh-CN"],
@@ -353,6 +357,7 @@ export const catalogs = {
     ...wakeReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
     ...externalToolsCatalogs.ja,
+    ...pairingCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
     ...checkoutGitCatalogs.ja,

@@ -49,12 +49,10 @@ describe("a rail tile (quick device-rail-slack)", () => {
   const mini: Tile = { id: "mini", label: "Mac mini", icon: "remote", core: false };
   const off: Tile = { id: "build-box", label: OFF.label, icon: "remote", core: false };
 
-  it("crowns the core's machine in the bottom-left corner beside its other marks, and says core after its name (PRD core-host-node-move N1)", () => {
+  it("draws no crown on any tile, the core's machine included (PRD device-connect-iroh D-80)", () => {
     const html = view({ tile: { ...mini, core: true }, counts: { needs_you: 3, done: 0 } });
-    expect(tile(html)).toContain('aria-label="Mac mini, core, Needs You 3"');
-    expect(html).toContain('data-rail-crown="true"');
+    expect(html).not.toContain("data-rail-crown");
     expect(marks(html)).toEqual([["needs_you", "3"]]);
-    expect(view({ tile: mini })).not.toContain("data-rail-crown");
   });
 
   it("is a focusable button whose name carries the device and each count it marks (B4)", () => {

@@ -20,6 +20,7 @@ publish = false
 hide-kit = { path = "../hide-kit" }
 hide-peer-protocol = { path = "../hide-peer-protocol" }
 hide-platform = { path = "../hide-platform" }
+blake3 = "=1.8.7"
 ed25519-dalek = "=3.0.0"
 getrandom = "=0.3.4"
 serde = { version = "=1.0.229", features = ["derive"] }

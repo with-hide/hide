@@ -665,6 +665,19 @@ pub fn guest_node_side(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::NODE_SIDE)
 }
 
+/// The guest's install root: the builds of that guest this host keeps, each
+/// in a folder named by its digest, with the `current` its hooks run and
+/// the version folders its pane holders run from (D-77 (2)).
+pub fn guest_install_root(state_dir: &Path, guest: &PeerKey) -> PathBuf {
+    guest_dir(state_dir, guest).join(hide_peer_protocol::launch::INSTALL_SIDE)
+}
+
+/// One build of a guest, named by the first 16 hex characters of its
+/// digest.
+pub fn guest_build(state_dir: &Path, guest: &PeerKey, build: &str) -> PathBuf {
+    guest_install_root(state_dir, guest).join(build)
+}
+
 /// The folder a state folder's holders listen and log in, one socket and
 /// one log per pane.
 pub fn holder_panes(state_dir: &Path) -> PathBuf {

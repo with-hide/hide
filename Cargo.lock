@@ -1721,6 +1721,7 @@ dependencies = [
 name = "hide-peer"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hide-kit",
@@ -1897,6 +1898,7 @@ dependencies = [
  "hide-node",
  "hide-node-link",
  "hide-peer",
+ "hide-peer-iroh",
  "hide-platform",
  "hide-project",
  "hide-relay-protocol",
@@ -6064,7 +6066,6 @@ dependencies = [
  "form_urlencoded",
  "futures-channel",
  "futures-io",
- "futures-sink",
  "futures-util",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
@@ -6094,7 +6095,6 @@ dependencies = [
  "serde_json",
  "signature",
  "simd-adler32",
- "slab",
  "smallvec",
  "subtle",
  "syn 2.0.119",

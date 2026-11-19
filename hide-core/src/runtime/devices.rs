@@ -735,9 +735,13 @@ impl Runtime {
             .devices
             .iter_mut()
             .find(|device| device.kind != "remote")
-            && local.host.helper_root != helper_root
+            && (local.host.helper_root != helper_root
+                || local.host.windows_drives != self.windows_drives)
         {
             local.host.helper_root = helper_root;
+            // A rebuilt row starts without it: this machine's own, as a
+            // device's helper reports its own.
+            local.host.windows_drives = self.windows_drives.clone();
             changed = true;
         }
         let ids = self
@@ -1041,7 +1045,17 @@ impl Runtime {
                     .filter(|device| device.kind == "remote")
                     .map(|device| self.device_answer(device))
                     .collect::<Vec<_>>();
-                Ok((serde_json::json!({ "devices": devices }), false))
+                let peers = self
+                    .snapshot
+                    .navigator
+                    .peers
+                    .iter()
+                    .map(crate::peer_machines::answer)
+                    .collect::<Vec<_>>();
+                Ok((
+                    serde_json::json!({ "devices": devices, "peers": peers }),
+                    false,
+                ))
             }
             DeviceCommand::Add { ssh_alias, name } => {
                 let ssh_alias = ssh_alias.trim().to_owned();

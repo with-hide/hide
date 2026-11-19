@@ -55,6 +55,11 @@ pub enum Input {
     /// Text that may also carry line breaks (LF, CR) and tabs, and no other
     /// control character: what `hide pane send --paste` admits.
     PasteText,
+    /// A pairing link another Hide shares (`hide://pair#...`, at most
+    /// `hide_peer::limits::MAX_LINK_BYTES` bytes), or a key.
+    LinkOrKey,
+    /// A socket address, `ip:port`.
+    Address,
     OneOf(&'static [&'static str]),
 }
 
@@ -73,6 +78,8 @@ impl Input {
             Unsigned => "unsigned",
             Json => "json",
             PasteText => "paste_text",
+            LinkOrKey => "link_or_key",
+            Address => "address",
             OneOf(_) => "one_of",
         }
     }
@@ -144,6 +151,18 @@ const fn optional(name: &'static str, value: Input) -> Opt {
     }
 }
 
+/// A switch that cannot be combined with `conflicts`.
+const fn exclusive(name: &'static str, conflicts: &'static [&'static str]) -> Opt {
+    Opt {
+        name,
+        value: None,
+        required: false,
+        requires: &[],
+        conflicts,
+        repeats: None,
+    }
+}
+
 const fn switch(name: &'static str) -> Opt {
     Opt {
         name,
@@ -210,8 +229,8 @@ const fn spec(
 }
 
 use Input::{
-    Approval, Body, Commit, Json, Key, OneOf, PasteText, Ratio, Session, Sha256, Span, Text,
-    Unsigned,
+    Address, Approval, Body, Commit, Json, Key, LinkOrKey, OneOf, PasteText, Ratio, Session,
+    Sha256, Span, Text, Unsigned,
 };
 
 const ID: &[Arg] = &[Arg {
@@ -746,10 +765,12 @@ pub const COMMANDS: &[Spec] = &[
             "access_key_unreadable",
         ],
     },
-    // Only the core's own machine may run these. Add registers the device
-    // without Hide's helper, which the operator allows on its row. A device
-    // answers its state, what it waits on from the operator, its failure by
-    // the row's action and the next step, never ssh's words.
+    // The machines this one is connected to: the Hides it is paired with
+    // (PRD device-connect-iroh) and its SSH devices. Only the core's own
+    // machine may run these. Sharing this machine, adding a link, allowing a
+    // request, resuming, asking back and naming an address are the
+    // operator's, at a terminal outside Hide's panes: a pane or an external
+    // tool is refused `device_from_pane` (B52).
     Spec {
         words: &["device", "list"],
         arguments: &[],
@@ -760,11 +781,29 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["device_list"],
         refusals: &["machine_not_permitted"],
     },
+    // Prints a link that works once, asks about the machine that pastes it
+    // at this terminal, and waits until that machine is let in or the link
+    // ends; the link ends with the command. With --json the link is the
+    // answer line, printed before the wait.
+    Spec {
+        words: &["device", "share"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_shared"],
+        refusals: &["device_from_pane", "peer_unavailable", "pairing_ended"],
+    },
+    // A link pairs with the Hide that shared it: the command shows the four
+    // words and takes the operator's yes or no at the terminal. An SSH alias
+    // whose machine already runs its own Hide is paired over SSH and nothing
+    // is installed there; any other alias registers the core's SSH device.
     Spec {
         words: &["device", "add"],
         arguments: &[Arg {
-            name: "ssh_alias",
-            value: Key,
+            name: "link_or_ssh_alias",
+            value: LinkOrKey,
             required: true,
             value_with: None,
         }],
@@ -772,17 +811,132 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[optional("--name", Text), switch("--json")],
         rest: None,
-        answers: &["device_added"],
+        answers: &["device_added", "device_joined", "device_paired"],
         refusals: &[
             "machine_not_permitted",
             "device_invalid",
             "device_duplicate",
+            "device_from_pane",
+            "link_invalid",
+            "link_newer",
+            "link_own",
+            "device_already_connected",
+            "pairing_no_offer",
+            "pairing_declined",
+            "pairing_host_full",
+            "pairing_full",
+            "pairing_unanswered",
+            "pairing_unreachable",
+            "pairing_update_needed",
+            "pairing_ended",
+            "ssh_hide_absent",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "ssh_not_reached",
+            "ssh_busy",
+            "device_own",
+            "device_limit",
+            "peer_unavailable",
+        ],
+    },
+    // Answers, at this terminal, the machines that wait for this machine's
+    // operator: on a machine with no window to answer in.
+    Spec {
+        words: &["device", "allow"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_allowed"],
+        refusals: &["device_from_pane"],
+    },
+    // A machine paired both ways has two directions, stopped and removed
+    // apart: --outgoing is this machine opening the other, --incoming the
+    // other opening this one.
+    Spec {
+        words: &["device", "pause"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
         ],
     },
     Spec {
+        words: &["device", "resume"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
+        ],
+    },
+    // A paired machine's direction, or an SSH device by its id or alias.
+    Spec {
         words: &["device", "remove"],
         arguments: &[Arg {
-            name: "device_id",
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed", "device_removed"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
+            "device_local_remove_denied",
+            "device_files_open",
+        ],
+    },
+    // Asks a machine this one is a guest of to let this machine open it
+    // too; its operator answers there.
+    Spec {
+        words: &["device", "request"],
+        arguments: &[Arg {
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -791,21 +945,48 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[switch("--json")],
         rest: None,
-        answers: &["device_removed"],
+        answers: &["device_changed"],
         refusals: &[
-            "machine_not_permitted",
+            "device_from_pane",
             "device_unknown",
-            "device_local_remove_denied",
-            "device_files_open",
+            "device_ambiguous",
+            "device_not_a_guest",
+            "device_already_connected",
+            "request_waiting",
         ],
     },
-    // Starts the row's Retry, an attempt that may ask the operator; with
-    // --wait it answers the attempt's outcome. Nothing answers what the
-    // attempt asks: that is the operator's, on the row.
+    // Names an address a paired machine is tried at first.
+    Spec {
+        words: &["device", "address"],
+        arguments: &[
+            Arg {
+                name: "device",
+                value: Key,
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "address",
+                value: Address,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &["device_from_pane", "device_unknown", "device_ambiguous"],
+    },
+    // A paired machine is dialed again now. An SSH device starts its row's
+    // Retry, an attempt that may ask the operator; with --wait it answers
+    // the attempt's outcome. Nothing answers what the attempt asks: that is
+    // the operator's, on the row.
     Spec {
         words: &["device", "retry"],
         arguments: &[Arg {
-            name: "device_id",
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -814,12 +995,53 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[switch("--wait"), switch("--json")],
         rest: None,
-        answers: &["device_retried"],
+        answers: &["device_changed", "device_retried"],
         refusals: &[
             "machine_not_permitted",
             "device_unknown",
+            "device_ambiguous",
             "device_dials_in",
             "device_wait_timeout",
+        ],
+    },
+    // What a machine about to pair over SSH runs on its target first: it
+    // changes nothing there and answers whether a Hide of that account's
+    // own runs. A refusal carries the same `look`, with `core` false on an
+    // account that never ran one.
+    Spec {
+        words: &["device", "look-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["device_looked"],
+        refusals: &["hide_unavailable", "request_timeout"],
+    },
+    // What a machine pairing over SSH or wsl.exe runs on its target, with
+    // the request it made: the target saves a grant that opens nothing
+    // until that machine confirms it over the connection, and answers its
+    // own ids and addresses. Run again with the same request, it answers
+    // the same.
+    Spec {
+        words: &["device", "accept-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--request", Key),
+            required("--key", Key),
+            required("--device", Key),
+            required("--name", Text),
+            switch("--wsl"),
+        ],
+        rest: None,
+        answers: &["device_accepted"],
+        refusals: &[
+            "device_from_pane",
+            "invalid_request",
+            "device_already_connected",
+            "device_limit",
         ],
     },
     // An agent's reads of and input to the panes of its machine, and its
@@ -1872,9 +2094,21 @@ fn answers() -> Value {
         "access_list".into(),
         shape(&["machine", "limit", "pending", "connections"]),
     );
-    map.insert("device_list".into(), shape(&["devices"]));
+    // The SSH devices and, under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected.
+    map.insert("device_list".into(), shape(&["devices", "peers"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
+    map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));
+    map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
+    map.insert("device_allowed".into(), shape(&["answered"]));
+    map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_accepted".into(), shape(&["accepted"]));
+    map.insert("device_looked".into(), shape(&["look"]));
+    map.insert(
+        "device_paired".into(),
+        shape(&["device_id", "name", "paired"]),
+    );
     map.insert(
         "device_retried".into(),
         hide_core::device_command::retried_schema(),
@@ -1954,6 +2188,8 @@ mod tests {
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
             PasteText => ("line one\nline two\tend", "\u{1b}[201~"),
+            LinkOrKey => ("k1", "-x"),
+            Address => ("192.0.2.7:7842", "nowhere"),
             OneOf(values) => (values[0], "other"),
         };
         (taken.to_owned(), refused.to_owned())
