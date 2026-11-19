@@ -11297,6 +11297,15 @@ mod wire_enum_tests {
         assert_wire(&contract, "device_switch_state", &switch_states);
         checked.insert("device_switch_state");
 
+        let needs = [DeviceNeeds::AutoLogin, DeviceNeeds::Linger];
+        for variant in needs {
+            match variant {
+                DeviceNeeds::AutoLogin | DeviceNeeds::Linger => {}
+            }
+        }
+        assert_wire(&contract, "device_needs", &needs);
+        checked.insert("device_needs");
+
         let text = String::new;
         let waits = [
             SignInWait::Secret {

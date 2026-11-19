@@ -35,7 +35,7 @@
     "docs/ARCHITECTURE.md": {"max": 123, "reason": "to-rewrite"},
     "docs/BROWSER_DISPLAYS.md": {"max": 1, "reason": "to-rewrite"},
     "docs/BUILD.md": {"max": 15, "reason": "to-rewrite"},
-    "docs/INSTALL.md": {"max": 65, "reason": "to-rewrite"},
+    "docs/INSTALL.md": {"max": 63, "reason": "to-rewrite"},
     "docs/LOCALIZATION.md": {"max": 3, "reason": "to-rewrite"},
     "docs/PERFORMANCE_TESTING.md": {"max": 14, "reason": "to-rewrite"},
     "docs/README.md": {"max": 8, "reason": "to-rewrite"},

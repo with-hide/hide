@@ -135,9 +135,18 @@ impl Account {
                 let mut command = started(&entry, shell);
                 for (name, _) in std::env::vars_os() {
                     let text = name.to_string_lossy();
-                    if ["HIDE_", "HERDR_", "HCOORD_", "CURSOR_", "OPENCODE", "GROK_"]
-                        .iter()
-                        .any(|prefix| text.starts_with(prefix))
+                    // What a pane the test runs in would hand the entry: this
+                    // or another terminal's pane identity, an agent's own marks.
+                    if [
+                        "HIDE_",
+                        hide_platform::process::FOREIGN_PANE_IDENTITY,
+                        "HCOORD_",
+                        "CURSOR_",
+                        "OPENCODE",
+                        "GROK_",
+                    ]
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix))
                     {
                         command.env_remove(name);
                     }
