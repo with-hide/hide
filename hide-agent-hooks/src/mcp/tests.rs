@@ -358,3 +358,68 @@ fn a_local_servers_version_is_what_its_package_or_image_pins() {
         assert_eq!(pin_of(line), expected, "{line}");
     }
 }
+
+#[test]
+fn a_server_hide_keeps_has_a_name_a_command_or_address_and_bounded_fields() {
+    for text in [
+        "GITHUB_TOKEN=x npx -y @modelcontextprotocol/server-github",
+        "claude mcp add --transport http linear https://mcp.linear.app/mcp --header \"Authorization: Bearer x\"",
+        "https://mcp.asana.com/sse",
+        r#"{"mcp": {"fetch": {"type": "local", "command": ["uvx", "mcp-server-fetch"]}}}"#,
+    ] {
+        let server = one(text).server.unwrap();
+        assert_eq!(server.check(), Ok(()), "{text}");
+    }
+    let refused = [
+        local("has space", "npx", &[], &[]),
+        local("ok", "  ", &[], &[]),
+        local("ok", "npx", &[], &["A", "A"]),
+        local("ok", "npx", &[], &["A=B"]),
+        local("ok", "npx", &[], &[""]),
+        local("ok", &"x".repeat(MAX_ARG_BYTES + 1), &[], &[]),
+        remote("ok", Remote::Http, "ftp://example.com/mcp", &[]),
+        remote("ok", Remote::Http, "https://example.com/a b", &[]),
+        remote(
+            "ok",
+            Remote::Http,
+            "https://example.com/mcp",
+            &["Bad Header"],
+        ),
+    ];
+    for server in refused {
+        assert!(server.check().is_err(), "{server:?}");
+    }
+    let many: Vec<String> = (0..=MAX_ARGS).map(|index| index.to_string()).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    assert!(local("ok", "npx", &many, &[]).check().is_err());
+}
+
+#[test]
+fn every_named_key_needs_a_value_an_agents_file_can_carry() {
+    let server = local("github", "npx", &["x"], &["TOKEN", "OTHER"]);
+    let keys = |pairs: &[(&str, &str)]| -> Keys {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), Secret::new((*value).to_owned())))
+            .collect()
+    };
+    assert_eq!(
+        server.check_keys(&keys(&[("TOKEN", "s3cr3t"), ("OTHER", "o")])),
+        Ok(())
+    );
+    for (given, refusal) in [
+        (keys(&[("TOKEN", "s3cr3t")]), "OTHER has no value"),
+        (
+            keys(&[("TOKEN", "s3cr3t"), ("OTHER", "")]),
+            "OTHER has no value",
+        ),
+        (
+            keys(&[("TOKEN", "!cat ~/.ssh/id_rsa"), ("OTHER", "o")]),
+            "TOKEN starts with !, which Pi and omp run as a command",
+        ),
+    ] {
+        let reason = server.check_keys(&given).unwrap_err();
+        assert_eq!(reason, refusal);
+        assert!(!reason.contains("s3cr3t") && !reason.contains("ssh"));
+    }
+}

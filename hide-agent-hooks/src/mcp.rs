@@ -40,6 +40,15 @@ use toml_file::TomlFile;
 
 /// The most bytes a server's name holds.
 pub const MAX_NAME_BYTES: usize = 64;
+/// The most arguments a local server's command takes, and the most bytes
+/// of its command or of one argument.
+pub const MAX_ARGS: usize = 64;
+pub const MAX_ARG_BYTES: usize = 4096;
+/// The longest address of a remote server.
+pub const MAX_URL_BYTES: usize = 2048;
+/// The most variables or headers a server names, and the longest name.
+pub const MAX_KEY_NAMES: usize = 64;
+pub const MAX_KEY_NAME_BYTES: usize = 256;
 
 /// One MCP server as Hide keeps it: its name in the agents' files and how it
 /// is reached.
@@ -144,6 +153,93 @@ impl fmt::Debug for Secret {
 
 /// A server's keys by the variable or header they belong to.
 pub type Keys = BTreeMap<String, Secret>;
+
+impl Server {
+    /// Why Hide keeps no server as `self` says it, the fields the operator
+    /// filled or a paste gave (B8): a name every agent's file holds, a
+    /// command or an `http(s)` address, and sizes within Hide's limits.
+    pub fn check(&self) -> Result<(), String> {
+        if !valid_name(&self.name) {
+            return Err(format!(
+                "a server's name is 1 to {MAX_NAME_BYTES} letters, digits, - or _"
+            ));
+        }
+        match &self.reach {
+            Reach::Local { command, args, .. } => {
+                if command.trim().is_empty() {
+                    return Err("a local server needs the command that starts it".to_owned());
+                }
+                if args.len() > MAX_ARGS {
+                    return Err(format!("a command takes at most {MAX_ARGS} arguments"));
+                }
+                if std::iter::once(command)
+                    .chain(args)
+                    .any(|word| word.len() > MAX_ARG_BYTES || word.contains('\0'))
+                {
+                    return Err(format!(
+                        "a command or argument is at most {MAX_ARG_BYTES} bytes, with no NUL"
+                    ));
+                }
+            }
+            Reach::Remote { url, .. } => {
+                let scheme = url.split_once("://").map(|(scheme, _)| scheme);
+                if !matches!(scheme, Some("http" | "https"))
+                    || url.len() > MAX_URL_BYTES
+                    || url.chars().any(char::is_whitespace)
+                {
+                    return Err(format!(
+                        "a remote server's address is an http or https address of at most {MAX_URL_BYTES} bytes"
+                    ));
+                }
+            }
+        }
+        let names = self.reach.key_names();
+        if names.len() > MAX_KEY_NAMES {
+            return Err(format!(
+                "a server names at most {MAX_KEY_NAMES} variables or headers"
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for name in names {
+            if name.is_empty()
+                || name.len() > MAX_KEY_NAME_BYTES
+                || name.chars().any(|character| {
+                    character == '='
+                        || character == ':'
+                        || character.is_whitespace()
+                        || character.is_control()
+                })
+            {
+                return Err(format!(
+                    "a variable's or header's name is 1 to {MAX_KEY_NAME_BYTES} bytes with no space, = or :"
+                ));
+            }
+            if !seen.insert(name.as_str()) {
+                return Err(format!("{name} is named twice"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Why `keys` do not give every variable and header `self` names a
+    /// value an agent's file can carry: each needs one that is not empty
+    /// and does not start with `!`, which Pi and omp run as a command. The
+    /// reason names the key, never its value.
+    pub fn check_keys(&self, keys: &Keys) -> Result<(), String> {
+        for name in self.reach.key_names() {
+            match keys.get(name).map(Secret::expose) {
+                None | Some("") => return Err(format!("{name} has no value")),
+                Some(value) if value.starts_with('!') => {
+                    return Err(format!(
+                        "{name} starts with !, which Pi and omp run as a command"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
+    }
+}
 
 /// A server name every agent's file can hold as it is: a JSON member name
 /// and a TOML bare key, Codex's `^[a-zA-Z0-9_-]+$`, at most
