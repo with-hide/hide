@@ -76,6 +76,21 @@ export type Peer = {
 
 export type Direction = "outgoing" | "incoming";
 
+/** The frame of a computer with no pairing under way (hide-peer `View::default()`). */
+export const NOTHING_UNDER_WAY: PairingView = { offer: null, asks: [], join: null, requests: [] };
+
+/**
+ * Whether this window is this computer's own (B52): the only screen that
+ * shares it, adds a machine to it or acts on one it is paired with. hided
+ * sends the `pairing` frame to this computer's own windows and to no other
+ * screen (another computer's view of this one, a phone) and refuses that
+ * screen's asks, so a screen without the frame lists the paired machines
+ * and offers nothing it would be refused. The one place this is decided.
+ */
+export function ownWindow(pairing: PairingView | null | undefined): boolean {
+  return pairing != null;
+}
+
 /** Every machine this one is paired with, in either direction. */
 export function pairedMachines(rest: SnapshotRest | null | undefined): readonly Peer[] {
   return rest?.navigator?.peers ?? NONE;

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hide_kit::layout;
+use hide_peer::link::{PairLink, Secret};
 use hide_peer::loopback::{Loopback, Net};
 use hide_peer::pairing::{
     AcceptError, AskKind, JoinError, JoinFailure, JoinPhase, Me, Pairings, RequestError,
@@ -18,11 +19,11 @@ use hide_peer::pairing::{
 use hide_peer::peers::{OpenError, PeerEvent, Peers};
 use hide_peer::protocol::frame::MAX_MESSAGE;
 use hide_peer::protocol::hello::GrantState;
-use hide_peer::protocol::pairing::{ConfirmState, Pairing, Revoke};
+use hide_peer::protocol::pairing::{ConfirmState, PairRefusal, Pairing, Revoke};
 use hide_peer::protocol::{PeerKey, StreamKind};
 use hide_peer::store::{KnownState, StoreError, Via};
 use hide_peer::wire::{read_message, write_message};
-use hide_peer::words::WordList;
+use hide_peer::words::{self, Nonce, WordList};
 use hide_peer::{Clock, limits};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
@@ -215,6 +216,208 @@ async fn a_link_pairs_two_machines_once_both_operators_agreed() {
     let again = pc.pairings.share(WordList::English).unwrap();
     assert_eq!(mac.pairings.join(&again.link), Err(JoinError::Already));
     assert_eq!(pc.pairings.join(&again.link), Err(JoinError::Own));
+}
+
+/// The words come from one value of each side, and a guest is bound to its
+/// own before it sees the host's (PRD D-17): the host's operator is shown
+/// the words of the value the guest committed to, and a guest that opens
+/// another value, chosen with the host's in hand, is refused before anyone
+/// is asked.
+#[tokio::test]
+async fn a_guest_cannot_choose_its_value_after_it_saw_the_hosts() {
+    let net = Net::new();
+    let mut pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let guest = Machine::new(&net, "macbook");
+    let conn = guest.peers.dial(&pc.machine.addr()).await.unwrap();
+    let committed = Nonce::from_bytes([1; 32]);
+    let commit = words::commitment(&pc.key(), &guest.key(), &committed);
+    // What a guest sends with a link: the secret and its commitment.
+    let pair = |link: &str| Pairing::Pair {
+        secret: PairLink::parse(link).unwrap().secret.to_hex().to_string(),
+        device: "macbook".into(),
+        name: "MacBook".into(),
+        commit: commit.clone(),
+    };
+
+    // A guest that opens what it committed to: the operator is asked, with
+    // the words of both values.
+    let offer = pc.pairings.share(WordList::English).unwrap();
+    let mut pairing = conn.open(StreamKind::Pairing).await.unwrap();
+    write_message(&mut pairing.send, &pair(&offer.link))
+        .await
+        .unwrap();
+    let Pairing::Asking { nonce, .. } = read(&mut pairing).await else {
+        panic!("the host's value");
+    };
+    let hosts = Nonce::from_hex(&nonce).expect("the host's value");
+    assert!(pc.view.borrow().asks.is_empty(), "nobody is asked yet");
+    let reveal = Pairing::Reveal {
+        nonce: committed.to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &reveal).await.unwrap();
+    let ask = pc
+        .shows("the guest's request", |view| view.asks.first().cloned())
+        .await;
+    assert_eq!(
+        ask.words,
+        Some(words::of(
+            WordList::English,
+            &pc.key(),
+            &guest.key(),
+            &committed,
+            &hosts
+        ))
+    );
+    // One value for one `pair`: a second one is not read for the words.
+    let second = Pairing::Reveal {
+        nonce: Nonce::from_bytes([2; 32]).to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &second).await.unwrap();
+    assert!(pc.pairings.answer(ask.id, false));
+    assert_eq!(
+        read(&mut pairing).await,
+        Pairing::Refused {
+            reason: PairRefusal::Declined
+        }
+    );
+    assert_eq!(pc.view.borrow().asks.len(), 0);
+
+    // The same guest on a new link, now choosing its value once it holds
+    // the host's: the value it opens is not the committed one.
+    let offer = pc.pairings.share(WordList::English).unwrap();
+    write_message(&mut pairing.send, &pair(&offer.link))
+        .await
+        .unwrap();
+    let Pairing::Asking { nonce, .. } = read(&mut pairing).await else {
+        panic!("the host's value");
+    };
+    assert_ne!(
+        nonce,
+        hosts.to_hex().as_str(),
+        "the host draws its value anew for each pairing"
+    );
+    let chosen = Pairing::Reveal {
+        nonce: Nonce::from_bytes([2; 32]).to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &chosen).await.unwrap();
+    assert_eq!(
+        read(&mut pairing).await,
+        Pairing::Refused {
+            reason: PairRefusal::NoOffer
+        }
+    );
+    let view = pc.view.borrow();
+    assert!(view.asks.is_empty(), "nobody was asked");
+    assert!(view.offer.is_none(), "the link is spent");
+}
+
+/// A guest that commits to no value cannot be held to one, so it is not
+/// answered with the host's: its link is spent like one with a wrong secret.
+#[tokio::test]
+async fn a_pair_that_commits_to_no_value_spends_the_link() {
+    let net = Net::new();
+    let pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let guest = Machine::new(&net, "macbook");
+    let conn = guest.peers.dial(&pc.machine.addr()).await.unwrap();
+    let mut pairing = conn.open(StreamKind::Pairing).await.unwrap();
+    let spelled = words::commitment(&pc.key(), &guest.key(), &Nonce::from_bytes([1; 32]));
+    for commit in [
+        String::new(),
+        spelled.to_uppercase(),
+        spelled[..62].to_owned(),
+    ] {
+        let offer = pc.pairings.share(WordList::English).unwrap();
+        let pair = Pairing::Pair {
+            secret: PairLink::parse(&offer.link)
+                .unwrap()
+                .secret
+                .to_hex()
+                .to_string(),
+            device: "macbook".into(),
+            name: "MacBook".into(),
+            commit,
+        };
+        write_message(&mut pairing.send, &pair).await.unwrap();
+        assert_eq!(
+            read(&mut pairing).await,
+            Pairing::Refused {
+                reason: PairRefusal::NoOffer
+            }
+        );
+        let view = pc.view.borrow();
+        assert!(view.asks.is_empty(), "nobody was asked");
+        assert!(view.offer.is_none(), "the link is spent");
+    }
+}
+
+/// The guest's words are those of the first value the host sent: a host
+/// that sends another once it holds the guest's value, one it could have
+/// searched for, moves nothing on the guest's screen (PRD D-17).
+#[tokio::test]
+async fn the_guests_words_stay_those_of_the_hosts_first_value() {
+    let net = Net::new();
+    let mut mac = Desk::new(&net, "macbook", "MacBook");
+    // The host is played by hand.
+    let mut host = Machine::new(&net, "windows-pc");
+    let link = PairLink {
+        host: host.key(),
+        device: "windows-pc".into(),
+        relay: None,
+        addrs: Vec::new(),
+        secret: Secret::from_bytes([5; 32]),
+    };
+    mac.pairings.join(&link.text().unwrap()).unwrap();
+    let mut pairing = host.accepted(StreamKind::Pairing).await;
+    let Pairing::Pair { commit, .. } = read(&mut pairing).await else {
+        panic!("the guest's pair");
+    };
+    let asking = |nonce: [u8; 32]| Pairing::Asking {
+        device: "windows-pc".into(),
+        name: "Windows PC".into(),
+        words: WordList::English.name().into(),
+        nonce: Nonce::from_bytes(nonce).to_hex().to_string(),
+    };
+    write_message(&mut pairing.send, &asking([3; 32]))
+        .await
+        .unwrap();
+    let Pairing::Reveal { nonce } = read(&mut pairing).await else {
+        panic!("the guest's value");
+    };
+    let guests = Nonce::from_hex(&nonce).expect("the guest's value");
+    assert!(
+        words::opens(&commit, &host.key(), &mac.key(), &guests),
+        "the guest opens what it committed to"
+    );
+    let first = words::of(
+        WordList::English,
+        &host.key(),
+        &mac.key(),
+        &guests,
+        &Nonce::from_bytes([3; 32]),
+    );
+    let shown = mac
+        .shows("the words", |view| view.join.as_ref()?.words)
+        .await;
+    assert_eq!(shown, first);
+
+    // Another value of the host's, then its grant. The guest reads them in
+    // order, so its confirm says both were read.
+    write_message(&mut pairing.send, &asking([4; 32]))
+        .await
+        .unwrap();
+    let granted = Pairing::Granted {
+        grant: "grant-1".into(),
+        device: "windows-pc".into(),
+        name: "Windows PC".into(),
+    };
+    write_message(&mut pairing.send, &granted).await.unwrap();
+    assert!(mac.pairings.compare(true));
+    assert!(matches!(
+        read(&mut pairing).await,
+        Pairing::Confirm { grant } if grant == "grant-1"
+    ));
+    let words = mac.view.borrow().join.as_ref().and_then(|join| join.words);
+    assert_eq!(words, Some(first), "the words did not move");
 }
 
 #[tokio::test]
@@ -681,6 +884,72 @@ async fn a_removal_reaches_a_host_that_was_off_and_a_second_one_forgets_it_here(
         peers.granting(&guest).state == GrantState::Revoked
     })
     .await;
+}
+
+/// B27: a removal of a grant the two have since replaced by pairing again
+/// takes nothing. The host answers it as done, so whoever kept sending it
+/// stops, and the new grant, its connection and its streams stay.
+#[tokio::test]
+async fn a_late_removal_of_an_old_grant_leaves_the_pairing_made_since() {
+    let net = Net::new();
+    let mut pc = Desk::new(&net, "windows-pc", "Windows PC");
+    let mut mac = Desk::new(&net, "macbook", "MacBook");
+    let (host, guest) = (pc.key(), mac.key());
+    pair_by_link(&mut pc, &mut mac).await;
+    let old = mac.peers().host(&host).unwrap().grant;
+
+    // The host removes the guest, and the two pair again: a new grant.
+    pc.pairings.remove_guest(&guest).unwrap();
+    mac.saves("the removal heard", |peers| {
+        peers
+            .host(&host)
+            .is_some_and(|host| host.state == KnownState::Unpaired)
+    })
+    .await;
+    mac.machine
+        .event("the connection's end", |event| {
+            matches!(event, PeerEvent::Disconnected { key, .. } if *key == host).then_some(())
+        })
+        .await;
+    pair_by_link(&mut pc, &mut mac).await;
+    let new = mac.peers().host(&host).unwrap().grant;
+    assert_ne!(old, new);
+    let held = |pc: &Desk| {
+        pc.peers()
+            .grants(|grants, _| grants.current(&guest).map(|grant| grant.id.clone()))
+    };
+    assert_eq!(held(&pc), Some(new.clone()));
+
+    // The guest works over the new pairing.
+    let link = mac.peers().link(&host).unwrap();
+    let mut terminal = link.open(StreamKind::Terminal).await.unwrap();
+    let mut there = pc.machine.accepted(StreamKind::Terminal).await;
+
+    // The removal of the old grant, sent before the two paired again,
+    // arrives only now.
+    let mut revoking = link.open(StreamKind::Revoke).await.unwrap();
+    let revoke = Revoke::Revoke { grant: old.clone() };
+    write_message(&mut revoking.send, &revoke).await.unwrap();
+    let body = within("the answer", read_message(&mut revoking.recv, MAX_MESSAGE))
+        .await
+        .unwrap()
+        .expect("an answer");
+    assert_eq!(
+        Revoke::parse(&body).unwrap(),
+        Some(Revoke::Revoked { grant: old })
+    );
+
+    // It took nothing: the new grant stands on both machines, and the
+    // stream opened under it still carries the guest's keys.
+    assert_eq!(held(&pc), Some(new));
+    assert_eq!(pc.grants(&guest), GrantState::Active);
+    assert_eq!(mac.host_state(&host), Some(KnownState::Active));
+    terminal.send.write_all(b"k").await.unwrap();
+    let mut byte = [0u8; 1];
+    within("the guest's key", there.recv.read_exact(&mut byte))
+        .await
+        .unwrap();
+    assert_eq!(&byte, b"k");
 }
 
 #[tokio::test(start_paused = true)]

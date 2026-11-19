@@ -25,7 +25,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function mount(pairing: PairingView, peers: Peer[] = []) {
+async function mount(pairing: PairingView | null, peers: Peer[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -77,12 +77,56 @@ it("lists a paired machine with its state, its direction and the one action its 
   expect(row("macbook")?.querySelector("[data-peer-direction]")?.textContent).toBe("it opens this computer");
   expect(row("windows-pc")?.textContent).toContain("Not connected · the relay cannot be reached");
   await press('[data-peer-retry="windows-pc"]');
-  expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: "windows-pc" } });
+  // An ask names the machine by its connection id, never by the device id it says of itself.
+  expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: lost.key } });
   // The machine that opens this one is asked to be opened too.
   expect(q('[data-peer-request-go="macbook"]')?.textContent).toBe("Open MacBook too");
   await press('[data-peer-request-go="macbook"]');
-  expect(last(events)).toMatchObject({ kind: "pairing_request", payload: { device: "macbook" } });
+  expect(last(events)).toMatchObject({ kind: "pairing_request", payload: { device: guest.key } });
   expect(q('[data-peer-request-go="windows-pc"]')).toBeNull();
+  await unmount();
+});
+
+it("acts on the row that was pressed when two machines say one device id", async () => {
+  const first = peer({ key: "11".repeat(32), name: "Office", connected: false, path: null });
+  const second = peer({ key: "22".repeat(32), name: "Imposter", connected: false, path: null });
+  const { events, unmount } = await mount(idle, [first, second]);
+  const retries = document.body.querySelectorAll<HTMLElement>('[data-peer-retry="windows-pc"]');
+  expect(retries).toHaveLength(2);
+  await act(async () => retries[1]?.click());
+  expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: second.key } });
+  await act(async () => retries[0]?.click());
+  expect(last(events)).toMatchObject({ kind: "pairing_retry", payload: { device: first.key } });
+  await unmount();
+});
+
+it("lists the paired machines and offers nothing on a screen that is not this computer's own window (B52)", async () => {
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active" });
+  const lost = peer({ connected: false, path: null });
+  // hided sends such a screen no `pairing` frame.
+  const { q, unmount } = await mount(null, [guest, lost]);
+  expect(q('[data-peer-row="macbook"]')?.textContent).toContain("MacBook");
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("Not connected");
+  expect(q("[data-pair-share]")).toBeNull();
+  expect(document.body.querySelector("[data-peer-row] button")).toBeNull();
+  await unmount();
+});
+
+it("asks before removing a machine that opens this computer, with its work left by default (B26)", async () => {
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active" });
+  const { q, press, events, unmount } = await mount(idle, [guest]);
+  // Radix opens the menu on Enter at its trigger.
+  await act(async () => { q('[data-peer-menu="macbook"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-remove-incoming="macbook"]');
+  const confirm = q('[data-peer-remove-confirm="macbook:incoming"]');
+  expect(confirm?.textContent).toContain("What already ran here and the files it read cannot be undone.");
+  // The work is left by default, and backing out is Cancel, never that choice's name.
+  expect(q('[data-peer-remove-work="keep"]')?.textContent).toBe("The work it ran on this computerLeave it runningIt stays, and shows on this computer's screen only");
+  expect([...(confirm?.querySelectorAll("button") ?? [])].map((button) => button.textContent)).toEqual(["Cancel", "Remove"]);
+  expect(events.filter((event) => event.kind === "pairing_remove")).toHaveLength(0);
+  await press("[data-peer-remove-go]");
+  expect(last(events)).toMatchObject({ kind: "pairing_remove", payload: { device: guest.key, direction: "incoming" } });
+  expect(q("[data-peer-remove-confirm]")).toBeNull();
   await unmount();
 });
 
@@ -194,6 +238,17 @@ it("asks Windows again from the line, and the line goes once the rules are in (B
   await act(async () => {});
   expect(host.allowFirewall).toHaveBeenCalledTimes(1);
   expect(screen.q("[data-pair-firewall]"), "the rules are in").toBeNull();
+  await screen.unmount();
+  delete window.hideHost;
+});
+
+it("shows no firewall line on another computer's screen of this one, and reads no rules there (B52)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("missing", "declined");
+  const screen = await mount(null, [peer()]);
+  await act(async () => {});
+  expect(screen.q("[data-pair-firewall]")).toBeNull();
+  expect(host.firewallState).not.toHaveBeenCalled();
   await screen.unmount();
   delete window.hideHost;
 });

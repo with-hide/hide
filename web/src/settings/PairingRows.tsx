@@ -14,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Note, Row, Status, Value } from "../components/settings-rows";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
-import { directionKey, mayRequest, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
+import { directionKey, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { askForFirewallOnce, useFirewall } from "./firewall";
 
@@ -100,16 +100,22 @@ export function ShareRow({ actions }: { actions: Actions }) {
   );
 }
 
-/** One paired machine: its name, its one state line, who opens whom, and what can be done about it. */
-export function PeerRow({ peer, request, actions, onRemove }: { peer: Peer; request: PairRequest | undefined; actions: Actions; onRemove: (peer: Peer, direction: Direction) => void }) {
+/**
+ * One paired machine: its name, its one state line, who opens whom, and,
+ * on this computer's own window, what can be done about it. An ask names
+ * the machine by its connection id: a device id is what a machine says of
+ * itself, and two rows can say the same one.
+ */
+export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer; request: PairRequest | undefined; actions: Actions; own: boolean; onRemove: (peer: Peer, direction: Direction) => void }) {
   const { t } = useInterfaceTranslation();
   const state = peerState(peer);
   const asked = requestLine(request);
   const device = peer.device_id;
-  const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device, direction } : { device });
+  const named = peer.key;
+  const act = (verb: "pause" | "resume" | "retry", direction?: Direction) => actions.pairing(verb, direction ? { device: named, direction } : { device: named });
   const ask = () => {
-    if (request) actions.pairing("dismiss_request", { device });
-    actions.pairing("request", { device });
+    if (request) actions.pairing("dismiss_request", { device: named });
+    actions.pairing("request", { device: named });
   };
   return (
     <Row
@@ -126,6 +132,8 @@ export function PeerRow({ peer, request, actions, onRemove }: { peer: Peer; requ
         </>
       }
     >
+      {own ? (
+      <>
       {state.action === "retry" ? (
         <Button variant="secondary" size="sm" data-peer-retry={device} onClick={() => act("retry")}>{t("pairing.action.retry")}</Button>
       ) : null}
@@ -135,7 +143,7 @@ export function PeerRow({ peer, request, actions, onRemove }: { peer: Peer; requ
         </Button>
       ) : null}
       {state.action === "remove_outgoing" ? (
-        <Button variant="secondary" size="sm" data-peer-forget={device} onClick={() => actions.pairing("remove", { device, direction: "outgoing" })}>
+        <Button variant="secondary" size="sm" data-peer-forget={device} onClick={() => actions.pairing("remove", { device: named, direction: "outgoing" })}>
           {t("pairing.action.forget")}
         </Button>
       ) : null}
@@ -175,10 +183,12 @@ export function PeerRow({ peer, request, actions, onRemove }: { peer: Peer; requ
             </>
           ) : null}
           {peer.opens === "unpaired" || peer.opens === "removing" ? (
-            <DropdownMenuItem variant="destructive" onSelect={() => actions.pairing("remove", { device, direction: "outgoing" })} data-peer-forget-menu={device}>{t("pairing.action.forget")}</DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onSelect={() => actions.pairing("remove", { device: named, direction: "outgoing" })} data-peer-forget-menu={device}>{t("pairing.action.forget")}</DropdownMenuItem>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      </>
+      ) : null}
     </Row>
   );
 }
@@ -207,25 +217,48 @@ export function FirewallRow({ asking, onAllow }: { asking: boolean; onAllow: () 
   );
 }
 
-/** The share row and every paired machine, with the confirm a removal asks (B26). */
+/**
+ * What becomes of the work a removed machine ran on this computer (B26).
+ * Today there is one answer, the default: it stays, and shows on this
+ * computer's screen only. Ending that machine's panes instead (B26's
+ * second choice, B60) is the guest node's to do: that choice goes here
+ * beside this one, and the removal then carries which was chosen.
+ */
+function RemovedWork() {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="space-y-xs" data-peer-remove-work="keep">
+      <div className="text-body text-subtle-foreground">{t("pairing.remove.workTitle")}</div>
+      <div className="text-body text-foreground">{t("pairing.remove.workKeep")}</div>
+      <Note>{t("pairing.remove.workKeepNote")}</Note>
+    </div>
+  );
+}
+
+/**
+ * Every paired machine, and on this computer's own window the share row,
+ * each machine's actions and the confirm a removal asks (B26, B52).
+ */
 export function PairedRows({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  const own = useShellStore((s) => ownWindow(s.pairing));
   const peers = useShellStore((s) => pairedMachines(s.rest));
   const requests = useShellStore((s) => s.pairing?.requests);
   const sharing = useShellStore((s) => s.pairing?.offer != null);
   const [removing, setRemoving] = useState<{ peer: Peer; direction: Direction } | null>(null);
   const opened = sharing || peers.length > 0;
-  const firewall = useFirewall(opened);
+  const firewall = useFirewall(own && opened);
   return (
     <>
-      <ShareRow actions={actions} />
-      {opened && firewall.state === "missing" ? <FirewallRow asking={firewall.asking} onAllow={firewall.allow} /> : null}
+      {own ? <ShareRow actions={actions} /> : null}
+      {own && opened && firewall.state === "missing" ? <FirewallRow asking={firewall.asking} onAllow={firewall.allow} /> : null}
       {peers.map((peer) => (
         <PeerRow
           key={peer.key}
           peer={peer}
           request={requests?.find((request) => request.key === peer.key)}
           actions={actions}
+          own={own}
           onRemove={(target, direction) => setRemoving({ peer: target, direction })}
         />
       ))}
@@ -234,13 +267,14 @@ export function PairedRows({ actions }: { actions: Actions }) {
           <AlertDialogContent data-peer-remove-confirm={`${removing.peer.device_id}:${removing.direction}`}>
             <AlertDialogHeader>
               <AlertDialogTitle>{t(removing.direction === "incoming" ? "pairing.remove.incomingTitle" : "pairing.remove.outgoingTitle", { name: removing.peer.name })}</AlertDialogTitle>
-              <AlertDialogDescription>{t(removing.direction === "incoming" ? "pairing.remove.incomingDescription" : "pairing.remove.outgoingDescription")}</AlertDialogDescription>
+              <AlertDialogDescription className="break-keep">{t(removing.direction === "incoming" ? "pairing.remove.incomingDescription" : "pairing.remove.outgoingDescription")}</AlertDialogDescription>
             </AlertDialogHeader>
+            {removing.direction === "incoming" ? <RemovedWork /> : null}
             <AlertDialogFooter>
-              <AlertDialogCancel>{t("pairing.remove.keep")}</AlertDialogCancel>
+              <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
               <AlertDialogAction
                 data-peer-remove-go="true"
-                onClick={() => actions.pairing("remove", { device: removing.peer.device_id, direction: removing.direction })}
+                onClick={() => actions.pairing("remove", { device: removing.peer.key, direction: removing.direction })}
               >
                 {t("pairing.remove.go")}
               </AlertDialogAction>

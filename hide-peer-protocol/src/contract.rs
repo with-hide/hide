@@ -120,6 +120,7 @@ fn pairing_messages() -> Vec<Pairing> {
         match message {
             Pairing::Pair { .. }
             | Pairing::Asking { .. }
+            | Pairing::Reveal { .. }
             | Pairing::Request { .. }
             | Pairing::Granted { .. }
             | Pairing::Refused { .. }
@@ -134,12 +135,15 @@ fn pairing_messages() -> Vec<Pairing> {
             secret: text(),
             device: text(),
             name: text(),
+            commit: text(),
         },
         Pairing::Asking {
             device: text(),
             name: text(),
             words: text(),
+            nonce: text(),
         },
+        Pairing::Reveal { nonce: text() },
         Pairing::Request {
             device: text(),
             name: text(),

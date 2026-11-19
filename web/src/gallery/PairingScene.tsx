@@ -3,7 +3,9 @@
 // Devices with a shared link and a paired machine in each state a row can be
 // in; `view=allow` and `view=request` are the allow window, with and without
 // words; `view=join` is the pasted link's words, and `view=failed` how a
-// pairing ended. It proves the rendered parts; the pairing is the daemon's.
+// pairing ended; `view=other` is the same Devices list on a screen that is
+// not this computer's own window, which only lists (B52). It proves the
+// rendered parts; the pairing is the daemon's.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -16,7 +18,7 @@ import { useShellStore } from "../store";
 import { standInHost } from "../practice/mount";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
-const VIEWS = ["devices", "allow", "request", "join", "failed"] as const;
+const VIEWS = ["devices", "other", "allow", "request", "join", "failed"] as const;
 type View = (typeof VIEWS)[number];
 
 const WORDS: Record<string, string[]> = { ko: ["바다", "연필", "구름", "사과"], en: ["engine", "bicycle", "muscle", "into"] };
@@ -37,7 +39,9 @@ const PEERS: Peer[] = [
 
 const LOCAL: Device = { agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: null, kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null };
 
-function pairingOf(view: View, lang: string): PairingView {
+function pairingOf(view: View, lang: string): PairingView | null {
+  // hided sends such a screen no `pairing` frame.
+  if (view === "other") return null;
   const words = WORDS[lang] ?? WORDS.en!;
   const soon = Date.now() + 101_000;
   const idle: PairingView = { offer: null, asks: [], join: null, requests: [] };
@@ -74,7 +78,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
       connection: "live",
       pairing: pairingOf(view, lang),
       pairingResult: null,
-      rest: { navigator: { devices: [LOCAL], peers: view === "devices" ? PEERS : [], focused_device_id: "local", workspaces: [] }, status: { remote: [] }, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } },
+      rest: { navigator: { devices: [LOCAL], peers: view === "devices" || view === "other" ? PEERS : [], focused_device_id: "local", workspaces: [] }, status: { remote: [] }, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } },
     } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
@@ -84,7 +88,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
       <InterfaceLanguageBoundary />
       <TooltipProvider>
         <div className="min-h-screen w-full bg-background text-foreground" data-gallery-scene="pairing" data-scene-ready="true">
-          {view === "devices" ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
+          {view === "devices" || view === "other" ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
           <PairingDialogs actions={actions} />
         </div>
       </TooltipProvider>

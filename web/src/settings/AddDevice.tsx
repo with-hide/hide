@@ -81,13 +81,14 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const { t } = useInterfaceTranslation();
   const hosts = useShellStore((s) => s.rest?.status?.ssh_hosts);
   const answered = useShellStore((s) => s.pairingResult);
-  // What the chosen Host's own Hide answered, and the pairing a press started.
-  const [look, setLook] = useState<{ alias: string; request: string; looked: SshLook | null } | null>(null);
+  // What the chosen Host's own Hide answered (nothing, when the look was
+  // refused), and the pairing a press started.
+  const [look, setLook] = useState<{ alias: string; request: string; answered: boolean; looked: SshLook | null } | null>(null);
   const [pairing, setPairing] = useState<{ request: string; refused: string | null } | null>(null);
   useEffect(() => {
     if (!answered?.request_id) return;
-    if (answered.verb === "look_ssh" && answered.request_id === look?.request && look.looked === null && answered.ok && answered.looked) {
-      setLook({ ...look, looked: answered.looked });
+    if (answered.verb === "look_ssh" && answered.request_id === look?.request && !look.answered) {
+      setLook({ ...look, answered: true, looked: answered.ok ? (answered.looked ?? null) : null });
     }
     if (answered.verb === "pair_ssh" && answered.request_id === pairing?.request && pairing.refused === null) {
       if (answered.ok) onPaired();
@@ -119,7 +120,10 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const connects = looked?.state === "ready";
   const connecting = pairing !== null && pairing.refused === null;
   const pending = (submitted !== null && !added && error === null) || connecting;
-  const blocked = pending || chosen === null || (distro === null && !connects && !name.trim());
+  // Until the Host answered, a press would add a machine that runs its own
+  // Hide as a helper device: the press waits for the answer.
+  const looking = look !== null && look.alias === chosen && !look.answered;
+  const blocked = pending || looking || chosen === null || (distro === null && !connects && !name.trim());
   const choose = (next: string) => {
     setAlias(next);
     setPairing(null);
@@ -127,7 +131,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
     // The name follows the Host until the person writes their own.
     if (!nameEdited) setName(defaultDeviceName(next));
     const request = `look-${Date.now()}`;
-    setLook({ alias: next, request, looked: null });
+    setLook({ alias: next, request, answered: false, looked: null });
     actions.pairing("look_ssh", { alias: next, request_id: request });
   };
   // Adding is where the whole kit is agreed to, once (PRD device-parity
@@ -180,6 +184,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       {unreadable}
       {hosts.truncated ? <Note>{t("devices.hostsTruncated", { count: hosts.hosts.length })}</Note> : null}
       <Note data-ssh-hosts-hint="true">{t("devices.notListed")}</Note>
+      {looking ? <Note tone="pending" data-ssh-look="looking">{t("pairing.ssh.looking")}</Note> : null}
       {lookLine ? <Status tone={lookLine.tone} data-ssh-look={looked?.state}>{t(lookLine.key)}</Status> : null}
       {pairing?.refused != null ? <Note tone="warn" data-ssh-pair-refused={pairing.refused}>{t(refusalKey(pairing.refused) ?? "pairing.failed.ended")}</Note> : null}
       {connects ? null : (
