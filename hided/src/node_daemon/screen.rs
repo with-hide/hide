@@ -99,11 +99,7 @@ pub(super) async fn screen(
 /// and an answer to what the dial their Retry started asks (`core_link`
 /// {action: `sign_in`}, PRD system-ssh-device-link B33). `None` when the
 /// screen left first.
-async fn hold(
-    socket: &mut WebSocket,
-    state: &NodeState,
-    connection: u64,
-) -> Option<Arc<LiveLink>> {
+async fn hold(socket: &mut WebSocket, state: &NodeState, connection: u64) -> Option<Arc<LiveLink>> {
     let mut live = state.live.clone();
     let mut phases = state.phases.clone();
     let mut sign_ins = state.sign_ins.clone();

@@ -644,10 +644,7 @@ async fn a_core_takes_the_grant_of_the_node_that_dials_it_and_of_no_other_machin
         root.path().join("host-state"),
         None,
     );
-    let key = hide_peer::MachineKey::generate()
-        .unwrap()
-        .public()
-        .to_hex();
+    let key = hide_peer::MachineKey::generate().unwrap().public().to_hex();
     let ask = |device: &str| {
         core.run(&[
             "device",

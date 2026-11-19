@@ -1181,7 +1181,10 @@ fn split_from_core(
         LinkFailure::SplitFailed(code)
     };
     let Some(updates) = shared.updates.as_ref() else {
-        return failed("split_not_saved", "the node knows no state folder".to_owned());
+        return failed(
+            "split_not_saved",
+            "the node knows no state folder".to_owned(),
+        );
     };
     let machine = match hide_platform::host::machine_id() {
         Ok(machine) => machine,

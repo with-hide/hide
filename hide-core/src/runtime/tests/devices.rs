@@ -1629,7 +1629,10 @@ fn a_node_that_dialed_in_becomes_its_machines_device_once_paired() {
             switched: true
         }
     );
-    assert_eq!(device.label, "MacBook", "the name it was registered under stays");
+    assert_eq!(
+        device.label, "MacBook",
+        "the name it was registered under stays"
+    );
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
 }
 

@@ -113,7 +113,8 @@ impl SplitFailure {
 /// machine over the SSH login the move used: the request, this machine's
 /// connection key and, when given, the grant this machine gives the core.
 /// It answers the command's value, or the code of why it gave none.
-pub type AskCore<'a> = dyn Fn(&str, &PeerKey, Option<&str>) -> Result<serde_json::Value, &'static str> + 'a;
+pub type AskCore<'a> =
+    dyn Fn(&str, &PeerKey, Option<&str>) -> Result<serde_json::Value, &'static str> + 'a;
 
 fn now_unix_ms() -> u64 {
     SystemTime::now()
@@ -214,7 +215,10 @@ fn answered(value: serde_json::Value, core: &str) -> Result<Accepted, SplitFailu
     if accepted.device != core {
         return Err(SplitFailure {
             code: "split_refused",
-            detail: format!("the machine answers as {}, not as the core", accepted.device),
+            detail: format!(
+                "the machine answers as {}, not as the core",
+                accepted.device
+            ),
         });
     }
     Ok(accepted)
@@ -361,7 +365,10 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             journal(dir.path(), phase);
             let reason = unfinished(dir.path()).unwrap().expect(phase);
-            assert!(reason.contains("move-1") && reason.contains("1.2.10"), "{reason}");
+            assert!(
+                reason.contains("move-1") && reason.contains("1.2.10"),
+                "{reason}"
+            );
         }
         let dir = tempfile::tempdir().unwrap();
         journal(dir.path(), r#"{"direction":"forward","phase":"done"}"#);
@@ -444,7 +451,9 @@ mod tests {
         }
 
         fn is_node(&self) -> bool {
-            crate::placement::read(&self.state, "m-node").unwrap().is_some()
+            crate::placement::read(&self.state, "m-node")
+                .unwrap()
+                .is_some()
         }
 
         fn given(&self) -> Option<(String, GrantStatus)> {
@@ -540,7 +549,10 @@ mod tests {
         let first = moved.given().unwrap();
 
         let unreachable = |_: &str, _: &PeerKey, _: Option<&str>| Err("ssh_not_reached");
-        assert_eq!(moved.split(&unreachable).unwrap_err().code, "split_not_reached");
+        assert_eq!(
+            moved.split(&unreachable).unwrap_err().code,
+            "split_not_reached"
+        );
         assert!(moved.is_node());
 
         let asked = std::cell::RefCell::new(Vec::new());
@@ -572,7 +584,9 @@ mod tests {
 
         let asked = std::cell::RefCell::new(Vec::new());
         let restarted = |request: &str, key: &PeerKey, given: Option<&str>| {
-            core_answers(if given.is_some() { "g-new" } else { "g-old" }, &asked)(request, key, given)
+            core_answers(if given.is_some() { "g-new" } else { "g-old" }, &asked)(
+                request, key, given,
+            )
         };
         moved.split(&restarted).unwrap();
         assert_eq!(moved.host().unwrap().grant, "g-new");

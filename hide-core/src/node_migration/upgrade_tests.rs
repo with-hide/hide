@@ -743,7 +743,10 @@ fn digest(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
                 continue;
             }
             let name = path.strip_prefix(root).unwrap().display().to_string();
-            files.insert(name, sha2::Sha256::digest(std::fs::read(&path).unwrap()).to_vec());
+            files.insert(
+                name,
+                sha2::Sha256::digest(std::fs::read(&path).unwrap()).to_vec(),
+            );
         }
     }
     files

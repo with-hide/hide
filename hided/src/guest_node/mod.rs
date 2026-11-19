@@ -248,15 +248,16 @@ pub fn run(dir: &str) -> ! {
     // installation, and so does everything this node answers and starts:
     // their `hide` and hooks ask for that name (D-46).
     if let Some(panes) = helper.as_ref().and_then(|helper| helper.panes.as_ref()) {
-        let install = panes
-            .id
-            .clone()
-            .zip(panes.cli.clone())
-            .map(|(id, cli)| hide_host::kit::PaneInstall {
-                id,
-                cli,
-                path_first: None,
-            });
+        let install =
+            panes
+                .id
+                .clone()
+                .zip(panes.cli.clone())
+                .map(|(id, cli)| hide_host::kit::PaneInstall {
+                    id,
+                    cli,
+                    path_first: None,
+                });
         hide_host::kit::answer_as(install);
     }
     hide_node::diagnostics::install(diagnostic);

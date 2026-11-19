@@ -992,12 +992,16 @@ impl Pairing {
                 // taken as a host only when this core already runs its
                 // work: it dials this core as a node, or was taken before.
                 if grant.is_some() {
-                    let state = self.core.state_dir().join(hide_core::node_migration::CORE_STATE);
-                    let dials = tokio::task::spawn_blocking(move || hide_core::dialing_nodes(&state))
-                        .await
-                        .map_err(|_| "hide_unavailable")?
-                        .map_err(|_| "hide_unavailable")?
-                        .contains(&device);
+                    let state = self
+                        .core
+                        .state_dir()
+                        .join(hide_core::node_migration::CORE_STATE);
+                    let dials =
+                        tokio::task::spawn_blocking(move || hide_core::dialing_nodes(&state))
+                            .await
+                            .map_err(|_| "hide_unavailable")?
+                            .map_err(|_| "hide_unavailable")?
+                            .contains(&device);
                     let taken = self
                         .paired(&peers)
                         .iter()
