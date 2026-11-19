@@ -724,7 +724,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
 /// the pairing verbs out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_to_its_window() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::fixtures::fixture_root("hp");
     let running = hided::start_daemon(Env {
         device_connect: false,
         ..host_env(root.path())
