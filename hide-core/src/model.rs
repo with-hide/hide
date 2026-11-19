@@ -11295,10 +11295,14 @@ mod wire_enum_tests {
         assert_wire(&contract, "device_switch_state", &switch_states);
         checked.insert("device_switch_state");
 
-        let needs = [DeviceNeeds::AutoLogin, DeviceNeeds::Linger];
+        let needs = [
+            DeviceNeeds::AutoLogin,
+            DeviceNeeds::Linger,
+            DeviceNeeds::OpenDistribution,
+        ];
         for variant in needs {
             match variant {
-                DeviceNeeds::AutoLogin | DeviceNeeds::Linger => {}
+                DeviceNeeds::AutoLogin | DeviceNeeds::Linger | DeviceNeeds::OpenDistribution => {}
             }
         }
         assert_wire(&contract, "device_needs", &needs);

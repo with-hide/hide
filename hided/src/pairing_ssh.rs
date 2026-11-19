@@ -331,11 +331,7 @@ struct Accept<'a> {
 
 /// Runs the target's `accept-ssh` on `login` and answers the value it
 /// printed.
-fn accept_on(
-    login: &dyn Login,
-    reach: &Reach,
-    asked: &Accept<'_>,
-) -> Result<Value, &'static str> {
+fn accept_on(login: &dyn Login, reach: &Reach, asked: &Accept<'_>) -> Result<Value, &'static str> {
     let me = asked.me;
     let key = asked.key.to_hex();
     let mut words = vec![
