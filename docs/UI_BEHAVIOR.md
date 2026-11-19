@@ -1256,6 +1256,37 @@ The `?` opens the one window telling a mission from a task, the same one a plan'
 Settings › Mission has no `?`: `hide-task` is folded into `hide-mission` (2026-11-09), so the page that sets a mission's defaults does not teach the difference, and its title stands alone.
 A mission deleted with its Conductor's session leaves every pane's slot.
 
+## The automation screen
+
+Web owner: `web/src/AutomationScreen.tsx`, `web/src/AutomationForm.tsx`, `web/src/automationDraft.ts`, `web/src/automationWords.ts`, `web/src/automationCall.ts`, `web/src/components/sidebar-automation-row.tsx`; hided owner of the window call: `hided/src/automation_screen.rs`; core owner: `hide-core/src/runtime/automations.rs` ([ARCHITECTURE.md, Automations](ARCHITECTURE.md#automations)).
+The automations of the window's own core are listed on a screen of the page's own beside the mission screen (PRD automations D-02).
+
+The sidebar's `자동화` row sits under the `미션` row with the repeat mark, the number of finished runs not looked at on its right (none at 0), and its hint `안 본 회차 N개`; pressing it replaces the center with the table and draws the row selected while the screen shows (B1).
+With no automation the screen says `자동화가 아직 없어요`, [+ 새 자동화], and one line that an agent can make one when asked in words (B2).
+The table's head reads `자동화 · N개` with [+ 새 자동화]; each row draws the unseen dot, the name, the schedule (`매일 09:00`), the next run (`내일 09:00`, `● 도는 중` or `⏸ 멈춤`), the last result (`✓ 12분`, `✗ <reason>`, `– 건너뜀 · <reason>`), the folder and agent, and ▶ to run it now, which is off with its reason while a run goes; a paused row is dimmed (B3).
+A window narrower than the mission screen's split (`missions-split`) leaves out the schedule and the folder and agent, which the detail names.
+When the core set its saved book aside as unreadable (`automations.unreadable`), one warning line above the table names the file it kept, until an automation is made.
+↑ and ↓ move between rows and Enter opens one; every icon-only button has a name (B38).
+
+[+ 새 자동화] and [편집] open the form in the screen: name, task, the agent, model and effort from the list an agent's start uses (the last choice by default), the folder, and the schedule (B4, B26).
+The folder is `폴더 없음 · 기본 폴더에서` by default with `~/hide/automations/<name>-…` under it, or one of this machine's listed projects; a Git project adds `회차마다 새 워크트리에서` (B5).
+The schedule is 매일, 평일, 매주 (days), N시간마다 (1 to 12) or a cron line; 200 ms after typing stops, the core reads it back as `<schedule> · 다음: <when> · 이 기계 시간대` (B6).
+What the core refuses (a cron under an hour or unreadable, a week with no day, an empty task, a name taken) is a red line under its field, and [만들기] is off (B7).
+[만들기] opens the new automation's detail, and [만들고 지금 실행] opens the manual run it started (B8); an edit sends only what changed.
+The preview, the make, the edit and a run's reopen are one `automation_call` each, answered to that window alone by an `automation_result` frame; every other press is a window event whose result the snapshot shows.
+
+The detail shows the task, the schedule, the next run, the folder, the agent with its model and effort, [지금 실행], [멈춤] or [다시 켜기], [편집], [폴더 열기] (in the desktop app on the core's own machine only) and delete, then the runs newest first (B11, B25).
+Opening it marks its unseen runs seen, so the sidebar's number drops.
+A run reads its time, its result, and the tags `수동`, `놓친 회차`, `이어서 대화 중` and `대화를 찾을 수 없음`; a skipped time and missed times are lines of their own.
+A run going opens its terminal in the screen, live and typed into, with [■ 멈추기], which ends it as `멈춤 · 사람이 끝냄` (B16).
+While a run's terminal shows, the window tells the core (`automation_run_viewing`), which keeps that terminal attached and open, and reads a turn that stops there with no cause as the operator's.
+Pressing a finished run whose terminal is closed asks the core to open its conversation again in the screen (B17); a terminal that slept while shown says so with [다시 열기] (B18), a conversation the core cannot resume says `대화를 찾을 수 없음` and opens nothing, and a refused opening (another opening of the automation still starting, `automation_opening`) is a line above [다시 열기].
+Delete asks `<name> 자동화와 회차 기록 N개를 지울까요? 작업 폴더와 결과 파일은 남아요`, adds `도는 회차도 멈춰요` when a run goes or is open, and offers [자동화 지우기] and [그대로 두기] with neither chosen (B27).
+
+An automation the core stopped for a person is its own Needs You row in the 프로젝트 list, the 태스크 list's 내 차례 and the Overview: its name with the Needs You mark, `<reason> · 고치고` and [다시 켜기], which turns it on and takes the row away; the row opens its detail (B23).
+A run's agent row reads `↻ 자동화: <name>` where a task's origin stands, and when it asks, is blocked or opened a View it stands in Needs You like any agent; pressing it opens the run's terminal in the screen, or the View it opened (B15).
+An automation's own folder is a workspace the core marks `unlisted`: no sidebar project, project filter, start target, search row or Overview project shows it, and its checkout's place reads as the run's origin (B30).
+
 ## Terminal image attachment boundary
 
 Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `hide-core/src/runtime/attachments.rs`; device staging `hide-host/src/attachments.rs`.
