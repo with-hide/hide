@@ -1,10 +1,8 @@
-//! The daemon's idle exit beside automations (PRD automations B32): an
-//! automation that is on keeps a daemon with no screen and no pane past its
-//! idle window, so its time comes on time; once none is on, the daemon ends
-//! after the window as before.
-// A daemon starts only where it can listen for panes locally, which Windows
-// cannot yet (#315).
-#![cfg(unix)]
+//! Automations through the daemon, on every system: the idle exit beside
+//! them (PRD automations B32), where an automation that is on keeps a daemon
+//! with no screen and no pane past its idle window and, once none is on, the
+//! daemon ends after the window as before; and `hide automation` (B9, B10),
+//! the built binary's commands against the daemon and its screen section.
 
 use std::path::Path;
 use std::time::{Duration, Instant};

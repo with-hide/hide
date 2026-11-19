@@ -243,6 +243,7 @@ pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
     "automation_home_unknown",
     "automation_cap",
     "automation_running",
+    "automation_changed_unread",
 ];
 
 /// A command on one automation and nothing else.
@@ -1652,11 +1653,21 @@ pub const COMMANDS: &[Spec] = &[
     spec(&["automation", "list"], &[], &[], &["automation_list"]),
     automation_by_id(&["automation", "show"], &["automation"]),
     Spec {
-        refusals: &["automation_unknown", "automation_running"],
+        refusals: &[
+            "automation_unknown",
+            "automation_running",
+            "automation_changed_unread",
+        ],
         ..automation_by_id(&["automation", "run"], &["automation"])
     },
-    automation_by_id(&["automation", "pause"], &["automation"]),
-    automation_by_id(&["automation", "resume"], &["automation"]),
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "pause"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "resume"], &["automation"])
+    },
     Spec {
         words: &["automation", "edit"],
         arguments: AUTOMATION_ID,

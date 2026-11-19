@@ -7013,7 +7013,8 @@
                 "automation_worktree_needs_git",
                 "automation_home_unknown",
                 "automation_cap",
-                "automation_running"
+                "automation_running",
+                "automation_changed_unread"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7064,7 +7065,8 @@
             "options": [],
             "refusals": [
                 "automation_unknown",
-                "automation_running"
+                "automation_running",
+                "automation_changed_unread"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7084,7 +7086,8 @@
             "command": "automation pause",
             "options": [],
             "refusals": [
-                "automation_unknown"
+                "automation_unknown",
+                "automation_changed_unread"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7104,7 +7107,8 @@
             "command": "automation resume",
             "options": [],
             "refusals": [
-                "automation_unknown"
+                "automation_unknown",
+                "automation_changed_unread"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7254,7 +7258,8 @@
                 "automation_worktree_needs_git",
                 "automation_home_unknown",
                 "automation_cap",
-                "automation_running"
+                "automation_running",
+                "automation_changed_unread"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -7486,7 +7491,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:70d8d63458f5a49fa90a7711fdc0542cbc0adbf444324d4e4a600e8dc7e344c4",
+    "digest": "sha256:bda212f829fa498d997cf556135b5af00554fabfc7e626c5c43b929ad956dc28",
     "envelopes": {
         "access": {
             "answer": "value",

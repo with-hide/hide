@@ -423,6 +423,9 @@ pub fn next_action(code: &str) -> &'static str {
         "automation_running" => {
             "A run of this automation is going now; wait until it ends (hide automation show <id>) before running it again"
         }
+        "automation_changed_unread" => {
+            "The change was made, but Hide could not read the automation back; run hide automation list to see where it stands before changing it again"
+        }
         "automations_unavailable" | "automations_store" => {
             "Hide could not open its automations; run the same command again, and if it lasts, the reason is in Hide's diagnostic log"
         }
@@ -798,9 +801,10 @@ pub fn answer(
             let Some(id) = changed["id"].as_str() else {
                 return Err(refusal("automations_unavailable".to_owned()));
             };
-            // Read back as the section has it; one removed in between
-            // still answers the change the core made.
-            let read_back = show(id).unwrap_or_else(|_| automation(&clock, changed.clone(), false));
+            // Read back as the section has it. The change is made either
+            // way; a read back that fails says so rather than answer half.
+            let read_back =
+                show(id).map_err(|_| refusal("automation_changed_unread".to_owned()))?;
             let mut answer = json!({"automation": read_back});
             if from_device {
                 answer["note"] = json!(ON_CORE_MACHINE);
