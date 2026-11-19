@@ -626,7 +626,8 @@ Whose an entry is, is the store's record: for each file, the entries Hide wrote 
 An entry with no record, or whose digest no longer matches, is the operator's: Hide neither writes over it nor takes it out, and the cell says it is already there and offers to take it in (B22, D-16).
 An entry is whole only while every field it holds is one its shape's reader reads (`Found::whole`): a `timeout`, an `enabled` or `disabled` switch or a tool list is a field Hide's copy leaves out, so an entry holding one is never Hide's to replace or take out, even when its server is the same.
 Taking a name over moves each copy that differs, or is not whole, out of its file into the undo list (`hide_agent_hooks::mcp::set_aside`): the entry as the file spelled it, every field kept, goes into the copy's `keys.json` before the file is rewritten, so an entry that cannot be kept stays where it is, and Hide's copy goes in its place.
-A machine leaving Hide puts each such entry back as it was (`put_back`), unless the file holds another entry of that name by then, and leaves an entry taken over where it was, since Hide did not put it there (B21, B30).
+A machine leaving Hide puts each such entry back as it was (`put_back`), unless the file holds another entry of that name by then, and leaves an entry taken over where it was, since Hide did not put it there, writing it back with its keys when a switch took it out since (`leave_copy`) (B21, B30).
+An entry taken over is named, like one set aside, by its file and its name in it (`Source::Copy`), and the item keeps the place's key, which names the file's agent.
 Codex's `config.toml` was a file only Codex wrote (its trust of Hide's hooks and of worktrees goes through `codex app-server`); Hide now writes its own `[mcp_servers.<name>]` tables there and nothing else.
 
 ### MCP keys

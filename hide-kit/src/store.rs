@@ -217,13 +217,14 @@ pub struct StoreItem {
     /// follow pass reads the files only when something changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
-    /// The operator's own copy, taken over from an agent's folder on this
-    /// machine (B20) with a [`Source::Copy`]: unless the undo list still
-    /// holds the folder it replaced there, the store holds the only
-    /// original, so a machine leaving Hide leaves a copy where it was
-    /// (B30). A copy another machine carried is not.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub adopted: bool,
+    /// The key of the place the operator's own copy was taken over from on
+    /// this machine (B20), with a [`Source::Copy`]: unless the undo list
+    /// still holds the folder or entry it replaced there, the store holds
+    /// the only original, so a machine leaving Hide leaves a copy where it
+    /// was (B30). The key names that place's kind, and an MCP file's agent.
+    /// A copy another machine carried has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted: Option<String>,
     pub body: ItemBody,
 }
 
@@ -912,7 +913,7 @@ pub(crate) trait Applier {
     /// Writes a copy of the store's own files `files` of an item at
     /// `place` under `name`, where nothing stands, for a machine leaving
     /// Hide while the store holds the operator's only original (B30).
-    fn leave_copy(&self, place: &Place, name: &str, files: &Path) -> Result<(), String>;
+    fn leave_copy(&self, place: &Place, item: &StoreItem, files: &Path) -> Result<(), String>;
     /// The item is deleted for good: anything of it the store keeps beside
     /// its files goes (an MCP's keys, D-11).
     fn purge(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<(), String>;
@@ -1229,9 +1230,13 @@ impl StoreReport {
 }
 
 /// The items whose only original the store holds (B30), with where each
-/// was taken over: an [`StoreItem::adopted`] one whose own folder there is
-/// not in the undo list, forgotten or past its limit.
-fn sole_originals<'a>(dir: &Path, store: &'a StoreRecord) -> Vec<(&'a StoreItem, PathBuf)> {
+/// was taken over and that place's key: an [`StoreItem::adopted`] one whose
+/// own folder or entry there is not in the undo list, forgotten or past its
+/// limit.
+fn sole_originals<'a>(
+    dir: &Path,
+    store: &'a StoreRecord,
+) -> Vec<(&'a StoreItem, PathBuf, &'a str)> {
     let set_aside: BTreeSet<PathBuf> = store
         .trash
         .iter()
@@ -1244,12 +1249,11 @@ fn sole_originals<'a>(dir: &Path, store: &'a StoreRecord) -> Vec<(&'a StoreItem,
     store
         .items
         .iter()
-        .filter(|item| item.adopted)
-        .filter_map(|item| match &item.source {
-            Source::Copy { from } => Some((item, PathBuf::from(from))),
+        .filter_map(|item| match (&item.source, &item.adopted) {
+            (Source::Copy { from }, Some(key)) => Some((item, PathBuf::from(from), key.as_str())),
             _ => None,
         })
-        .filter(|(_, from)| !set_aside.contains(from))
+        .filter(|(_, from, _)| !set_aside.contains(from))
         .collect()
 }
 
@@ -1274,7 +1278,10 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
     let mut failed = false;
     let originals = sole_originals(&dir, &store);
     // Each such copy Hide holds where the operator had it stays there.
-    let stays: BTreeSet<&Path> = originals.iter().map(|(_, from)| from.as_path()).collect();
+    let stays: BTreeSet<&Path> = originals
+        .iter()
+        .map(|(_, from, _)| from.as_path())
+        .collect();
     for (key, place) in &store.written {
         let Some(kind) = place.kind else { continue };
         let at = recorded_place(key, place);
@@ -1339,12 +1346,12 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         kept_back = Some(reason);
     }
     // Where a switch took the copy out, the store's copy is written back.
-    for (item, from) in &originals {
+    for (item, from, key) in &originals {
         let (Some(folder), Some(_)) = (from.parent(), from.file_name()) else {
             continue;
         };
         let at = Place {
-            key: String::new(),
+            key: (*key).to_owned(),
             path: folder.to_path_buf(),
             columns: Vec::new(),
             profiles: Vec::new(),
@@ -1361,7 +1368,7 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
             ),
             Ok(None) => {
                 let files = dir.join("items").join(folder_name(&item.id));
-                match applier.leave_copy(&at, &item.name, &files) {
+                match applier.leave_copy(&at, item, &files) {
                     Ok(()) => continue,
                     Err(reason) => reason,
                 }
@@ -1620,7 +1627,7 @@ fn install(
             added_at_unix_ms: now_unix_ms(),
             latest: None,
             folder_missing: false,
-            adopted: false,
+            adopted: None,
             body: ItemBody::Skill(body),
         });
     }
@@ -1727,7 +1734,7 @@ fn receive(
         latest: carried.latest.clone(),
         folder_missing: false,
         fingerprint: None,
-        adopted: false,
+        adopted: None,
         body,
     };
     if let Some(existing) = store.item(&id) {
@@ -1963,7 +1970,7 @@ fn adopt(
                 Source::Folder { path } => skill::fingerprint(Path::new(path)).ok().flatten(),
                 _ => None,
             },
-            adopted: matches!(source, Source::Copy { .. }),
+            adopted: matches!(source, Source::Copy { .. }).then(|| place.key.clone()),
             source,
             on: true,
             off_for: BTreeSet::new(),
@@ -2020,7 +2027,7 @@ fn set_aside(
         folder_missing: false,
         added_at_unix_ms: now_unix_ms(),
         // Put back as an item, it is the operator's original again.
-        adopted: true,
+        adopted: Some(place.key.clone()),
         ..item.clone()
     };
     push_trash(

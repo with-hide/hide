@@ -181,7 +181,12 @@ fn file_of(place: &Place) -> Result<McpFile, String> {
     };
     crate::agents::adapter(agent)
         .and_then(|adapter| McpFile::at(adapter.declaration(), place.path.clone()))
-        .ok_or_else(|| format!("{} is no MCP file Hide knows", place.path.display()))
+        .ok_or_else(|| {
+            format!(
+                "Hide no longer knows which agent's MCP file {} is",
+                place.path.display()
+            )
+        })
 }
 
 /// Lists `adapter`'s file at the real path `path`, or adds `profiles` to the
@@ -409,9 +414,11 @@ impl Applier for McpApplier {
         hide_platform::fs::private::create_dir_all(into)
             .map_err(|error| failed(format!("{} could not be made: {error}", into.display())))?;
         crate::mcp_keys::write(into, &keys).map_err(keys_failed)?;
+        // The entry's address, as the store names what it took over and set
+        // aside: the file, then the server's name in it.
         Ok((
             Source::Copy {
-                from: place.path.display().to_string(),
+                from: place.path.join(name).display().to_string(),
             },
             ItemBody::Mcp(McpBody { server }),
         ))
@@ -455,8 +462,20 @@ impl Applier for McpApplier {
         Ok(true)
     }
 
-    fn leave_copy(&self, _place: &Place, _name: &str, _files: &Path) -> Result<(), String> {
-        Err("Hide cannot leave an MCP server's copy yet".to_owned())
+    /// Writes the server taken over back into the agent's file it was
+    /// taken from, with its keys, where nothing of its name stands (B30).
+    fn leave_copy(&self, place: &Place, item: &StoreItem, files: &Path) -> Result<(), String> {
+        let body = body_of(item)?;
+        let file = file_of(place)?;
+        let keys = crate::mcp_keys::read(files).map_err(|error| error.to_string())?;
+        match mcp::write(&file, &body.server, &keys).map_err(|failure| failure.message())? {
+            mcp::Written::Written | mcp::Written::Unchanged => Ok(()),
+            mcp::Written::Unsupported => Err(format!(
+                "{} does not take the server {}",
+                file.agent(),
+                body.server.name
+            )),
+        }
     }
 
     fn purge(&self, _ctx: &Ctx<'_>, _item: &StoreItem) -> Result<(), String> {
@@ -621,7 +640,7 @@ pub(super) fn add(
         latest: None,
         folder_missing: false,
         fingerprint: None,
-        adopted: false,
+        adopted: None,
         body: ItemBody::Mcp(McpBody {
             server: server.clone(),
         }),

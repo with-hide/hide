@@ -720,6 +720,53 @@ fn a_take_over_sets_each_other_copy_aside_whole_and_a_machine_leaving_puts_it_ba
 }
 
 #[test]
+fn a_server_taken_over_and_switched_off_where_it_was_goes_back_there_when_the_machine_leaves() {
+    let fixture = mcp_agents();
+    write(
+        &path_of(&fixture, "codex"),
+        "[mcp_servers.fetch]\ncommand = \"uvx\"\nargs = [\"mcp-server-fetch\"]\nenv = { PROXY = \"http://proxy\" }\n",
+    );
+    store(
+        &fixture,
+        vec![StoreChange::Adopt {
+            kind: ItemKind::Mcp,
+            name: "fetch".to_owned(),
+            from: None,
+        }],
+    );
+    // Switched off for Codex, the operator's own entry leaves its file: the
+    // store holds the only original now.
+    store(
+        &fixture,
+        vec![StoreChange::Set {
+            item: "mcp:fetch".to_owned(),
+            column: Some("codex".to_owned()),
+            on: false,
+        }],
+    );
+    assert!(held(&fixture, "codex", "fetch").is_none());
+
+    let report = remove(&fixture.target);
+
+    assert!(
+        report
+            .agents
+            .iter()
+            .all(|(_, outcome)| !matches!(outcome, crate::RemoveOutcome::Failed { .. })),
+        "{:?}",
+        report.agents
+    );
+    assert_eq!(
+        key_of(&held(&fixture, "codex", "fetch").unwrap(), "PROXY"),
+        "http://proxy"
+    );
+    for (agent, _) in FILES.iter().filter(|(agent, _)| *agent != "codex") {
+        assert!(held(&fixture, agent, "fetch").is_none(), "{agent}");
+    }
+    assert!(!crate::layout::store_dir(fixture.home()).exists());
+}
+
+#[test]
 fn removing_the_machine_takes_hides_servers_and_their_keys_out() {
     let fixture = mcp_agents();
     add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);

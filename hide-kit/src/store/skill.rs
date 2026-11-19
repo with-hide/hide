@@ -156,8 +156,8 @@ impl Applier for SkillApplier {
         remove_at(&place.path.join(name))
     }
 
-    fn leave_copy(&self, place: &Place, name: &str, files: &Path) -> Result<(), String> {
-        copy_into(files, &place.path, name, false)
+    fn leave_copy(&self, place: &Place, item: &StoreItem, files: &Path) -> Result<(), String> {
+        copy_into(files, &place.path, &item.name, false)
     }
 
     fn adopt(
