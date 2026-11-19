@@ -493,7 +493,7 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             // Asked of a machine that holds the folders already, not one
             // that was only told who does.
             if value["helper"] != "held" && !projects.is_empty() {
-                value["projects"] = json!(add_projects(env, &projects));
+                value["projects"] = json!(add_projects(env, projects));
             }
             // Read by the machine that ran it, never by a person.
             println!("{}", json!({"ok":true,"value":value}));
