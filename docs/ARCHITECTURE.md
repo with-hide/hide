@@ -3152,7 +3152,8 @@ Each label worker asks the node of the machine that runs its engine for the lock
 ### The peer connection
 
 Two machines that each run Hide keep one connection between them, and three crates hold it.
-The core role opens this machine's end of it in `hided/src/peer_host.rs`, and only when it is needed: at the daemon's start when a grant, a pending one included, or a known host is saved (`peer_host::endpoint_wanted`), and otherwise at the moment the operator shares this machine or adds one (`PeerHost::open`).
+The core role opens this machine's end of it in `hided/src/peer_host.rs`, and only when it is needed: at the daemon's start when a grant, or a host this machine is still a guest of, is saved (`peer_host::endpoint_wanted`), and otherwise at the moment the operator shares this machine, adds one or acts on a machine the records name (`PeerHost::open`).
+A machine whose every host dropped the pairing has nothing to dial and opens none at its start: its rows are read from the saved records (`PeerHost::recorded`, `Pairing::rested`).
 A machine that is paired with nothing binds no socket, attaches to no relay and asks macOS nothing about the local network; once open the endpoint stays open until the daemon ends, which closes it.
 Every stream a peer opens is handed to the one handler its kind's owner registered at the daemon's start (`PeerHost::handle`), each in a task of its own, and a stream of a kind no one handles is dropped, which closes it for the peer.
 `HIDE_PEER_DIRECT=<ip>:<port>` binds that one address with no relay and no local network search, for development and tests (`hided/src/env.rs`).
@@ -3207,7 +3208,9 @@ A machine holds 16 such connections at most and closes the next as `busy`; what 
 **Pairing.**
 `hide_peer::pairing::Pairings` is how two machines become a pair and stop being one, above any transport: the one link a host shares, the machines that wait for this machine's operator, the pairing this machine is joining, the request a guest sends to be let in the other way, and the confirm and the removal a guest keeps sending until its host answered.
 A link is `hide://pair#...` with the host's connection id, its device id, the addresses it can be dialed at and a one-time secret; it opens a pairing for 9 minutes and for one machine, and a second share replaces the first.
-Both screens show the same four words, read from a hash of the two keys and the secret in the word list the host named, and each operator has 2 minutes: the guest says the words match, the host allows, and anything else, a closed window included, leaves no grant that opens anything.
+Both screens show the same four words, read from a hash of the two keys and of one random value of each side in the word list the host named (`hide_peer::words`).
+Neither side picks its value knowing the other's: the guest's first message carries only a commitment to its value, the host answers with its own, and the guest then opens the commitment before the host's operator is asked, so a machine between the two cannot search for a value that makes the screens agree; the link's secret says only that the guest holds the link.
+Each operator has 2 minutes: the guest says the words match, the host allows, and anything else, a closed window included, leaves no grant that opens anything.
 A machine that is already a guest asks to be let in the other way over the connection the two have, which needs no words since both keys are proved, and the answer there is the same allow window; at most 8 machines wait for an operator at once, and one machine's confirms, removals and requests are each held to 6 a minute.
 The two directions are two records: pausing or removing one leaves the other and the connection as they were, and a guest that removes a host it cannot reach keeps the removal and sends it until the host answers.
 
@@ -3215,9 +3218,13 @@ The two directions are two records: pausing or removing one leaves the other and
 The core keeps them as a list of facts (`hide-core/src/peer_machines.rs`) and publishes them as `navigator.peers`: who opens whom, whether the two are connected and by which path, why not when the relay is unreachable or stopped for the month, and which side must update.
 A machine this one opens becomes a device of the core once its host confirmed the pairing: `Runtime::reconcile_peer_devices` (`hide-core/src/runtime/peer_devices.rs`) registers it under its own device id with `LinkOrigin::Peer { key }` when `opens` turns `active`, keeps it through a pause, and removes it with what Hide recorded for it when the pairing ends; an id another registration already holds is left to that registration, with a `peer_device.id_taken` diagnostic.
 One machine is one tile: the one place the web shell reads a rail tile's list (`openedMachines` in `web/src/pairing.ts`) leaves a machine that is a device to that device's tile, which leads to its screen, and gives a tile of its own only to one that is not a device yet.
+An ask names a paired machine by its connection id, its device id, its name or the start of its connection id; a device id is what a machine says of itself, so one that two paired machines share is refused as `device_ambiguous`, and a window always sends the row's connection id.
+The relay's reason is asked in a task of its own, at most once in 30 seconds, so neither the loop that publishes the machines nor an ask waits on the relay.
+A share a terminal holds (`hide device share`) ends 10 seconds after that terminal last asked for its status; the command keeps asking while its allow question waits for the operator, so only a terminal that went away ends it.
 An ask reaches the daemon from a window as a `pairing_<verb>` event and from `hide device` over the bootstrap socket, and both are answered by `Pairing::ask` with the caller it came from: sharing, adding, comparing, allowing, resuming, asking back, naming an address and pairing over SSH are the operator's alone, refused to a Hide pane (by what the kernel says of the caller, and by the command's own environment before it is sent) and to an external tool, and every ask is refused to a screen that is not this machine's own window, which hears the refusal alone.
 The pairings under way go to this machine's own windows as a `pairing` frame, sent when a window connects and when it changes, and the answer to a window's ask as a `pairing_result` frame to that window; neither is part of the snapshot, a relay connection is never sent either, and the link and the words are never logged.
-Reading opens nothing: only sharing, adding a machine and answering for an SSH pairing open the endpoint.
+A terminal outside Hide's panes reads the same pairings in the status `hide device` polls; a program in a pane reads the paired machines there and never the link or the words.
+Reading opens nothing: only sharing, adding a machine, answering for an SSH pairing and acting on a machine the records name open the endpoint.
 
 **Pairing over SSH.**
 A machine this one reaches over SSH and that already runs its own Hide is paired with no words, because whoever signs in to that account already holds its authority (`hided/src/pairing_ssh.rs`).

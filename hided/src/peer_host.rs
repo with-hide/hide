@@ -5,8 +5,9 @@
 //! A machine that is paired with nothing, and is neither sharing itself nor
 //! adding a machine, opens no endpoint: no socket, no relay, and on macOS no
 //! question about the local network. [`PeerHost::start`] opens it when a
-//! grant or a known host is saved, and [`PeerHost::open`] at the moment the
-//! operator shares this machine or adds one. Once open it stays open until
+//! grant or a host this machine is still a guest of is saved, and
+//! [`PeerHost::open`] at the moment the operator shares this machine, adds
+//! one or acts on a machine the records name. Once open it stays open until
 //! the daemon ends, which closes it.
 //!
 //! Each [`StreamKind`] has one owner, which hands in its handler
@@ -25,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hide_kit::layout;
 use hide_peer::peers::{Config, Peers};
 use hide_peer::protocol::{Candidate, StreamKind};
-use hide_peer::store::{Grants, Known};
+use hide_peer::store::{Grant, Grants, Host, Known, KnownState};
 use hide_peer::{Clock, MachineKey, PeerTransport};
 use hide_peer_iroh::{DEVICE_RELAY_URL, IrohConn, IrohTransport, Options};
 use serde_json::json;
@@ -96,16 +97,31 @@ fn now_unix_ms() -> u64 {
         .map_or(0, |since| since.as_millis() as u64)
 }
 
-/// Whether `state_dir` has a reason to open the endpoint at the daemon's
-/// start: a grant this machine gives that has not run out, a pending one
-/// included, since its guest confirms over the endpoint, or a host it is a
-/// guest of. It is not "a pairing is confirmed": what follows only a
-/// confirmed pairing asks that separately.
+/// Whether this machine's endpoint is wanted at the daemon's start:
+/// `state_dir` records a grant this machine gives that has not run out, or
+/// a host it is still a guest of. A host that dropped the pairing is no
+/// reason: nothing is dialed, and the row it leaves needs no socket, no
+/// relay and no question from the system.
 pub fn endpoint_wanted(state_dir: &Path) -> io::Result<bool> {
     let mut grants = Grants::open(layout::peer_grants(state_dir))?;
     grants.expire(now_unix_ms()).map_err(io::Error::other)?;
     let known = Known::open(layout::peer_known(state_dir))?;
-    Ok(grants.list(now_unix_ms()).next().is_some() || !known.list().is_empty())
+    Ok(grants.list(now_unix_ms()).next().is_some()
+        || known
+            .list()
+            .iter()
+            .any(|host| host.state != KnownState::Unpaired))
+}
+
+/// The pairings `state_dir` records, read from the files: the grants this
+/// machine gives that have not run out, and the hosts it is a guest of.
+fn recorded(state_dir: &Path) -> io::Result<(Vec<Grant>, Vec<Host>)> {
+    let grants = Grants::open(layout::peer_grants(state_dir))?;
+    let known = Known::open(layout::peer_known(state_dir))?;
+    Ok((
+        grants.list(now_unix_ms()).cloned().collect(),
+        known.list().to_vec(),
+    ))
 }
 
 impl PeerHost {
@@ -159,6 +175,15 @@ impl PeerHost {
             .get_or_try_init(|| self.open_endpoint())
             .await
             .cloned()
+    }
+
+    /// The pairings the state folder records, for the moments the endpoint
+    /// that owns them is not open: its grants and its hosts.
+    pub async fn recorded(&self) -> io::Result<(Vec<Grant>, Vec<Host>)> {
+        let state_dir = self.settings.state_dir.clone();
+        tokio::task::spawn_blocking(move || recorded(&state_dir))
+            .await
+            .map_err(io::Error::other)?
     }
 
     /// The open endpoint's connections; `None` while it is not open.
@@ -377,7 +402,7 @@ pub(crate) mod fixture {
 
 #[cfg(test)]
 mod tests {
-    use hide_peer::protocol::CloseCode;
+    use hide_peer::protocol::{CloseCode, PeerKey};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::fixture::*;
@@ -390,6 +415,40 @@ mod tests {
         assert!(machine.host.peers().is_none());
         assert!(machine.host.candidates().is_empty());
         assert!(!layout::peers(machine.dir.path()).exists());
+    }
+
+    /// Saves in `guest`'s state folder a host it is a guest of, in `state`.
+    fn known_host(guest: &Machine, state: KnownState) {
+        let mut known = Known::open(layout::peer_known(guest.dir.path())).unwrap();
+        known
+            .put(Host {
+                key: PeerKey::from_bytes([7; 32]),
+                device: "windows-pc".to_owned(),
+                name: "windows-pc".to_owned(),
+                grant: "grant".to_owned(),
+                state,
+                candidates: Vec::new(),
+            })
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_machine_whose_only_host_dropped_the_pairing_opens_no_endpoint_and_keeps_its_record()
+    {
+        let machine = Machine::new("macbook");
+        known_host(&machine, KnownState::Unpaired);
+        assert!(machine.host.start().await.unwrap().is_none());
+        assert!(machine.host.peers().is_none());
+        let (grants, hosts) = machine.host.recorded().await.unwrap();
+        assert!(grants.is_empty());
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].state, KnownState::Unpaired);
+
+        // A host it only paused is still its host: resuming needs the
+        // endpoint, so the start opens it.
+        let paused = Machine::new("macbook");
+        known_host(&paused, KnownState::PausedByMe);
+        assert!(endpoint_wanted(paused.dir.path()).unwrap());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -43,6 +43,7 @@ async fn a_guest_runs_nothing_until_both_sides_settled() {
         secret: "5e".repeat(32),
         device: "macbook".into(),
         name: "MacBook".into(),
+        commit: "c0".repeat(32),
     };
     write_message(&mut asking.send, &pair).await.unwrap();
 

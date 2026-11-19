@@ -647,7 +647,8 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 // Paired with something: dial every known host and go on
                 // with what was not settled.
                 Ok(Some(_)) => pairing.started().await,
-                Ok(None) => {}
+                // Nothing to dial: a machine a host dropped is still listed.
+                Ok(None) => pairing.rested().await,
                 Err(error) => hide_core::diagnostic!(serde_json::json!({
                     "component": "peer_host",
                     "kind": "peer_host.open_failed",

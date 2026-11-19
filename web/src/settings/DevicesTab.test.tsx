@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import type { Device, DeviceHost, Kit, KitComponent } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
@@ -47,7 +48,8 @@ async function mount(next: ReturnType<typeof state>) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState(next as never);
+    // This computer's own window: hided sent it the `pairing` frame.
+    useShellStore.setState({ pairing: NOTHING_UNDER_WAY, ...next } as never);
     root.render(<TooltipProvider><DevicesTab actions={actions} /></TooltipProvider>);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
@@ -209,6 +211,13 @@ it("opens Add device from one button above the list, and shows the Add dialog on
   expect(q("[data-add-device]")).toBeNull();
   await act(async () => { q("[data-device-add-open]")?.click(); });
   expect(document.body.querySelector("[data-add-device-dialog]")).not.toBeNull();
+  await unmount();
+});
+
+it("offers no Add device on a screen that is not this computer's own window (PRD device-connect-iroh B52)", async () => {
+  const { q, unmount } = await mount({ ...state([remote("mini")]), pairing: null } as never);
+  expect(q('[data-device-row="mini"]')).not.toBeNull();
+  expect(q("[data-device-add-open]")).toBeNull();
   await unmount();
 });
 

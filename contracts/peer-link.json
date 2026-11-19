@@ -339,6 +339,7 @@
         "fields": [
           "device",
           "name",
+          "nonce",
           "words"
         ],
         "since": 1
@@ -366,6 +367,7 @@
       },
       "pair": {
         "fields": [
+          "commit",
           "device",
           "name",
           "secret"
@@ -382,6 +384,12 @@
         "fields": [
           "device",
           "name"
+        ],
+        "since": 1
+      },
+      "reveal": {
+        "fields": [
+          "nonce"
         ],
         "since": 1
       }

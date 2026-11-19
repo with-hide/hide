@@ -60,13 +60,14 @@ it("asks hided for the Hosts once when it opens (B50)", async () => {
 });
 
 it("lists each Host with its address, and fills the name and adds only the alias and the name once one is chosen (B50)", async () => {
-  const { events, q, unmount } = await mount(hosts([host("studio"), host("lab")]));
+  const { events, q, answer, unmount } = await mount(hosts([host("studio"), host("lab")]));
   expect(q('[data-ssh-host="studio"]')?.textContent).toContain("fixture@studio.example.invalid:22");
   // No username, port or key input, and no alias input.
   expect(q("[data-device-alias]")).toBeNull();
   expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
   expect((q("[data-device-label]") as HTMLInputElement).value).toBe("lab");
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "absent" } });
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   const register = sent(events, "register_device");
   expect(register).toHaveLength(1);
@@ -80,7 +81,6 @@ it("connects to a Host whose own Hide runs, and installs nothing there (PRD devi
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
   // Choosing the Host is the one look: an ssh that asks nobody.
   expect(sent(events, "pairing_look_ssh").map((event) => event.payload.alias)).toEqual(["lab"]);
-  expect(q("[data-ssh-look]")).toBeNull();
   await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
   expect(q('[data-ssh-look="ready"]')?.textContent).toContain("Hide is already there · this only connects");
   // Nothing is installed, so there is no name to give and no install to agree to.
@@ -93,6 +93,27 @@ it("connects to a Host whose own Hide runs, and installs nothing there (PRD devi
   expect(q('[data-add-device="connect"]')?.hasAttribute("disabled")).toBe(true);
   await answer("pair_ssh", { ok: true, device_id: "lab-machine", name: "Lab" });
   expect(paired).toHaveBeenCalledTimes(1);
+  await unmount();
+});
+
+it("waits for the Host's own answer before it adds, so a machine that runs Hide is never added as a helper device meanwhile (B7)", async () => {
+  const { events, q, answer, unmount } = await mount(hosts([host("lab"), host("studio")]));
+  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  // Asked and not answered: the press does nothing yet, and the form says what it waits for.
+  expect(q('[data-ssh-look="looking"]')?.textContent).toBe("Checking for Hide there…");
+  expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device")).toHaveLength(0);
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "ready" } });
+  expect(q('[data-ssh-look="looking"]')).toBeNull();
+  expect(q('[data-add-device="connect"]')?.hasAttribute("disabled")).toBe(false);
+  // A look hided refused looked at nothing: the Host is added as before.
+  await act(async () => { q('[data-ssh-host="studio"] [role="radio"]')?.click(); });
+  expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
+  await answer("look_ssh", { ok: false, reason: "ssh_busy" });
+  expect(q("[data-ssh-look]")).toBeNull();
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device").map((event) => event.payload.ssh_alias)).toEqual(["studio"]);
   await unmount();
 });
 
@@ -115,7 +136,7 @@ it("says what to do on a machine whose Hide is too old or not running, and adds 
   expect(q('[data-ssh-look="update_there"]')?.textContent).toContain("Update Hide on that PC");
   // Another Host's answer is never this one's line.
   await act(async () => { q('[data-ssh-host="studio"] [role="radio"]')?.click(); });
-  expect(q("[data-ssh-look]")).toBeNull();
+  expect(q("[data-ssh-look]")?.dataset.sshLook).toBe("looking");
   await answer("look_ssh", { ok: true, alias: "studio", looked: { state: "not_running", system: "macos" } });
   expect(q('[data-ssh-look="not_running"]')?.textContent).toContain("Log in on that Mac");
   await act(async () => { q('[data-add-device="true"]')?.click(); });
@@ -136,8 +157,9 @@ it("leaves a Host with no Hide of its own, or one ssh did not reach, as it was",
 });
 
 it("waits for the device its alias added, under whatever id the core gives it", async () => {
-  const { q, rerender, unmount } = await mount(hosts([host("lab")]));
+  const { q, answer, rerender, unmount } = await mount(hosts([host("lab")]));
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "absent" } });
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   expect(q('[data-add-device="true"]')?.textContent).toBe("Adding…");
   // Its first connection names it by its machine's id, not by the alias.
@@ -201,8 +223,9 @@ it("keeps what Hide installs under Advanced, three lines long, and asks for no s
 // The core clears `last_error` at its next event of any kind, so a refusal that only lived there would
 // let the form read "no error yet" as "still pending" and lock itself again (code-web 3, `useRefusalSince`).
 it("keeps a refused Add enabled with its reason after the core clears last_error", async () => {
-  const { q, unmount } = await mount(hosts([host("lab")]));
+  const { q, answer, unmount } = await mount(hosts([host("lab")]));
   await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
+  await answer("look_ssh", { ok: true, alias: "lab", looked: { state: "absent" } });
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   // Sent and not answered: the form waits.
   expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
