@@ -106,6 +106,20 @@ impl PauseReason {
     pub fn asks(self) -> bool {
         self != Self::Operator
     }
+
+    /// The code a run that stopped for it ends with, and the one the CLI
+    /// and a refusal name it by.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Operator => "automation_paused",
+            Self::LoginExpired => "automation_login_expired",
+            Self::FolderMissing => "automation_folder_missing",
+            Self::AgentMissing => "automation_agent_missing",
+            Self::FolderDetached => "automation_folder_detached",
+            Self::MachineChanged => MACHINE_CHANGED,
+            Self::FolderInRepository => "automation_folder_in_repository",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

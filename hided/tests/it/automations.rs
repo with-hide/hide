@@ -1,10 +1,8 @@
-//! The daemon's idle exit beside automations (PRD automations B32): an
-//! automation that is on keeps a daemon with no screen and no pane past its
-//! idle window, so its time comes on time; once none is on, the daemon ends
-//! after the window as before.
-// A daemon starts only where it can listen for panes locally, which Windows
-// cannot yet (#315).
-#![cfg(unix)]
+//! Automations through the daemon, on every system: the idle exit beside
+//! them (PRD automations B32), where an automation that is on keeps a daemon
+//! with no screen and no pane past its idle window and, once none is on, the
+//! daemon ends after the window as before; and `hide automation` (B9, B10),
+//! the built binary's commands against the daemon and its screen section.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -162,4 +160,261 @@ async fn an_automation_that_is_on_keeps_an_idle_daemon_until_none_is_on() {
         );
         tokio::time::sleep(Duration::from_millis(200)).await; // wait-ok: the daemon has ended and closed its port
     }
+}
+
+/// `hide automation …` run as an approved tool, which the operator gave
+/// Act: the `hide` binary itself against this daemon, with no pane.
+async fn acting_tool(
+    root: &Path,
+    window: &mut crate::access::Window,
+    name: &str,
+    level: &str,
+) -> crate::access::Tool {
+    let tool = crate::access::Tool::new(root, &format!("{name}-home"));
+    let id = tool.put_up(name);
+    window
+        .send("access_approve", json!({"id": id, "level": level}))
+        .await;
+    let connected = tool.request_until_answered(name).await;
+    assert!(connected.ok, "{}", connected.out);
+    tool
+}
+
+/// A refusal with `code`, and the sentence it gives, which names what to
+/// change.
+fn refused(ran: &crate::access::Ran, code: &str) -> String {
+    assert!(!ran.ok, "{code} expected, the command ran: {}", ran.out);
+    let line = ran.json();
+    assert_eq!(line["error"]["code"], code, "{}", ran.out);
+    line["error"]["message"].as_str().unwrap().to_owned()
+}
+
+fn wall_clock_at(value: &Value, time: &str) -> bool {
+    value
+        .as_str()
+        .is_some_and(|at| at.len() == "2026-11-20 09:00".len() && at.ends_with(&format!(" {time}")))
+}
+
+/// PRD automations c1 (B9, B10): the CLI makes, reads, changes, pauses,
+/// resumes and removes an automation through the core, answers what its
+/// schedule reads as and when it runs next, the screen's section shows it
+/// at once, and a period under an hour or a cron line that is none is
+/// refused with why and what to do.
+// The daemon runs on this test's runtime while the tool's `hide` blocks a
+// thread of it, so it needs threads of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = daemon_env(dir.path());
+    env.keep_alive = true;
+    env.idle_secs = 600;
+    // A plain-folder project Hide has open, by its real path.
+    let project = hide_platform::fs::identity::canonical(&env.home)
+        .unwrap()
+        .join("projects")
+        .join("issues");
+    std::fs::create_dir_all(project.join("notes")).unwrap();
+    let project_wire = hide_platform::path::to_wire(&project).unwrap();
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "workspace_registrations": [{"id": "w-issues", "label": "issues", "path": project_wire}],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let running = hided::start_daemon(env).await.unwrap();
+    let mut settings = crate::access::Window::open(&running).await;
+    let tool = acting_tool(dir.path(), &mut settings, "scheduler", "act").await;
+    let mut screen = window(&running).await;
+
+    let made = tool.run(&[
+        "automation",
+        "add",
+        "--name",
+        "Morning issues",
+        "--task",
+        "Sort the new issues\nand label them",
+        "--schedule",
+        "weekdays 09:00",
+        "--kind",
+        "claude",
+        "--effort",
+        "high",
+    ]);
+    assert!(made.ok, "{}", made.out);
+    let automation = &made.json()["value"]["automation"];
+    assert_eq!(automation["name"], "Morning issues");
+    assert_eq!(automation["task"], "Sort the new issues\nand label them");
+    assert_eq!(automation["reads_as_text"], "weekdays at 09:00");
+    assert!(
+        wall_clock_at(&automation["next_run_at"], "09:00"),
+        "{automation}"
+    );
+    assert_eq!(
+        automation["agent"],
+        json!({"kind": "claude", "effort": "high"})
+    );
+    // No folder named: the automation's own, under the home's hide folder.
+    assert_eq!(automation["folder"]["default"], true);
+    assert!(
+        automation["folder"]["path"]
+            .as_str()
+            .unwrap()
+            .contains("hide/automations/Morning-issues-"),
+        "{automation}"
+    );
+    let id = automation["id"].as_str().unwrap().to_owned();
+    // The screen's section lists it at once (B9).
+    listed(&mut screen, &["Morning issues"]).await;
+
+    // What may not run is refused with why (B7, B10).
+    let draft = |schedule: &str, name: &str| {
+        tool.run(&[
+            "automation",
+            "add",
+            "--name",
+            name,
+            "--task",
+            "Check the stale pull requests",
+            "--schedule",
+            schedule,
+            "--kind",
+            "codex",
+        ])
+    };
+    let too_often = refused(
+        &draft("cron */4 * * * *", "Every four minutes"),
+        "schedule_too_often",
+    );
+    assert!(
+        too_often.contains("at most every five minutes"),
+        "{too_often}"
+    );
+    refused(
+        &draft("cron 0 9 * *", "Four fields"),
+        "schedule_cron_invalid",
+    );
+    refused(&draft("cron 0 9 30 2 *", "February"), "schedule_never");
+    refused(
+        &draft("every 13h 09:00", "Too far apart"),
+        "schedule_hours_out_of_range",
+    );
+    refused(&draft("every morning", "Words"), "schedule_unreadable");
+    refused(&draft("daily 9am", "Morning"), "schedule_time_invalid");
+    refused(
+        &draft("weekdays 09:00", "Morning issues"),
+        "automation_name_taken",
+    );
+    // A project's root folder is the project's; a folder inside it is not
+    // one Hide has open (B5).
+    let inside = project.join("notes");
+    refused(
+        &tool.run(&[
+            "automation",
+            "add",
+            "--name",
+            "Notes",
+            "--task",
+            "Tidy the notes",
+            "--schedule",
+            "daily 08:00",
+            "--kind",
+            "claude",
+            "--folder",
+            inside.to_str().unwrap(),
+        ]),
+        "automation_folder_unknown",
+    );
+    let in_project = tool.run(&[
+        "automation",
+        "add",
+        "--name",
+        "Project notes",
+        "--task",
+        "Tidy the notes",
+        "--schedule",
+        "daily 08:00",
+        "--kind",
+        "claude",
+        "--folder",
+        project.to_str().unwrap(),
+    ]);
+    assert!(in_project.ok, "{}", in_project.out);
+    let folder = &in_project.json()["value"]["automation"]["folder"];
+    assert_eq!(folder["default"], false, "{folder}");
+    assert_eq!(folder["path"], project_wire.as_str(), "{folder}");
+    assert!(tool.run(&["automation", "remove", "Project notes"]).ok);
+    let preview = tool.run(&["automation", "preview", "--schedule", "cron 0 9 * * 1-5"]);
+    assert!(preview.ok, "{}", preview.out);
+    // A cron line equal to a choice reads as that choice (B6).
+    assert_eq!(
+        preview.json()["value"]["reads_as_text"],
+        "weekdays at 09:00"
+    );
+
+    // Read by its name or its id.
+    let shown = tool.run(&["automation", "show", "Morning issues"]);
+    assert!(shown.ok, "{}", shown.out);
+    assert_eq!(shown.json()["value"]["automation"]["id"], id.as_str());
+    let list = tool.run(&["automation", "list"]).json();
+    assert_eq!(list["value"]["items"][0]["id"], id.as_str());
+    assert!(list["value"]["items"][0].get("records").is_none());
+
+    // Changed from the next run on (B26).
+    let edited = tool.run(&[
+        "automation",
+        "edit",
+        &id,
+        "--schedule",
+        "weekly mon,thu 18:30",
+        "--name",
+        "Issue sweep",
+    ]);
+    assert!(edited.ok, "{}", edited.out);
+    let automation = &edited.json()["value"]["automation"];
+    assert_eq!(automation["reads_as_text"], "every mon, thu at 18:30");
+    assert!(
+        wall_clock_at(&automation["next_run_at"], "18:30"),
+        "{automation}"
+    );
+    listed(&mut screen, &["Issue sweep"]).await;
+
+    // Paused, it has no next time; on again, it has one (B25).
+    let paused = tool.run(&["automation", "pause", "Issue sweep"]).json();
+    assert_eq!(
+        paused["value"]["automation"]["paused"]["reason"],
+        "operator"
+    );
+    assert!(paused["value"]["automation"]["next_run_at"].is_null());
+    let resumed = tool.run(&["automation", "resume", &id]).json();
+    assert!(resumed["value"]["automation"]["paused"].is_null());
+    assert!(wall_clock_at(
+        &resumed["value"]["automation"]["next_run_at"],
+        "18:30"
+    ));
+
+    // At View only, the reads run and a change is refused.
+    let viewer = acting_tool(dir.path(), &mut settings, "watcher", "view").await;
+    assert!(viewer.run(&["automation", "list"]).ok);
+    let change = viewer.run(&["automation", "pause", &id]);
+    assert!(
+        !change.ok && change.out.contains("access_view_only"),
+        "{}",
+        change.out
+    );
+
+    let removed = tool.run(&["automation", "remove", "Issue sweep"]);
+    assert!(removed.ok, "{}", removed.out);
+    assert_eq!(removed.json()["value"]["removed"]["name"], "Issue sweep");
+    listed(&mut screen, &[]).await;
+    refused(
+        &tool.run(&["automation", "show", &id]),
+        "automation_unknown",
+    );
+    running.stop();
 }

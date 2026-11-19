@@ -4,6 +4,7 @@ pub mod agent_cli;
 pub mod agent_exec;
 pub mod attach;
 pub mod attachments;
+pub mod automation_cli;
 pub mod backoff;
 pub mod boundary;
 mod browser_assets;

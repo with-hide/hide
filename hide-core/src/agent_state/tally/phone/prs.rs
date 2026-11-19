@@ -433,7 +433,9 @@ fn workspaces(rest: &Value) -> impl Iterator<Item = &Value> {
         .flatten()
         .filter_map(|status| status.pointer("/session/workspaces")?.as_array())
         .flatten();
-    local.chain(remote)
+    local
+        .chain(remote)
+        .filter(|workspace| super::listed_project(workspace))
 }
 
 fn read<T: for<'de> Deserialize<'de>>(value: &Value, kind: &str) -> Option<T> {

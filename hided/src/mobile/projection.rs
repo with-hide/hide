@@ -5,7 +5,7 @@
 //! nothing else of the snapshot.
 
 pub use hide_core::agent_state::phone::{
-    AgentKey, PhoneAgent, PhoneMissions, PhonePrs, Projection, project,
+    AgentKey, PhoneAgent, PhoneAutomations, PhoneMissions, PhonePrs, Projection, project,
 };
 use serde_json::Value;
 
