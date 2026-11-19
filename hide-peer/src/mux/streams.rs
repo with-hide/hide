@@ -915,12 +915,17 @@ mod tests {
 
     /// A carrier's writing direction that hands each frame to the test, one
     /// at a time: the connection's writer waits in it until the test takes
-    /// the frame.
-    struct Handed(std::sync::mpsc::SyncSender<Vec<u8>>);
+    /// the frame, and `offered` counts the frames it has brought.
+    struct Handed {
+        frames: std::sync::mpsc::SyncSender<Vec<u8>>,
+        offered: Arc<std::sync::atomic::AtomicUsize>,
+    }
 
     impl std::io::Write for Handed {
         fn write(&mut self, frame: &[u8]) -> io::Result<usize> {
-            self.0
+            self.offered
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.frames
                 .send(frame.to_vec())
                 .map(|()| frame.len())
                 .map_err(|_| io::ErrorKind::BrokenPipe.into())
@@ -937,9 +942,14 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_larger_priority_is_written_first() {
         let (silent, _other_end) = LocalStream::pair().unwrap();
-        let (handed, taken) = std::sync::mpsc::sync_channel(0);
+        let (frames, taken) = std::sync::mpsc::sync_channel(0);
+        let offered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handed = Handed {
+            frames,
+            offered: Arc::clone(&offered),
+        };
         let end = silent.shutdown_handle();
-        let carrier = Carrier::new(silent, Handed(handed), move || end.shutdown());
+        let carrier = Carrier::new(silent, handed, move || end.shutdown());
         let (dialer, _accepts) = Pipe::start(carrier, true).unwrap();
         let next = move || {
             let frame: Vec<u8> = taken.recv_timeout(WITHIN).expect("the next frame");
@@ -952,7 +962,9 @@ mod tests {
         assert_eq!(next(), (PEER_OPEN, 1));
         assert_eq!(next(), (PEER_OPEN, 3));
         // The flood spends its whole credit: one frame in the writer's
-        // hands, the rest waiting behind it.
+        // hands, its fourth after the hello and the two opens, and the rest
+        // waiting behind it. The key is written only then: a writer that
+        // had not yet taken a flood frame would take the key first.
         let flooding = tokio::spawn(async move {
             let chunk = vec![1_u8; MAX_CHUNK];
             while bulk.write_all(&chunk).await.is_ok() {}
@@ -963,6 +975,10 @@ mod tests {
                 .get(&priority)
                 .map_or(0, |class| class.waiting.len())
         };
+        until("the writer to hold a flood frame", || {
+            offered.load(std::sync::atomic::Ordering::Acquire) == 4
+        })
+        .await;
         until("the flood to wait", || waiting(-100) == WINDOW - 1).await;
         keys.write_all(b"k").await.unwrap();
         until("the key to wait", || waiting(100) == 1).await;
