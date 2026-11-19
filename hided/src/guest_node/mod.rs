@@ -79,6 +79,34 @@ fn exit(code: i32, kind: &str, message: String) -> ! {
     std::process::exit(code)
 }
 
+/// What the node does about a pane whose holder died without saying why.
+/// Its own next start ends that pane's record as lost and wakes its agent
+/// (`Holders::recover`), so the node ends with [`launch::EXIT_RESTART`] and
+/// its host starts it again, every other pane staying in its holder. It
+/// ends so at most once in [`launch::HOLDER_LOST_RESTART_SECS`], counted in
+/// its own folder across its starts; a pane lost sooner stays unreachable
+/// until the next start, and the host's daemon never restarts for it.
+fn restart_for_lost_holder(dir: PathBuf) -> Arc<dyn Fn(&str) + Send + Sync> {
+    use crate::holder_restart::{Asked, request};
+    Arc::new(
+        move |pane| match request(&dir, std::time::SystemTime::now(), &|| Ok(())) {
+            Ok(Asked::Requested) => exit(
+                launch::EXIT_RESTART,
+                "guest_node.restart_for_lost_holder",
+                format!("the holder of {pane} was lost"),
+            ),
+            Ok(Asked::Waiting) => record(
+                "guest_node.holder_lost",
+                json!({"pane": pane, "outcome": "already_asked"}),
+            ),
+            Err(error) => record(
+                "guest_node.holder_lost",
+                json!({"pane": pane, "outcome": format!("failed: {error}")}),
+            ),
+        },
+    )
+}
+
 /// Writes the host one line. A host that cannot be written to hears
 /// nothing more of this node, so the node ends.
 fn say(line: &impl serde::Serialize) {
@@ -207,6 +235,9 @@ pub fn run(dir: &str) -> ! {
             message,
         )
     });
+    // A holder that died without saying why is settled by a start of this
+    // node, which it asks its host for by ending (D-77 (6)).
+    terminals.on_holder_lost(restart_for_lost_holder(dir.clone()));
     let slot = PaneSlot::holding(holders);
     let owned = slot.own(OWN_WITHIN).unwrap_or_else(|error| {
         exit(

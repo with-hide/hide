@@ -612,6 +612,15 @@ impl NodeTerminals {
         lock(&self.holders).clone()
     }
 
+    /// Calls `tell` with a pane whose holder died without saying why
+    /// (`Holders::on_holder_lost`); nothing before the node started its
+    /// holders. What the node does about it is the caller's.
+    pub fn on_holder_lost(&self, tell: Arc<dyn Fn(&str) + Send + Sync>) {
+        if let Some(holders) = lock(&self.local).as_ref() {
+            holders.on_holder_lost(tell);
+        }
+    }
+
     /// This node's panes that may still run, as its holders' records say;
     /// none before it started its holders.
     pub fn live_panes(&self) -> Result<Vec<String>, String> {

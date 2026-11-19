@@ -3290,7 +3290,7 @@ Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more
 
 | What | Cap | At the cap | Named in |
 | --- | --- | --- | --- |
-| Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 8 | the next guest's node is not started and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::start_within_the_cap` |
+| Guests at work on one host, a guest being at work while its node runs or a pane of it is left | 4 | the next guest's node is not started and the guest is told `host_full`, which its device shows as a reason; a guest already at work is never refused its own node | `launch::MAX_GUEST_NODES`, `Guests::start_within_the_cap` |
 | Guests a host keeps a place for | 32 | those with no node and no pane are dropped, and past that a guest is refused | `hide_peer::limits::MAX_GRANTS`, `Guests::node_for` |
 | Panes of one guest, each in one holder | 256 | the node starts no holder past it, and the host lists none | `hide_kit::panes::HOLDER_CAP`, `hide_core::guest_panes::MAX_PANES` |
 | Streams on one connection | 72, with a cap for each kind | a stream past it is refused | `hide_peer::limits::MAX_STREAMS` |
@@ -3298,13 +3298,15 @@ Memory and CPU are not promised: a guest's node took about 40 MB and 0.5 MB more
 | Letters a node keeps while its core is away | 4,096 events and 8 MiB | the sender is refused `outbox_full`; nothing is dropped | `event::BOX_MAX_EVENTS`, `event::BOX_MAX_BYTES` |
 | Events a node hands the host before the guest's stream takes them | 64 | the node's output is left unread, which holds its next event in its box | `guests/node.rs`, `EVENTS_WAITING` |
 | Crashes of a node the host starts again | 5 in 600 s | the node is left stopped and the guest's device shows the reason with a retry | `launch::CRASHES`, `launch::CRASH_WINDOW_SECS` |
-| Restarts of a node's own service for a lost holder | 1 in 600 s | the host never restarts for it | `launch::HOLDER_LOST_RESTART_SECS` |
+| Starts of a node for a holder it lost | 1 in 600 s | a pane lost sooner stays unreachable until the node's next start; the host's own daemon never restarts for it | `launch::HOLDER_LOST_RESTART_SECS`, `launch::EXIT_RESTART` |
 | Builds of one guest a host keeps | 2 | the oldest goes when a node says it is ready | `launch::BUILDS_KEPT` |
 
 The first row is set by the hook entries.
-A guest at work adds one helper start to every agent event on the host's account, and eight guests are to add no more than a quarter of a second to one event on the slowest system Hide supports.
-On a Mac a start took about 5 ms in a release build.
-The `windows check` lane prints what it takes there on every run (`windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each`), started as Claude Code starts a hook, with no shell, and as Codex does, through PowerShell, beside what PowerShell alone takes.
+A guest at work adds one start of its helper to every agent event on the host's account, and the guests together are to add no more than a second to one event on the slowest system Hide supports, for an agent that runs its hooks one after another.
+That system is Windows, where an entry runs in PowerShell: on a GitHub Windows runner (2026-11-19, a debug build, two runs of ten starts each) a guest's entry took 225 to 290 ms at the median started as Claude Code starts it and 145 to 157 ms as Codex does, of which PowerShell alone took 140 ms, and the first start of a new helper file 2.9 s.
+Four guests therefore add about one second there at the most, and one start's time for an agent that runs its hooks at once.
+On a Mac a start took about 5 ms in a release build, so four guests add about 20 ms.
+The `windows check` lane prints the figures on every run (`windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each`), beside what PowerShell alone takes.
 
 ### A guest taken off the host
 
@@ -3317,6 +3319,10 @@ The two words come on two threads and are applied one at a time, and the grant l
 Once a guest that was taken off has no pane and its node has stopped, its place among the guests, the screens' way to its panes and its whole `g/<key>` folder are removed; a folder of a guest with no grant that nothing was started from since the daemon's start is removed in the same sweep.
 A guest that is paired again before that has its mark cleared and its node started again, since the one that was running takes no new link.
 Of a guest's builds the host keeps the one that runs and the one before it; the rest are removed when a node says it is ready.
+
+A holder of a guest's pane that dies without saying why is settled by that guest's node alone (PRD D-77 (6)).
+A node's start ends such a pane's record as lost and wakes its agent, as a daemon's start does for its own panes, so the node ends itself with exit code 71 and the host starts it again at once, every other pane staying in its holder (`guest_node::restart_for_lost_holder`, `guests::node::follows`).
+The node asks so at most once in 600 s, counted in its own folder across its starts, and the host counts each such end with the node's crashes, so a build that asks at every start is left stopped like one that crashes.
 
 ### A guest node's events while its core is away
 

@@ -145,6 +145,7 @@
         "folder_held": 75,
         "folder_refused": 73,
         "host_unreachable": 70,
+        "restart": 71,
         "unknown_word": 64
       },
       "from_node": [
@@ -158,7 +159,7 @@
         "end_now_waits_secs": 5,
         "folder_held_retries": 10,
         "folder_held_retry_secs": 1,
-        "guest_nodes": 8,
+        "guest_nodes": 4,
         "holder_lost_restart_secs": 600,
         "idle_end_secs": 60
       },

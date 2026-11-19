@@ -484,6 +484,7 @@ pub fn shape() -> Value {
                     "host_unreachable": launch::EXIT_HOST_UNREACHABLE,
                     "folder_refused": launch::EXIT_FOLDER_REFUSED,
                     "folder_held": launch::EXIT_FOLDER_HELD,
+                    "restart": launch::EXIT_RESTART,
                 },
                 "limits": {
                     "guest_nodes": launch::MAX_GUEST_NODES,

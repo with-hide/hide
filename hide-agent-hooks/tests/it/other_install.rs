@@ -6,8 +6,8 @@
 //! Hide alike, the entry says nothing and writes nothing, so what it costs
 //! is one start of the helper, the way that agent starts a hook.
 //!
-//! The cost is printed and never asserted. How many guests' nodes a host
-//! runs at once (`hide_peer_protocol::launch::MAX_GUEST_NODES`) was set from
+//! The cost is printed and never asserted. How many guests a host has at
+//! work at once (`hide_peer_protocol::launch::MAX_GUEST_NODES`) was set from
 //! what the Windows lane printed here, and a runner's speed on one day is no
 //! test's subject (`docs/TESTING.md`).
 
@@ -64,11 +64,8 @@ impl Account {
     pub(crate) fn with_a_guests_entries() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().canonicalize().unwrap().join("home");
-        let root = home
-            .join("state")
-            .join("g")
-            .join("0123456789abcdef")
-            .join("i");
+        let state = hide_agent_hooks::state_folder::default_state_dir(&home);
+        let root = state.join("g").join("0123456789abcdef").join("i");
         let helper = root.join("current").join(HELPER_BINARY_NAME);
         std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
         #[cfg(unix)]
@@ -76,7 +73,6 @@ impl Account {
         #[cfg(windows)]
         std::fs::copy(crate::programs::hook(), &helper).unwrap();
         let install = route::install_of_guest_root(&root);
-        let state = hide_agent_hooks::state_folder::default_state_dir(&home);
         for runtime in AgentRuntime::ALL {
             std::fs::create_dir_all(runtime.home_directory(&home)).unwrap();
             let target = HookTarget::new(&helper, &state)
@@ -97,7 +93,10 @@ impl Account {
         entry
     }
 
-    /// Every file under the account's home.
+    /// Every file Hide keeps on the account and every file of its agents'
+    /// folders: where a helper that went on would write. A shell an agent
+    /// starts the entry in keeps files of its own under the home
+    /// (PowerShell 7's start profile), which are not the entry's.
     fn files(&self) -> BTreeSet<PathBuf> {
         fn walk(folder: &Path, found: &mut BTreeSet<PathBuf>) {
             for entry in std::fs::read_dir(folder).unwrap() {
@@ -109,8 +108,12 @@ impl Account {
                 }
             }
         }
+        let state = hide_agent_hooks::state_folder::default_state_dir(&self.home);
         let mut found = BTreeSet::new();
-        walk(&self.home, &mut found);
+        walk(state.parent().unwrap(), &mut found);
+        for runtime in AgentRuntime::ALL {
+            walk(&runtime.home_directory(&self.home), &mut found);
+        }
         found
     }
 
