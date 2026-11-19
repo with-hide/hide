@@ -72,9 +72,7 @@ impl Runtime {
                 .map_or(Place::Shelf, Place::Tray),
             Caller::Pane(pane) if self.pane_opener(pane).is_ok() => Place::Shelf,
             Caller::Pane(_) => self.front_place(key),
-            Caller::Checkout { .. } | Caller::Access { .. } | Caller::Desk => {
-                self.front_place(key)
-            }
+            Caller::Checkout { .. } | Caller::Access { .. } | Caller::Desk => self.front_place(key),
         }
     }
 

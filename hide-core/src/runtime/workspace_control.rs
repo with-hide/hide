@@ -2,11 +2,11 @@
 
 use super::Runtime;
 use crate::view_layout::DisplayKind;
-use crate::workspace_views::Place;
 use crate::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, ActionSource, BrowserRouteSource,
     Caller, Context, Query, QueryResult, Refusal, View,
 };
+use crate::workspace_views::Place;
 
 const ACTION_RESULTS_KEPT: usize = 128;
 const ACTION_RETRY_WINDOW_MS: u64 = 10 * 60 * 1000;
@@ -82,7 +82,9 @@ impl Runtime {
     ) -> Result<(), Refusal> {
         if let Some(area_id) = area_id {
             let known = self.area_place(key, area_id).is_some()
-                || crate::view_layout::Layout::default().area(area_id).is_some();
+                || crate::view_layout::Layout::default()
+                    .area(area_id)
+                    .is_some();
             if !known {
                 return Err(layout_refusal(
                     crate::view_layout::LayoutError::UnknownArea(area_id.to_owned()),
@@ -521,8 +523,7 @@ impl Runtime {
             let existing = (!*new_target)
                 .then(|| {
                     self.claim_existing_view(key, place, |display| {
-                        display.kind == DisplayKind::Browser
-                            && display.url.as_deref() == Some(url)
+                        display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
                     })
                 })
                 .flatten()
@@ -771,7 +772,11 @@ impl Runtime {
                 {
                     self.mark_view_unseen(key, view_id);
                 }
-                (view_id.clone(), moved || selected, self.view_area(key, view_id))
+                (
+                    view_id.clone(),
+                    moved || selected,
+                    self.view_area(key, view_id),
+                )
             }
             Action::Split {
                 view_id,
@@ -919,7 +924,9 @@ impl Runtime {
             .views
             .get(&key.0, &key.1)?
             .layouts()
-            .find(|(place, layout)| matches!(place, Place::Tray(_)) && layout.area(area_id).is_some())
+            .find(|(place, layout)| {
+                matches!(place, Place::Tray(_)) && layout.area(area_id).is_some()
+            })
             .map(|(place, _)| place)
     }
 
@@ -929,9 +936,7 @@ impl Runtime {
         self.workspace_views
             .as_ref()
             .and_then(|store| store.views.get(&key.0, &key.1))
-            .is_some_and(|view| {
-                view.open || view.tray(tab).is_some_and(|tray| tray.pair.is_some())
-            })
+            .is_some_and(|view| view.open || view.tray(tab).is_some_and(|tray| tray.pair.is_some()))
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of
@@ -1069,7 +1074,10 @@ impl Runtime {
                 .iter()
                 .flat_map(|(place, layout)| {
                     let in_front = *place == front;
-                    layout.areas().into_iter().map(move |area| (in_front, layout, area))
+                    layout
+                        .areas()
+                        .into_iter()
+                        .map(move |area| (in_front, layout, area))
                 })
                 .flat_map(|(in_front, layout, area)| {
                     area.displays.iter().map(move |display| View {

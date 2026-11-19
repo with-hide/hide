@@ -26,8 +26,8 @@ use super::workspace_view::WorkspaceKey;
 use super::*;
 use crate::delivery::ledger::{Ledger, State as LetterState};
 use crate::model::{
-    OpenedViewSnapshot, ViewCommentSnapshot, ViewFeedbackGroupSnapshot, ViewFeedbackSendReason,
-    ViewDisplaySnapshot, ViewFeedbackSendSnapshot, ViewFeedbackSendState, ViewFeedbackSnapshot,
+    OpenedViewSnapshot, ViewCommentSnapshot, ViewDisplaySnapshot, ViewFeedbackGroupSnapshot,
+    ViewFeedbackSendReason, ViewFeedbackSendSnapshot, ViewFeedbackSendState, ViewFeedbackSnapshot,
     ViewOpenerSnapshot,
 };
 use crate::node_access::{LinkError, NodeLink, call_as};
@@ -2162,7 +2162,8 @@ mod tests {
     fn opened_view_at(runtime: &mut Runtime, path: &str) -> String {
         let key = key();
         let place = runtime.front_place(&key);
-        let view = runtime.change_view_layout(&key, &place, |layout, stamp| {
+        let view = runtime
+            .change_view_layout(&key, &place, |layout, stamp| {
                 let display = layout.new_display(path, DisplayKind::File, None, false);
                 let id = display.id.clone();
                 let area = layout.active_area().id.clone();
@@ -2307,7 +2308,8 @@ mod tests {
         let mut guard = runtime.lock().unwrap();
         let opener = guard.opener_of_pane("recipient");
         let place = guard.front_place(&key());
-        let page = guard.change_view_layout(&key(), &place, |layout, stamp| {
+        let page = guard
+            .change_view_layout(&key(), &place, |layout, stamp| {
                 let mut display = layout.new_browser_display("http://localhost:5173/", 1);
                 display.opener = opener;
                 let id = display.id.clone();

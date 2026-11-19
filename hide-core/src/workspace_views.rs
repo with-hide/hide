@@ -580,7 +580,9 @@ impl WorkspaceView {
     }
 
     pub fn view_mut(&mut self, id: &str) -> Option<&mut crate::view_layout::Display> {
-        self.views_mut().into_iter().find(|display| display.id == id)
+        self.views_mut()
+            .into_iter()
+            .find(|display| display.id == id)
     }
 
     /// Where the View `id` sits.
@@ -1092,7 +1094,10 @@ fn settle(
         let before = view.trays.len();
         view.trays.retain(|tray| tabs.insert(tray.tab.clone()));
         if view.trays.len() != before {
-            notes.push(format!("{} trays named a tab twice", before - view.trays.len()));
+            notes.push(format!(
+                "{} trays named a tab twice",
+                before - view.trays.len()
+            ));
         }
         // No build writes an outside file's tab; one in the file has no grant
         // behind it.
@@ -1210,7 +1215,9 @@ impl WorkspaceView {
         if renamed == 0 {
             Vec::new()
         } else {
-            vec![format!("{renamed} ids repeated across trays and were renumbered")]
+            vec![format!(
+                "{renamed} ids repeated across trays and were renumbered"
+            )]
         }
     }
 }
@@ -1428,7 +1435,10 @@ mod tests {
         assert_eq!(root_split.ratio, 0.7);
         let paired = view.tray("w1:t2").unwrap();
         assert_eq!(paired.pair.as_ref().unwrap().pane, "w1:p3");
-        assert_eq!(paired.layout.displays().next().unwrap().kind, DisplayKind::Card);
+        assert_eq!(
+            paired.layout.displays().next().unwrap().kind,
+            DisplayKind::Card
+        );
         assert_eq!(view.shelf.display_count(), 1);
         let ids: Vec<&str> = view.views().map(|display| display.id.as_str()).collect();
         let mut unique = ids.clone();
@@ -1587,7 +1597,10 @@ mod tests {
             else {
                 panic!("expected a preserved unreadable file, got {outcome:?}");
             };
-            assert!(!path.exists(), "the original path is free for the next save");
+            assert!(
+                !path.exists(),
+                "the original path is free for the next save"
+            );
             assert_eq!(fs::read(&preserved).unwrap(), body);
         }
     }
@@ -1749,7 +1762,12 @@ mod tests {
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("\"schema_version\": 6"));
-        for retired in ["\"pinned\"", "\"documents\"", "detail_width", "\"view_layout\""] {
+        for retired in [
+            "\"pinned\"",
+            "\"documents\"",
+            "detail_width",
+            "\"view_layout\"",
+        ] {
             assert!(!written.contains(retired), "{retired} is not written again");
         }
         let (again, outcome) = load(&path, 2);
@@ -1855,14 +1873,20 @@ mod tests {
         assert_eq!(lane(memory), (true, true, Some(Tool::Memory)));
         assert_eq!(memory.panel_width, Some(420));
         assert_eq!(memory.view_count(), 1);
-        assert_eq!(lane(loaded.get("local", "/prs").unwrap()), (true, false, None));
+        assert_eq!(
+            lane(loaded.get("local", "/prs").unwrap()),
+            (true, false, None)
+        );
         let explorer = loaded.get("local", "/explorer").unwrap();
         assert_eq!(lane(explorer), (true, false, Some(Tool::Explorer)));
         assert_eq!(explorer.explorer_width, Some(250));
 
         save(&path, &loaded).unwrap();
         let written = fs::read_to_string(&path).unwrap();
-        assert!(!written.contains("\"prs\""), "the PRs scope is not written again");
+        assert!(
+            !written.contains("\"prs\""),
+            "the PRs scope is not written again"
+        );
         assert!(written.contains("\"tool\": \"memory\""));
         assert_eq!(load(&path, 2).1, current());
     }
@@ -1891,7 +1915,10 @@ mod tests {
         let docs = loaded.get("local", "/docs").unwrap();
         assert_eq!(lane(docs), (true, true, None));
         assert_eq!(docs.view_count(), 1);
-        assert_eq!(lane(loaded.get("local", "/alone").unwrap()), (true, false, None));
+        assert_eq!(
+            lane(loaded.get("local", "/alone").unwrap()),
+            (true, false, None)
+        );
 
         save(&path, &loaded).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("\"mission\""));
@@ -1985,7 +2012,12 @@ mod tests {
         let LoadOutcome::Loaded { repairs, .. } = outcome else {
             panic!("loads, got {outcome:?}");
         };
-        assert!(repairs.iter().any(|note| note.contains("named a tab twice")), "{repairs:?}");
+        assert!(
+            repairs
+                .iter()
+                .any(|note| note.contains("named a tab twice")),
+            "{repairs:?}"
+        );
         let view = loaded.get("local", "/repo").unwrap();
         assert_eq!(view.trays.len(), 2);
         assert_eq!(view.shelf.display_count(), 0, "a card on no tray goes");
@@ -2035,7 +2067,10 @@ mod tests {
         let tray = view.tray("t1").unwrap();
         assert!(tray.shown);
         assert_eq!(tray.layout.display_count(), 1);
-        assert!(!view.adopt_pending_tray("t2"), "nothing is pending any more");
+        assert!(
+            !view.adopt_pending_tray("t2"),
+            "nothing is pending any more"
+        );
     }
 
     #[test]

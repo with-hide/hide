@@ -762,7 +762,8 @@ fn map_trays(view: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
                     set(card.get_mut("workspace_id"), Moves::Registration, map);
                     set(card.get_mut("checkout_id"), Moves::Checkout, map);
                     set(
-                        card.get_mut("session").and_then(|session| session.get_mut("device_id")),
+                        card.get_mut("session")
+                            .and_then(|session| session.get_mut("device_id")),
                         Moves::Device,
                         map,
                     );

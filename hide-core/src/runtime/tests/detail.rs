@@ -430,7 +430,10 @@ fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
         "the other tab's card never follows"
     );
     open_at(&mut runtime, &worktrees, serde_json::json!("here"));
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t2"), [worktrees.clone()]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t2"),
+        [worktrees.clone()]
+    );
 
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:p")));
     assert_eq!(drawn_desk(&mut runtime), ("w-order:t1".into(), true, 1));
@@ -445,8 +448,14 @@ fn a_card_stays_on_the_desk_of_the_tab_it_opened_on() {
     closed.focused_pane_id = None;
     runtime.ingest_session(Ok(closed));
     let store = runtime.workspace_views.as_ref().unwrap();
-    let view = store.views.get(crate::node::TEST_NODE, checkout_path).unwrap();
-    assert!(view.tray("w-order:t2").is_none(), "the closed tab's desk went");
+    let view = store
+        .views
+        .get(crate::node::TEST_NODE, checkout_path)
+        .unwrap();
+    assert!(
+        view.tray("w-order:t2").is_none(),
+        "the closed tab's desk went"
+    );
     assert_eq!(
         desk(&runtime, checkout_path, "w-order:t1"),
         [cost, worktrees],
@@ -500,7 +509,11 @@ fn two_panes_of_one_tab_share_its_desk() {
     let map = DetailItem::Mission {
         mission: "mission-41".into(),
     };
-    open_at(&mut runtime, &map, serde_json::json!({"pane": "w-order:t1:p"}));
+    open_at(
+        &mut runtime,
+        &map,
+        serde_json::json!({"pane": "w-order:t1:p"}),
+    );
     assert!(runtime.dispatch_json(&operator_focus_event("w-order:t1:q")));
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
@@ -556,9 +569,19 @@ fn the_slots_an_older_build_kept_move_onto_their_panes_desks_once() {
         desk(&runtime, checkout_path, "w-order:t2"),
     ];
     let all: Vec<&DetailItem> = desks.iter().flatten().collect();
-    assert_eq!(all.iter().filter(|card| ***card == cost).count(), 1, "{desks:?}");
-    assert!(desks[0].contains(&worktrees) && desks[0].contains(&cost), "{desks:?}");
-    assert!(all.contains(&&front), "the slot kept for no pane lands: {desks:?}");
+    assert_eq!(
+        all.iter().filter(|card| ***card == cost).count(),
+        1,
+        "{desks:?}"
+    );
+    assert!(
+        desks[0].contains(&worktrees) && desks[0].contains(&cost),
+        "{desks:?}"
+    );
+    assert!(
+        all.contains(&&front),
+        "the slot kept for no pane lands: {desks:?}"
+    );
     let waiting: Vec<_> = runtime
         .snapshot
         .ui_state
@@ -592,7 +615,10 @@ fn a_record_pressed_where_no_agent_is_opens_in_its_sessions_pane() {
     };
 
     open_at(&mut runtime, &record(&session), serde_json::json!("owner"));
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t2"), [record(&session)]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t2"),
+        [record(&session)]
+    );
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
         Some("w-order:t2:p"),
@@ -692,7 +718,10 @@ fn a_pull_request_pressed_where_no_agent_is_opens_at_its_makers_pane() {
     );
 
     open_pull_request(&mut runtime, 43, serde_json::json!("owner"));
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t2"), [card(42), card(43)]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t2"),
+        [card(42), card(43)]
+    );
 }
 
 /// Operator report 2026-11-09: a pull request pressed on an agent's row
@@ -712,7 +741,10 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
         open_pull_request(&mut runtime, number, serde_json::json!({"pane": parent}));
         assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(parent));
     }
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), [card(42), card(43)]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t1"),
+        [card(42), card(43)]
+    );
     assert!(desk(&runtime, checkout_path, "w-order:t2").is_empty());
 
     open_pull_request(
@@ -720,7 +752,10 @@ fn a_pull_request_pressed_on_a_parents_row_opens_in_the_parents_slot() {
         42,
         serde_json::json!({"pane": "w-order:t9:p"}),
     );
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), [card(42), card(43)]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t1"),
+        [card(42), card(43)]
+    );
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some(parent));
 }
 
@@ -747,5 +782,8 @@ fn a_pull_request_pressed_inside_a_record_opens_beside_it_on_the_same_desk() {
         Some("w-order:t1:p"),
         "the keyboard stays"
     );
-    assert_eq!(desk(&runtime, checkout_path, "w-order:t1"), [record, card(42)]);
+    assert_eq!(
+        desk(&runtime, checkout_path, "w-order:t1"),
+        [record, card(42)]
+    );
 }

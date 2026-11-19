@@ -8,12 +8,12 @@ use hide_platform::fs::identity::{self, FileId};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AgentLogoMode, ColorTheme, DeviceRegistration, OverviewGraphChoices,
-    PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PaneCompletion, PaneReadRecord, PaneTurnRowMode,
-    PracticeProgress, RightPanelSection, SidebarLens, SidebarProject, TaskView, ThemePreference,
-    UiStateSnapshot, WorkspaceRegistration, default_accent_hex, default_font_size,
-    default_pane_text_scale, default_panel_visible, default_sidebar_width,
-    default_terminal_font_size, practice_chapter_id_valid,
+    AgentLogoMode, ColorTheme, DeviceRegistration, OverviewGraphChoices, PRACTICE_CHAPTER_LIMIT,
+    PRACTICE_STEP_LIMIT, PaneCompletion, PaneReadRecord, PaneTurnRowMode, PracticeProgress,
+    RightPanelSection, SidebarLens, SidebarProject, TaskView, ThemePreference, UiStateSnapshot,
+    WorkspaceRegistration, default_accent_hex, default_font_size, default_pane_text_scale,
+    default_panel_visible, default_sidebar_width, default_terminal_font_size,
+    practice_chapter_id_valid,
 };
 
 const UI_STATE_SCHEMA_VERSION: u32 = 1;

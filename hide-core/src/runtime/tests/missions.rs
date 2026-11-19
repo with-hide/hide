@@ -214,10 +214,14 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
         "the settings' concurrency is the default cap"
     );
     let views = |runtime: &Runtime| {
-        runtime
-            .workspace_views
-            .as_ref()
-            .map_or(0, |store| store.views.workspaces.iter().map(|view| view.view_count()).sum::<usize>())
+        runtime.workspace_views.as_ref().map_or(0, |store| {
+            store
+                .views
+                .workspaces
+                .iter()
+                .map(|view| view.view_count())
+                .sum::<usize>()
+        })
     };
     assert_eq!(views(&runtime), 0, "an empty mission opens nothing");
 
@@ -4725,7 +4729,9 @@ fn fixture_in_front(runtime: &mut Runtime) -> crate::runtime::workspace_view::Wo
     runtime.snapshot.navigator.focused_workspace_id = Some("workspace".into());
     runtime.snapshot.navigator.focused_checkout_id = Some("checkout".into());
     runtime.sync_workspace_view();
-    runtime.front_workspace_key().expect("the fixture's checkout")
+    runtime
+        .front_workspace_key()
+        .expect("the fixture's checkout")
 }
 
 /// PRD lane-desk-pair-view D-13, conductor decision 3: a mission's card in
@@ -4800,7 +4806,10 @@ fn the_mission_card_in_front_sends_its_events_and_keeps_its_tab_when_its_mission
         .clone()
         .unwrap();
     assert!(runtime.drop_missions_of(&[(session.device_id, session.session_id)]));
-    assert!(cards(&runtime).contains(&map), "a gone subject keeps its tab");
+    assert!(
+        cards(&runtime).contains(&map),
+        "a gone subject keeps its tab"
+    );
     runtime.refresh_mission_events();
     assert!(runtime.snapshot.mission_events.events.is_empty());
 }
@@ -4829,9 +4838,11 @@ fn a_mission_opens_in_its_conductors_slot() {
     open(&mut runtime);
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
     let shows_map = |runtime: &Runtime| {
-        runtime
-            .front_tray_layout(&key)
-            .is_some_and(|layout| layout.displays().any(|display| display.card.as_ref() == Some(&map)))
+        runtime.front_tray_layout(&key).is_some_and(|layout| {
+            layout
+                .displays()
+                .any(|display| display.card.as_ref() == Some(&map))
+        })
     };
     assert!(shows_map(&runtime), "on the desk of the Conductor's tab");
 
@@ -12181,7 +12192,8 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
         profile: None,
     };
     let url = "https://example.test/screens";
-    let page = runtime.change_front_layout(&key, |layout, stamp| {
+    let page = runtime
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_browser_display(url, 1);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12190,7 +12202,8 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
         })
         .unwrap();
     let diff_path = "/checkouts/fixture/src/main.rs";
-    let diff = runtime.change_front_layout(&key, |layout, stamp| {
+    let diff = runtime
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_display(diff_path, DisplayKind::Diff, Some(false), false);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12221,7 +12234,8 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
         rows(runtime).into_iter().find(|row| row.kind == kind)
     };
     let close = |runtime: &mut Runtime, view: &str| {
-        runtime.change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+        runtime
+            .change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
             .unwrap();
     };
     let press = |runtime: &mut Runtime, key: u64, view: &str, request: &str| {
@@ -12433,7 +12447,8 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     register(&mut runtime, record("agent-9", helper, Some("agent-2")));
     let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
     let close = |runtime: &mut Runtime, view: &str| {
-        runtime.change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+        runtime
+            .change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
             .unwrap();
     };
 
@@ -12616,7 +12631,8 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
     let results = project_view(&mut runtime, "/checkouts/fixture/results.md");
     runtime.link_mission_view(&key, &results, "recipient", 10);
     let url = "https://example.test/spec";
-    let spec = runtime.change_front_layout(&key, |layout, stamp| {
+    let spec = runtime
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_browser_display(url, 1);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12657,7 +12673,8 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
     let label = listed[1].0.clone();
 
     // Closed, the page stays listed under the name it had.
-    runtime.change_front_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
+    runtime
+        .change_front_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
         .unwrap();
     assert_eq!(rows(&mut runtime)[1], (label.clone(), true, page.clone()));
     let press = |runtime: &mut Runtime, key: Option<u64>, node: Option<&str>| {
@@ -12827,7 +12844,8 @@ fn a_decisions_views_moving_tell_the_operator_nothing_new() {
 
     let later = project_view(&mut runtime, "/checkouts/fixture/later.md");
     runtime.link_mission_view(&key, &later, "sender", 20);
-    runtime.change_front_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
+    runtime
+        .change_front_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
         .unwrap();
     let moved = conductor_shown(&mut runtime);
     assert_eq!(told(&moved), told(&asked));

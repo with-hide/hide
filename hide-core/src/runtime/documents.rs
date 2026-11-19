@@ -19,11 +19,11 @@ use std::sync::Arc;
 use super::editor::PreparedFileTab;
 use super::view_areas::ViewPlacement;
 use super::workspace_view::WorkspaceKey;
-use crate::workspace_views::Place;
 use super::*;
 use crate::files::{DocumentPlace, DocumentRoot, OpenFailure, SaveOutcome};
 use crate::model::{EditorConflictSnapshot, EditorOpeningSnapshot, EditorSaveSnapshot};
 use crate::node_access::{LinkError, NodeLink};
+use crate::workspace_views::Place;
 
 #[derive(Default)]
 pub(super) struct SaveSlot {

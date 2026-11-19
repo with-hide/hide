@@ -28,7 +28,6 @@ use serde::Deserialize;
 
 use super::documents::OpenRequestFields;
 use super::workspace_view::{AreaIntent, WorkspaceKey, file_label};
-use crate::workspace_views::Place;
 use super::*;
 use crate::model::{
     BrowserOpenReceiptSnapshot, ViewAreaSnapshot, ViewDisplaySnapshot, ViewDisplayState,
@@ -38,6 +37,7 @@ use crate::view_layout::{
     Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
     MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title, is_file_address,
 };
+use crate::workspace_views::Place;
 
 /// Split request ids remembered per Workspace, so a split sent twice splits
 /// once (engineering principle 11). Runtime only.
@@ -590,9 +590,7 @@ impl Runtime {
 
     /// Every tree of every Workspace, each with the Workspace and the place
     /// it is.
-    pub(super) fn every_view_layout(
-        &self,
-    ) -> impl Iterator<Item = (WorkspaceKey, Place, &Layout)> {
+    pub(super) fn every_view_layout(&self) -> impl Iterator<Item = (WorkspaceKey, Place, &Layout)> {
         self.workspace_views.iter().flat_map(|store| {
             store.views.workspaces.iter().flat_map(|view| {
                 view.layouts().map(|(place, layout)| {
@@ -960,7 +958,12 @@ impl Runtime {
     /// shelf, any other closes, and its document with it when no other View
     /// shows it, the way closing its last View does (so Reopen Closed brings
     /// a file back).
-    fn retire_oldest_view(&mut self, key: &WorkspaceKey, place: &Place, oldest: OldestView) -> bool {
+    fn retire_oldest_view(
+        &mut self,
+        key: &WorkspaceKey,
+        place: &Place,
+        oldest: OldestView,
+    ) -> bool {
         if oldest.agents
             && matches!(place, Place::Tray(_))
             && self.make_view_room(key, &Place::Shelf)
@@ -1948,9 +1951,9 @@ impl Runtime {
                 // stays in its pane's list to open again (PRD
                 // lane-desk-pair-view D-07, B11), and the last tab leaving
                 // folds the tray.
-                let agents = self.view_display(&key, &display_id).is_some_and(|display| {
-                    !display.operator && !display.openers.is_empty()
-                });
+                let agents = self
+                    .view_display(&key, &display_id)
+                    .is_some_and(|display| !display.operator && !display.openers.is_empty());
                 if agents
                     && matches!(self.view_place(&key, &display_id), Some(Place::Tray(_)))
                     && self.bring_view_to(&key, &display_id, &Place::Shelf)
@@ -2779,8 +2782,7 @@ impl Runtime {
     /// Retry (B16): reads an unavailable display's file again into its tab.
     /// A display waiting for its device says what it waits for.
     fn retry_view_display(&mut self, key: &WorkspaceKey, display_id: &str) -> bool {
-        let Some(display) = self.view_display(key, display_id).cloned()
-        else {
+        let Some(display) = self.view_display(key, display_id).cloned() else {
             let error = LayoutError::UnknownDisplay(display_id.to_owned());
             self.set_error(error.kind(), error.message(), false);
             return true;
@@ -3073,9 +3075,8 @@ impl Runtime {
             if let Some(front) = front
                 && let Some(layout) = view.layout_mut(front)
             {
-                let (changed, capped) = reconcile_layout(
-                    layout, &key, true, &owned, &tabs, &roots, requested, now,
-                );
+                let (changed, capped) =
+                    reconcile_layout(layout, &key, true, &owned, &tabs, &roots, requested, now);
                 stored |= changed;
                 unshown.extend(
                     capped
@@ -3474,16 +3475,18 @@ impl Runtime {
             .as_deref()
             .and_then(|id| facts.tabs.get(id).copied());
         let (comments, not_delivered) = facts.feedback.map_or((0, 0), |feedback| {
-            feedback.on(display).fold((0, 0), |(all, expired), comment| {
-                (
-                    all + 1,
-                    expired
-                        + usize::from(matches!(
-                            comment.state,
-                            crate::view_feedback::CommentState::NotDelivered { .. }
-                        )),
-                )
-            })
+            feedback
+                .on(display)
+                .fold((0, 0), |(all, expired), comment| {
+                    (
+                        all + 1,
+                        expired
+                            + usize::from(matches!(
+                                comment.state,
+                                crate::view_feedback::CommentState::NotDelivered { .. }
+                            )),
+                    )
+                })
         });
         ViewDisplaySnapshot {
             id: display.id.clone(),

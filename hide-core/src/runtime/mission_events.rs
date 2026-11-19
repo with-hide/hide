@@ -960,10 +960,14 @@ impl Runtime {
     /// needs no page round trip; the screen is the page's, so it names its
     /// detail (PRD mission-screen D-16).
     pub(super) fn refresh_mission_events(&mut self) {
-        let open = self.missions.shown.clone().or_else(|| match self.shown_card() {
-            Some(DetailItem::Mission { mission }) => Some(mission.clone()),
-            _ => None,
-        });
+        let open = self
+            .missions
+            .shown
+            .clone()
+            .or_else(|| match self.shown_card() {
+                Some(DetailItem::Mission { mission }) => Some(mission.clone()),
+                _ => None,
+            });
         if self.missions.events_made == (open.clone(), self.missions.events_edit) {
             return;
         }

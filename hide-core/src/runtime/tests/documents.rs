@@ -1672,7 +1672,11 @@ fn a_device_workspaces_displays_wait_for_its_helper_after_a_restart() {
         let mut store =
             WorkspaceViewStore::open(views_dir.join("views.json"), Default::default()).0;
         // The file's diff, and the file beside it in use.
-        let layout = &mut store.views.entry(DEVICE, &root).tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+        let layout = &mut store
+            .views
+            .entry(DEVICE, &root)
+            .tray_entry(crate::workspace_views::PENDING_TRAY)
+            .layout;
         let diff = layout.new_display(&f.path("a.txt"), DisplayKind::Diff, Some(false), false);
         layout.insert("a1", diff, 1).unwrap();
         let file = layout.new_display(&f.path("a.txt"), DisplayKind::File, None, false);
@@ -1816,7 +1820,9 @@ fn a_quit_mid_restore_keeps_the_stored_layout_byte_for_byte() {
     let mut views = crate::workspace_views::WorkspaceViews::default();
     let entry = views.entry(DEVICE, &f.root.to_string_lossy());
     entry.show_tray(crate::workspace_views::PENDING_TRAY);
-    let layout = &mut entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = &mut entry
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let diff = layout.new_display(&f.path("a.txt"), DisplayKind::Diff, Some(false), false);
     layout.insert("a1", diff, 1).unwrap();
     let preview = layout.new_display(&f.path("b.txt"), DisplayKind::File, None, true);
@@ -1898,7 +1904,10 @@ fn a_preview_open_landing_right_after_its_restore_read_replaces_that_preview() {
     let views_dir = f.runtime_dir("hide-document-views-");
     let file = views_dir.join("workspace-views.json");
     let mut views = crate::workspace_views::WorkspaceViews::default();
-    let layout = &mut views.entry(DEVICE, &f.root.to_string_lossy()).tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = &mut views
+        .entry(DEVICE, &f.root.to_string_lossy())
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let restored = layout.new_display(&f.path("b.txt"), DisplayKind::File, None, true);
     layout.insert("a1", restored, 1).unwrap();
     crate::workspace_views::save(&file, &views).unwrap();
@@ -2552,7 +2561,10 @@ fn a_retried_view_shows_opening_while_its_read_is_in_flight() {
     let views_dir = f.runtime_dir("hide-document-views-");
     let file = views_dir.join("workspace-views.json");
     let mut views = crate::workspace_views::WorkspaceViews::default();
-    let layout = &mut views.entry(DEVICE, &root).tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+    let layout = &mut views
+        .entry(DEVICE, &root)
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let restored = layout.new_display(&f.path("gone.txt"), DisplayKind::File, None, false);
     let restored_id = restored.id.clone();
     layout.insert("a1", restored, 1).unwrap();

@@ -97,9 +97,7 @@ impl Runtime {
             store.generation += 1;
         }
         self.persist_workspace_views();
-        if self.front_tab(&key) != tab
-            && self.local_tab_pane(&pane)
-        {
+        if self.front_tab(&key) != tab && self.local_tab_pane(&pane) {
             self.focus_pane(pane, PaneFocusOrigin::Operator, None);
         }
         true
@@ -163,7 +161,9 @@ impl Runtime {
             .view_display(key, display_id)
             .and_then(|display| display.opener.as_ref())
             .and_then(|opener| self.view_opener_snapshot(opener).pane_id)
-            .filter(|pane| *pane != left && self.pane_tab(key, pane).as_deref() == Some(tab.as_str()))
+            .filter(|pane| {
+                *pane != left && self.pane_tab(key, pane).as_deref() == Some(tab.as_str())
+            })
         else {
             return;
         };

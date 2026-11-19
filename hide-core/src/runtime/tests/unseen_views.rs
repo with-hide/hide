@@ -265,14 +265,16 @@ fn a_view_in_an_area_that_is_not_active_stays_unseen() {
     let first = open(&mut guard, "recipient", "src/a.ts");
     let second = open(&mut guard, "recipient", "src/b.ts");
     // The first View moves to an area of its own; the second stays active.
-    guard.change_front_layout(&key(), |layout, stamp| {
+    guard
+        .change_front_layout(&key(), |layout, stamp| {
             let area = layout.active_area().id.clone();
             layout
                 .split(&first, &area, crate::view_layout::Edge::Right, stamp)
                 .map(|_| ((), true))
         })
         .unwrap();
-    guard.change_front_layout(&key(), |layout, stamp| {
+    guard
+        .change_front_layout(&key(), |layout, stamp| {
             let area = layout.area_of(&second).unwrap().id.clone();
             layout.focus_area(&area, stamp).map(|changed| ((), changed))
         })
@@ -319,7 +321,8 @@ fn a_view_closed_before_it_is_seen_takes_its_look_with_it() {
     assert_eq!(row(&guard, "recipient").group, "needs_you");
     // B13, B32: the record lives on the View and goes with it.
     let place = guard.view_place(&key(), &view).unwrap();
-    guard.change_view_layout(&key(), &place, |layout, _| {
+    guard
+        .change_view_layout(&key(), &place, |layout, _| {
             layout.remove(&view);
             Ok(((), true))
         })
@@ -356,7 +359,8 @@ fn only_an_agents_open_makes_a_view_to_look_at() {
     // A terminal link the operator clicked in the agent's pane names the
     // agent as opener, and is still the operator's open.
     guard.expect_view_opener(&key(), "src/link.ts", DisplayKind::File, Some("recipient"));
-    let link = guard.change_front_layout(&key(), |layout, stamp| {
+    let link = guard
+        .change_front_layout(&key(), |layout, stamp| {
             let display = layout.new_display("src/link.ts", DisplayKind::File, None, false);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -576,7 +580,8 @@ fn a_view_a_tools_agent_opened_is_the_eye_on_its_row_in_the_tools_cell_only() {
     assert_eq!(agent.mark, RowMark::Look);
     assert_eq!(agent.look.as_ref().unwrap().view_id, view);
     assert!(
-        guard.view_display(&key(), &view)
+        guard
+            .view_display(&key(), &view)
             .is_some_and(|display| !display.openers.is_empty() && display.unseen.is_some())
     );
     // The tool's cell holds the row where its state puts it, and the eye
@@ -624,8 +629,7 @@ fn a_tools_direct_open_is_the_operators_own_open() {
     keyboard(&mut guard, Some("sender"));
     let caller = crate::workspace_control::access_caller_id(&connection, None);
     let view = open(&mut guard, &caller, "src/hello.html");
-    let display = guard.view_display(&key(), &view)
-        .unwrap();
+    let display = guard.view_display(&key(), &view).unwrap();
     assert!(display.operator && display.openers.is_empty() && display.opener.is_none());
     assert!(
         display.unseen.is_none(),
@@ -656,7 +660,8 @@ fn reading_the_parent_takes_in_the_childs_view_signal_and_a_close_drops_it() {
     assert!(unseen(&guard, &view));
     // (6) Closed, it is gone everywhere.
     let place = guard.view_place(&key(), &view).unwrap();
-    guard.change_view_layout(&key(), &place, |layout, _| {
+    guard
+        .change_view_layout(&key(), &place, |layout, _| {
             layout.remove(&view);
             Ok(((), true))
         })
@@ -903,7 +908,8 @@ fn a_row_for_a_file_in_two_tabs_names_the_tab_still_to_look_at() {
     keyboard(&mut guard, Some("recipient"));
     let first = open(&mut guard, "recipient", "src/a.ts");
     let other = open(&mut guard, "recipient", "src/b.ts");
-    let second_area = guard.change_front_layout(&key(), |layout, stamp| {
+    let second_area = guard
+        .change_front_layout(&key(), |layout, stamp| {
             let area = layout.active_area().id.clone();
             layout
                 .split(&other, &area, crate::view_layout::Edge::Right, stamp)
@@ -916,7 +922,8 @@ fn a_row_for_a_file_in_two_tabs_names_the_tab_still_to_look_at() {
     keyboard(&mut guard, Some("sender"));
     // The agent, no longer watched, opens the file again in the second area;
     // its open leaves the operator's front where it was (B1).
-    let again = guard.change_front_layout(&key(), |layout, stamp| {
+    let again = guard
+        .change_front_layout(&key(), |layout, stamp| {
             let display = layout.new_display("src/a.ts", DisplayKind::File, None, false);
             let id = display.id.clone();
             layout.insert(&second_area, display, stamp)?;
@@ -1183,7 +1190,8 @@ fn the_phones_list_is_the_views_the_agent_opened_that_are_open() {
     assert!(seen.contains(&(login.as_str(), true)));
     // Closed on the desktop, it leaves the list (B12, B27).
     let place = guard.view_place(&key(), &login).unwrap();
-    guard.change_view_layout(&key(), &place, |layout, _| {
+    guard
+        .change_view_layout(&key(), &place, |layout, _| {
             layout.remove(&login);
             Ok(((), true))
         })

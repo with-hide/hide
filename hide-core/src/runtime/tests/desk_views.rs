@@ -79,16 +79,17 @@ fn engine_splits_first_tab(runtime: &mut Runtime, directory: &Path) {
             layout
         })
         .collect();
-    let mut payload: SessionSnapshotPayload = crate::sidebar::owned_label_fixture(serde_json::json!({
-        "agents": [],
-        "focused_workspace_id": "w-order",
-        "focused_pane_id": "w-order:t1:p",
-        "workspaces": [{"workspace_id": "w-order", "label": "order", "active_tab_id": TABS[0]}],
-        "tabs": tabs,
-        "panes": panes,
-        "layouts": layouts
-    }))
-    .expect("split session payload");
+    let mut payload: SessionSnapshotPayload =
+        crate::sidebar::owned_label_fixture(serde_json::json!({
+            "agents": [],
+            "focused_workspace_id": "w-order",
+            "focused_pane_id": "w-order:t1:p",
+            "workspaces": [{"workspace_id": "w-order", "label": "order", "active_tab_id": TABS[0]}],
+            "tabs": tabs,
+            "panes": panes,
+            "layouts": layouts
+        }))
+        .expect("split session payload");
     agents_in_every_pane(&mut payload);
     runtime.ingest_session(Ok(payload));
     runtime.sync_workspace_view();
@@ -401,8 +402,14 @@ fn each_tab_shows_its_own_desk_and_the_lane_stays_the_workspaces() {
     let (mut runtime, checkout, directory) = setup("own-desk");
     open(&mut runtime, &checkout, &directory, "a.md");
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
-    assert!(strip(&runtime, &directory).is_empty(), "B9: the second desk");
-    assert!(!lane_documents(&runtime), "B9: an empty desk shows no column");
+    assert!(
+        strip(&runtime, &directory).is_empty(),
+        "B9: the second desk"
+    );
+    assert!(
+        !lane_documents(&runtime),
+        "B9: an empty desk shows no column"
+    );
     open(&mut runtime, &checkout, &directory, "b.md");
     view_event(
         &mut runtime,
@@ -497,10 +504,7 @@ fn a_background_agents_open_lands_on_no_desk_and_moves_nothing() {
             "background-open"
         });
         open(&mut runtime, &checkout, &directory, "a.md");
-        view_event(
-            &mut runtime,
-            serde_json::json!({"tool": tool}),
-        );
+        view_event(&mut runtime, serde_json::json!({"tool": tool}));
         let area = active_area(&runtime, &directory);
         let editor = runtime.snapshot.editor.active_tab_id.clone();
         let lane = runtime.snapshot.workspace_view.as_ref().unwrap().lane_calls;
@@ -1028,15 +1032,27 @@ fn a_device_workspace_keeps_its_view_when_its_visible_tab_changes() {
         .views
         .entry(device, "/srv/remote");
     for name in ["x.md", "y.md"] {
-        let display = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.new_display(
-            &format!("/srv/remote/{name}"),
-            crate::view_layout::DisplayKind::File,
-            None,
-            false,
-        );
-        entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.insert("a1", display, 1).unwrap();
+        let display = entry
+            .tray_entry(crate::workspace_views::PENDING_TRAY)
+            .layout
+            .new_display(
+                &format!("/srv/remote/{name}"),
+                crate::view_layout::DisplayKind::File,
+                None,
+                false,
+            );
+        entry
+            .tray_entry(crate::workspace_views::PENDING_TRAY)
+            .layout
+            .insert("a1", display, 1)
+            .unwrap();
     }
-    let ids: Vec<String> = entry.tray_entry(crate::workspace_views::PENDING_TRAY).layout.displays().map(|d| d.id.clone()).collect();
+    let ids: Vec<String> = entry
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout
+        .displays()
+        .map(|d| d.id.clone())
+        .collect();
     entry.show_tray(crate::workspace_views::PENDING_TRAY);
     let front = |runtime: &Runtime| {
         runtime
@@ -1121,7 +1137,11 @@ fn async_completion_is_bound_to_the_original_tab_and_failure_is_atomic() {
     assert_eq!(shelf(&runtime, &directory), ["c.md"]);
     assert!(strip(&runtime, &directory).is_empty(), "the desk in front");
     assert_eq!(
-        runtime.snapshot.workspace_view.as_ref().map(|view| &view.layout),
+        runtime
+            .snapshot
+            .workspace_view
+            .as_ref()
+            .map(|view| &view.layout),
         frame.as_ref().map(|view| &view.layout)
     );
     // A native pane moved within the same checkout is no longer the caller
@@ -1409,7 +1429,10 @@ fn moving_the_keyboard_inside_a_tab_moves_nothing_on_its_desk() {
         serde_json::json!({"action": "focus", "display_id": a}),
     );
     let before = drawn(&runtime);
-    assert_eq!(before, (vec!["a.md".into(), "b.md".into()], vec!["a.md".into()]));
+    assert_eq!(
+        before,
+        (vec!["a.md".into(), "b.md".into()], vec!["a.md".into()])
+    );
     for pane in ["w-order:t1:q", "w-order:t1:p", "w-order:t1:q"] {
         runtime.dispatch_json(&operator_focus_event(pane));
         runtime.sync_workspace_view();
@@ -1611,7 +1634,11 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
         serde_json::json!({"action": "close", "display_id": a}),
     );
     runtime.sync_workspace_view();
-    assert_eq!(listed(&runtime).0.len(), 2, "off the desk, still the record's");
+    assert_eq!(
+        listed(&runtime).0.len(),
+        2,
+        "off the desk, still the record's"
+    );
     control(
         &mut runtime,
         "w-order:t1:p",
@@ -1645,7 +1672,11 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
         Some("w-order:t1:p")
     );
     assert_eq!(drawn(&runtime).1, ["b.md"]);
-    assert!(shelf(&runtime, &directory).iter().all(|name| name != "b.md"));
+    assert!(
+        shelf(&runtime, &directory)
+            .iter()
+            .all(|name| name != "b.md")
+    );
 }
 
 // Pair view (PRD lane-desk-pair-view D-08, D-15, D-22): an Agent tab drawn as
@@ -1684,7 +1715,11 @@ fn a_pair_view_is_its_tabs_and_survives_a_tab_switch_and_a_restart() {
     assert_eq!(runtime.snapshot.status.last_error, None);
     let on = paired(TABS[0], "w-order:t1:p");
     assert_eq!(pairs(&runtime), (Some(on.clone()), vec![on.clone()]));
-    assert_eq!(fronts(&runtime, &directory), ["a.md"], "B18: its agent's View");
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["a.md"],
+        "B18: its agent's View"
+    );
     assert!(lane_documents(&runtime));
 
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
@@ -1705,7 +1740,11 @@ fn a_pair_view_is_its_tabs_and_survives_a_tab_switch_and_a_restart() {
 
     pair_event(&mut runtime, None);
     assert_eq!(pairs(&runtime), (None, vec![]));
-    assert_eq!(strip(&runtime, &directory), ["a.md", "b.md"], "the desk stays");
+    assert_eq!(
+        strip(&runtime, &directory),
+        ["a.md", "b.md"],
+        "the desk stays"
+    );
 }
 
 /// B28: the left pane leaving its tab ends the pair view, with no notice,

@@ -411,7 +411,8 @@ fn a_split_or_an_open_past_the_caps_is_refused_and_changes_nothing() {
         .unwrap()
         .views
         .entry(crate::node::TEST_NODE, &root)
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout = full;
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout = full;
     let before = tree(&mut runtime);
     assert_eq!(before.display_count, MAX_VIEW_DISPLAYS);
     let tabs = runtime.snapshot.editor.tabs.clone();
@@ -462,7 +463,8 @@ fn fill(runtime: &mut Runtime, directory: &Path, count: usize) {
         .unwrap()
         .views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout = layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout = layout;
 }
 
 /// B19: at its 32 views nothing adds a 33rd to the checkout when none of them
@@ -564,7 +566,8 @@ fn a_reopen_that_lands_after_the_views_filled_is_refused_and_stays_reopenable() 
             .unwrap()
             .views
             .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
-            .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+            .tray_entry(crate::workspace_views::PENDING_TRAY)
+            .layout;
         let last = layout.new_display(
             &directory.join("last.md").to_string_lossy(),
             DisplayKind::File,
@@ -1472,11 +1475,7 @@ fn a_restart_restores_the_view_tree_and_marks_a_missing_file_unavailable() {
     let view = restarted.snapshot.workspace_view.clone().unwrap();
     assert_eq!(
         (view.tray.shown, view.tool, view.explorer_width),
-        (
-            true,
-            Some(crate::workspace_views::Tool::Changes),
-            Some(300)
-        )
+        (true, Some(crate::workspace_views::Tool::Changes), Some(300))
     );
     assert_eq!(active_label(&restarted).as_deref(), Some("a.md"));
 
@@ -1503,7 +1502,8 @@ fn open_to_the_side_of_a_restored_file_that_came_back_opens_it_beside() {
     let mut views = crate::workspace_views::WorkspaceViews::default();
     let layout = &mut views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let restored = layout.new_display(
         &gone.to_string_lossy(),
         crate::view_layout::DisplayKind::File,
@@ -1546,7 +1546,8 @@ fn restored_diff(name: &str, committed: Option<bool>) -> (Runtime, PathBuf) {
     let mut views = crate::workspace_views::WorkspaceViews::default();
     let layout = &mut views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout;
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout;
     let mut diff = layout.new_display(
         &directory.join("x.md").to_string_lossy(),
         crate::view_layout::DisplayKind::Diff,
@@ -1595,7 +1596,8 @@ fn retry_on_a_diff_view_without_its_tab_opens_the_diff_again() {
     for display in store
         .views
         .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .tray_entry(crate::workspace_views::PENDING_TRAY).layout
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout
         .displays_mut()
     {
         display.tab_id = None;
@@ -2060,7 +2062,12 @@ fn a_pull_request_card_opens_as_a_tab_of_the_desk_in_front() {
             .into_iter()
             .flat_map(|(_, _, displays)| displays)
             .filter(|display| display.kind == crate::view_layout::DisplayKind::Card)
-            .map(|display| (display.id, display.card.expect("a card tab names its subject")))
+            .map(|display| {
+                (
+                    display.id,
+                    display.card.expect("a card tab names its subject"),
+                )
+            })
             .collect::<Vec<_>>()
     };
     let front = runtime.snapshot.ui_state.focused_checkout_id.clone();
@@ -2071,14 +2078,19 @@ fn a_pull_request_card_opens_as_a_tab_of_the_desk_in_front() {
     assert_eq!(runtime.snapshot.ui_state.focused_checkout_id, front);
     let opened = cards(&mut runtime);
     assert_eq!(
-        opened.iter().map(|(_, card)| card.clone()).collect::<Vec<_>>(),
+        opened
+            .iter()
+            .map(|(_, card)| card.clone())
+            .collect::<Vec<_>>(),
         [item(42)]
     );
     event(&mut runtime, 43);
     event(&mut runtime, 43);
     let both = cards(&mut runtime);
     assert_eq!(
-        both.iter().map(|(_, card)| card.clone()).collect::<Vec<_>>(),
+        both.iter()
+            .map(|(_, card)| card.clone())
+            .collect::<Vec<_>>(),
         [item(42), item(43)],
         "the same card again is the same tab"
     );

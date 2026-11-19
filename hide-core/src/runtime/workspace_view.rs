@@ -16,11 +16,11 @@ use serde::Deserialize;
 
 use super::view_areas::Reconciled;
 use super::*;
-use crate::workspace_views::Place;
 use crate::model::{
     BrowserAreaScopeRow, BrowserViewInventoryRow, LaneCallSide, WorkspaceViewSnapshot,
 };
 use crate::view_layout::DisplayKind;
+use crate::workspace_views::Place;
 use crate::workspace_views::{self, Tool, WorkspaceView, WorkspaceViews};
 
 /// A Workspace's identity: the device and the checkout path.
@@ -463,7 +463,11 @@ impl Runtime {
             return;
         };
         let entry = store.views.entry(&key.0, &key.1);
-        let before = (entry.open, entry.tool, entry.tray(tab).is_some_and(|tray| tray.shown));
+        let before = (
+            entry.open,
+            entry.tool,
+            entry.tray(tab).is_some_and(|tray| tray.shown),
+        );
         entry.show_tray(tab);
         let changed = before != (entry.open, entry.tool, true);
         store.call_lane(key, LaneCallSide::View);
@@ -895,7 +899,10 @@ impl Runtime {
                 // A lane that had no column comes back on the tray when it
                 // has tabs, else on the Explorer (B15).
                 if !entry.has_column(Some(&tab)) {
-                    if entry.tray(&tab).is_some_and(|tray| tray.layout.display_count() > 0) {
+                    if entry
+                        .tray(&tab)
+                        .is_some_and(|tray| tray.layout.display_count() > 0)
+                    {
                         entry.tray_entry(&tab).shown = true;
                     } else {
                         entry.tool = Some(Tool::Explorer);
@@ -1153,44 +1160,44 @@ impl Runtime {
                 // A page on no tray is still held, loaded off screen by the
                 // host (PRD lane-desk-pair-view D-37, B32).
                 for (place, layout) in view.layouts() {
-                let tray = match &place {
-                    Place::Tray(tab) => Some(tab.clone()),
-                    Place::Shelf => None,
-                };
-                for area in layout.areas() {
-                    scopes.push(BrowserAreaScopeRow {
-                        device_id: view.device_id.clone(),
-                        path: view.path.clone(),
-                        area_id: area.id.clone(),
-                        incarnation: incarnations
-                            .get(&(
-                                view.device_id.as_str(),
-                                view.path.as_str(),
-                                area.id.as_str(),
-                            ))
-                            .copied()
-                            .unwrap_or(store.generation),
-                    });
-                    // An outside HTML file is a page the host draws like any
-                    // other, kept alive while it is hidden.
-                    displays.extend(
-                        area.displays
-                            .iter()
-                            .filter(|display| {
-                                display.kind == DisplayKind::Browser
-                                    || display.external.as_ref().is_some_and(|file| {
-                                        file.kind == crate::view_layout::ExternalKind::Html
-                                    })
-                            })
-                            .map(|display| BrowserViewInventoryRow {
-                                device_id: view.device_id.clone(),
-                                path: view.path.clone(),
-                                area_id: area.id.clone(),
-                                view_id: display.id.clone(),
-                                tray: tray.clone(),
-                            }),
-                    );
-                }
+                    let tray = match &place {
+                        Place::Tray(tab) => Some(tab.clone()),
+                        Place::Shelf => None,
+                    };
+                    for area in layout.areas() {
+                        scopes.push(BrowserAreaScopeRow {
+                            device_id: view.device_id.clone(),
+                            path: view.path.clone(),
+                            area_id: area.id.clone(),
+                            incarnation: incarnations
+                                .get(&(
+                                    view.device_id.as_str(),
+                                    view.path.as_str(),
+                                    area.id.as_str(),
+                                ))
+                                .copied()
+                                .unwrap_or(store.generation),
+                        });
+                        // An outside HTML file is a page the host draws like any
+                        // other, kept alive while it is hidden.
+                        displays.extend(
+                            area.displays
+                                .iter()
+                                .filter(|display| {
+                                    display.kind == DisplayKind::Browser
+                                        || display.external.as_ref().is_some_and(|file| {
+                                            file.kind == crate::view_layout::ExternalKind::Html
+                                        })
+                                })
+                                .map(|display| BrowserViewInventoryRow {
+                                    device_id: view.device_id.clone(),
+                                    path: view.path.clone(),
+                                    area_id: area.id.clone(),
+                                    view_id: display.id.clone(),
+                                    tray: tray.clone(),
+                                }),
+                        );
+                    }
                 }
             }
             // Every Workspace's, connected or not: a grant ends only when no
@@ -1346,10 +1353,12 @@ impl Runtime {
             let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
             let layout = self.view_layout_snapshot(key, tray_layout);
             let pair_of = |tray: &crate::workspace_views::Tray| {
-                tray.pair.as_ref().map(|pair| crate::model::PairViewSnapshot {
-                    tab_id: tray.tab.clone(),
-                    pane_id: pair.pane.clone(),
-                })
+                tray.pair
+                    .as_ref()
+                    .map(|pair| crate::model::PairViewSnapshot {
+                        tab_id: tray.tab.clone(),
+                        pane_id: pair.pane.clone(),
+                    })
             };
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),

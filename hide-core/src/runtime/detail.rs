@@ -10,11 +10,11 @@
 
 use super::workspace_view::WorkspaceKey;
 use super::*;
-use crate::workspace_views::Place;
 use crate::model::{
     DetailItem, PRACTICE_CHAPTER_LIMIT, PRACTICE_STEP_LIMIT, PracticeProgress, SidebarLens,
     SidebarProject, TaskView, practice_chapter_id_valid,
 };
+use crate::workspace_views::Place;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -619,7 +619,13 @@ impl Runtime {
     /// The cards of one slot as tabs of `tab`'s tray, oldest first, the one
     /// the slot showed last in front; the tray is shown when the slot was. A
     /// card the checkout holds already stays on the desk it is on (D-20).
-    fn place_slot_cards(&mut self, key: &WorkspaceKey, tab: &str, cards: Vec<DetailItem>, shown: bool) {
+    fn place_slot_cards(
+        &mut self,
+        key: &WorkspaceKey,
+        tab: &str,
+        cards: Vec<DetailItem>,
+        shown: bool,
+    ) {
         let place = Place::Tray(tab.to_owned());
         for card in cards {
             let held = self
@@ -635,9 +641,7 @@ impl Runtime {
                 Ok(((), true))
             });
         }
-        if shown
-            && let Some(store) = self.workspace_views.as_mut()
-        {
+        if shown && let Some(store) = self.workspace_views.as_mut() {
             store.views.entry(&key.0, &key.1).tray_entry(tab).shown = true;
             self.persist_workspace_views();
         }

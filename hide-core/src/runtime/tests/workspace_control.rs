@@ -47,7 +47,10 @@ fn caller_fixture() -> (Runtime, tempfile::TempDir) {
 }
 
 fn seed_browser_areas(runtime: &mut Runtime, context: &Context) -> (String, String, String) {
-    let layout = runtime.front_desk_mut(&((&context.device_id).to_string(), (&context.checkout_path).to_string()));
+    let layout = runtime.front_desk_mut(&(
+        (&context.device_id).to_string(),
+        (&context.checkout_path).to_string(),
+    ));
     let first = layout.new_browser_display("https://example.test/page", 1);
     let first_id = first.id.clone();
     layout.insert("a1", first, 1).unwrap();
@@ -103,7 +106,10 @@ fn caller_query_reads_only_its_live_checkout_and_untouched_views_are_empty() {
         Some(Vec::new())
     );
 
-    let layout = runtime.front_desk_mut(&((crate::node::TEST_NODE).to_string(), ("/checkouts/b").to_string()));
+    let layout = runtime.front_desk_mut(&(
+        (crate::node::TEST_NODE).to_string(),
+        ("/checkouts/b").to_string(),
+    ));
     let display = layout.new_display(
         "/checkouts/b/보고서.md",
         crate::view_layout::DisplayKind::File,
@@ -911,7 +917,10 @@ fn legacy_browser_open_keeps_global_dedupe_and_active_area_insertion() {
         .unwrap();
     assert_eq!(reused.view_id, existing);
     assert_eq!(reused.area_id.as_deref(), Some("a1"));
-    assert_eq!(runtime.front_tray_layout(&key).unwrap().displays().count(), 3);
+    assert_eq!(
+        runtime.front_tray_layout(&key).unwrap().displays().count(),
+        3
+    );
 }
 
 #[test]
@@ -1001,7 +1010,8 @@ fn browser_area_removed_during_file_read_refuses_without_mutation() {
     };
     let material = source.read().unwrap();
     let key = (expected.device_id.clone(), expected.checkout_path.clone());
-    runtime.change_front_layout(&key, |layout, _| Ok((layout.remove(&other_view), true)))
+    runtime
+        .change_front_layout(&key, |layout, _| Ok((layout.remove(&other_view), true)))
         .unwrap();
     assert!(
         runtime
@@ -1123,7 +1133,10 @@ fn scoped_browser_close_and_select_refuse_a_document_in_the_named_area() {
             .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
             .unwrap()
             .context;
-        let layout = runtime.front_desk_mut(&((&expected.device_id).to_string(), (&expected.checkout_path).to_string()));
+        let layout = runtime.front_desk_mut(&(
+            (&expected.device_id).to_string(),
+            (&expected.checkout_path).to_string(),
+        ));
         let file = layout.new_display(
             "/checkouts/b/index.html",
             crate::view_layout::DisplayKind::File,
