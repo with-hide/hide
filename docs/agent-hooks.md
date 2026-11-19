@@ -941,7 +941,9 @@ On Windows active command hooks run through PowerShell, so Hide writes that form
 
 The skills the operator adds in Settings go from the store (`~/.hide/store`, [ARCHITECTURE.md: The store of skills and MCP items](ARCHITECTURE.md#the-store-of-skills-and-mcp-items)) into the same folders as Hide's stubs, one folder per skill with its `SKILL.md` and every other file of it, and into the same folder of each profile account.
 They are switched per folder, not per agent: the `claude` switch is `~/.claude/skills` and each Claude profile's folder, the shared switch is `~/.agents/skills`, which Codex, Grok, OpenCode, Pi and omp read, and the `antigravity` switch is `~/.gemini/config/skills`; Grok and omp also read `~/.claude/skills`, so a skill on in both folders reaches them from both, which they each list once ([What the kit puts down](#what-the-kit-puts-down)).
-A store copy carries no marker line: it is Hide's because the store's record names it with the digest of its files, so a copy the operator edited is theirs from then on and Hide leaves it, and a folder of the same name the operator put there is never replaced or removed.
+When one folder is a link to another, such as `~/.agents/skills` to `~/.claude/skills`, the two are one place, which holds a skill while either switch is on.
+A store copy carries no marker line: it is Hide's because the store's record names it with the digest of its files, so a copy the operator edited, or one they cloned a repository into, is theirs from then on and Hide leaves it, and a folder of the same name the operator put there is never replaced or removed until they take it over.
+A take-over keeps the operator's folder where it is when Hide's copy is the same, and moves it whole into the undo list otherwise; a machine leaving Hide leaves a taken-over skill where it was and puts a moved one back.
 A skill on is written while any agent that reads its folder is on; with every such agent switched off in Settings › Agents its cell reads `agent_off` and nothing is written there.
 Hide's own stubs are written by the kit alone and never shown in the store, and the store never writes a folder named after one of them.
 
