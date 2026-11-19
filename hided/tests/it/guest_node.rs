@@ -42,7 +42,7 @@ fn hided(home: &Path) -> Command {
     let mut command = Command::new(program);
     for (key, _) in std::env::vars_os() {
         let upper = key.to_string_lossy().to_uppercase();
-        if upper.starts_with("HERDR_") || upper.starts_with("HIDE_") {
+        if hide_platform::process::is_foreign_pane_identity(&upper) || upper.starts_with("HIDE_") {
             command.env_remove(key);
         }
     }
