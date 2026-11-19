@@ -7,18 +7,24 @@
 //! machines already keep, this asks the host on the management stream to
 //! run this build's node, uploads the build when the host lacks it, and
 //! opens the node link stream once the host says the node is ready. The
-//! management stream stays open for as long as that link does.
+//! management stream stays open for as long as that link does, and on it
+//! the node's box of events reaches this core: this side names how far it
+//! recorded the box, records each event the node sends after that,
+//! acknowledges it and only then applies it (D-66, `hide_peer::inbox`).
 
 use std::collections::HashMap;
 use std::io::{self, Read};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hide_node::ssh::host::HelperPackages;
 use hide_node::ssh::host::guest_build::GuestBuild;
 use hide_node::ssh::host::peer::{Opened, PeerDial};
 use hide_node_link::device::{Cancel, EstablishError};
+use hide_peer::inbox::{Applied, Apply, Inbox, Recorded};
 use hide_peer::protocol::build::FileMessage;
+use hide_peer::protocol::event::Event;
 use hide_peer::protocol::hello::GrantState;
 use hide_peer::protocol::manage::{Manage, NodeStop, Release};
 use hide_peer::protocol::{PeerKey, StreamKind, frame, launch};
@@ -29,6 +35,7 @@ use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 use crate::peer_host::{HostPeers, Link, PeerHost, Stream};
+use crate::peer_inbox::{self, Events};
 
 /// How long a machine that is not connected is waited for: the connection
 /// is kept by the pairing, which dials it again by itself.
@@ -63,6 +70,17 @@ fn failed(what: &str, error: impl std::fmt::Display) -> EstablishError {
     EstablishError::Helper(format!("{what}: {error}"))
 }
 
+/// How long an earlier link's management stream has to end, on both
+/// machines, before the next one is opened in its place.
+const HELD_ENDS_WITHIN: Duration = Duration::from_secs(2);
+
+/// The management stream held for one host.
+struct Held {
+    close: watch::Sender<bool>,
+    /// Done once the stream ended and the host let its place go.
+    ended: tokio::task::JoinHandle<()>,
+}
+
 pub struct Dialer {
     /// The endpoint, handed in once it exists: the core is started before
     /// it.
@@ -73,18 +91,36 @@ pub struct Dialer {
     release: Option<Release>,
     /// What ends the management stream held for each host, so a new link
     /// to that host opens the one a connection carries.
-    held: Mutex<HashMap<PeerKey, watch::Sender<bool>>>,
+    held: Mutex<HashMap<PeerKey, Held>>,
+    /// This daemon's state folder, which holds each host's inbox.
+    state_dir: PathBuf,
+    /// What applies a node's events, handed in once the core exists. With
+    /// none, no box is asked for and the node keeps its events.
+    events: OnceLock<Arc<dyn Events>>,
 }
 
 impl Dialer {
-    pub fn new(runtime: Handle, build: String, release: Option<Release>) -> Arc<Self> {
+    pub fn new(
+        runtime: Handle,
+        build: String,
+        release: Option<Release>,
+        state_dir: PathBuf,
+    ) -> Arc<Self> {
         Arc::new(Self {
             host: OnceLock::new(),
             runtime,
             build,
             release,
             held: Mutex::new(HashMap::new()),
+            state_dir,
+            events: OnceLock::new(),
         })
+    }
+
+    /// What applies the events of this core's nodes. Given once, at the
+    /// daemon's start.
+    pub fn take_events(&self, events: Arc<dyn Events>) {
+        let _ = self.events.set(events);
     }
 
     /// The endpoint this dialer opens streams on. Given once, at the
@@ -105,6 +141,7 @@ impl Dialer {
         &self,
         host: &Arc<PeerHost>,
         key: PeerKey,
+        device: &str,
         packages: HelperPackages,
     ) -> Result<Opened, EstablishError> {
         let peers = host.open().await.map_err(|error| {
@@ -124,8 +161,13 @@ impl Dialer {
             .map_or_else(|| key.short(), |known| known.name);
         // A connection carries one management stream: the one an earlier
         // link to this host held ends before this one opens.
-        if let Some(earlier) = lock(&self.held).remove(&key) {
-            earlier.send_replace(true);
+        let earlier = lock(&self.held).remove(&key);
+        if let Some(earlier) = earlier {
+            earlier.close.send_replace(true);
+            // The host takes one such stream at a time, so the next opens
+            // only once it let the earlier one go. A host that does not
+            // answer in time refuses the next, and the link is tried again.
+            let _ = tokio::time::timeout(HELD_ENDS_WITHIN, earlier.ended).await;
         }
         let mut management = link
             .open(StreamKind::Management)
@@ -184,8 +226,19 @@ impl Dialer {
             .await
             .map_err(|error| failed("The node link did not open", error))?;
         let (close, closed) = watch::channel(false);
-        lock(&self.held).insert(key, close.clone());
-        tokio::spawn(hold(management, key, closed.clone()));
+        let taking = self.events.get().map(|events| Taking {
+            dir: hide_kit::layout::peer_inbox(&self.state_dir, &key),
+            device: device.to_owned(),
+            events: Arc::clone(events),
+        });
+        let ended = tokio::spawn(hold(management, key, closed.clone(), taking));
+        lock(&self.held).insert(
+            key,
+            Held {
+                close: close.clone(),
+                ended,
+            },
+        );
         let (writing, _) =
             hide_peer::blocking::blocking(send, tokio::io::empty(), self.runtime.clone());
         Ok(Opened {
@@ -208,6 +261,7 @@ impl PeerDial for Dialer {
     fn open(
         &self,
         key: &str,
+        device: &str,
         packages: &HelperPackages,
         cancel: &Cancel,
     ) -> Result<Opened, EstablishError> {
@@ -227,7 +281,7 @@ impl PeerDial for Dialer {
         });
         let opened = self.runtime.block_on(async {
             tokio::select! {
-                opened = self.open_link(host, key, packages.clone()) => opened,
+                opened = self.open_link(host, key, device, packages.clone()) => opened,
                 _ = stopped.wait_for(|stopped| *stopped) => Err(ended()),
             }
         });
@@ -359,30 +413,234 @@ async fn upload(link: &Link, build: &GuestBuild) -> Result<(), EstablishError> {
     }
 }
 
-/// Keeps a host's management stream open while its node link is, and
-/// records what the host says of the node meanwhile. The link itself ends
-/// when the node does; this only says why.
-async fn hold(mut management: Stream, key: PeerKey, mut closed: watch::Receiver<bool>) {
+/// What one host's events are recorded in and applied through.
+struct Taking {
+    /// The host's inbox folder.
+    dir: PathBuf,
+    /// The device id the core knows the host's panes under.
+    device: String,
+    events: Arc<dyn Events>,
+}
+
+/// One connection's use of a host's inbox. Every step is a durable write
+/// or a call into the core, so each runs off the runtime.
+struct Taken {
+    inbox: Arc<Mutex<Inbox>>,
+    device: String,
+    events: Arc<dyn Events>,
+    /// Until when the recorded events wait for the core to know what they
+    /// are for; `None` while none waits.
+    waits_until: Option<Instant>,
+}
+
+/// [`Events`] as the inbox applies through it, for one pass.
+struct Pass<'a> {
+    events: &'a dyn Events,
+    device: &'a str,
+    last: bool,
+}
+
+impl Apply for Pass<'_> {
+    fn apply(&mut self, event: &Event) -> Applied {
+        self.events.apply(self.device, event, self.last)
+    }
+}
+
+impl Taken {
+    /// Opens the host's inbox. What an earlier connection recorded and did
+    /// not apply is in it again.
+    async fn open(taking: Taking) -> io::Result<Self> {
+        let Taking {
+            dir,
+            device,
+            events,
+        } = taking;
+        let inbox = tokio::task::spawn_blocking(move || Inbox::open(&dir))
+            .await
+            .map_err(io::Error::other)??;
+        Ok(Self {
+            inbox: Arc::new(Mutex::new(inbox)),
+            device,
+            events,
+            waits_until: None,
+        })
+    }
+
+    /// Applies what is recorded, in order, as far as the core can take it
+    /// now. An event the core cannot place yet waits, with those after
+    /// it, for [`peer_inbox::PANES_WITHIN`] from its first try: the core
+    /// knows a pane only once the node's link brought it back.
+    async fn apply(&mut self) -> io::Result<()> {
+        let (inbox, events, device) = (
+            Arc::clone(&self.inbox),
+            Arc::clone(&self.events),
+            self.device.clone(),
+        );
+        let last = self
+            .waits_until
+            .is_some_and(|until| Instant::now() >= until);
+        let waiting = tokio::task::spawn_blocking(move || {
+            let mut inbox = lock(&inbox);
+            let mut pass = Pass {
+                events: events.as_ref(),
+                device: &device,
+                last,
+            };
+            inbox.apply_recorded(&mut pass)?;
+            io::Result::Ok(inbox.unapplied() > 0)
+        })
+        .await
+        .map_err(io::Error::other)??;
+        self.waits_until = waiting.then(|| {
+            self.waits_until
+                .filter(|_| !last)
+                .unwrap_or_else(|| Instant::now() + peer_inbox::PANES_WITHIN)
+        });
+        Ok(())
+    }
+
+    async fn record(&self, event: Event) -> io::Result<Recorded> {
+        let inbox = Arc::clone(&self.inbox);
+        tokio::task::spawn_blocking(move || lock(&inbox).record(event))
+            .await
+            .map_err(io::Error::other)?
+    }
+
+    /// How far the host's box is recorded: what the host is told to send
+    /// from.
+    fn resume(&self) -> Manage {
+        let inbox = lock(&self.inbox);
+        let (outbox, seq) = inbox.position();
+        Manage::Resume {
+            outbox: outbox.to_owned(),
+            seq,
+        }
+    }
+
+    /// Records one event the host sent. What the host is answered: the
+    /// acknowledgement, or this side's place again when the event is not
+    /// the next one or there is no room for it.
+    async fn take(&self, event: Event) -> io::Result<Manage> {
+        let outbox = event.outbox.clone();
+        Ok(match self.record(event).await? {
+            Recorded::New { seq } | Recorded::Again { seq } => Manage::EventAck { outbox, seq },
+            Recorded::Gap { .. } | Recorded::Full => self.resume(),
+        })
+    }
+}
+
+/// Keeps a host's management stream open while its node link is, and ends
+/// it as the host hears an end: this side stops writing and reads until
+/// the host let the stream go, so the host's place for the next one is
+/// free when this returns.
+async fn hold(
+    mut management: Stream,
+    key: PeerKey,
+    closed: watch::Receiver<bool>,
+    taking: Option<Taking>,
+) {
+    held(&mut management, key, closed, taking).await;
+    let _ = tokio::time::timeout(HELD_ENDS_WITHIN, async {
+        let _ = management.send.shutdown().await;
+        while let Ok(Some(_)) = wire::read_message(&mut management.recv, frame::MAX_MESSAGE).await {
+        }
+    })
+    .await;
+}
+
+/// What a held management stream does: records what the host says of the
+/// node, and takes the node's box of events. The link itself ends when
+/// the node does; this only says why.
+async fn held(
+    management: &mut Stream,
+    key: PeerKey,
+    mut closed: watch::Receiver<bool>,
+    taking: Option<Taking>,
+) {
+    let failed = |step: &str, error: &dyn std::fmt::Display| {
+        hide_core::diagnostic!(json!({
+            "component": "peer_dial",
+            "kind": "peer_dial.inbox_failed",
+            "host": key.short(),
+            "step": step,
+            "error": error.to_string(),
+        }));
+    };
+    // An inbox that cannot be read asks for nothing: the node keeps its
+    // events for a connection that can record them.
+    let mut taken = match taking {
+        Some(taking) => Taken::open(taking)
+            .await
+            .map_err(|error| failed("open", &error))
+            .ok(),
+        None => None,
+    };
+    if let Some(open) = &taken
+        && ask(management, &open.resume()).await.is_err()
+    {
+        return;
+    }
+    // What an earlier connection recorded and did not apply comes first.
+    let mut apply = taken.is_some();
     loop {
+        if std::mem::take(&mut apply)
+            && let Some(open) = taken.as_mut()
+            && let Err(error) = open.apply().await
+        {
+            failed("apply", &error);
+            taken = None;
+        }
+        let waits = taken
+            .as_ref()
+            .is_some_and(|open| open.waits_until.is_some());
         let message = tokio::select! {
-            message = answer(&mut management) => message,
+            message = answer(management) => message,
             _ = closed.wait_for(|closed| *closed) => break,
+            _ = tokio::time::sleep(peer_inbox::LOOK_AGAIN), if waits => {
+                apply = true;
+                continue;
+            }
         };
-        match message {
+        let said = match message {
             Ok(Manage::NodeStopped {
                 reason,
                 retry,
                 detail,
-            }) => hide_core::diagnostic!(json!({
-                "component": "peer_dial",
-                "kind": "peer_dial.node_stopped",
-                "host": key.short(),
-                "reason": format!("{reason:?}"),
-                "retry": retry,
-                "detail": detail,
-            })),
-            Ok(_) => {}
+            }) => {
+                hide_core::diagnostic!(json!({
+                    "component": "peer_dial",
+                    "kind": "peer_dial.node_stopped",
+                    "host": key.short(),
+                    "reason": format!("{reason:?}"),
+                    "retry": retry,
+                    "detail": detail,
+                }));
+                None
+            }
+            // A node the host started again knows no one who listens.
+            Ok(Manage::NodeReady { .. }) => taken.as_ref().map(Taken::resume),
+            Ok(Manage::Event(event)) => match &taken {
+                Some(open) => match open.take(event).await {
+                    // Applied once the answer is on its way.
+                    Ok(said) => {
+                        apply = true;
+                        Some(said)
+                    }
+                    Err(error) => {
+                        failed("record", &error);
+                        taken = None;
+                        None
+                    }
+                },
+                None => None,
+            },
+            Ok(_) => None,
             Err(_) => break,
+        };
+        if let Some(said) = said
+            && ask(management, &said).await.is_err()
+        {
+            break;
         }
     }
 }
@@ -454,11 +712,21 @@ mod tests {
         stand_in::programs(programs.path());
         let packages =
             HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE);
-        let dialer = Dialer::new(Handle::current(), "9.9.9".to_owned(), None);
+        let dialer = Dialer::new(
+            Handle::current(),
+            "9.9.9".to_owned(),
+            None,
+            guest.dir.path().to_path_buf(),
+        );
         dialer.attach(Arc::clone(&guest.host));
         let open = |dialer: Arc<Dialer>, packages: HelperPackages| {
             tokio::task::spawn_blocking(move || {
-                dialer.open(&host_key.to_hex(), &packages, &Cancel::default())
+                dialer.open(
+                    &host_key.to_hex(),
+                    "windows-pc",
+                    &packages,
+                    &Cancel::default(),
+                )
             })
         };
         let opened = within(
@@ -510,6 +778,118 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        (again.close)();
+    }
+
+    /// What the core takes, for a test: the first event's pane is not
+    /// known at its first try, as while a node's link is still being read.
+    struct Taken {
+        tries: std::sync::atomic::AtomicUsize,
+        applied: tokio::sync::mpsc::UnboundedSender<(String, Event)>,
+    }
+
+    impl Events for Taken {
+        fn apply(&self, device: &str, event: &Event, _last: bool) -> Applied {
+            let first_try = self.tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            if first_try {
+                return Applied::Later;
+            }
+            let _ = self.applied.send((device.to_owned(), event.clone()));
+            Applied::Done
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_core_names_its_place_in_its_nodes_box_and_applies_each_event_once_in_order() {
+        let host = Machine::at("windows-pc", short_root());
+        let guest = Machine::new("macbook");
+        let home = tempfile::tempdir().unwrap();
+        Guests::new(
+            host.dir.path().to_path_buf(),
+            home.path().to_path_buf(),
+            HelperPackages::new(None, crate::cli::RELEASE),
+            None,
+        )
+        .serve(&host.host, host.shutdown.clone());
+        let _link = paired(&host, &guest).await;
+        let host_key = host.host.peers().unwrap().key();
+        let guest_key = guest.host.peers().unwrap().key();
+
+        // The stand-in node keeps a box; this test is its link endpoint.
+        let node_dir = layout::guest_node_side(host.dir.path(), &guest_key);
+        std::fs::create_dir_all(&node_dir).unwrap();
+        let listener = LocalListener::bind(&node_dir.join(launch::LINK_ENDPOINT)).unwrap();
+        let _links = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while let Ok(stream) = listener.accept() {
+                held.push(stream);
+            }
+        });
+        let programs = tempfile::tempdir().unwrap();
+        stand_in::programs_with_a_box(programs.path());
+        let packages =
+            HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE);
+        let dialer = Dialer::new(
+            Handle::current(),
+            "9.9.9".to_owned(),
+            None,
+            guest.dir.path().to_path_buf(),
+        );
+        dialer.attach(Arc::clone(&guest.host));
+        let (applied, mut heard) = tokio::sync::mpsc::unbounded_channel();
+        dialer.take_events(Arc::new(Taken {
+            tries: Default::default(),
+            applied,
+        }));
+        let open = |dialer: Arc<Dialer>, packages: HelperPackages| {
+            tokio::task::spawn_blocking(move || {
+                dialer.open(
+                    &host_key.to_hex(),
+                    "windows-pc",
+                    &packages,
+                    &Cancel::default(),
+                )
+            })
+        };
+        let opened = within(
+            "the node's link",
+            open(Arc::clone(&dialer), packages.clone()),
+        )
+        .await
+        .unwrap()
+        .unwrap_or_else(|error| panic!("the host runs the node: {error}"));
+
+        // The core has seen no box: it asks from the start. The node's
+        // second event exists only because the first one's acknowledgement
+        // reached it, and the first is applied before the second though
+        // the core could not place it at once.
+        let (device, first) = within("the first event", heard.recv()).await.unwrap();
+        assert_eq!(device, "windows-pc");
+        assert_eq!(
+            (first.seq, &first.body),
+            (1, &json!({"from": 0, "acked": 0, "away": 0}))
+        );
+        let (_, second) = within("the second event", heard.recv()).await.unwrap();
+        assert_eq!((second.seq, &second.body["acked"]), (2, &json!(1)));
+
+        // The next connection names the place this one recorded, so the
+        // node sends nothing it already gave.
+        // The core closes a link and lets its stream go, which frees the
+        // host's place for the next one.
+        let Opened {
+            reading,
+            writing,
+            close,
+            ..
+        } = opened;
+        close();
+        drop((reading, writing));
+        let again = within("the second link", open(dialer, packages))
+            .await
+            .unwrap()
+            .unwrap_or_else(|error| panic!("the host still runs the node: {error}"));
+        let (_, third) = within("the third event", heard.recv()).await.unwrap();
+        assert_eq!((third.seq, &third.body["from"]), (3, &json!(2)));
         (again.close)();
     }
 }

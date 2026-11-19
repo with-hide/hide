@@ -84,6 +84,9 @@ Use a new intent for a new letter, including the same text for another recipient
 The envelope identifies the sender and letter kind; it is not a session-level authority or anti-forgery proof.
 The current first-line format is `Hide letter <id> from <name> (<agent>) [<kind>]`, with independent writer and transcript-reader examples in [delivery-envelope.json](../contracts/delivery-envelope.json).
 
+A pane of another Hide's work on this machine, while that Hide is not connected, has no core to ask: `hide request send` there is kept by the pane's node and answers `{"queued": true, "intent": …}` (the `queued` answer of the contract), and the letter is recorded with its id once that Hide is back, under the same intent.
+A full box refuses the send `outbox_full`, a box the node could not write `outbox_unavailable`, and every other command there answers `owner_offline` at once; the contract's `away` section lists the three with their next actions ([ARCHITECTURE.md](ARCHITECTURE.md#a-guest-nodes-events-while-its-core-is-away)).
+
 ### Who may read a letter
 
 `hide request show <id>` answers a letter's sender and its recipient, and every other caller is refused `letter_unavailable`, as for a letter that does not exist; its `next_action` says to ask the agent that named the letter for its body.
@@ -107,6 +110,7 @@ A tool that runs these commands from a program (such as a dispatch client) check
 - `commands`: each command's words, its positional `arguments` with their value types (`"required": false` on one it takes without, which leaves out every argument after it, and `value_with` naming the option that widens what it admits: `hide pane send`'s text is `text`, and `paste_text`, line breaks and tabs too, with `--paste`), `repeats_at_most` for a last argument that repeats, its `options` (each with `name`, `value` type or `null` for a switch, `required`, the options it `requires`, and `repeats_at_most` for one given more than once), `needs_one_of` for a command that needs at least one of the arguments and options it names (`hide pane send`: its text, a `--key` or `--enter`), what `rest` passes through after `--`, the names of the `answers` it can return, and, where the contract declares them, the `refusals` its own rule answers with; those are not every failure, since every command can also fail for the daemon, the pane or the ledger.
 - `value_types`: what each value type admits (`text`, `key`, `body`, `paste_text`, `approval`, `unsigned`, `one_of` with its `values`).
 - `envelopes`: for each topic, where the printed line carries `ok`, the `answer` and the failure `code`; a failure also exits non-zero.
+- `away`: the refusals a command may answer in a pane of another Hide's work on this machine while that Hide is not connected.
 - `answers`: the JSON Schema of each answer, and `digest`, the `sha256:` of the document without it, its keys sorted and written compactly.
 
 A caller compares the digest it was written against, or the commands and options it uses, and refuses a mismatch before running anything.

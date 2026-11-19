@@ -26,6 +26,7 @@ use hide_kit::layout;
 use hide_node::ssh::host::{HelperPackages, guest_build};
 use hide_node_link::address::guest_pane_id;
 use hide_peer::protocol::build::{self, FileMessage};
+use hide_peer::protocol::launch::Position;
 use hide_peer::protocol::manage::{Manage, NodeStop};
 use hide_peer::protocol::{PeerKey, StreamKind, frame, launch};
 use hide_peer::{limits, wire};
@@ -540,6 +541,7 @@ impl Guests {
             mut send, mut recv, ..
         } = incoming.stream;
         let mut phase: Option<watch::Receiver<Phase>> = None;
+        let mut events: Option<Events> = None;
         loop {
             let answer = tokio::select! {
                 message = wire::read_message(&mut recv, frame::MAX_MESSAGE) => {
@@ -551,7 +553,14 @@ impl Guests {
                         Err(_) => break,
                     };
                     match self.asked(guest, &device, asked).await {
-                        Asked::Answer(answer) => Some(answer),
+                        Asked::Answer(answer) => serde_json::to_value(answer).ok(),
+                        Asked::Events(asked) => {
+                            // A stream asks for one node's box at a time.
+                            if let Some(earlier) = events.replace(asked) {
+                                earlier.node.away(earlier.listener);
+                            }
+                            None
+                        }
                         Asked::Watch(node) => {
                             // The node's standing now is the first answer.
                             let mut watched = node.phase();
@@ -568,16 +577,46 @@ impl Guests {
                         None => std::future::pending().await,
                     }
                 } => match changed {
-                    Ok(answer) => Some(answer),
+                    Ok(answer) => serde_json::to_value(answer).ok(),
                     Err(_) => break,
                 },
+                event = async {
+                    match events.as_mut() {
+                        Some(events) => events.events.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match event {
+                    Some(event) => Some(event),
+                    // Another stream asked for the box after this one.
+                    None => {
+                        events = None;
+                        None
+                    }
+                },
             };
+            // A guest that takes nothing ends its stream: the node's
+            // events wait in its box, not here.
             if let Some(answer) = answer
-                && wire::write_message(&mut send, &answer).await.is_err()
+                && !matches!(
+                    tokio::time::timeout(
+                        limits::WRITE_WITHIN,
+                        wire::write_message(&mut send, &answer)
+                    )
+                    .await,
+                    Ok(Ok(()))
+                )
             {
                 break;
             }
         }
+        if let Some(events) = events {
+            events.node.away(events.listener);
+        }
+        // The guest opens its next management stream once it sees this
+        // one end: the reading half goes first, so this machine's place
+        // for that kind is free by then.
+        drop(recv);
+        drop(send);
     }
 
     async fn asked(self: &Arc<Self>, guest: PeerKey, device: &str, asked: Manage) -> Asked {
@@ -621,10 +660,27 @@ impl Guests {
                 }
                 Asked::Nothing
             }
-            // The event box's messages, and what only a host writes.
-            Manage::Resume { .. }
-            | Manage::Event(_)
-            | Manage::EventAck { .. }
+            // The guest's core names its place in its node's box: the node
+            // sends what follows on this stream (D-66).
+            Manage::Resume { outbox, seq } => self
+                .node(&guest)
+                .and_then(|node| {
+                    let (listener, events) = node.resume(Position { outbox, seq })?;
+                    Some(Asked::Events(Events {
+                        node,
+                        listener,
+                        events,
+                    }))
+                })
+                .unwrap_or(Asked::Nothing),
+            Manage::EventAck { outbox, seq } => {
+                if let Some(node) = self.node(&guest) {
+                    node.ack(Position { outbox, seq });
+                }
+                Asked::Nothing
+            }
+            // What only a host writes.
+            Manage::Event(_)
             | Manage::NodeReady { .. }
             | Manage::NodeStopped { .. }
             | Manage::NodePreparing { .. } => Asked::Nothing,
@@ -720,7 +776,17 @@ enum Asked {
     Answer(Manage),
     /// The node's standing is told from now on.
     Watch(Arc<GuestNode>),
+    /// The node's box is sent from now on.
+    Events(Events),
     Nothing,
+}
+
+/// One node's events on their way to the stream that asked for its box.
+struct Events {
+    node: Arc<GuestNode>,
+    /// The name the node knows this stream's ask by.
+    listener: u64,
+    events: tokio::sync::mpsc::Receiver<serde_json::Value>,
 }
 
 /// Carries a guest's link stream to its node's endpoint and back until one
@@ -808,14 +874,38 @@ pub(crate) mod stand_in {
     /// endpoint a test listens on, and end when told to or when their input
     /// ends.
     pub(crate) fn programs(folder: &Path) {
-        let node = format!(
-            "#!/bin/sh\nprintf '%s\\n' '{{\"guest_node\":{},\"build\":\"9.9.9\",\"build_id\":\"0000000000000000\",\"pid\":'\"$$\"',\"link\":\"{}\",\"tap\":\"{}\",\"tap_versions\":[{},{}],\"capabilities\":[]}}'\nwhile read -r line; do\n  case \"$line\" in *'\"end\"'*) exit 0 ;; esac\ndone\nexit 0\n",
+        write(folder, &node("[]", ""));
+    }
+
+    /// The same programs with a node that keeps a box: it names the
+    /// capability, sends one event each time it is asked for its box and
+    /// one more for the first acknowledgement, and each event says the
+    /// place it was last asked from and how many acknowledgements and how
+    /// many "the guest is away" it heard before it. Every event carries a
+    /// field this build does not know.
+    pub(crate) fn programs_with_a_box(folder: &Path) {
+        let event = r#"seq=$((seq+1)); printf '{"event":{"v":1,"outbox":"box","seq":%s,"kind":"letter","key":"k%s","at_unix_ms":7,"body":{"from":%s,"acked":%s,"away":%s},"later":"kept"}}\n' "$seq" "$seq" "$from" "$acked" "$away""#;
+        let lines = format!(
+            "    *'\"resume\"'*) from=$(printf '%s' \"$line\" | sed 's/.*\"seq\":\\([0-9]*\\).*/\\1/'); {event} ;;\n    *'\"ack\"'*) acked=$((acked+1)); if [ \"$acked\" = 1 ]; then {event}; fi ;;\n    *'\"away\"'*) away=$((away+1)) ;;\n"
+        );
+        write(folder, &node(r#"["events"]"#, &lines));
+    }
+
+    /// The node's script: its ready line, then what it does with each line
+    /// of its host (`cases`, the arms of a `case "$line"`), ending when
+    /// told to or when its input ends.
+    fn node(capabilities: &str, cases: &str) -> String {
+        format!(
+            "#!/bin/sh\nseq=0; from=0; acked=0; away=0\nprintf '%s\\n' '{{\"guest_node\":{},\"build\":\"9.9.9\",\"build_id\":\"0000000000000000\",\"pid\":'\"$$\"',\"link\":\"{}\",\"tap\":\"{}\",\"tap_versions\":[{},{}],\"capabilities\":{capabilities}}}'\nwhile read -r line; do\n  case \"$line\" in\n{cases}    *'\"end\"'*) exit 0 ;;\n  esac\ndone\nexit 0\n",
             launch::GUEST_NODE,
             launch::LINK_ENDPOINT,
             launch::TAP_ENDPOINT,
             hide_peer::protocol::tap::OLDEST_TAP,
             hide_peer::protocol::tap::NEWEST_TAP,
-        );
+        )
+    }
+
+    fn write(folder: &Path, node: &str) {
         for (name, bytes) in [
             ("hided", node.as_bytes()),
             ("hide", b"hide".as_slice()),
@@ -926,6 +1016,91 @@ mod tests {
         .unwrap()
         .expect("an answer before the stream ends");
         FileMessage::parse(&body).unwrap().expect("a known answer")
+    }
+
+    /// The next management message as its fields, whatever this build
+    /// knows of them.
+    async fn fields(stream: &mut Stream) -> serde_json::Value {
+        let body = within(
+            "a management message",
+            wire::read_message(&mut stream.recv, frame::MAX_MESSAGE),
+        )
+        .await
+        .unwrap()
+        .expect("the management stream stays open");
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_nodes_box_reaches_its_guest_as_the_node_wrote_it_and_the_node_hears_how_far_it_was_recorded()
+     {
+        let pair = Pair::new().await;
+        let programs = tempfile::tempdir().unwrap();
+        stand_in::programs_with_a_box(programs.path());
+        let build = HelperPackages::new(Some(programs.path().to_path_buf()), crate::cli::RELEASE)
+            .guest_build(std::env::consts::OS, std::env::consts::ARCH)
+            .unwrap_or_else(|error| panic!("the stand-in build is whole: {error}"));
+        let bytes: Vec<&[u8]> = (0..build.files().len())
+            .map(|index| build.bytes(index).unwrap())
+            .collect();
+        upload(&pair.link, build.id(), build.files(), &bytes).await;
+        let mut management = pair.link.open(StreamKind::Management).await.unwrap();
+        ask(&mut management, &start(Some(build.id()))).await;
+        loop {
+            match answer(&mut management).await {
+                Manage::NodePreparing { .. } => {}
+                Manage::NodeReady { .. } => break,
+                other => panic!("the node starts: {other:?}"),
+            }
+        }
+
+        // The guest names its place, and the node's event comes as the
+        // node wrote it: a field this host's build does not know is in it.
+        let resume = |outbox: &str, seq| Manage::Resume {
+            outbox: outbox.to_owned(),
+            seq,
+        };
+        ask(&mut management, &resume("", 0)).await;
+        let first = fields(&mut management).await;
+        assert_eq!(
+            first,
+            json!({"t": "event", "v": 1, "outbox": "box", "seq": 1, "kind": "letter",
+                   "key": "k1", "at_unix_ms": 7, "later": "kept",
+                   "body": {"from": 0, "acked": 0, "away": 0}})
+        );
+        // What the guest recorded reaches the node.
+        ask(
+            &mut management,
+            &Manage::EventAck {
+                outbox: "box".to_owned(),
+                seq: 1,
+            },
+        )
+        .await;
+        let second = fields(&mut management).await;
+        assert_eq!(
+            (&second["seq"], &second["body"]["acked"]),
+            (&json!(2), &json!(1))
+        );
+
+        // The guest goes: the node is told before the host lets go of the
+        // stream, so its next event waits for whoever asks next.
+        management.send.shutdown().await.unwrap();
+        while let Ok(Some(_)) = within(
+            "the stream's end",
+            wire::read_message(&mut management.recv, frame::MAX_MESSAGE),
+        )
+        .await
+        {}
+        let mut again = pair.link.open(StreamKind::Management).await.unwrap();
+        ask(&mut again, &resume("box", 2)).await;
+        let third = fields(&mut again).await;
+        assert_eq!(
+            (&third["seq"], &third["body"]),
+            (&json!(3), &json!({"from": 2, "acked": 1, "away": 1}))
+        );
+        ask(&mut again, &Manage::NodeEnd { mode: EndMode::Now }).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -11,6 +11,8 @@
 //! and goes meanwhile, and the node keeps its pane holders, their records
 //! and its ownership of them across every one (D-77 (5)).
 
+pub(crate) mod away;
+mod event_box;
 mod tap;
 
 use std::io::{self, BufRead, BufReader, Write};
@@ -89,6 +91,18 @@ fn say(line: &impl serde::Serialize) {
     }
 }
 
+/// Writes the host one event of the box, as the line it is kept as: a
+/// field this build does not know goes with it.
+fn say_event(event: &str) {
+    let mut out = io::stdout().lock();
+    if writeln!(out, "{{\"event\":{event}}}")
+        .and_then(|()| out.flush())
+        .is_err()
+    {
+        std::process::exit(launch::EXIT_HOST_UNREACHABLE);
+    }
+}
+
 /// What a diagnostic of the node's own parts is written to: up the guest's
 /// link while there is one, and otherwise the host's log.
 fn diagnostic(value: serde_json::Value) {
@@ -153,6 +167,19 @@ pub fn run(dir: &str) -> ! {
     };
     let link = bind(launch::LINK_ENDPOINT);
     let taps = bind(launch::TAP_ENDPOINT);
+    let away = bind(away::ENDPOINT);
+    // A box this build cannot read stays as it is for a build that can:
+    // the node runs without one and says so to whoever sends a letter.
+    let events = match event_box::EventBox::open(&dir, Box::new(say_event)) {
+        Ok(events) => Some(Arc::new(events)),
+        Err(error) => {
+            record(
+                "guest_node.box_unreadable",
+                json!({"error": error.to_string()}),
+            );
+            None
+        }
+    };
 
     let program = std::env::current_exe().unwrap_or_else(|error| refused(error));
     let install_root = launch::runs_from_install_root(&dir, &program);
@@ -211,13 +238,22 @@ pub fn run(dir: &str) -> ! {
         link: launch::LINK_ENDPOINT.to_owned(),
         tap: launch::TAP_ENDPOINT.to_owned(),
         tap_versions: [tap_contract::OLDEST_TAP, tap_contract::NEWEST_TAP],
-        capabilities: Vec::new(),
+        capabilities: events
+            .iter()
+            .flat_map(|_| launch::NODE_CAPABILITIES)
+            .map(str::to_owned)
+            .collect(),
     });
 
     {
         let life = Arc::clone(&life);
         let owned = Arc::clone(&owned);
-        std::thread::spawn(move || read_host(&life, &owned));
+        let events = events.clone();
+        std::thread::spawn(move || read_host(&life, &owned, events.as_deref()));
+    }
+    {
+        let slot = slot.clone();
+        std::thread::spawn(move || away::serve(&away, &slot, events.as_ref()));
     }
     {
         let hub = Arc::clone(&hub);
@@ -370,7 +406,7 @@ fn accept_links(link: &LocalListener, life: &Life, sessions: &mpsc::SyncSender<L
 
 /// Reads what the host says on the node's input until that input ends,
 /// which is the host going away: the node exits and leaves its holders.
-fn read_host(life: &Life, owned: &Arc<dyn PaneHolders>) {
+fn read_host(life: &Life, owned: &Arc<dyn PaneHolders>, events: Option<&event_box::EventBox>) {
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         match ToNode::parse(&line) {
@@ -380,15 +416,35 @@ fn read_host(life: &Life, owned: &Arc<dyn PaneHolders>) {
                 lock(&life.state).after_last_pane = true;
                 life.look();
             }
-            // The event box's lines, which this build does not name in its
-            // ready line yet.
-            Some(ToNode::Resume(_) | ToNode::Ack(_) | ToNode::Away) => {}
+            // The box's lines: a node that named no box is sent none.
+            Some(ToNode::Resume(position)) => {
+                box_did("resume", events.map(|events| events.resume(&position)));
+            }
+            Some(ToNode::Ack(position)) => {
+                box_did("ack", events.map(|events| events.ack(&position)));
+            }
+            Some(ToNode::Away) => {
+                if let Some(events) = events {
+                    events.away();
+                }
+            }
             // A line of a later host.
             None => record("guest_node.host_line_unread", json!({"bytes": line.len()})),
         }
     }
     record("guest_node.input_ended", json!({}));
     std::process::exit(launch::EXIT_ENDED);
+}
+
+/// Records a box step that failed. The guest's core asks again at its next
+/// connection, and an event it did not get is still kept.
+fn box_did(step: &str, done: Option<io::Result<()>>) {
+    if let Some(Err(error)) = done {
+        record(
+            "guest_node.box_step_failed",
+            json!({"step": step, "error": error.to_string()}),
+        );
+    }
 }
 
 /// Ends every pane through the node's own ownership, then exits. A pane

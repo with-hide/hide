@@ -217,6 +217,70 @@ fn a_node_binds_its_endpoints_says_ready_then_idle_and_ends_with_its_input() {
     assert_eq!(node.exit(), Some(launch::EXIT_ENDED));
 }
 
+/// One exchange with the node's away endpoint, as a pane's `hide` has it.
+fn away(node: &Node, ask: serde_json::Value) -> serde_json::Value {
+    let mut stream = LocalStream::connect(&node.dir.join("away.sock")).unwrap();
+    stream.set_read_timeout(Some(WITHIN)).unwrap();
+    writeln!(stream, "{ask}").unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    serde_json::from_str(&line).unwrap_or_else(|error| panic!("{line}: {error}"))
+}
+
+#[test]
+fn a_node_sends_the_box_an_earlier_node_left_and_answers_a_pane_while_its_guest_is_away() {
+    let root = short_root();
+    // An earlier node of this guest, of another build, kept two events;
+    // the guest's core recorded the first.
+    let recorded = include_str!("../../../contracts/fixtures/peer-link/event-box.jsonl");
+    let dir = root.path().join(launch::NODE_SIDE);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("box.jsonl"), recorded).unwrap();
+    std::fs::write(dir.join("acked"), r#"{"v":1,"outbox":"recorded","seq":1}"#).unwrap();
+
+    let mut node = Node::start(root.path());
+    assert_eq!(node.ready().capabilities, launch::NODE_CAPABILITIES);
+    assert!(node.idle("that it is idle"));
+
+    // Nothing is sent until the guest's core names its place; then the
+    // event it has not recorded comes as it was written, with the fields
+    // this build does not know.
+    node.tell(r#"{"resume":{"outbox":"recorded","seq":1}}"#);
+    let kept: serde_json::Value = serde_json::from_str(recorded.lines().nth(1).unwrap()).unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&node.line("its kept event")).unwrap();
+    assert_eq!(sent, serde_json::json!({ "event": kept }));
+    node.tell(r#"{"ack":{"outbox":"recorded","seq":2}}"#);
+    node.tell(r#""away""#);
+
+    // With no link, a pane's `hide` asks the node itself: a command that
+    // needs the guest's core is told the core is away, and a letter is
+    // kept only for a caller this machine's kernel finds in the pane it
+    // names, which this test is not.
+    assert_eq!(
+        away(&node, serde_json::json!({"pane_id": "w1:p1"})),
+        serde_json::json!({"ok": false, "reason": "owner_offline"})
+    );
+    let letter = away(
+        &node,
+        serde_json::json!({"pane_id": "w1:p1", "command": {
+            "op": "send", "target": "parent", "intent": "a", "body": "b", "kind": "report"
+        }}),
+    );
+    assert_eq!(letter["ok"], false, "{letter}");
+    assert_ne!(letter["reason"], "owner_offline", "{letter}");
+
+    drop(node.input.take());
+    assert_eq!(node.exit(), Some(launch::EXIT_ENDED));
+    // What the guest recorded is gone from the box, and its place is kept.
+    assert_eq!(std::fs::read(dir.join("box.jsonl")).unwrap(), b"");
+    let place: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("acked")).unwrap()).unwrap();
+    assert_eq!(
+        place,
+        serde_json::json!({"v": 1, "outbox": "recorded", "seq": 2})
+    );
+}
+
 #[test]
 fn a_new_host_on_the_tap_replaces_the_one_before_it() {
     let root = short_root();

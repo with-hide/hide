@@ -26,11 +26,14 @@ use super::{HelperPackages, PaneHook, RemoteHost, TerminalHook, lock_recover};
 pub trait PeerDial: Send + Sync {
     /// Has the machine paired under the connection key `key` run this
     /// core's node, from the build `packages` holds for that machine's
-    /// platform, and opens the node's link. Blocking and bounded; a raised
+    /// platform, and opens the node's link. `device` is the id the core
+    /// knows that machine's panes under, which what the node reports of
+    /// them beside its link is applied to. Blocking and bounded; a raised
     /// `cancel` ends it at its next wait.
     fn open(
         &self,
         key: &str,
+        device: &str,
         packages: &HelperPackages,
         cancel: &Cancel,
     ) -> Result<Opened, EstablishError>;
@@ -156,7 +159,9 @@ impl DialedTransport for PeerDevice {
         let stage = |name: &str| super::establish_stage(&target, name, since);
         let ended = || EstablishError::Helper(super::ATTEMPT_ENDED.to_owned());
         stage("node");
-        let opened = self.dial.open(&self.key, &self.packages, &cancel)?;
+        let opened = self
+            .dial
+            .open(&self.key, &self.node, &self.packages, &cancel)?;
         if cancel.is_cancelled() {
             (opened.close)();
             return Err(ended());

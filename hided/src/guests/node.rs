@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use hide_peer::protocol::PeerKey;
 use hide_peer::protocol::build;
-use hide_peer::protocol::launch::{self, EndMode, FromNode, Ready, ToNode};
+use hide_peer::protocol::launch::{self, EndMode, FromNode, Position, Ready, ToNode};
 use hide_peer::protocol::manage::NodeStop;
 use hide_peer::protocol::tap;
 use hide_platform::process::OwnedChild;
@@ -59,6 +59,18 @@ impl Phase {
             detail: None,
         }
     }
+}
+
+/// How many of a node's events wait for the guest's stream to take them
+/// before the node's output is left unread, which holds the node's next
+/// event in its box.
+const EVENTS_WAITING: usize = 64;
+
+/// The guest's management stream that asked for the node's box: where the
+/// node's events go until that stream ends or another asks.
+struct Listener {
+    id: u64,
+    events: tokio::sync::mpsc::Sender<serde_json::Value>,
 }
 
 /// How long a crashed node stays down before it is started again.
@@ -179,6 +191,9 @@ struct Control {
     stopping: bool,
     /// When the node crashed, within the window crashes are counted in.
     crashes: VecDeque<Instant>,
+    listener: Option<Listener>,
+    /// The listeners there have been, which names each.
+    listeners: u64,
 }
 
 pub struct GuestNode {
@@ -316,6 +331,91 @@ impl GuestNode {
         });
         if !written {
             control.input = None;
+        }
+    }
+
+    /// The guest's core is connected and recorded the node's box as far as
+    /// `position`: the node sends what follows, and each event comes out
+    /// of the receiver as the management message it is. `None` for a node
+    /// that is not running or keeps no box. A stream that asked earlier
+    /// hears no more.
+    pub fn resume(
+        &self,
+        position: Position,
+    ) -> Option<(u64, tokio::sync::mpsc::Receiver<serde_json::Value>)> {
+        if !self.running().is_some_and(|running| {
+            running
+                .capabilities
+                .iter()
+                .any(|named| named == launch::CAP_EVENTS)
+        }) {
+            return None;
+        }
+        let (events, heard) = tokio::sync::mpsc::channel(EVENTS_WAITING);
+        let id = {
+            let mut control = lock(&self.control);
+            control.listeners += 1;
+            let id = control.listeners;
+            control.listener = Some(Listener { id, events });
+            id
+        };
+        // The listener is in place first: the node answers with events.
+        self.tell(&ToNode::Resume(position));
+        Some((id, heard))
+    }
+
+    /// The guest's core recorded the node's box through `position`.
+    pub fn ack(&self, position: Position) {
+        self.tell(&ToNode::Ack(position));
+    }
+
+    /// The stream that asked for the box as listener `id` ended: the node
+    /// keeps its events until the next one asks. A later listener is left
+    /// as it is.
+    pub fn away(&self, id: u64) {
+        let was = {
+            let mut control = lock(&self.control);
+            let was = control
+                .listener
+                .as_ref()
+                .is_some_and(|listener| listener.id == id);
+            if was {
+                control.listener = None;
+            }
+            was
+        };
+        if was {
+            self.tell(&ToNode::Away);
+        }
+    }
+
+    /// Hands one event line of the node to the stream that asked for its
+    /// box, as a management message. The line is read as its fields, so
+    /// one this build does not know goes with it. This waits while the
+    /// stream is behind, which leaves the node's output unread and its
+    /// next event in its box; a stream that ended is told to the node.
+    fn relay(&self, line: &str) {
+        let Ok(serde_json::Value::Object(mut said)) = serde_json::from_str(line) else {
+            return;
+        };
+        let Some(serde_json::Value::Object(mut event)) = said.remove("event") else {
+            return;
+        };
+        event.insert("t".to_owned(), "event".into());
+        let listener = lock(&self.control)
+            .listener
+            .as_ref()
+            .map(|listener| (listener.id, listener.events.clone()));
+        // An event no stream asked for stays in the node's box: the guest
+        // names its place again when it connects.
+        let Some((id, events)) = listener else {
+            return;
+        };
+        if events
+            .blocking_send(serde_json::Value::Object(event))
+            .is_err()
+        {
+            self.away(id);
         }
     }
 
@@ -499,7 +599,13 @@ impl GuestNode {
         let exit = self.serve(&mut child, &heard, built);
         // Whatever ended the run, the process and what it left in its tree
         // are gone before the next one starts; its holders are not in it.
-        lock(&self.control).input = None;
+        // The stream that asked for its box hears no more of it, and asks
+        // the node that follows.
+        {
+            let mut control = lock(&self.control);
+            control.input = None;
+            control.listener = None;
+        }
         let reaped = match &exit {
             Some(_) => {
                 let _ = child.kill_tree();
@@ -588,9 +694,10 @@ impl GuestNode {
             };
             match FromNode::parse(&line) {
                 Some(FromNode::Idle(now)) => idle = now,
-                // The event box's lines: this host reads none until its
-                // build names the capability to the guest.
-                Some(FromNode::Event(_) | FromNode::BoxFull(_)) => {}
+                Some(FromNode::Event(_)) => self.relay(&line),
+                // A report the box had no room for. This build's node
+                // keeps only what a pane sends, and answers that pane.
+                Some(FromNode::BoxFull(_)) => {}
                 // A line of a later build.
                 None => {}
             }

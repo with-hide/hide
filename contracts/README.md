@@ -79,7 +79,10 @@ A new platform is one entry here, a runner that builds it, and its row in [docs/
 `hide-peer-protocol` is the writer: `contract::shape` builds the file's content from the crate's own constants and types, and its test `the_committed_contract_is_what_the_code_speaks` fails until this file matches.
 The crate also includes the file in its source, and a build that is not a release sends the file's hash in its hello, so two development builds of different contracts refuse each other instead of misreading one another.
 A change to it is a change to what a peer of another build reads: add a field or a message type an older reader skips, and raise the link version (`hello::NEWEST_LINK`) for anything an older reader would misread.
-Regenerate it from that crate alone, so the keys come out in one order whatever else the build selects, and never edit it by hand:
+`fixtures/peer-link/event-box.jsonl` is a guest node's box as recorded: its first line as this build writes one, its second with fields a later build of the same guest might add.
+The node's tests read it as the box an earlier node left (`hided/src/guest_node/event_box.rs`, `hided/tests/it/guest_node.rs`): every line goes to the guest's core as it was written, and this build's own line matches the first field for field, so the build before and the build after read the same box.
+Add a line when a build starts writing a field; never change a recorded one.
+Regenerate `peer-link.json` from that crate alone, so the keys come out in one order whatever else the build selects, and never edit it by hand:
 
 ```sh
 bash scripts/verify-cargo.sh build -p hide-peer-protocol --example export_contract

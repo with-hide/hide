@@ -3235,6 +3235,7 @@ A file that names another machine, as a copied or restored home folder would car
 An event another core hands this one is appended and synced to `peers/inbox/<host>/events.jsonl` before it is acknowledged, in the sender's own sequence: a repeat answers its old number, a gap is refused with what the inbox holds, and a full inbox refuses instead of dropping.
 Events are applied one at a time with `cursor.json` saved after each, and one that cannot be applied is acknowledged and logged rather than blocking the ones behind it.
 An append that fails partway is cut back to the last whole line, so the next event never joins a torn one.
+An event whose target the core does not know yet (`Applied::Later`) stays recorded and holds the ones behind it, so order is kept; it is tried again until its caller says the wait is over.
 
 **The iroh transport.**
 `hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
@@ -3260,6 +3261,27 @@ The core holds the lists as `navigator.guest_panes`, keyed by the guest's device
 The node keeps a session on every pane its holders' records say may run, so the host draws a pane whether or not the guest's core looks at it, and the guest's core's attach and release only decide whether a pane's output also goes up the node link.
 After its own restart the daemon lists each guest's panes again from the file and starts the node of a guest that still has panes from the build it last ran (`h/node.json`), with the guest away.
 `hide pane send` types text and Enter into a guest's pane through the tap once the node is there to take them; this machine keeps no text of a guest's pane, so a read is refused as `guest_pane_read`, a named key as `guest_pane_keys` and a paste as `paste_unsupported`.
+
+### A guest node's events while its core is away
+
+A pane of a guest's node reaches the guest's core through the pane service of the node's link, which lives only as long as a link does.
+While no link is served, the same `hide` asks the node itself on `away.sock` in the node's folder (`hided/src/guest_node/away.rs`), bound for the node's whole life: one line each way, both ends the guest's own build.
+A letter (`hide request send`) from a caller this machine's kernel finds in the pane it names is kept in the node's box and answered `queued`; every other command needs the core's judgement and is answered `owner_offline` at once, and so is a credential the pane asks for with no link (`workspace_cli::bootstrap`).
+
+The box is `box.jsonl` and `acked` in the node's folder (`hided/src/guest_node/event_box.rs`), in the format `hide_peer_protocol::event` names because two builds of one guest read it: the node that wrote it and the one that replaces it.
+An event is appended and synced before its sender is answered, numbered from 1 with no gaps in a box named once; an event of the same kind and key that is still kept is the same event, so a send tried again adds nothing.
+At 4096 events or 8 MiB a new event is refused `outbox_full` and nothing kept is dropped; one event is at most a management message.
+A line is kept and sent as the text it was written as, so a field a later build added reaches the guest's core unchanged, and a whole line this build cannot read refuses the box and leaves the file as it is: the node then names no `events` capability and answers a letter `outbox_unavailable`.
+
+The guest's core asks for the box on the management stream it holds beside its node link (`hided/src/peer_dial.rs`, `hold`): it names how far it recorded (`resume`), the host tells the node on its input (`ToNode::Resume`), and the node writes every kept event, and each new one as it is made, on its output.
+The host relays each line to the stream that asked as an `event` message with the line's own fields (`GuestNode::relay`), at most 64 waiting; a stream that takes nothing for 30 s is ended and the node is told `away`, so events wait in the node's box and never in the host's memory.
+The guest records each event durably (`hide_peer::inbox`), acknowledges it, and only then applies it; the acknowledgement goes back to the node, which drops what was recorded.
+A core whose place the box cannot follow (it names another box, or a place the box dropped or never reached) gets what is kept in a box started fresh, numbered from 1, and the product's own keys make a repeat nothing.
+One management stream per guest is open at a time: a new link ends the earlier stream on both machines before it opens the next (`Held`).
+
+This build keeps one kind of event, `letter`, and applies it as the command the pane would have run had the core been there (`hided/src/peer_inbox.rs`): the pane's own context and agent, and the letter's intent, which makes a second apply the same letter.
+The core knows a pane only once the node's link brought it back, so a letter waits up to 60 s for that and is then logged as unappliable: its pane, or the agent in it, is gone.
+A pane's end and an agent's completion are not events: they reach the core as the node's state when its link is read again, which is the same however often it is read.
 
 ### Moving the core
 

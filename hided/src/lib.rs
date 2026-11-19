@@ -61,6 +61,7 @@ pub mod pane_auth;
 mod pane_sizes;
 pub mod peer_dial;
 pub mod peer_host;
+pub mod peer_inbox;
 pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
@@ -493,6 +494,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 commit,
                 order: this_build.order,
             }),
+        env.state_dir.clone(),
     );
     seat.starting("core.owner");
     let core = Arc::new(CoreHandle::spawn(
@@ -599,6 +601,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         shutdown.clone(),
     );
     peer_dial.attach(Arc::clone(&peers));
+    peer_dial.take_events(Arc::new(peer_inbox::Letters::new(Arc::clone(&core))));
     // Each stream kind's owner hands its handler in here, before the
     // endpoint opens. The start is not held for the endpoint: a machine
     // whose network is down still starts, and the reason is in the log.
