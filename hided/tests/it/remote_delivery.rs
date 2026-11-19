@@ -1033,12 +1033,16 @@ fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_o
         let mut stop = account.command(&fixture.remote.hide);
         stop.arg("stop");
         let stopped = fixture::capture(stop)?;
+        // So is the terminal that Hide opened for the project it was handed,
+        // as it does for every project added to it: a holder outlives the
+        // Hide that started it.
+        let ended = fixture::end_holders(&state);
         journey?;
         ensure!(
             stopped.status.success(),
             "the account's own Hide did not stop: {}",
             String::from_utf8_lossy(&stopped.stderr)
         );
-        Ok(())
+        ended
     })
 }
