@@ -218,9 +218,9 @@ describe("the where row: which project, then which branch", () => {
 describe("an automation's own folder (PRD automations B30)", () => {
   it("is offered nowhere a project is picked, and the sidebar's list of it stays one array", () => {
     const snapshot = rest();
-    const own = checkout("c-auto", "w-auto", "/home/hide/automations/a-1", { is_primary: true });
+    const own = checkout("c-auto", "w-auto", "/srv/hide/automations/a-1", { is_primary: true });
     snapshot.navigator!.workspaces!.push(workspace("w-auto", "a-1", "local", [own], { unlisted: true }));
-    expect(keys(snapshot, { kind: "main" }).flat()).not.toContain(checkoutKey("local", "/home/hide/automations/a-1"));
+    expect(keys(snapshot, { kind: "main" }).flat()).not.toContain(checkoutKey("local", "/srv/hide/automations/a-1"));
     const listed = contextWorkspaces(snapshot);
     expect(listed.map((row) => row.id)).toEqual(["w-hide", "w-sasu"]);
     expect(contextWorkspaces(snapshot)).toBe(listed);
