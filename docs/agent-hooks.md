@@ -22,6 +22,7 @@ Its own records are the exception: they stay in the state folder of the daemon t
 
 On Windows `~` is the account's profile folder (`%USERPROFILE%`), where Claude Code, Codex, Grok keeps these files and OpenCode, Pi and omp load their plugins and extensions from.
 Beside the hooks, Hide records Claude Code's, Codex's, agy's, Grok's and Pi's own folder trust for a worktree it made, in each agent's own file ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
+It also writes the MCP servers the operator keeps in Hide's store into each agent's own MCP file, one entry per server, and takes them out again ([MCP servers](#mcp-servers)).
 
 One entry is appended per registered event, and nothing else in the file is touched.
 The common writer retains JSON source spans through `serde_json::value::RawValue`, splicing only owned changes so unrelated members, groups and handlers retain their literal whitespace, ordering and escapes.
@@ -591,6 +592,65 @@ Grok's real reading is measured by the agent journey's `start_untrusted` cell ([
 Pi's is measured by the same cell on Linux, macOS and Windows: the never-trusted repository holds `.pi/settings.json`, so the untrusted start reaches its prompt only through the trust Hide recorded.
 The pull request runs no registry install, so a failure that is not Hide's never holds one; a change to the trust writer is proven on all three systems with `gh workflow run nightly.yml --ref <branch> -f lane=agy`.
 
+## MCP servers
+
+The operator adds an MCP server once, in Settings › Skills and MCP or with `hide mcp`, and Hide writes it into the MCP file of every agent and profile account its switches reach (PRD skill-mcp-manager B11 to B16, D-27, D-28, D-32).
+`hide_agent_hooks::mcp` is the only code that writes those files; which servers go where, and which entries are Hide's, is the store's (`hide_kit::store`).
+
+Each agent's definition names its file and its shape in `[account.paths]`: `mcp`, with the account's variables like every other place, and `mcp_format`, the converter that reads and writes it.
+There is one converter per shape, not per agent, and omp's file has Claude Code's shape; an agent whose file has a shape Hide already reads is added with those two lines.
+A server is local (a command, its arguments and its variables) or remote (an address and its headers), and a remote one speaks Streamable HTTP or the older Server-Sent Events.
+
+| Agent | File | Profile account's file | Shape (`mcp_format`) | Transports |
+| --- | --- | --- | --- | --- |
+| Claude Code | `~/.claude.json`, `mcpServers`, or `~/.claude/.config.json` while that older file has content, as for [folder trust](#folder-trust-for-the-worktrees-hide-makes) | `$CLAUDE_CONFIG_DIR/.claude.json` | `claude`: `type` is `stdio`, `http` or `sse` | stdio, HTTP, SSE |
+| Codex | `~/.codex/config.toml`, `[mcp_servers.<name>]` | `$CODEX_HOME/config.toml` | `codex`: `command`, `args`, `env`, or `url` and `http_headers` | stdio, HTTP; Codex reads a `transport = "sse"` entry as Streamable HTTP, so an SSE server is not written |
+| OpenCode | `~/.config/opencode/opencode.json`, `mcp.<name>` | `$XDG_CONFIG_HOME/opencode/opencode.json` | `opencode`: `type` `local` with `command` as one list and `environment`, or `remote` with `url` and `headers` | stdio, HTTP; OpenCode 2 has no SSE client |
+| Pi | `~/.pi/agent/mcp.json`, `mcpServers` | `$PI_CODING_AGENT_DIR/mcp.json` | `pi`: no `type`; `command`, `args`, `env`, or `url` and `headers` | stdio, HTTP; Pi refuses SSE ("legacy SSE transport is not supported") |
+| omp | `~/.omp/agent/mcp.json`, `mcpServers` | `~/.omp/profiles/<name>/agent/mcp.json` | `claude` | stdio, HTTP, SSE |
+| Grok | `~/.grok/config.toml`, `[mcp_servers.<name>]` | `$GROK_HOME/config.toml` | `grok`: no `type` for a local server or Streamable HTTP, `type = "sse"` for SSE, `headers` | stdio, HTTP, SSE |
+| Antigravity | `~/.gemini/config/mcp_config.json`, `mcpServers` | none: agy has no profile of its own account | `agy`: `command`, `args`, `env`, or `serverUrl` and `headers` | stdio, HTTP; `agy mcp add -t sse` fails |
+
+The shapes are each agent's own `mcp add` output in a scratch home and its documentation: Claude Code 2.1.328, Codex 0.169.0, OpenCode 2.0.29 and its first shape back to 1.0, Pi 1.0.4, Grok 1.0.77 and agy 1.5.12, and omp 18.7.0's `docs/mcp-config.md`, since omp has no `mcp` command (measured 2026-11-19).
+A cell whose agent does not take the server's transport reads unsupported, and its tooltip says why (B14).
+OpenCode 2 also reads a second shape, `mcp.servers.<name>`, which its own `mcp add --global` writes: Hide reads entries there for adoption and name clashes, writes only the first shape, which every OpenCode version reads, and does not name a server `servers`.
+On Windows each file is under the account's profile folder (`%USERPROFILE%`) at the same place: Claude Code, Codex and Grok document it, OpenCode and Pi build it from the home folder in their source, and omp and agy keep it in the folder Hide already writes their extension and hooks into on Windows.
+
+A write puts one entry in, under the server's name, and a removal takes one out; every other byte of the file stays, and a table of servers the removal leaves empty goes, with each table above it that it was the last of, so a file Hide added the table to is as it was (an empty table the operator kept there goes too, which every agent reads as no server).
+A JSON file goes through the same lossless reader and compare-before-replace as the hook files ([What is written, and where](#what-is-written-and-where)), a TOML file through `toml_edit`, which keeps the rest of the document as written, and both replace the file atomically, keeping its permissions, or 0600 for a file Hide makes.
+Claude Code rewrites `~/.claude.json` while it runs, so Hide holds Claude Code's own lock on it across its read and write, as folder trust does.
+A file Hide cannot read (broken JSON or TOML, an unexpected shape) is left as it is, and only that agent's cell fails; the failure names the file and the line, never the line's text, which can hold a key.
+Writing the same server again changes no byte (B27).
+
+Whose an entry is, is the store's record: for each file, the entries Hide wrote with the digest of each (`Server::digest`), the server's name, how it is reached and the names of its variables and headers, never a value, and a fingerprint of the key values written with it (`Written::keys`), an HMAC-SHA256 under the store's own secret, 32 random bytes in the owner-only `~/.hide/store/keys.secret`, so the record tells nothing of a value, a short one included, to one who reads it without the secret.
+The secret is made with the first fingerprint; once the record holds one, a secret that is gone or cannot be read stops every store pass and keeps the store when the machine leaves Hide, since a new secret, or none, would read every server Hide wrote with keys as the operator's and Hide would never take them out.
+An entry is Hide's only while its server and its keys are both what Hide wrote: a key the operator typed into the file by hand makes the entry theirs, so a later switch off, key edit or delete leaves it as it is (B22).
+A key edited in Hide is still Hide's to rewrite where the file holds the key Hide wrote before, and a place whose rewrite failed is retried with the record saying which key it holds.
+An entry with no record, or whose digest no longer matches, is the operator's: Hide neither writes over it nor takes it out, and the cell says it is already there and offers to take it in (B22, D-16).
+An entry with a field of a type its agent does not take (a number among the arguments, a variable that is no string) is one Hide cannot read, never one read as if that field were absent.
+An entry is whole only while every field it holds is one its shape's reader reads (`Found::whole`): a `timeout`, an `enabled` or `disabled` switch or a tool list is a field Hide's copy leaves out, so an entry holding one is never Hide's to replace or take out, even when its server is the same.
+An agent's entry is the item only with the item's keys too: the same server with another key is the operator's other server, so copies that differ only in a key are listed as different, a take-over with no copy picked is refused until the operator picks one (B21), and taking one over sets the others aside with their keys.
+The values travel inside the store only as `KeyValues`, which compares them and fingerprints them with the store's secret and gives none out (`Entry::keys`, `Applier::keys`).
+Taking a name over moves each copy that differs, or is not whole, out of its file into the undo list (`hide_agent_hooks::mcp::set_aside`): the entry as the file spelled it, every field kept, goes into the copy's `keys.json` before the file is rewritten, so an entry that cannot be kept stays where it is, and Hide's copy goes in its place.
+A machine leaving Hide puts each such entry back as it was (`put_back`), unless the file holds another entry of that name by then, and leaves an entry taken over where it was, since Hide did not put it there, writing it back with its keys when a switch took it out since (`leave_copy`) (B21, B30).
+An entry taken over is named, like one set aside, by its file and its name in it (`Source::Copy`), and the item keeps the place's key, which names the file's agent.
+Codex's `config.toml` was a file only Codex wrote (its trust of Hide's hooks and of worktrees goes through `codex app-server`); Hide now writes its own `[mcp_servers.<name>]` tables there and nothing else.
+
+### MCP keys
+
+A variable's or header's value, an API key or anything the operator typed there, is kept in `keys.json` in the store's folder of the item it belongs to (`hide_kit::mcp_keys`), owner-only on every system (0600 on macOS and Linux, an access list naming only the account on Windows), and a key file anyone else could read or change is refused rather than read (B10, D-11).
+The file goes where its item's folder goes: a delete moves it to the undo list with the item and a restore brings it back, so the agents' files lose the server at once while Hide alone keeps the key, and a permanent delete removes it (B18, D-39).
+Two items of one name, one in the store and one in the undo list, therefore never share a key.
+A copy set aside from an agent's file keeps that entry's text in the same file, since it holds the entry's keys, until it is put back or the folder's keys are next written.
+It is the only place Hide keeps a key: the store's record, its report, the snapshot and the logs carry a server with the names of its keys and never a value, and a key reaches an agent's file only when the converter writes it.
+A value travels only from the screen to a machine's store, inside the change that carries it (`ReadMcp`'s paste, `AddMcp` and `SetMcp`'s keys), and from one machine's store to another's inside a copy (`Receive`), each as `hide_kit::store::Sealed`, which prints as `••••`; a change's outcome, `status.store_answer` and every log line hold it emptied (`StoreChange::redacted`).
+What a paste gave stays staged in the store's folder, owner-only, until an add takes it (the staged copy goes then, and the paste's answer once every server in it is added), the operator closes the answer (`CancelMcp`), or, answered by no one, it passes its hour or four newer pastes; the screen learns only which keys it gave.
+A pasted command line whose program is neither a path nor found on the account's search, as a sentence pasted into the field is, reads as no server, as an unreadable paste does (`mcp::paste::read` asks the kit's agent search); a JSON snippet's servers stay whatever they run, as a README gives them.
+A key edit rewrites every file Hide wrote the server to, profile accounts included, and a file that could not be written then gets the new key on a later pass (B12, B26); a copy to a device that brings only a new key does the same there (B28).
+A value prints as `••••` wherever a key is formatted, and a failure of the key file never quotes it, since a parser's message can quote the value it stopped at (B13).
+A key that starts with `!` is refused for every agent: Pi and omp run such a value as a shell command in place of the value, and `${NAME}` in a value is expanded by them too.
+The key stays in the agent's file as plain text, as it would if the operator had put it there by hand (PRD skill-mcp-manager Non-goals).
+
 ## Project guardrails
 
 The pre-tool hook also refuses what a project's protections name, the four switches of Project Settings > Working style ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#project-settings), PRD agent-guardrails).
@@ -1110,7 +1170,8 @@ OpenCode's sessions live in its database rather than in session files, so it has
 
 An agent is a row only when its documentation confirms where it reads skills and the name of the program it installs.
 The other fifteen agents earlier builds supported are no longer rows (see Retired agents below).
-Hide does not write an agent's `AGENTS.md` or `CLAUDE.md`, its MCP configuration or its model settings, and it runs no installer for an agent.
+Hide does not write an agent's `AGENTS.md` or `CLAUDE.md` or its model settings, and it runs no installer for an agent.
+The MCP servers the operator keeps in Hide are the one entry of an agent's own configuration it writes, one per server, in the agent's MCP file ([MCP servers](#mcp-servers)).
 The things it records in an agent's own state are Codex's trust for Hide's own hooks, below, and Claude Code's, Codex's, agy's, Grok's and Pi's folder trust for the worktrees Hide makes ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 ### The oldest version of each agent

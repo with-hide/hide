@@ -1116,3 +1116,6 @@ fn a_copy_carries_each_skill_with_its_files_to_another_machines_store_once() {
         staging.display()
     );
 }
+
+#[path = "store_mcp_cases.rs"]
+mod mcp;

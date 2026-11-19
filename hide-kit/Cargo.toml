@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 base64 = "=0.23.1"
+getrandom = "=0.2.16"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 hide-agent-hooks = { path = "../hide-agent-hooks" }
 hide-holder-protocol = { path = "../hide-holder-protocol" }

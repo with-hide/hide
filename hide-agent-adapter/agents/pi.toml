@@ -37,6 +37,8 @@ sessions = "{PI_CODING_AGENT_DIR}/sessions"
 login = "{PI_CODING_AGENT_DIR}/auth.json"
 state = "{PI_CODING_AGENT_DIR}"
 usage = false
+mcp = "{PI_CODING_AGENT_DIR}/mcp.json"
+mcp_format = "pi"
 
 [account.forbid]
 vars = ["PI_CODING_AGENT_SESSION_DIR"]

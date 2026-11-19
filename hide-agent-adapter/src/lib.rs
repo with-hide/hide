@@ -16,7 +16,7 @@ pub use account::{
 pub mod composer;
 mod declarations;
 pub mod definition;
-pub use definition::AccountPath;
+pub use definition::{AccountPath, McpFormat};
 mod journey;
 pub mod scene;
 mod scene_declarations;
@@ -1028,6 +1028,12 @@ impl AgentAdapter {
     /// its screen rules ([`definition::builtin_account`]).
     pub fn account_rule(&self) -> Option<&'static definition::AccountRule> {
         definition::builtin_account(self.id)
+    }
+
+    /// The shape of the agent's MCP file ([`AccountPath::Mcp`]), `None`
+    /// for an agent Hide writes no MCP server for.
+    pub fn mcp_format(&self) -> Option<McpFormat> {
+        self.account_rule()?.mcp_format
     }
 
     /// Where `path` is below the home for the default profile, as `~/…`:

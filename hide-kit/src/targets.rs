@@ -562,9 +562,11 @@ fn written_by(place: AccountPath) -> Option<PieceKind> {
         // account the start's profile runs in, and a going target takes
         // Hide's entries out (docs/agent-hooks.md, Profile accounts).
         AccountPath::FolderTrust => Some(PieceKind::FolderTrust),
-        AccountPath::Sessions | AccountPath::Login | AccountPath::State | AccountPath::Usage => {
-            None
-        }
+        AccountPath::Sessions
+        | AccountPath::Login
+        | AccountPath::State
+        | AccountPath::Usage
+        | AccountPath::Mcp => None,
     }
 }
 
@@ -1319,6 +1321,11 @@ impl ProfileAccount {
     /// The account's own place `place`, as the account spells it.
     pub(crate) fn path(&self, place: AccountPath) -> Option<PathBuf> {
         self.own.account.path(place).map(Path::to_path_buf)
+    }
+
+    /// The account's MCP file in its agent's shape (`hide_agent_hooks::mcp`).
+    pub(crate) fn mcp_file(&self, home: &Path) -> Option<hide_agent_hooks::mcp::McpFile> {
+        hide_agent_hooks::mcp::McpFile::of(self.own.adapter.declaration(), self.own.at(home))
     }
 
     /// The real place of `path` in the account, judged as every write of

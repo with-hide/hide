@@ -30,6 +30,8 @@ mod source;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use hide_agent_hooks::mcp::Server;
+
 use serde::{Deserialize, Serialize};
 
 use crate::agent_kit::enabled;
@@ -37,7 +39,7 @@ use crate::agents::{Detection, RETIRED_SKILLS, SKILLS};
 use crate::record::Record;
 use crate::{KitProfiles, KitTarget, Scope};
 
-pub use mcp::McpBody;
+pub use mcp::{McpBody, McpPreview, PastedPick, PastedServer, Sealed, SentKeys};
 pub(crate) use source::Fetched;
 pub use source::SourceSpec;
 
@@ -121,6 +123,9 @@ pub enum Version {
     NpmLatest,
     /// An MCP command that pins a version.
     Pinned(String),
+    /// A local MCP that pins nothing and is no npm runner's package (a
+    /// program, `uvx`, an image with no tag): the row shows no version.
+    Unpinned,
 }
 
 impl Version {
@@ -212,13 +217,14 @@ pub struct StoreItem {
     /// follow pass reads the files only when something changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
-    /// The operator's own copy, taken over from an agent's folder on this
-    /// machine (B20) with a [`Source::Copy`]: unless the undo list still
-    /// holds the folder it replaced there, the store holds the only
-    /// original, so a machine leaving Hide leaves a copy where it was
-    /// (B30). A copy another machine carried is not.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub adopted: bool,
+    /// The key of the place the operator's own copy was taken over from on
+    /// this machine (B20), with a [`Source::Copy`]: unless the undo list
+    /// still holds the folder or entry it replaced there, the store holds
+    /// the only original, so a machine leaving Hide leaves a copy where it
+    /// was (B30). The key names that place's kind, and an MCP file's agent.
+    /// A copy another machine carried has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted: Option<String>,
     pub body: ItemBody,
 }
 
@@ -241,14 +247,15 @@ impl StoreItem {
     }
 
     pub fn version(&self) -> Version {
+        // An MCP's version is what its server runs, wherever it came from
+        // (B36).
+        if let ItemBody::Mcp(body) = &self.body {
+            return body.version();
+        }
         match &self.source {
             Source::Git { commit, tag, .. } => Version::of_commit(commit, tag.as_deref()),
             Source::Folder { .. } => Version::Folder,
-            Source::Copy { .. } => Version::Copy,
-            Source::Pasted => match &self.body {
-                ItemBody::Mcp(body) => body.version(),
-                ItemBody::Skill(_) => Version::Copy,
-            },
+            Source::Copy { .. } | Source::Pasted => Version::Copy,
         }
     }
 
@@ -290,6 +297,12 @@ pub struct TrashEntry {
 pub struct Written {
     pub item: String,
     pub digest: String,
+    /// The keys Hide wrote there beside what the digest covers (an MCP
+    /// server's), fingerprinted with the store's secret
+    /// (`crate::mcp_keys::KeysSecret`): a key typed into the file by hand
+    /// since makes the entry the operator's (B22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<String>,
 }
 
 /// One place Hide wrote into, as the record keeps it: enough to take its
@@ -333,6 +346,13 @@ pub struct StoreRecord {
     /// new session (B17).
     #[serde(default)]
     pub changed: BTreeMap<String, BTreeMap<String, u64>>,
+    /// What MCP pastes read as, oldest first (`mcp::trim_previews`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_previews: Vec<mcp::McpPreview>,
+    /// The places whose copy of an item Hide wrote before the item's keys
+    /// changed, by item id: the reconcile writes them again (B12, B26).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stale: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl StoreRecord {
@@ -388,6 +408,32 @@ pub enum StoreChange {
     /// Take in an item another machine's store carried, with its content
     /// (B28, D-15): only the core's copy job makes it, never the screen.
     Receive { item: Box<CarriedItem> },
+    /// Read what the operator pasted into the MCP add field (B8): its
+    /// servers land in [`StoreReport::mcp_previews`] with the names of their
+    /// keys, and the values it gave stay in the store.
+    ReadMcp { text: Sealed },
+    /// Add the MCP server the operator confirmed (B8-B10): `server` as the
+    /// fields say, each key typed on the screen, else the value the paste
+    /// `from` gave.
+    AddMcp {
+        server: Server,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: SentKeys,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<PastedPick>,
+    },
+    /// The operator closed a paste's answer: the values it staged go now,
+    /// rather than at the hour's end (D-11). A paste already gone is no
+    /// error.
+    CancelMcp { preview: String },
+    /// Change an MCP item's server and keys (B12); a key not typed keeps
+    /// its value.
+    SetMcp {
+        item: String,
+        server: Server,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: SentKeys,
+    },
 }
 
 impl StoreChange {
@@ -400,6 +446,19 @@ impl StoreChange {
             StoreChange::Receive { item } => StoreChange::Receive {
                 item: Box::new(item.redacted()),
             },
+            StoreChange::ReadMcp { text } => StoreChange::ReadMcp {
+                text: text.emptied(),
+            },
+            StoreChange::AddMcp { server, keys, from } => StoreChange::AddMcp {
+                server: server.clone(),
+                keys: mcp::emptied(keys),
+                from: from.clone(),
+            },
+            StoreChange::SetMcp { item, server, keys } => StoreChange::SetMcp {
+                item: item.clone(),
+                server: server.clone(),
+                keys: mcp::emptied(keys),
+            },
             StoreChange::Inspect { .. }
             | StoreChange::Install { .. }
             | StoreChange::Set { .. }
@@ -409,7 +468,8 @@ impl StoreChange {
             | StoreChange::Adopt { .. }
             | StoreChange::CheckUpdates
             | StoreChange::PreviewUpdate { .. }
-            | StoreChange::Update { .. } => self.clone(),
+            | StoreChange::Update { .. }
+            | StoreChange::CancelMcp { .. } => self.clone(),
         }
     }
 }
@@ -451,8 +511,8 @@ pub enum Carried {
     /// type and how they are emptied.
     Mcp {
         body: McpBody,
-        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-        keys: serde_json::Value,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        keys: mcp::SentKeys,
     },
 }
 
@@ -470,9 +530,9 @@ impl Carried {
                     })
                     .collect(),
             },
-            Carried::Mcp { body, .. } => Carried::Mcp {
+            Carried::Mcp { body, keys } => Carried::Mcp {
                 body: body.clone(),
-                keys: serde_json::Value::Null,
+                keys: mcp::emptied(keys),
             },
         }
     }
@@ -481,7 +541,10 @@ impl Carried {
     fn size(&self) -> u64 {
         match self {
             Carried::Skill { files } => files.iter().map(|file| file.data.len() as u64).sum(),
-            Carried::Mcp { keys, .. } => keys.to_string().len() as u64,
+            Carried::Mcp { keys, .. } => keys
+                .iter()
+                .map(|(name, value)| (name.len() + value.len()) as u64)
+                .sum(),
         }
     }
 }
@@ -669,6 +732,13 @@ pub struct Cell {
     /// When the column's copy last changed (B17).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_at_unix_ms: Option<u64>,
+    /// The key of the place the state speaks of, which a change names:
+    /// the one holding the operator's own copy of a hand-written cell
+    /// (what [`StoreChange::Adopt`] takes over), the one that failed or
+    /// waits, otherwise the first the column governs. `None` for a column
+    /// with no place on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
 }
 
 /// One item's row.
@@ -687,6 +757,10 @@ pub struct ItemReport {
     /// The skill's files, for the confirm screens.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
+    /// The MCP server as the edit screen shows it: how it is reached and
+    /// the names of its keys, never a value (B12, D-34).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<Server>,
     pub cells: Vec<Cell>,
 }
 
@@ -746,6 +820,9 @@ pub struct StoreReport {
     pub previews: Vec<Preview>,
     #[serde(default)]
     pub diffs: Vec<UpdateDiff>,
+    /// What MCP pastes read as, for the add screen (B8, B9).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_previews: Vec<McpPreview>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at_unix_ms: Option<u64>,
     /// The store follows a folder, so a light pass every few seconds keeps
@@ -805,6 +882,10 @@ pub(crate) struct Entry {
     /// inside): only then can Hide's copy stand for it, and only then is it
     /// ever Hide's to replace or take out.
     pub(crate) whole: bool,
+    /// The keys it holds beside what its digest covers (an MCP server's
+    /// variables and headers); none for a kind without keys. A copy is an
+    /// item, or the one Hide wrote, only when these agree too.
+    pub(crate) keys: Option<mcp::KeyValues>,
 }
 
 /// One entry as a place's listing read it, or why it could not be read.
@@ -824,6 +905,16 @@ pub(crate) trait Applier {
     /// Every entry `place` holds, by name, each read on its own: one that
     /// cannot be read answers why and leaves the others listed.
     fn entries(&self, place: &Place) -> Result<Vec<Listed>, String>;
+    /// Where the operator finds `place`'s entry `name`: a skill's folder, or
+    /// the MCP file that holds the server.
+    fn entry_path(&self, place: &Place, name: &str) -> PathBuf {
+        place.path.join(name)
+    }
+    /// The keys `item` keeps in its folder `files` beside its body; none for
+    /// a kind without keys.
+    fn keys(&self, _item: &StoreItem, _files: &Path) -> Result<Option<mcp::KeyValues>, String> {
+        Ok(None)
+    }
     /// Writes `item` at `place`, replacing what is there under its name
     /// (only ever Hide's own copy); answers the digest written.
     fn write(&self, ctx: &Ctx<'_>, place: &Place, item: &StoreItem) -> Result<String, String>;
@@ -849,7 +940,7 @@ pub(crate) trait Applier {
     /// Writes a copy of the store's own files `files` of an item at
     /// `place` under `name`, where nothing stands, for a machine leaving
     /// Hide while the store holds the operator's only original (B30).
-    fn leave_copy(&self, place: &Place, name: &str, files: &Path) -> Result<(), String>;
+    fn leave_copy(&self, place: &Place, item: &StoreItem, files: &Path) -> Result<(), String>;
     /// The item is deleted for good: anything of it the store keeps beside
     /// its files goes (an MCP's keys, D-11).
     fn purge(&self, ctx: &Ctx<'_>, item: &StoreItem) -> Result<(), String>;
@@ -889,6 +980,9 @@ pub(crate) struct Ctx<'a> {
     /// The pass may change places, so every entry is read again
     /// ([`Place::fresh`]).
     pub(crate) fresh: bool,
+    /// The store's secret, for the fingerprints of the keys Hide wrote
+    /// ([`Written::keys`]); none before anything with keys was written.
+    pub(crate) secret: Option<crate::mcp_keys::KeysSecret>,
 }
 
 impl Ctx<'_> {
@@ -1098,6 +1192,10 @@ fn run(
         Err(reason) => return refused(reason),
     };
     let before = store.clone();
+    let secret = match store_secret(&dir, &store, mode == Mode::Apply && dir.is_dir()) {
+        Ok(secret) => secret,
+        Err(reason) => return refused(reason),
+    };
     let ctx = Ctx {
         target,
         dir,
@@ -1106,6 +1204,7 @@ fn run(
         record,
         scope,
         fresh: mode == Mode::Apply,
+        secret,
     };
     let mut outcomes = Vec::new();
     if mode == Mode::Apply {
@@ -1134,6 +1233,7 @@ fn run(
             let item = store.items[index].clone();
             reconcile(&ctx, &mut store, &item, &places[&item.kind], &mut failures);
         }
+        trim_stale(&mut store);
     }
     let report = report(&ctx, &store, &places, &failures, outcomes);
     if mode == Mode::Apply
@@ -1165,9 +1265,13 @@ impl StoreReport {
 }
 
 /// The items whose only original the store holds (B30), with where each
-/// was taken over: an [`StoreItem::adopted`] one whose own folder there is
-/// not in the undo list, forgotten or past its limit.
-fn sole_originals<'a>(dir: &Path, store: &'a StoreRecord) -> Vec<(&'a StoreItem, PathBuf)> {
+/// was taken over and that place's key: an [`StoreItem::adopted`] one whose
+/// own folder or entry there is not in the undo list, forgotten or past its
+/// limit.
+fn sole_originals<'a>(
+    dir: &Path,
+    store: &'a StoreRecord,
+) -> Vec<(&'a StoreItem, PathBuf, &'a str)> {
     let set_aside: BTreeSet<PathBuf> = store
         .trash
         .iter()
@@ -1180,13 +1284,36 @@ fn sole_originals<'a>(dir: &Path, store: &'a StoreRecord) -> Vec<(&'a StoreItem,
     store
         .items
         .iter()
-        .filter(|item| item.adopted)
-        .filter_map(|item| match &item.source {
-            Source::Copy { from } => Some((item, PathBuf::from(from))),
+        .filter_map(|item| match (&item.source, &item.adopted) {
+            (Source::Copy { from }, Some(key)) => Some((item, PathBuf::from(from), key.as_str())),
             _ => None,
         })
-        .filter(|(_, from)| !set_aside.contains(from))
+        .filter(|(_, from, _)| !set_aside.contains(from))
         .collect()
+}
+
+/// The store's secret, made when `make` and the record holds no key
+/// fingerprint yet. One the record's fingerprints need that is gone or
+/// cannot be read refuses the pass: a new secret, or none, would read every
+/// MCP entry Hide wrote with keys as the operator's, and Hide would never
+/// take them out.
+fn store_secret(
+    dir: &Path,
+    store: &StoreRecord,
+    make: bool,
+) -> Result<Option<crate::mcp_keys::KeysSecret>, String> {
+    let keyed = store
+        .written
+        .values()
+        .any(|place| place.entries.values().any(|written| written.keys.is_some()));
+    match crate::mcp_keys::secret(dir, make && !keyed) {
+        Ok(None) if keyed => Err(format!(
+            "{} is gone, so Hide cannot tell the MCP servers it wrote from ones changed by hand; the store is left as it is",
+            dir.join(crate::mcp_keys::SECRET_FILE).display()
+        )),
+        Ok(secret) => Ok(secret),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// Takes the copies Hide put into every place out, leaves or writes back a
@@ -1206,11 +1333,23 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         Ok(store) => store,
         Err(reason) => return vec![("store".to_owned(), RemoveOutcome::Failed { reason })],
     };
+    // Without its secret no copy whose keys Hide recorded reads as Hide's,
+    // so the store stays rather than leave them in the agents' files.
+    let secret = match store_secret(&dir, &store, false) {
+        Ok(secret) => secret,
+        Err(reason) => {
+            log("store.secret_unreadable", None, &reason);
+            return vec![("store".to_owned(), RemoveOutcome::Failed { reason })];
+        }
+    };
     let mut outcomes = Vec::new();
     let mut failed = false;
     let originals = sole_originals(&dir, &store);
     // Each such copy Hide holds where the operator had it stays there.
-    let stays: BTreeSet<&Path> = originals.iter().map(|(_, from)| from.as_path()).collect();
+    let stays: BTreeSet<&Path> = originals
+        .iter()
+        .map(|(_, from, _)| from.as_path())
+        .collect();
     for (key, place) in &store.written {
         let Some(kind) = place.kind else { continue };
         let at = recorded_place(key, place);
@@ -1220,7 +1359,7 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
             if stays.contains(place.path.join(name).as_path()) {
                 continue;
             }
-            match take_out_if_ours(applier(kind), &at, name, written) {
+            match take_out_if_ours(applier(kind), &at, name, written, secret.as_ref()) {
                 Ok(true) => removed = true,
                 Ok(false) => {}
                 Err(reason) => failure = Some(reason),
@@ -1275,12 +1414,12 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
         kept_back = Some(reason);
     }
     // Where a switch took the copy out, the store's copy is written back.
-    for (item, from) in &originals {
+    for (item, from, key) in &originals {
         let (Some(folder), Some(_)) = (from.parent(), from.file_name()) else {
             continue;
         };
         let at = Place {
-            key: String::new(),
+            key: (*key).to_owned(),
             path: folder.to_path_buf(),
             columns: Vec::new(),
             profiles: Vec::new(),
@@ -1297,7 +1436,7 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
             ),
             Ok(None) => {
                 let files = dir.join("items").join(folder_name(&item.id));
-                match applier.leave_copy(&at, &item.name, &files) {
+                match applier.leave_copy(&at, item, &files) {
                     Ok(()) => continue,
                     Err(reason) => reason,
                 }
@@ -1448,6 +1587,12 @@ fn change_one(
             fetched.diff_of(item).map(drop)
         }
         StoreChange::Update { item, commit } => update(ctx, store, item, commit),
+        StoreChange::ReadMcp { text } => mcp::read_paste(ctx, store, text),
+        StoreChange::AddMcp { server, keys, from } => {
+            mcp::add(ctx, store, server, keys, from.as_ref())
+        }
+        StoreChange::CancelMcp { preview } => mcp::cancel(ctx, store, preview),
+        StoreChange::SetMcp { item, server, keys } => mcp::set(ctx, store, item, server, keys),
         StoreChange::Receive { item } => receive(ctx, store, item),
     }
 }
@@ -1551,7 +1696,7 @@ fn install(
             added_at_unix_ms: now_unix_ms(),
             latest: None,
             folder_missing: false,
-            adopted: false,
+            adopted: None,
             body: ItemBody::Skill(body),
         });
     }
@@ -1607,6 +1752,7 @@ fn delete(ctx: &Ctx<'_>, store: &mut StoreRecord, id: &str) -> Result<(), StoreR
     }
     let item = store.items.remove(index);
     store.changed.remove(id);
+    store.stale.remove(id);
     push_trash(
         ctx,
         store,
@@ -1657,7 +1803,7 @@ fn receive(
         latest: carried.latest.clone(),
         folder_missing: false,
         fingerprint: None,
-        adopted: false,
+        adopted: None,
         body,
     };
     if let Some(existing) = store.item(&id) {
@@ -1666,8 +1812,14 @@ fn receive(
             && existing.on == item.on
             && existing.off_for == item.off_for
         {
+            // An MCP's digest holds no key value, so the keys it carried are
+            // compared on their own.
+            let keys = match carried.kind {
+                ItemKind::Mcp => mcp::take_carried_keys(ctx, store, &id, &staged).map(drop),
+                ItemKind::Skill => Ok(()),
+            };
             let _ = std::fs::remove_dir_all(&staged);
-            return Ok(());
+            return keys;
         }
         delete(ctx, store, &id).inspect_err(|_| {
             let _ = std::fs::remove_dir_all(&staged);
@@ -1712,6 +1864,7 @@ pub(crate) fn export(
         record,
         scope: &scope,
         fresh: true,
+        secret: None,
     };
     let mut items = Vec::new();
     let mut size = 0;
@@ -1809,6 +1962,7 @@ fn copies_of<'a>(
     applier: &dyn Applier,
     places: &'a [Place],
     name: &str,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
 ) -> Result<Vec<(&'a Place, Entry)>, StoreRefusal> {
     let mut copies = Vec::new();
     for place in places {
@@ -1817,7 +1971,7 @@ fn copies_of<'a>(
             .get(&place.key)
             .and_then(|kept| kept.entries.get(name));
         match applier.entry(place, name) {
-            Ok(Some(entry)) if !ours(written, &entry) => copies.push((place, entry)),
+            Ok(Some(entry)) if !ours(written, &entry, secret) => copies.push((place, entry)),
             Ok(_) => {}
             Err(reason) => return Err(failed(reason)),
         }
@@ -1848,7 +2002,7 @@ fn adopt(
     let applier = applier(kind);
     let places = applier.places(ctx);
     let id = StoreItem::id_of(kind, name);
-    let copies = copies_of(store, applier, &places, name)?;
+    let copies = copies_of(store, applier, &places, name, ctx.secret.as_ref())?;
     let existing = store.item(&id).is_some();
     let chosen = match from {
         Some(key) => Some(
@@ -1864,7 +2018,7 @@ fn adopt(
                 .ok_or_else(|| not_found(format!("no agent holds {name}")))?;
             if copies
                 .iter()
-                .any(|(_, entry)| entry.digest != first.1.digest)
+                .any(|(_, entry)| entry.digest != first.1.digest || entry.keys != first.1.keys)
             {
                 return Err(StoreRefusal::new(
                     StoreRefusalCause::Differs,
@@ -1887,7 +2041,7 @@ fn adopt(
                 Source::Folder { path } => skill::fingerprint(Path::new(path)).ok().flatten(),
                 _ => None,
             },
-            adopted: matches!(source, Source::Copy { .. }),
+            adopted: matches!(source, Source::Copy { .. }).then(|| place.key.clone()),
             source,
             on: true,
             off_for: BTreeSet::new(),
@@ -1902,9 +2056,15 @@ fn adopt(
         .cloned()
         .ok_or_else(|| not_found(format!("no item {id}")))?;
     let digest = item.digest();
+    // A copy is the item only with the item's keys too: one holding another
+    // key is the operator's other server, and goes to the undo list whole.
+    let keys = applier
+        .keys(&item, &ctx.item_files(&item.id))
+        .map_err(failed)?;
     for (place, entry) in &copies {
-        if entry.digest == digest && entry.link.is_none() && entry.whole {
-            record_written(store, place, &item, &digest);
+        if entry.digest == digest && entry.keys == keys && entry.link.is_none() && entry.whole {
+            let mark = keys_mark(keys.as_ref(), ctx.secret.as_ref());
+            record_written(store, place, &item, &digest, mark);
         } else if entry.link.is_some() {
             // A link goes as a link; what it leads to stays (D-20).
             applier.remove(place, name).map_err(failed)?;
@@ -1944,7 +2104,7 @@ fn set_aside(
         folder_missing: false,
         added_at_unix_ms: now_unix_ms(),
         // Put back as an item, it is the operator's original again.
-        adopted: true,
+        adopted: Some(place.key.clone()),
         ..item.clone()
     };
     push_trash(
@@ -1967,13 +2127,36 @@ fn set_aside(
 
 /// Whether a place's entry is the copy Hide wrote, unedited and holding
 /// nothing a copy leaves out.
-fn ours(written: Option<&Written>, entry: &Entry) -> bool {
-    written.is_some_and(|written| written.digest == entry.digest)
-        && entry.link.is_none()
+/// The fingerprint [`Written::keys`] keeps of `keys`, none without keys or
+/// before the store has a secret.
+fn keys_mark(
+    keys: Option<&mcp::KeyValues>,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
+) -> Option<String> {
+    keys.zip(secret)
+        .map(|(keys, secret)| keys.fingerprint(secret))
+}
+
+fn ours(
+    written: Option<&Written>,
+    entry: &Entry,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
+) -> bool {
+    written.is_some_and(|written| {
+        written.digest == entry.digest && written.keys == keys_mark(entry.keys.as_ref(), secret)
+    }) && entry.link.is_none()
         && entry.whole
 }
 
-fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, digest: &str) {
+/// Records Hide's copy of `item` at `place`, with the fingerprint of the
+/// keys written with it.
+fn record_written(
+    store: &mut StoreRecord,
+    place: &Place,
+    item: &StoreItem,
+    digest: &str,
+    keys: Option<String>,
+) {
     let kept = store
         .written
         .entry(place.key.clone())
@@ -1986,6 +2169,7 @@ fn record_written(store: &mut StoreRecord, place: &Place, item: &StoreItem, dige
     let written = Written {
         item: item.id.clone(),
         digest: digest.to_owned(),
+        keys,
     };
     if kept.entries.get(&item.name) != Some(&written) {
         kept.entries.insert(item.name.clone(), written);
@@ -2050,6 +2234,18 @@ fn reconcile(
     let applier = applier(item.kind);
     let columns = applier.columns();
     let digest = item.digest();
+    // The keys every write of this pass puts in with the item.
+    let keys = match applier.keys(item, &ctx.item_files(&item.id)) {
+        Ok(keys) => keys_mark(keys.as_ref(), ctx.secret.as_ref()),
+        Err(reason) => {
+            for place in places {
+                failures
+                    .0
+                    .insert((item.id.clone(), place.key.clone()), reason.clone());
+            }
+            return;
+        }
+    };
     for place in places {
         let governing: Vec<&Column> = columns
             .iter()
@@ -2072,7 +2268,7 @@ fn reconcile(
                     now: all.now || one.now,
                 },
             );
-        let held = match judge(store, applier, place, item, &digest) {
+        let held = match judge(store, applier, place, item, &digest, ctx.secret.as_ref()) {
             Ok(held) => held,
             Err(reason) => {
                 failures
@@ -2081,14 +2277,23 @@ fn reconcile(
                 continue;
             }
         };
+        let stale = store
+            .stale
+            .get(&item.id)
+            .is_some_and(|places| places.contains(&place.key));
         let result = if want.now && place.blocked.is_none() {
             match held {
                 Held::Missing | Held::Older => applier.write(ctx, place, item).map(|written| {
-                    record_written(store, place, item, &written);
+                    record_written(store, place, item, &written, keys.clone());
+                    true
+                }),
+                // Hide's copy, written before the item's keys changed.
+                Held::Current if stale => applier.write(ctx, place, item).map(|written| {
+                    record_written(store, place, item, &written, keys.clone());
                     true
                 }),
                 Held::Current => {
-                    record_written(store, place, item, &digest);
+                    record_written(store, place, item, &digest, keys.clone());
                     Ok(false)
                 }
                 Held::Theirs => Ok(false),
@@ -2109,6 +2314,9 @@ fn reconcile(
         } else {
             Ok(false)
         };
+        if stale && (matches!(result, Ok(true)) || !written_at(store, place, item)) {
+            unstale(store, &item.id, &place.key);
+        }
         match result {
             Ok(true) => {
                 let changed = store.changed.entry(item.id.clone()).or_default();
@@ -2127,12 +2335,45 @@ fn reconcile(
     }
 }
 
+/// Whether the record holds Hide's copy of `item` at `place`.
+fn written_at(store: &StoreRecord, place: &Place, item: &StoreItem) -> bool {
+    store
+        .written
+        .get(&place.key)
+        .and_then(|kept| kept.entries.get(&item.name))
+        .is_some_and(|written| written.item == item.id)
+}
+
+fn unstale(store: &mut StoreRecord, id: &str, key: &str) {
+    if let Some(places) = store.stale.get_mut(id) {
+        places.remove(key);
+        if places.is_empty() {
+            store.stale.remove(id);
+        }
+    }
+}
+
+/// Lets a stale mark go once the record no longer holds Hide's copy of the
+/// item there: an item that went, a place a pass no longer lists.
+fn trim_stale(store: &mut StoreRecord) {
+    let written = store.written.clone();
+    store.stale.retain(|id, places| {
+        places.retain(|key| {
+            written
+                .get(key)
+                .is_some_and(|kept| kept.entries.values().any(|entry| entry.item == *id))
+        });
+        !places.is_empty()
+    });
+}
+
 fn judge(
     store: &StoreRecord,
     applier: &dyn Applier,
     place: &Place,
     item: &StoreItem,
     digest: &str,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
 ) -> Result<Held, String> {
     let written = store
         .written
@@ -2141,7 +2382,7 @@ fn judge(
         .filter(|written| written.item == item.id);
     Ok(match applier.entry(place, &item.name)? {
         None => Held::Missing,
-        Some(entry) if !ours(written, &entry) => Held::Theirs,
+        Some(entry) if !ours(written, &entry, secret) => Held::Theirs,
         Some(entry) if entry.digest == digest => Held::Current,
         Some(_) => Held::Older,
     })
@@ -2164,9 +2405,12 @@ fn take_out_if_ours(
     place: &Place,
     name: &str,
     written: &Written,
+    secret: Option<&crate::mcp_keys::KeysSecret>,
 ) -> Result<bool, String> {
     match applier.entry(place, name)? {
-        Some(entry) if ours(Some(written), &entry) => applier.remove(place, name).map(|()| true),
+        Some(entry) if ours(Some(written), &entry, secret) => {
+            applier.remove(place, name).map(|()| true)
+        }
         _ => Ok(false),
     }
 }
@@ -2212,7 +2456,7 @@ fn release_orphans(
             .and_then(|places| places.iter().find(|place| place.key == key))
             .cloned()
             .unwrap_or_else(|| recorded_place(&key, &kept));
-        match take_out_if_ours(applier(kind), &at, &name, &written) {
+        match take_out_if_ours(applier(kind), &at, &name, &written, ctx.secret.as_ref()) {
             Ok(_) => forget_written(store, &key, &name),
             Err(reason) => log("store.release_failed", Some(&written.item), &reason),
         }
@@ -2267,6 +2511,7 @@ fn report(
             })
             .collect(),
         diffs: store.diffs.clone(),
+        mcp_previews: mcp::previews(ctx, store),
         checked_at_unix_ms: store.checked_at_unix_ms,
         follows: store
             .items
@@ -2291,7 +2536,7 @@ fn item_report(
         .map(|place| {
             let held = match failures.0.get(&(item.id.clone(), place.key.clone())) {
                 Some(reason) => Err(reason.clone()),
-                None => judge(store, applier, place, item, &digest),
+                None => judge(store, applier, place, item, &digest, ctx.secret.as_ref()),
             };
             (place, held)
         })
@@ -2304,11 +2549,14 @@ fn item_report(
                 .iter()
                 .filter(|(place, _)| place.governed_by(&column.id))
                 .collect();
-            let (state, reason) = cell_state(ctx, item, applier, column, &mine);
+            let (state, reason, about) = cell_state(ctx, item, applier, column, &mine);
             Cell {
                 column: column.id.clone(),
                 state,
                 reason,
+                place: about
+                    .or_else(|| mine.first().map(|(place, _)| *place))
+                    .map(|place| place.key.clone()),
                 changed_at_unix_ms: store
                     .changed
                     .get(&item.id)
@@ -2330,22 +2578,31 @@ fn item_report(
             ItemBody::Skill(body) => body.files.clone(),
             ItemBody::Mcp(_) => Vec::new(),
         },
+        server: match &item.body {
+            ItemBody::Mcp(body) => Some(body.server.clone()),
+            ItemBody::Skill(_) => None,
+        },
         cells,
     }
 }
 
-fn cell_state(
+/// A cell's state, why, and the place that state speaks of when it is one
+/// of the column's places in particular.
+fn cell_state<'p>(
     ctx: &Ctx<'_>,
     item: &StoreItem,
     applier: &dyn Applier,
     column: &Column,
-    places: &[&(&Place, Result<Held, String>)],
-) -> (CellState, Option<String>) {
+    places: &[&(&'p Place, Result<Held, String>)],
+) -> (CellState, Option<String>, Option<&'p Place>) {
+    let failed = places
+        .iter()
+        .find_map(|(place, held)| held.as_ref().err().map(|reason| (*place, reason.clone())));
     if let Err(reason) = applier.supports(item, column) {
-        return (CellState::Unsupported, Some(reason));
+        return (CellState::Unsupported, Some(reason), None);
     }
     if !column.agents.iter().any(|agent| ctx.enabled(agent)) {
-        return (CellState::AgentOff, None);
+        return (CellState::AgentOff, None, None);
     }
     if !item.on_for(&column.id) {
         let still: Vec<&Place> = places
@@ -2362,8 +2619,8 @@ fn cell_state(
             .map(String::as_str)
             .collect();
         // A copy Hide could not take out is still read: the cell is not off.
-        return match places.iter().find_map(|(_, held)| held.as_ref().err()) {
-            Some(reason) => (CellState::Failed, Some(reason.clone())),
+        return match failed {
+            Some((place, reason)) => (CellState::Failed, Some(reason), Some(place)),
             None if !still.is_empty() && !keeping.is_empty() => (
                 CellState::Off,
                 Some(format!(
@@ -2371,16 +2628,18 @@ fn cell_state(
                     keeping.into_iter().collect::<Vec<_>>().join(", "),
                     item.kind.code()
                 )),
+                still.first().copied(),
             ),
             None if !still.is_empty() => (
                 CellState::Failed,
                 Some("Hide's copy is still in place; the next pass takes it out".to_owned()),
+                still.first().copied(),
             ),
-            None => (CellState::Off, None),
+            None => (CellState::Off, None, None),
         };
     }
-    if let Some(reason) = places.iter().find_map(|(_, held)| held.as_ref().err()) {
-        return (CellState::Failed, Some(reason.clone()));
+    if let Some((place, reason)) = failed {
+        return (CellState::Failed, Some(reason), Some(place));
     }
     if let Some((place, _)) = places
         .iter()
@@ -2394,6 +2653,7 @@ fn cell_state(
                 item.kind.code(),
                 item.name
             )),
+            Some(*place),
         );
     }
     if !column
@@ -2404,21 +2664,22 @@ fn cell_state(
         return (
             CellState::Waiting,
             Some("none of its agents is found on this machine".to_owned()),
+            None,
         );
     }
     if let Some((place, _)) = places.iter().find(|(place, _)| place.blocked.is_some()) {
-        return (CellState::Waiting, place.blocked.clone());
+        return (CellState::Waiting, place.blocked.clone(), Some(*place));
     }
-    if places
+    match places
         .iter()
-        .all(|(_, held)| matches!(held, Ok(Held::Current)))
+        .find(|(_, held)| !matches!(held, Ok(Held::Current)))
     {
-        (CellState::On, None)
-    } else {
-        (
+        None => (CellState::On, None, None),
+        Some((place, _)) => (
             CellState::Failed,
             Some("the copy is not in place yet; the next pass tries again".to_owned()),
-        )
+            Some(*place),
+        ),
     }
 }
 
@@ -2427,6 +2688,11 @@ fn cell_state(
 /// shows in that item's cell instead (B22).
 fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Vec<Unmanaged> {
     let mut found: BTreeMap<(ItemKind, String), Vec<FoundCopy>> = BTreeMap::new();
+    // What tells the copies apart, a digest and an MCP server's keys as
+    // fingerprinted for this process alone, kept beside them and never
+    // reported.
+    type Sameness = (String, Option<mcp::KeyValues>);
+    let mut sameness: BTreeMap<(ItemKind, String), Vec<Sameness>> = BTreeMap::new();
     for (kind, places) in places {
         let applier = applier(*kind);
         let columns = applier.columns();
@@ -2453,11 +2719,17 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                 // One entry that cannot be read is listed with why, and the
                 // folder's others as ever.
                 let (digest, link, refused) = match read {
-                    Ok(entry) => (
-                        entry.digest,
-                        entry.link.as_ref().map(|link| link.display().to_string()),
-                        None,
-                    ),
+                    Ok(entry) => {
+                        sameness
+                            .entry((*kind, name.clone()))
+                            .or_default()
+                            .push((entry.digest.clone(), entry.keys));
+                        (
+                            entry.digest,
+                            entry.link.as_ref().map(|link| link.display().to_string()),
+                            None,
+                        )
+                    }
                     Err(reason) => (String::new(), None, Some(reason)),
                 };
                 found
@@ -2467,7 +2739,7 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                         place: place.key.clone(),
                         agents: agents.clone(),
                         profiles: place.profiles.clone(),
-                        path: place.path.join(&name).display().to_string(),
+                        path: applier.entry_path(place, &name).display().to_string(),
                         link,
                         digest,
                         refused,
@@ -2480,9 +2752,9 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
         .map(|((kind, name), copies)| Unmanaged {
             kind,
             same: copies.iter().all(|copy| copy.refused.is_none())
-                && copies
-                    .windows(2)
-                    .all(|pair| pair[0].digest == pair[1].digest),
+                && sameness
+                    .get(&(kind, name.clone()))
+                    .is_none_or(|read| read.windows(2).all(|pair| pair[0] == pair[1])),
             name,
             copies,
         })
@@ -2499,11 +2771,13 @@ fn trim_staging(ctx: &Ctx<'_>, store: &mut StoreRecord) {
     while store.diffs.len() > PREVIEW_LIMIT {
         store.diffs.remove(0);
     }
+    mcp::trim_previews(store);
     let named: BTreeSet<&str> = store
         .previews
         .iter()
         .map(|preview| preview.id.as_str())
         .chain(store.diffs.iter().map(|diff| diff.id.as_str()))
+        .chain(store.mcp_previews.iter().map(|preview| preview.id.as_str()))
         .collect();
     let Ok(entries) = std::fs::read_dir(ctx.staging()) else {
         return;

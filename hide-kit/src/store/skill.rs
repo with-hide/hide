@@ -156,8 +156,8 @@ impl Applier for SkillApplier {
         remove_at(&place.path.join(name))
     }
 
-    fn leave_copy(&self, place: &Place, name: &str, files: &Path) -> Result<(), String> {
-        copy_into(files, &place.path, name, false)
+    fn leave_copy(&self, place: &Place, item: &StoreItem, files: &Path) -> Result<(), String> {
+        copy_into(files, &place.path, &item.name, false)
     }
 
     fn adopt(
@@ -391,7 +391,7 @@ fn join(places: &mut Vec<Place>, place: Place) {
 
 /// The real folder `path` names, links on the way followed as the agents
 /// that read it follow them; the parts not there yet are spelled as given.
-fn real_folder(path: &Path) -> PathBuf {
+pub(super) fn real_folder(path: &Path) -> PathBuf {
     let mut there = path;
     let mut rest = Vec::new();
     loop {
@@ -423,6 +423,7 @@ fn entry_at(at: &Path, fresh: bool) -> Result<Option<Entry>, String> {
             digest,
             link: Some(target),
             whole,
+            keys: None,
         }));
     }
     let (digest, whole) = facts(at, fresh)?;
@@ -430,6 +431,7 @@ fn entry_at(at: &Path, fresh: bool) -> Result<Option<Entry>, String> {
         digest,
         link: None,
         whole,
+        keys: None,
     }))
 }
 

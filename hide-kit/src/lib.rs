@@ -32,6 +32,7 @@ mod hooks;
 pub mod layout;
 pub mod legacy;
 mod local;
+pub mod mcp_keys;
 pub mod panes;
 pub mod process;
 mod record;

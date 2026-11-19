@@ -21,6 +21,7 @@ mod hook_deadline;
 mod host_helper;
 mod letter_origin;
 mod lossless_install;
+mod mcp_files;
 mod opencode_helper;
 mod opencode_plugin;
 mod opener_guard;

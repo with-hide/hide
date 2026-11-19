@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use hide_agent_adapter::definition::{By, builtin};
 use hide_agent_adapter::{
-    AccountKey, AccountPath, AccountRef, NodeEnv, Os, Place, Profile, ProfileId, Refusal, resolve,
+    AccountKey, AccountPath, AccountRef, McpFormat, NodeEnv, Os, Place, Profile, ProfileId,
+    Refusal, adapter, resolve,
 };
 
 /// An absolute path on the system the test runs on.
@@ -69,12 +70,13 @@ struct Agent {
     /// folder ("" for the folder itself); a named account sets the name.
     vars: &'static [(&'static str, &'static str)],
     forbid: &'static [&'static str],
-    default: [At; 9],
-    profile: [At; 9],
+    default: [At; 10],
+    profile: [At; 10],
 }
 
 // The order of AccountPath::ALL: hooks, hook_trust, plugins, skills,
-// folder_trust, sessions, login, state, usage.
+// folder_trust, sessions, login, state, usage, mcp. The MCP files are
+// each agent's own documentation's (PRD skill-mcp-manager D-27, D-28).
 const AGENTS: [Agent; 7] = [
     Agent {
         kind: "claude-code",
@@ -91,6 +93,7 @@ const AGENTS: [Agent; 7] = [
             At::Home(".claude.json"),
             At::Home(".claude"),
             At::Home(".claude/.credentials.json"),
+            At::Home(".claude.json"),
         ],
         profile: [
             At::Account("settings.json"),
@@ -102,6 +105,7 @@ const AGENTS: [Agent; 7] = [
             At::Account(".claude.json"),
             At::Account(""),
             At::Account(".credentials.json"),
+            At::Account(".claude.json"),
         ],
     },
     Agent {
@@ -119,6 +123,7 @@ const AGENTS: [Agent; 7] = [
             At::Home(".codex/auth.json"),
             At::Home(".codex"),
             At::Home(".codex/archived_sessions"),
+            At::Home(".codex/config.toml"),
         ],
         profile: [
             At::Account("hooks.json"),
@@ -130,6 +135,7 @@ const AGENTS: [Agent; 7] = [
             At::Account("auth.json"),
             At::Account(""),
             At::Account("archived_sessions"),
+            At::Account("config.toml"),
         ],
     },
     Agent {
@@ -151,6 +157,7 @@ const AGENTS: [Agent; 7] = [
             At::None,
             At::Home(".config/opencode"),
             At::None,
+            At::Home(".config/opencode/opencode.json"),
         ],
         profile: [
             At::None,
@@ -162,6 +169,7 @@ const AGENTS: [Agent; 7] = [
             At::None,
             At::Account("config/opencode"),
             At::None,
+            At::Account("config/opencode/opencode.json"),
         ],
     },
     Agent {
@@ -179,6 +187,7 @@ const AGENTS: [Agent; 7] = [
             At::Home(".pi/agent/auth.json"),
             At::Home(".pi/agent"),
             At::None,
+            At::Home(".pi/agent/mcp.json"),
         ],
         profile: [
             At::None,
@@ -190,6 +199,7 @@ const AGENTS: [Agent; 7] = [
             At::Account("auth.json"),
             At::Account(""),
             At::None,
+            At::Account("mcp.json"),
         ],
     },
     Agent {
@@ -207,6 +217,7 @@ const AGENTS: [Agent; 7] = [
             At::Home(".omp/agent/agent.db"),
             At::Home(".omp/agent"),
             At::None,
+            At::Home(".omp/agent/mcp.json"),
         ],
         profile: [
             At::None,
@@ -218,6 +229,7 @@ const AGENTS: [Agent; 7] = [
             At::Home(".omp/profiles/work/agent/agent.db"),
             At::Home(".omp/profiles/work/agent"),
             At::None,
+            At::Home(".omp/profiles/work/agent/mcp.json"),
         ],
     },
     Agent {
@@ -235,6 +247,7 @@ const AGENTS: [Agent; 7] = [
             At::Home(".grok/auth.json"),
             At::Home(".grok"),
             At::None,
+            At::Home(".grok/config.toml"),
         ],
         profile: [
             At::Account("hooks/hide.json"),
@@ -246,6 +259,7 @@ const AGENTS: [Agent; 7] = [
             At::Account("auth.json"),
             At::Account(""),
             At::None,
+            At::Account("config.toml"),
         ],
     },
     Agent {
@@ -263,9 +277,10 @@ const AGENTS: [Agent; 7] = [
             At::None,
             At::Home(".gemini/config"),
             At::None,
+            At::Home(".gemini/config/mcp_config.json"),
         ],
         // agy has no profile of its own account (D-14).
-        profile: [At::None; 9],
+        profile: [At::None; 10],
     },
 ];
 
@@ -289,6 +304,32 @@ fn own_account(agent: &Agent) -> Option<(AccountRef, PathBuf)> {
         }
         By::Name => Some((AccountRef::Name("work".to_owned()), home())),
         By::None => None,
+    }
+}
+
+/// The shape of each agent's MCP file, from its own `mcp add` and
+/// documentation (PRD skill-mcp-manager D-27): omp's file has Claude Code's
+/// shape, and an agent with no MCP file has none.
+#[test]
+fn each_agent_names_the_shape_of_its_mcp_file() {
+    for (kind, format) in [
+        ("claude-code", Some(McpFormat::Claude)),
+        ("codex", Some(McpFormat::Codex)),
+        ("opencode", Some(McpFormat::Opencode)),
+        ("pi", Some(McpFormat::Pi)),
+        ("omp", Some(McpFormat::Claude)),
+        ("grok", Some(McpFormat::Grok)),
+        ("antigravity", Some(McpFormat::Agy)),
+        ("gemini", None),
+    ] {
+        let found = adapter(kind)
+            .and_then(|adapter| adapter.mcp_format())
+            .or_else(|| {
+                builtin(kind)
+                    .and_then(|definition| definition.account.as_ref())
+                    .and_then(|rule| rule.mcp_format)
+            });
+        assert_eq!(found, format, "{kind}");
     }
 }
 
