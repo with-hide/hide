@@ -602,10 +602,12 @@ jobs:
         # through the platform layer's private files, and hide-peer-iroh
         # binds real UDP sockets on loopback: what the Linux Rust lane proves
         # of them it proves for Linux (docs/ARCHITECTURE.md, The peer
-        # connection).
+        # connection). The link multiplexer's tests (`mux::`) stay out: it
+        # moved into hide-peer from hided, where this job never ran them, and
+        # four of them do not hold on Windows (#2655).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-peer) | package(hide-peer-protocol) | package(hide-peer-iroh)'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-peer) & !test(/^mux::/)) | package(hide-peer-protocol) | package(hide-peer-iroh)'
       - name: Every kit location follows the home the platform names
         # The kit finds its home in USERPROFILE, never in the HOME OpenSSH sets
         # beside it (hide-host/src/kit.rs).
