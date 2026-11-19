@@ -1266,6 +1266,9 @@ async fn screen_loop(
                                 }
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
                             }
+                            Ok(ClientAction::Automation(event)) => {
+                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -2519,6 +2522,9 @@ enum ClientAction {
     /// (`importable_projects`), or where a clone or a new project would
     /// land on a device (`clone_target`, `project_target`).
     NodeAsk(Value),
+    /// A window's call on the automations that waits for the core's answer
+    /// (`automation_screen`).
+    Automation(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2583,6 +2589,7 @@ fn handle_client_text(
         Some("home_folder_list" | "importable_projects") => {
             return Ok(ClientAction::NodeAsk(event));
         }
+        Some(crate::automation_screen::KIND) => return Ok(ClientAction::Automation(event)),
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {
