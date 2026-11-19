@@ -186,7 +186,7 @@ export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exc
  * One automation as the phone gets it (`hide-core` phone `PhoneAutomation`): no folder, task or agent. `schedule` is the choice it
  * reads as, `records` the newest first with `records_omitted` older ones left on the desktop.
  */
-export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused" | "recent_spend"> & {
+export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused"> & {
   schedule: AutomationSchedule;
   records: PhoneAutomationRecord[];
   records_omitted?: number;

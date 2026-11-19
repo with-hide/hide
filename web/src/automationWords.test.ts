@@ -62,6 +62,8 @@ describe("an automation's words", () => {
   it("words what a run spent in the usage screen's tokens, and its price as a lower bound when some calls had none", () => {
     expect(spendText({ tokens: 12_340, micro_usd: 420_000, unpriced: false }, "ko", ko)).toBe("토큰 12.3K · $0.42");
     expect(spendText({ tokens: 900, micro_usd: 90_000, unpriced: true }, "en", en)).toBe("900 tokens · ≥ $0.09");
+    // A run of models with no known price says its tokens alone, never `≥ $0.00`.
+    expect(spendText({ tokens: 12_340, micro_usd: 0, unpriced: true }, "ko", ko)).toBe("토큰 12.3K");
     expect(recentSpendText({ tokens: 1_500_000, micro_usd: 2_100_000, unpriced: false, runs: 5 }, "ko", ko)).toBe("최근 5회 · 토큰 1.5M · $2.10");
   });
 

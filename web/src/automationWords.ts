@@ -2,7 +2,7 @@ import type { TFunction } from "i18next";
 import { agentProductName } from "./agentAdapters";
 import { formatElapsed } from "./components/elapsed";
 import type { InterfaceLanguage } from "./i18n/locale";
-import { usd } from "./projectStatus";
+import { pricedUsd } from "./projectStatus";
 import type { Automation, AutomationPauseReason, AutomationRecord, AutomationRun, AutomationSchedule, AutomationSpend, AutomationWeekday } from "./snapshot";
 import { compactTokens } from "./usageHistory";
 
@@ -158,11 +158,14 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
 
 /**
  * What a run spent, `토큰 12.3K · $0.42` (D-26, B39), in the usage screen's
- * token form and the project tool's money; a price some calls lacked is a
- * lower bound, `≥ $0.42`, as the project tool's per-PR cost reads.
+ * token form and the project tool's money (`pricedUsd`): a price some calls
+ * lacked is a lower bound, `≥ $0.42`, and with no priced call the tokens
+ * stand alone, since a cost is said only for a model whose price is known.
  */
 export function spendText(spend: AutomationSpend, language: InterfaceLanguage, t: Translate): string {
-  return t("automation.spend", { tokens: compactTokens(spend.tokens, language), cost: `${spend.unpriced ? "≥ " : ""}${usd(spend.micro_usd, language)}` });
+  const tokens = compactTokens(spend.tokens, language);
+  const cost = pricedUsd(spend, language);
+  return cost === null ? t("automation.spendTokens", { tokens }) : t("automation.spend", { tokens, cost });
 }
 
 /** `최근 5회 · 토큰 61.5K · $2.10`: what the runs the ledger read among those kept spent together (B39). */
