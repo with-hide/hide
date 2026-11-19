@@ -368,15 +368,15 @@ impl McpFile {
     /// writes no MCP server for.
     pub fn of(adapter: &AgentAdapter, at: AccountAt<'_>) -> Option<Self> {
         adapter.mcp_format()?;
-        // Claude Code's servers are in its global config, which it reads
-        // from the older `.config.json` while that file has content: the
-        // file its folder trust is in (`AgentRuntime::trust_path`).
-        let path = if adapter.id == crate::AgentRuntime::ClaudeCode.dialect().adapter().id {
-            crate::AgentRuntime::ClaudeCode.trust_path(at)
-        } else {
-            at.place(adapter, AccountPath::Mcp)
-        };
-        Self::at(adapter, path)
+        // Claude Code reads its servers, as its folder trust, from its older
+        // `.config.json` while that file has content.
+        let older = (adapter.id == crate::AgentRuntime::ClaudeCode.dialect().adapter().id)
+            .then(|| crate::AgentRuntime::ClaudeCode.older_config(at))
+            .flatten();
+        Self::at(
+            adapter,
+            older.unwrap_or_else(|| at.place(adapter, AccountPath::Mcp)),
+        )
     }
 
     /// `adapter`'s MCP file at `path`, a place its definition named once:
@@ -420,9 +420,9 @@ pub struct Found {
     /// The server and its keys, `None` for an entry Hide cannot read in
     /// the file's shape.
     pub server: Option<(Server, Keys)>,
-    /// Nothing in it is a field the shape's reader leaves out (a timeout,
-    /// an `enabled` switch, a tool list): only then does writing the server
-    /// back lose nothing of it.
+    /// It reads as a server and holds no field the shape's reader leaves out
+    /// (a timeout, an `enabled` switch, a tool list): only then does writing
+    /// the server back lose nothing of it.
     pub whole: bool,
 }
 
@@ -682,12 +682,9 @@ impl Document {
                         if table == 0 && shape.reserved.contains(&name.as_str()) {
                             continue;
                         }
-                        entries.push((
-                            table,
-                            name.clone(),
-                            format::json_server(shape, name, entry),
-                            format::json_whole(shape, entry),
-                        ));
+                        let server = format::json_server(shape, name, entry);
+                        let whole = server.is_some() && format::json_whole(shape, entry);
+                        entries.push((table, name.clone(), server, whole));
                     }
                 }
                 Self::Toml(document) => {
@@ -698,12 +695,9 @@ impl Document {
                         if table == 0 && shape.reserved.contains(&name) {
                             continue;
                         }
-                        entries.push((
-                            table,
-                            name.to_owned(),
-                            format::toml_server(shape, name, entry),
-                            format::toml_whole(shape, entry),
-                        ));
+                        let server = format::toml_server(shape, name, entry);
+                        let whole = server.is_some() && format::toml_whole(shape, entry);
+                        entries.push((table, name.to_owned(), server, whole));
                     }
                 }
             }
@@ -844,6 +838,51 @@ impl Document {
                 {
                     servers.remove(name);
                 }
+            }
+        }
+        self.drop_emptied(path, keys)
+    }
+
+    /// Takes out the table at `keys` when a removal left it empty, and each
+    /// table above it that it was the last of, so a file Hide added them to
+    /// is as it was before. An empty table the operator kept there goes too,
+    /// which every agent reads as no server.
+    fn drop_emptied(&mut self, path: &Path, keys: &[&str]) -> Result<(), InstallFailure> {
+        for depth in (1..=keys.len()).rev() {
+            let (parents, last) = keys[..depth].split_at(depth - 1);
+            let emptied = match self {
+                Self::Json(document) => {
+                    let Some(parent) = json_table_mut(document, parents, path, false)? else {
+                        return Ok(());
+                    };
+                    let emptied = parent
+                        .get(last[0])
+                        .and_then(Value::as_object)
+                        .is_some_and(Map::is_empty);
+                    if emptied {
+                        parent.shift_remove(last[0]);
+                    }
+                    emptied
+                }
+                Self::Toml(document) => {
+                    let Some(parent) =
+                        toml_item_mut(document.document.as_item_mut(), parents, path, false)?
+                            .and_then(Item::as_table_like_mut)
+                    else {
+                        return Ok(());
+                    };
+                    let emptied = parent
+                        .get(last[0])
+                        .and_then(Item::as_table_like)
+                        .is_some_and(TableLike::is_empty);
+                    if emptied {
+                        parent.remove(last[0]);
+                    }
+                    emptied
+                }
+            };
+            if !emptied {
+                return Ok(());
             }
         }
         Ok(())

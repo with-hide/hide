@@ -234,12 +234,29 @@ fn fields(
 }
 
 /// What an entry's fields say: the server and its keys, or `None` when it is
-/// not a server Hide can read in this shape.
+/// not a server Hide can read in this shape. `read` answers a field the
+/// entry holds as `Some(None)` when its value is not of a type the field
+/// takes (a number among the arguments, an `env` value that is no string):
+/// the entry is then unreadable, never read as if the field were absent,
+/// which would drop it from a copy.
 fn server_of(
     shape: &Shape,
     name: &str,
-    get: &dyn Fn(&str) -> Option<Field>,
+    read: &dyn Fn(&str) -> Option<Option<Field>>,
 ) -> Option<(Server, Keys)> {
+    let read_fields = shape
+        .kind
+        .as_ref()
+        .map(|kinds| kinds.key)
+        .into_iter()
+        .chain(["command", "args", shape.env, shape.url, shape.headers])
+        .filter(|key| reads(shape, key));
+    for key in read_fields {
+        if matches!(read(key), Some(None)) {
+            return None;
+        }
+    }
+    let get = |key: &str| read(key).flatten();
     let text = |key: &str| match get(key) {
         Some(Field::Text(text)) => Some(text),
         _ => None,
@@ -367,18 +384,18 @@ pub(super) fn json_server(shape: &Shape, name: &str, entry: &Value) -> Option<(S
     let entry = entry.as_object()?;
     server_of(shape, name, &|key| {
         Some(match entry.get(key)? {
-            Value::String(text) => Field::Text(text.clone()),
-            Value::Array(list) => Field::List(
-                list.iter()
-                    .map(|word| word.as_str().map(str::to_owned))
-                    .collect::<Option<_>>()?,
-            ),
-            Value::Object(map) => Field::Map(
-                map.iter()
-                    .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
-                    .collect::<Option<_>>()?,
-            ),
-            _ => return None,
+            Value::String(text) => Some(Field::Text(text.clone())),
+            Value::Array(list) => list
+                .iter()
+                .map(|word| word.as_str().map(str::to_owned))
+                .collect::<Option<_>>()
+                .map(Field::List),
+            Value::Object(map) => map
+                .iter()
+                .map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+                .collect::<Option<_>>()
+                .map(Field::Map),
+            _ => None,
         })
     })
 }
@@ -407,19 +424,21 @@ pub(super) fn toml_server(shape: &Shape, name: &str, entry: &Item) -> Option<(Se
     server_of(shape, name, &|key| {
         let item = entry.get(key)?;
         if let Some(text) = item.as_str() {
-            return Some(Field::Text(text.to_owned()));
+            return Some(Some(Field::Text(text.to_owned())));
         }
         if let Some(list) = item.as_array() {
-            return list
-                .iter()
-                .map(|word| word.as_str().map(str::to_owned))
-                .collect::<Option<_>>()
-                .map(Field::List);
+            return Some(
+                list.iter()
+                    .map(|word| word.as_str().map(str::to_owned))
+                    .collect::<Option<_>>()
+                    .map(Field::List),
+            );
         }
-        let map = item.as_table_like()?;
-        map.iter()
-            .map(|(key, value)| Some((key.to_owned(), value.as_str()?.to_owned())))
-            .collect::<Option<_>>()
-            .map(Field::Map)
+        Some(item.as_table_like().and_then(|map| {
+            map.iter()
+                .map(|(key, value)| Some((key.to_owned(), value.as_str()?.to_owned())))
+                .collect::<Option<_>>()
+                .map(Field::Map)
+        }))
     })
 }

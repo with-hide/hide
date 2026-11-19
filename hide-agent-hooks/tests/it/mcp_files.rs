@@ -382,6 +382,64 @@ fn an_entry_set_aside_and_put_back_is_what_the_file_held_with_every_field() {
 }
 
 #[test]
+fn a_field_of_a_type_the_agent_does_not_take_makes_the_entry_unreadable() {
+    let home = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "codex",
+            "[mcp_servers.port]\ncommand = \"srv\"\nenv = { PORT = 8080 }\n",
+        ),
+        (
+            "pi",
+            "{\"mcpServers\": {\"port\": {\"command\": \"srv\", \"args\": [\"--port\", 8080]}}}",
+        ),
+        (
+            "claude-code",
+            "{\"mcpServers\": {\"port\": {\"type\": 1, \"command\": \"srv\"}}}",
+        ),
+    ];
+    for (kind, text) in cases {
+        let agent = agents()
+            .into_iter()
+            .find(|agent| agent.kind == kind)
+            .unwrap();
+        let file = default_file(&agent, home.path());
+        write(file.path(), text);
+        let found = mcp::entry(&file, "port").unwrap().unwrap();
+        assert!(found.server.is_none(), "{kind}");
+        assert!(!found.whole, "{kind}");
+    }
+}
+
+#[test]
+fn a_table_of_servers_hide_added_goes_with_its_last_server() {
+    for agent in agents() {
+        let home = tempfile::tempdir().unwrap();
+        let file = default_file(&agent, home.path());
+        let original = if agent.toml {
+            "# mine\nmodel = \"x\"\n"
+        } else {
+            "{\n  \"model\": \"x\"\n}\n"
+        };
+        write(file.path(), original);
+        let (server, keys) = github();
+        assert_eq!(
+            mcp::write(&file, &server, &keys).unwrap(),
+            Written::Written,
+            "{}",
+            agent.kind
+        );
+        assert!(mcp::remove(&file, "github").unwrap(), "{}", agent.kind);
+        assert_eq!(
+            std::fs::read_to_string(file.path()).unwrap(),
+            original,
+            "{}",
+            agent.kind
+        );
+    }
+}
+
+#[test]
 fn writing_the_same_server_again_changes_no_byte_and_a_new_key_rewrites_it() {
     for agent in agents() {
         let home = tempfile::tempdir().unwrap();
@@ -543,6 +601,18 @@ fn a_profile_account_gets_its_own_file_and_the_default_stays_untouched() {
             file,
             "{kind}"
         );
+        if kind == "claude-code" {
+            // The definition's `mcp` path and the folder trust's file are
+            // one file, so the two cannot drift.
+            let at = AccountAt::Account {
+                home: home.path(),
+                account: &resolved,
+            };
+            assert_eq!(
+                file.path(),
+                hide_agent_hooks::AgentRuntime::ClaudeCode.trust_path(at)
+            );
+        }
         let (server, keys) = github();
         assert_eq!(
             mcp::write(&file, &server, &keys).unwrap(),
@@ -665,7 +735,8 @@ fn opencodes_second_shape_is_read_and_a_server_written_from_it_moves_to_the_firs
     assert_eq!(mcp::write(&file, &server, &keys).unwrap(), Written::Written);
     let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(written["mcp"]["github"], agent.local);
-    assert_eq!(written["mcp"]["servers"], json!({}));
+    // The second shape's table, emptied by the move, goes.
+    assert_eq!(written["mcp"].get("servers"), None);
     assert!(mcp::remove(&file, "github").unwrap());
     assert!(mcp::entries(&file).unwrap().is_empty());
 }
@@ -731,9 +802,18 @@ fn claude_codes_servers_follow_its_older_global_config_while_that_has_content() 
         home.path().join(".claude.json"),
         "an empty older file is not read"
     );
+    assert_eq!(
+        file.path(),
+        hide_agent_hooks::AgentRuntime::ClaudeCode.trust_path(AccountAt::Home(home.path())),
+        "the definition's `mcp` path and the folder trust's file are one file"
+    );
     write(&legacy, "{\"numStartups\": 1}");
     let file = McpFile::of(the("claude-code"), AccountAt::Home(home.path())).unwrap();
     assert_eq!(file.path(), legacy);
+    assert_eq!(
+        file.path(),
+        hide_agent_hooks::AgentRuntime::ClaudeCode.trust_path(AccountAt::Home(home.path()))
+    );
     let (server, keys) = github();
     assert_eq!(mcp::write(&file, &server, &keys).unwrap(), Written::Written);
     let written: Value = serde_json::from_str(&std::fs::read_to_string(&legacy).unwrap()).unwrap();
