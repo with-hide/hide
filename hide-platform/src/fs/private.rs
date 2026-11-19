@@ -737,6 +737,9 @@ mod sys {
 }
 
 #[cfg(windows)]
+pub(crate) use sys::current_user_sid;
+
+#[cfg(windows)]
 mod sys {
     use std::ffi::c_void;
     use std::fs;
@@ -998,6 +1001,12 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         Ok(Closing(token))
+    }
+
+    /// The account this process acts as, as its SID string (`S-1-5-...`).
+    pub(crate) fn current_user_sid() -> io::Result<String> {
+        let token = acting_token(TOKEN_QUERY)?;
+        token_sid(token.0, TokenUser)?.text()
     }
 
     fn account() -> io::Result<Account> {

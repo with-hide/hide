@@ -2209,12 +2209,64 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
             ConnectError::StartFailed(detail)
         })?;
     }
+    // A paired machine's core runs under its login item and nothing else
+    // (PRD device-connect-iroh D-41): the item starts it, with its marker
+    // put back, and a core of an older build it started is updated.
+    let agents = crate::always_on::agents_for(&env.home);
+    if crate::login_item::installed(&agents, &env.home, &env.state_dir)
+        .map_err(ConnectError::StartFailed)?
+    {
+        crate::login_item::start_installed(&agents, &env.home, &env.state_dir)
+            .map_err(ConnectError::StartFailed)?;
+        let (state, health) = wait_for_item_core(env)?;
+        if health["build"] == build.as_str() {
+            return Ok((state, health));
+        }
+        if package.is_none() {
+            return Err(ConnectError::OtherBuild(format!(
+                "the core its login item runs (pid {}) is build {}; this hide is not from a desktop package (build {build}) and does not update it",
+                state.pid,
+                health["build"].as_str().unwrap_or("unknown"),
+            )));
+        }
+        let program = health["starter"]["program"]
+            .as_str()
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                ConnectError::StartFailed(
+                    "the core its login item started names no program".to_owned(),
+                )
+            })?;
+        return update_started_core(env, (state, health), &build, &program);
+    }
     let spawned_at = unix_ms();
     let mut daemon = spawn_daemon(env, false).map_err(ConnectError::StartFailed)?;
     let started = wait_healthy(env, &mut daemon, spawned_at);
     // The daemon outlives this command; nothing waits for it.
     std::mem::forget(daemon);
     started
+}
+
+/// How long the core a login item started has to answer `/health`.
+const ITEM_CORE_ANSWERS_WITHIN: Duration = Duration::from_secs(30);
+
+/// The daemon of this state folder once the core its login item started
+/// answers, of whatever build.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn wait_for_item_core(env: &Env) -> Result<Healthy, ConnectError> {
+    let deadline = std::time::Instant::now() + ITEM_CORE_ANSWERS_WITHIN;
+    loop {
+        if let Some(healthy) = healthy_daemon(env) {
+            return Ok(healthy);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(ConnectError::NoResponse(format!(
+                "the core its login item starts did not answer within {}s",
+                ITEM_CORE_ANSWERS_WITHIN.as_secs()
+            )));
+        }
+        std::thread::sleep(HEALTH_PAUSE);
+    }
 }
 
 /// How long an updated core has to answer `/health` once its update said
@@ -2910,6 +2962,9 @@ fn daemon_to_restart(
 }
 
 fn stop(state_dir: &Path) -> Result<(), String> {
+    // First, so a login item does not start the core again (PRD
+    // device-connect-iroh D-41); `hide connect` puts it back.
+    crate::login_item::release(state_dir)?;
     match state_file::read_state(state_dir).map_err(|e| e.to_string())? {
         Some(state) if still_the_daemon(&state) => {
             stop_daemon(state_dir, &state)?;

@@ -1,12 +1,16 @@
-//! Account-wide login agents: a program the system keeps running for the
-//! account, starts at its login and starts again when it fails. A moved HOME
-//! never changes which of the system's agents are the account's. The system's
-//! commands are injectable ([`UserAgents::fixture`]) so a fixture never
-//! reaches the real ones.
+//! Account-wide login agents: a program the system starts at the account's
+//! login and starts again after it exits, for as long as its marker file
+//! exists. A moved HOME never changes which of the system's agents are the
+//! account's. The system's commands are injectable ([`UserAgents::fixture`],
+//! [`UserAgents::fixture_of`]) so a fixture never reaches the real ones.
 //!
-//! launchd is the one system with login agents here (macOS, `launchd`).
-//! Every other system answers `ErrorKind::Unsupported` with the reason to
-//! each question that needs login agents, and has none installed, so there is
+//! Each system keeps its own kind of agent: launchd on macOS, systemd's user
+//! manager on Linux, Task Scheduler on Windows (`launchd`, `systemd`,
+//! `task_scheduler`). The rule is the same on all three: an installed agent
+//! starts at once and at each login, and is started again after any exit
+//! while its marker exists; with the marker gone it is not. A system with
+//! none of them answers `ErrorKind::Unsupported` with the reason to each
+//! question that needs login agents, and has none installed, so there is
 //! nothing to read, unload, remove or forget.
 
 use std::io;
@@ -15,9 +19,13 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 mod launchd;
+mod systemd;
+mod task_scheduler;
 
 const NO_LOGIN_AGENTS: &str = "this system has no login agents";
 const NO_POWER_SETTINGS: &str = "this system has no power settings to read";
+const NO_ONE_SHOT_JOBS: &str = "this system starts no one-shot job in the login session";
+const NO_LINGER: &str = "this system's agents run only while the account is logged in";
 
 #[derive(Clone, Debug)]
 pub struct UserAgents {
@@ -27,9 +35,33 @@ pub struct UserAgents {
 #[derive(Clone, Debug)]
 enum System {
     Launchd(launchd::Launchd),
+    Systemd(systemd::Systemd),
+    TaskScheduler(task_scheduler::TaskScheduler),
     /// No login agents: nothing is installed or unloaded and no command
     /// runs.
     None,
+}
+
+/// Which system's agents a fixture stands in for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Kind {
+    /// macOS: the stand-ins are `launchctl` and `pmset`.
+    Launchd,
+    /// Linux: the stand-ins are `systemctl` and `loginctl`.
+    Systemd,
+    /// Windows: the stand-ins are `schtasks` and `conhost`.
+    TaskScheduler,
+}
+
+/// What [`UserAgents::linger`] got.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Linger {
+    On,
+    /// The system's policy kept the account from asking for itself; an
+    /// administrator runs `command`.
+    NeedsAdministrator {
+        command: String,
+    },
 }
 
 /// What an agent needs of the account's login to run.
@@ -46,13 +78,14 @@ pub enum Login {
 impl UserAgents {
     pub fn current() -> Self {
         #[cfg(target_os = "macos")]
-        {
-            Self {
-                system: System::Launchd(launchd::Launchd::current()),
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        Self::none()
+        let system = System::Launchd(launchd::Launchd::current());
+        #[cfg(target_os = "linux")]
+        let system = System::Systemd(systemd::Systemd::current());
+        #[cfg(windows)]
+        let system = System::TaskScheduler(task_scheduler::TaskScheduler::current());
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+        let system = System::None;
+        Self { system }
     }
 
     /// A system with no login agents. A test fixture's HOME gets this, so
@@ -63,20 +96,31 @@ impl UserAgents {
         }
     }
 
-    /// An explicit external-system fixture, never selected by an environment
-    /// variable: the system's programs are the stand-ins in `stand_ins`, under
-    /// the names the implementation runs (launchd's `launchctl` and `pmset`),
-    /// and its agents are a domain of the fixture's own.
+    /// An explicit external-system fixture of launchd, never selected by an
+    /// environment variable: [`Self::fixture_of`] with [`Kind::Launchd`].
     pub fn fixture(stand_ins: &Path) -> Self {
-        Self {
-            system: System::Launchd(launchd::Launchd::fixture(stand_ins)),
-        }
+        Self::fixture_of(Kind::Launchd, stand_ins)
+    }
+
+    /// An explicit external-system fixture, never selected by an
+    /// environment variable: the system's programs are the stand-ins in
+    /// `stand_ins`, under the names the implementation of `kind` runs, and
+    /// its agents are a domain of the fixture's own.
+    pub fn fixture_of(kind: Kind, stand_ins: &Path) -> Self {
+        let system = match kind {
+            Kind::Launchd => System::Launchd(launchd::Launchd::fixture(stand_ins)),
+            Kind::Systemd => System::Systemd(systemd::Systemd::fixture(stand_ins)),
+            Kind::TaskScheduler => {
+                System::TaskScheduler(task_scheduler::TaskScheduler::fixture(stand_ins))
+            }
+        };
+        Self { system }
     }
 
     /// Whether this system keeps login agents; `Unsupported` says why not.
     pub fn supported(&self) -> io::Result<()> {
         match &self.system {
-            System::Launchd(_) => Ok(()),
+            System::Launchd(_) | System::Systemd(_) | System::TaskScheduler(_) => Ok(()),
             System::None => Err(unsupported(NO_LOGIN_AGENTS)),
         }
     }
@@ -86,6 +130,20 @@ impl UserAgents {
     pub fn login(&self, home: &Path, stop: &AtomicBool) -> io::Result<Login> {
         match &self.system {
             System::Launchd(launchd) => launchd.login(home, stop),
+            System::Systemd(systemd) => systemd.login(home, stop),
+            System::TaskScheduler(tasks) => Ok(tasks.login()),
+            System::None => Err(unsupported(NO_LOGIN_AGENTS)),
+        }
+    }
+
+    /// Has the account's agents run with no one logged in, from the
+    /// machine's start (systemd's linger), or says the command an
+    /// administrator runs when the account may not ask for itself;
+    /// `Unsupported` on a system whose agents need a login.
+    pub fn linger(&self, home: &Path, stop: &AtomicBool) -> io::Result<Linger> {
+        match &self.system {
+            System::Systemd(systemd) => systemd.linger(home, stop),
+            System::Launchd(_) | System::TaskScheduler(_) => Err(unsupported(NO_LINGER)),
             System::None => Err(unsupported(NO_LOGIN_AGENTS)),
         }
     }
@@ -95,20 +153,28 @@ impl UserAgents {
     pub fn sleeps_on_power(&self, home: &Path, stop: &AtomicBool) -> io::Result<Option<Duration>> {
         match &self.system {
             System::Launchd(launchd) => launchd.sleeps_on_power(home, stop),
-            System::None => Err(unsupported(NO_POWER_SETTINGS)),
+            System::Systemd(_) | System::TaskScheduler(_) | System::None => {
+                Err(unsupported(NO_POWER_SETTINGS))
+            }
         }
     }
 
-    /// Installs `agent` for `home`'s account, which starts it and starts it
-    /// at each login; one installed already under its label is replaced.
+    /// Installs `agent` for `home`'s account, which starts it now and at
+    /// each login, and starts it again after any exit while `marker`
+    /// exists; one installed already under its label is replaced, which
+    /// ends its run.
     pub fn install(
         &self,
         agent: &LoginAgent<'_>,
+        marker: &Path,
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
         match &self.system {
-            System::Launchd(launchd) => launchd.install(agent, home, stop),
+            System::Launchd(launchd) => launchd.install(agent, marker, home, stop),
+            System::Systemd(systemd) => systemd.install(agent, marker, home, stop),
+            // The task cannot test the marker; its program does.
+            System::TaskScheduler(tasks) => tasks.install(agent, home, stop),
             System::None => Err(unsupported(NO_LOGIN_AGENTS)),
         }
     }
@@ -117,7 +183,7 @@ impl UserAgents {
     /// login and never after it exits, until [`unload`] ends it. What the
     /// system needs to run it is kept in `folder`, a private folder the
     /// caller made and keeps until then. One loaded already under its label
-    /// is replaced.
+    /// is replaced. launchd's alone.
     ///
     /// [`unload`]: Self::unload
     pub fn start_once(
@@ -129,20 +195,25 @@ impl UserAgents {
     ) -> io::Result<()> {
         match &self.system {
             System::Launchd(launchd) => launchd.start_once(agent, folder, home, stop),
+            System::Systemd(_) | System::TaskScheduler(_) => Err(unsupported(NO_ONE_SHOT_JOBS)),
             System::None => Err(unsupported(NO_LOGIN_AGENTS)),
         }
     }
 
-    /// Starts the loaded agent `label` when it is not running.
+    /// Starts the installed agent `label` when it is not running.
     pub fn start(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         match &self.system {
             System::Launchd(launchd) => launchd.start(label, home, stop),
+            System::Systemd(systemd) => systemd.start(label, home, stop),
+            System::TaskScheduler(tasks) => tasks.start(label, home, stop),
             System::None => Err(unsupported(NO_LOGIN_AGENTS)),
         }
     }
 
     /// How the loaded agent `label` last exited, once it is not running:
     /// `None` while it runs or has never exited, or when it is not loaded.
+    /// Task Scheduler answers its tasks' results only in the system's
+    /// language, so on Windows this is always `None`.
     pub fn last_exit(
         &self,
         label: &str,
@@ -151,15 +222,19 @@ impl UserAgents {
     ) -> io::Result<Option<String>> {
         match &self.system {
             System::Launchd(launchd) => launchd.last_exit(label, home, stop),
-            System::None => Ok(None),
+            System::Systemd(systemd) => systemd.last_exit(label, home, stop),
+            System::TaskScheduler(_) | System::None => Ok(None),
         }
     }
 
     /// Whether the system holds the agent `label` now: running it, or
-    /// ready to start it again.
+    /// ready to start it again. Task Scheduler holds a task while it is
+    /// installed.
     pub fn is_loaded(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<bool> {
         match &self.system {
             System::Launchd(launchd) => launchd.is_loaded(label, home, stop),
+            System::Systemd(systemd) => systemd.is_loaded(label, home, stop),
+            System::TaskScheduler(_) => task_scheduler::TaskScheduler::is_installed(label, home),
             System::None => Ok(false),
         }
     }
@@ -169,37 +244,39 @@ impl UserAgents {
     pub fn is_installed(&self, label: &str, home: &Path) -> io::Result<bool> {
         match &self.system {
             System::Launchd(_) => launchd::Launchd::is_installed(label, home),
+            System::Systemd(_) => systemd::Systemd::is_installed(label, home),
+            System::TaskScheduler(_) => task_scheduler::TaskScheduler::is_installed(label, home),
             System::None => Ok(false),
         }
     }
 
-    /// Unloads the agent `label`, which ends its process, and returns once
-    /// the system no longer holds it.
+    /// Unloads the agent `label`, which ends its run, and returns once the
+    /// system no longer runs it. A Task Scheduler run is asked to end; a
+    /// program that outlives it is its caller's to end.
     pub fn unload(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         match &self.system {
             System::Launchd(launchd) => launchd.unload(label, home, stop),
+            System::Systemd(systemd) => systemd.unload(label, home, stop),
+            System::TaskScheduler(tasks) => tasks.unload(label, home, stop),
             System::None => Ok(()),
         }
     }
 
-    /// Unloads the agent `label`, which ends its process, and uninstalls it.
+    /// Unloads the agent `label`, which ends its run, and uninstalls it.
     pub fn remove(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
-        match &self.system {
-            System::Launchd(launchd) => {
-                launchd.unload(label, home, stop)?;
-                launchd::Launchd::forget(label, home)
-            }
-            System::None => Ok(()),
-        }
+        self.unload(label, home, stop)?;
+        self.forget(label, home, stop)
     }
 
-    /// Uninstalls the agent `label` and leaves it loaded: the next login
+    /// Uninstalls the agent `label` and leaves its run going: the next login
     /// starts nothing of it, and what runs now goes on until it exits or is
     /// unloaded. The agent's own process can ask this of itself, where its
     /// own unload would stop it midway.
-    pub fn forget(&self, label: &str, home: &Path) -> io::Result<()> {
+    pub fn forget(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         match &self.system {
             System::Launchd(_) => launchd::Launchd::forget(label, home),
+            System::Systemd(systemd) => systemd.forget(label, home, stop),
+            System::TaskScheduler(tasks) => tasks.forget(label, home, stop),
             System::None => Ok(()),
         }
     }
@@ -215,7 +292,8 @@ pub struct LoginAgent<'a> {
     pub program: &'a Path,
     pub arguments: &'a [&'a str],
     pub environment: &'a [(&'a str, &'a str)],
-    /// Where its standard output and error go.
+    /// Where its standard output and error go; a Task Scheduler task keeps
+    /// none, and its program writes its own log.
     pub log: &'a Path,
 }
 
@@ -223,34 +301,57 @@ pub struct LoginAgent<'a> {
 pub fn account_home() -> io::Result<PathBuf> {
     #[cfg(unix)]
     {
-        use std::ffi::CStr;
         use std::os::unix::ffi::OsStrExt;
-        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
-        let mut result = std::ptr::null_mut();
-        let mut bytes = vec![0_u8; 64 * 1024];
-        // The initialized buffer outlives the passwd pointers; copy before returning.
-        let code = unsafe {
-            libc::getpwuid_r(
-                libc::getuid(),
-                record.as_mut_ptr(),
-                bytes.as_mut_ptr().cast(),
-                bytes.len(),
-                &mut result,
-            )
-        };
-        if code != 0 {
-            return Err(io::Error::from_raw_os_error(code));
-        }
-        if result.is_null() {
-            return Err(io::Error::from(io::ErrorKind::NotFound));
-        }
-        let record = unsafe { record.assume_init() };
-        if record.pw_dir.is_null() {
-            return Err(io::Error::from(io::ErrorKind::NotFound));
-        }
-        let home = unsafe { CStr::from_ptr(record.pw_dir) };
-        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(home.to_bytes())))
+        account_record(|record| PathBuf::from(std::ffi::OsStr::from_bytes(record.home)))
     }
     #[cfg(windows)]
     crate::host::home_dir()
+}
+
+/// The account's login name from the user database.
+#[cfg(unix)]
+fn account_name() -> io::Result<String> {
+    account_record(|record| String::from_utf8_lossy(record.name).into_owned())
+}
+
+#[cfg(unix)]
+struct AccountRecord<'a> {
+    name: &'a [u8],
+    home: &'a [u8],
+}
+
+/// Reads this process's account from the user database, by its uid.
+#[cfg(unix)]
+fn account_record<T>(read: impl FnOnce(AccountRecord<'_>) -> T) -> io::Result<T> {
+    use std::ffi::CStr;
+    let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+    let mut result = std::ptr::null_mut();
+    let mut bytes = vec![0_u8; 64 * 1024];
+    // The initialized buffer outlives the passwd pointers; `read` copies
+    // before they go.
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            record.as_mut_ptr(),
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+            &mut result,
+        )
+    };
+    if code != 0 {
+        return Err(io::Error::from_raw_os_error(code));
+    }
+    if result.is_null() {
+        return Err(io::Error::from(io::ErrorKind::NotFound));
+    }
+    let record = unsafe { record.assume_init() };
+    if record.pw_dir.is_null() || record.pw_name.is_null() {
+        return Err(io::Error::from(io::ErrorKind::NotFound));
+    }
+    let home = unsafe { CStr::from_ptr(record.pw_dir) };
+    let name = unsafe { CStr::from_ptr(record.pw_name) };
+    Ok(read(AccountRecord {
+        name: name.to_bytes(),
+        home: home.to_bytes(),
+    }))
 }

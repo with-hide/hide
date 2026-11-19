@@ -198,7 +198,7 @@ fn wait_for_core(
 /// Asks `pid` to stop, kills it past [`STOPPED_WITHIN`], and answers once
 /// it is gone.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn stop_pid(pid: u32) -> Result<(), String> {
+pub(crate) fn stop_pid(pid: u32) -> Result<(), String> {
     if !hide_platform::process::is_alive(pid) {
         return Ok(());
     }

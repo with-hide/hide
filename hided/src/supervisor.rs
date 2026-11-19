@@ -1730,6 +1730,7 @@ mod tests {
                     environment: &[],
                     log: &home.path().join("core.log"),
                 },
+                &hide_kit::layout::keep_alive(&state),
                 home.path(),
                 &AtomicBool::new(false),
             )

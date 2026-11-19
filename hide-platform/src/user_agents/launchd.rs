@@ -1,8 +1,10 @@
 //! launchd, macOS's login agents. An agent is a job in the account's GUI
 //! session (`gui/<uid>`, whatever HOME says), defined by a property list in
 //! `~/Library/LaunchAgents`: launchd starts it when the session starts and
-//! when it is installed, restarts it when it fails or is killed, at most
-//! every ten seconds, and leaves it stopped after it exits successfully.
+//! when it is installed, and starts it again after any exit, at most every
+//! ten seconds, while its marker file exists (`KeepAlive` `PathState`, which
+//! launchd also watches, so a marker that appears starts a job not
+//! running); with the marker gone it stays stopped.
 //! `pmset` answers the machine's power settings.
 
 use std::io;
@@ -114,6 +116,7 @@ impl Launchd {
     pub(super) fn install(
         &self,
         agent: &LoginAgent<'_>,
+        marker: &Path,
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
@@ -122,7 +125,11 @@ impl Launchd {
         if let Some(folder) = path.parent() {
             std::fs::create_dir_all(folder)?;
         }
-        crate::fs::atomic::write_file(&path, plist(agent).as_bytes(), crate::fs::Access::Private)?;
+        crate::fs::atomic::write_file(
+            &path,
+            plist(agent, marker).as_bytes(),
+            crate::fs::Access::Private,
+        )?;
         self.bootstrap(&path, home, stop)
     }
 
@@ -287,14 +294,18 @@ impl Launchd {
 }
 
 /// `agent`'s property list: started at load and at each start of the GUI
-/// session, restarted when it fails or is killed, never after a successful
-/// exit, at most every ten seconds.
-fn plist(agent: &LoginAgent<'_>) -> String {
+/// session, and again after any exit while `marker` exists, at most every
+/// ten seconds.
+fn plist(agent: &LoginAgent<'_>, marker: &Path) -> String {
     property_list(
         agent,
-        concat!(
-            "<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>",
-            "<key>ThrottleInterval</key><integer>10</integer>",
+        &format!(
+            concat!(
+                "<key>KeepAlive</key><dict><key>PathState</key><dict>",
+                "<key>{marker}</key><true/></dict></dict>",
+                "<key>ThrottleInterval</key><integer>10</integer>",
+            ),
+            marker = escape(&marker.to_string_lossy()),
         ),
     )
 }

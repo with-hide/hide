@@ -17,6 +17,7 @@
 //! - [`blocking`]: a stream as blocking `Read` and `Write`, for NodeLink.
 //! - [`mux`]: many streams over a carrier that is one byte stream.
 //! - [`limits`]: every cap, in one table.
+//! - [`port`]: the UDP port a state folder's endpoint binds, chosen once.
 
 pub mod blocking;
 pub mod gate;
@@ -27,6 +28,7 @@ pub mod log;
 pub mod loopback;
 pub mod mux;
 pub mod peers;
+pub mod port;
 pub mod store;
 pub mod transport;
 pub mod wire;

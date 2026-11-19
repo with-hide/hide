@@ -418,6 +418,22 @@ pub fn core_move_abandoned(state_dir: &Path) -> PathBuf {
     state_dir.join("core-move-abandoned.json")
 }
 
+/// The marker that the core on `state_dir` is to keep running: while it
+/// exists the login item starts the core again after any exit, and without
+/// it the item's start ends at once; `hide stop` removes it, and `hide
+/// connect` puts it back (`hided::login_item`, PRD device-connect-iroh D-41).
+pub fn keep_alive(state_dir: &Path) -> PathBuf {
+    state_dir.join("keep-alive")
+}
+
+/// The install root of the builds a paired machine's login item runs its
+/// core from, one version folder each (`<root>/<version>/hided`), so an app
+/// update never replaces the program under a running core
+/// (`hided::always_on`).
+pub fn core_root(home: &Path) -> PathBuf {
+    hide_home(home).join("core")
+}
+
 /// The record on a machine taking or giving the core in a move: a core
 /// waiting for its first link, active, stopped for the move, or retired;
 /// its owner is `hided core-move` (`hided::core_move::handover`).
@@ -425,9 +441,9 @@ pub fn core_handover(state_dir: &Path) -> PathBuf {
     state_dir.join("core-handover.json")
 }
 
-/// The login item that runs the core on `state_dir` after a move placed it
-/// on this machine (`hided::login_item`): one per state folder, so a folder
-/// other than the account's default never takes the default's item.
+/// The login item that runs the core on `state_dir` (`hided::login_item`),
+/// a paired machine's or one a move placed here: one per state folder, so a
+/// folder other than the account's default never takes the default's item.
 pub fn core_login_item(home: &Path, state_dir: &Path) -> String {
     const LABEL: &str = "dev.withhide.core";
     if state_dir == default_state_dir(home) {
@@ -621,6 +637,13 @@ pub fn peer_grants(state_dir: &Path) -> PathBuf {
 /// The hosts this machine is a guest of, and where to find them.
 pub fn peer_known(state_dir: &Path) -> PathBuf {
     peers(state_dir).join("known.json")
+}
+
+/// The UDP port this state folder's peer endpoint binds, chosen once, so
+/// the Windows firewall rule that lets same-network machines reach it holds
+/// across restarts and updates (D-38; `hide_peer::port`).
+pub fn peer_port(state_dir: &Path) -> PathBuf {
+    peers(state_dir).join("udp-port")
 }
 
 /// This machine's durable record of the events of the host named by the

@@ -5284,9 +5284,13 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             // The core's own engine is this process's, so it answers while
             // the daemon runs and keeps nothing alive; its panes do (PRD
             // engine-bundle-3-core-owns D-10).
-            live_panes: {
+            live_work: {
                 let holders = Arc::clone(state.core.pane_holders());
-                Arc::new(move || holders.live_panes())
+                let state_dir = state.core.state_dir().to_path_buf();
+                Arc::new(move || {
+                    let paired = crate::always_on::paired(&state_dir)?;
+                    Ok(holders.live_panes()? + usize::from(paired))
+                })
             },
         },
         // Mobile on with a phone paired: the phone may come back at any
@@ -5305,10 +5309,11 @@ pub(crate) struct Idle {
     pub clients: Arc<AtomicUsize>,
     pub last_client_gone: Arc<Mutex<Instant>>,
     pub shutdown: crate::ending::Ending,
-    /// How many of this machine's holder panes may still run
-    /// (`hide_kit::panes::Panes::live`): they keep the daemon alive while
-    /// one may.
-    pub live_panes: Arc<dyn Fn() -> Result<usize, String> + Send + Sync>,
+    /// How many things that keep the daemon may still run: this machine's
+    /// holder panes (`hide_kit::panes::Panes::live`), and for a core, its
+    /// pairing with another machine (`always_on::paired`), whose peers reach
+    /// it with no window open (PRD device-connect-iroh D-41).
+    pub live_work: Arc<dyn Fn() -> Result<usize, String> + Send + Sync>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
@@ -5342,7 +5347,7 @@ pub(crate) fn watch_idle(
             // with no core.
             if panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL) {
                 panes_probed = Some(Instant::now());
-                let live = Arc::clone(&idle.live_panes);
+                let live = Arc::clone(&idle.live_work);
                 panes_live = tokio::task::spawn_blocking(move || panes_running(&*live))
                     .await
                     .unwrap_or(true);
@@ -5428,7 +5433,7 @@ mod tests {
                 clients: Arc::new(AtomicUsize::new(0)),
                 last_client_gone: Arc::new(Mutex::new(Instant::now())),
                 shutdown: shutdown.clone(),
-                live_panes: Arc::new(move || live.clone()),
+                live_work: Arc::new(move || live.clone()),
             },
             || false,
         );
