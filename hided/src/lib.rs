@@ -574,6 +574,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             device: peer_device.clone(),
             release: build_order::Release::of_this_build().is_official(),
             direct: env.peer_direct,
+            device_connect: env.device_connect,
         },
         shutdown.clone(),
     );
@@ -586,6 +587,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         env.home.clone(),
         env.state_dir.clone(),
         env.starter_program.is_some(),
+        env.device_connect,
     );
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
@@ -604,7 +606,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         shutdown.clone(),
     );
-    {
+    // A build that does not offer connections between two Hides opens no
+    // endpoint and lists no paired machine, whatever records are on disk.
+    if env.device_connect {
         let peers = Arc::clone(&peers);
         let pairing = Arc::clone(&pairing);
         tokio::spawn(async move {
@@ -679,6 +683,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "keep_alive": env.keep_alive,
             "idle_secs": env.idle_secs,
             "core_instance": core_instance(),
+            // Whether this build offers connections between two Hides: the
+            // window shows pairing only where it does.
+            "device_connect": env.device_connect,
         })),
         mobile: Arc::clone(&mobile),
         peers: Arc::clone(&peers),

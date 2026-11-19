@@ -4,8 +4,10 @@
 // in; `view=allow` and `view=request` are the allow window, with and without
 // words; `view=join` is the pasted link's words, and `view=failed` how a
 // pairing ended; `view=other` is the same Devices list on a screen that is
-// not this computer's own window, which only lists (B52). It proves the
-// rendered parts; the pairing is the daemon's.
+// not this computer's own window, which only lists (B52). `connect=off` is
+// a build that does not offer connections between two Hides, which shows
+// none of it for the same records. It proves the rendered parts; the
+// pairing is the daemon's.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -62,6 +64,8 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   // `firewall=missing`: a Windows PC whose firewall rules are not in place
   // (B32), drawn through a stand-in of the desktop host's two firewall calls.
   const firewall = params.get("firewall") === "missing";
+  const connect = params.get("connect") ?? "on";
+  if (connect !== "on" && connect !== "off") throw new Error(`Unknown pairing connect ${connect}`);
   useLayoutEffect(() => {
     if (!firewall) return;
     const before = window.hideHost;
@@ -76,13 +80,14 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",
+      daemon: { device_connect: connect === "on" },
       pairing: pairingOf(view, lang),
       pairingResult: null,
       rest: { navigator: { devices: [LOCAL], peers: view === "devices" || view === "other" ? PEERS : [], focused_device_id: "local", workspaces: [] }, status: { remote: [] }, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } },
     } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view]);
+  }, [theme, lang, view, connect]);
   return (
     <>
       <InterfaceLanguageBoundary />

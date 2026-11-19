@@ -18,6 +18,27 @@ use serde_json::{Map, Value, json};
 /// The document's own format; a caller that reads another refuses it.
 pub const FORMAT: u32 = 1;
 
+/// The `hide device` verbs that only pair two Hides. The table keeps them,
+/// so a build that offers connections between two Hides takes them
+/// (`env::Env::device_connect`), and the document leaves them out until
+/// that feature ships: a build without it refuses each with
+/// `device_connect_unavailable` (`device_cli`).
+pub const PAIRING_ONLY: &[&str] = &[
+    "share",
+    "allow",
+    "pause",
+    "resume",
+    "request",
+    "address",
+    "look-ssh",
+    "accept-ssh",
+];
+
+/// Whether the document lists `spec`: every command but [`PAIRING_ONLY`].
+fn documented(spec: &Spec) -> bool {
+    !matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
+}
+
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
     "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane", "access",
@@ -1974,7 +1995,11 @@ fn command_json(spec: &Spec) -> Value {
 fn body() -> Value {
     json!({
         "format": FORMAT,
-        "commands": COMMANDS.iter().map(command_json).collect::<Vec<_>>(),
+        "commands": COMMANDS
+            .iter()
+            .filter(|spec| documented(spec))
+            .map(command_json)
+            .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
             "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
@@ -2681,6 +2706,34 @@ mod tests {
         );
         assert!(admit(&args(&["inbox", "--hook", "--bell"])).is_err());
         assert!(admit(&args(&["inbox", "--prompt-digest", "d"])).is_err());
+    }
+
+    /// The verbs that only pair two Hides stay out of the document until
+    /// that feature ships, and the CLI still admits them, so a build that
+    /// offers it takes them and one that does not refuses them with their
+    /// reason rather than as unknown words.
+    #[test]
+    fn the_document_leaves_out_the_verbs_that_only_pair() {
+        let args = |line: &[&str]| {
+            line.iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let document = document();
+        let listed: Vec<&str> = document["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|command| command["command"].as_str().unwrap())
+            .collect();
+        for verb in PAIRING_ONLY {
+            let command = format!("device {verb}");
+            assert!(!listed.contains(&command.as_str()), "{command} is listed");
+            assert!(admit(&args(&["device", verb])).is_ok(), "{command}");
+        }
+        for kept in ["device list", "device add", "device remove", "device retry"] {
+            assert!(listed.contains(&kept), "{kept} is not listed");
+        }
     }
 
     /// The committed copy is the contract this build exports, so a change to

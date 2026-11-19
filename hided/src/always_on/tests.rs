@@ -92,10 +92,22 @@ impl Machine {
     /// Reconciles as a core that runs `program`, recording each install of
     /// a build in the install root.
     fn reconcile(&self, under_item: bool, installs: &std::cell::Cell<usize>) -> Outcome {
+        self.reconcile_in(true, under_item, installs)
+    }
+
+    /// [`Self::reconcile`] as a build that offers connections between two
+    /// Hides (`device_connect`) or not.
+    fn reconcile_in(
+        &self,
+        device_connect: bool,
+        under_item: bool,
+        installs: &std::cell::Cell<usize>,
+    ) -> Outcome {
         let program = self.home.path().join("app/hided");
         let asker = Asker {
             program: &program,
             under_item,
+            device_connect,
         };
         reconcile(
             &self.agents,
@@ -162,12 +174,45 @@ fn the_first_pairing_puts_the_login_item_in_and_the_last_removal_takes_it_out() 
         "{list}"
     );
     assert!(!list.contains("HIDE_KEEP_ALIVE"), "{list}");
+    // The item's core offers what keeps it, or its start would take it out.
+    assert!(
+        list.contains("<key>HIDE_DEVICE_CONNECT</key><string>1</string>"),
+        "{list}"
+    );
 
     assert_eq!(machine.reconcile(false, &installs), Outcome::Kept);
     assert_eq!(installs.get(), 1, "a paired machine's build is put in once");
 
     machine.unpair();
     assert_eq!(machine.reconcile(false, &installs), Outcome::Removed);
+    assert!(!machine.installed() && !machine.loaded() && !machine.kept());
+}
+
+/// A build that does not offer connections between two Hides puts no item
+/// in for a pairing on disk, and takes out the one a development build put
+/// in for it.
+#[cfg(unix)]
+#[test]
+fn a_build_without_connections_between_hides_keeps_no_login_item_for_a_pairing() {
+    let machine = Machine::new();
+    let installs = std::cell::Cell::new(0);
+    machine.pair();
+    assert!(!paired(&machine.state, false).unwrap());
+    assert_eq!(
+        machine.reconcile_in(false, false, &installs),
+        Outcome::Nothing
+    );
+    assert!(!machine.installed() && !machine.kept());
+    assert_eq!(installs.get(), 0, "no build is put in");
+
+    assert!(matches!(
+        machine.reconcile_in(true, false, &installs),
+        Outcome::Installed { .. }
+    ));
+    assert_eq!(
+        machine.reconcile_in(false, false, &installs),
+        Outcome::Removed
+    );
     assert!(!machine.installed() && !machine.loaded() && !machine.kept());
 }
 
@@ -281,6 +326,7 @@ fn a_system_with_no_login_items_puts_nothing_in() {
     let asker = Asker {
         program: &program,
         under_item: false,
+        device_connect: true,
     };
     let outcome = reconcile(&UserAgents::none(), home.path(), &state, &asker, |_| {
         panic!("a build was put in")

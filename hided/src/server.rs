@@ -5341,8 +5341,9 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             live_work: {
                 let holders = Arc::clone(state.core.pane_holders());
                 let state_dir = state.core.state_dir().to_path_buf();
+                let device_connect = state.peers.device_connect();
                 Arc::new(move || {
-                    let paired = crate::always_on::paired(&state_dir)?;
+                    let paired = crate::always_on::paired(&state_dir, device_connect)?;
                     Ok(holders.live_panes()? + usize::from(paired))
                 })
             },

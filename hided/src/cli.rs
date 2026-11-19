@@ -1020,7 +1020,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
         CommandKind::AlwaysOn(command) => {
-            crate::always_on::cli::run(&command, &env.home, &env.state_dir)
+            crate::always_on::cli::run(&command, &env.home, &env.state_dir, env.device_connect)
         }
         CommandKind::Restart { daemon, started } => restart(&env, daemon, started),
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),

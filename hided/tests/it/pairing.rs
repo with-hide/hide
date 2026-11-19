@@ -7,7 +7,8 @@
 //! machine's own window (B52).
 //!
 //! The two endpoints bind loopback with no relay (`HIDE_PEER_DIRECT`), so
-//! nothing leaves the machine.
+//! nothing leaves the machine. Both builds offer connections between two
+//! Hides (`HIDE_DEVICE_CONNECT=1`); one that does not refuses all of it.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,7 @@ fn host_env(root: &Path) -> Env {
         tailscale_bin: Some(root.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
+        device_connect: true,
         search_path: None,
     }
 }
@@ -151,6 +153,7 @@ impl Terminal {
             .env("HIDE_TAILSCALE_BIN", self.home.join("no-tailscale"))
             .env("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws")
             .env("HIDE_PEER_DIRECT", "127.0.0.1:0")
+            .env(hided::env::HIDE_DEVICE_CONNECT, "1")
             .env("LANG", "en_US.UTF-8")
             .env_remove("LC_ALL")
             .env_remove("LC_MESSAGES")
@@ -343,7 +346,7 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     // A machine paired with nothing lists nothing, and looking opens no
     // endpoint (D-83).
     assert!(host.peers().is_empty());
-    assert!(!hided::peer_host::endpoint_wanted(&host.state).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&host.state, true).unwrap());
 
     // What is the operator's alone is refused where an agent runs: by this
     // command's own environment, and by what the kernel says of the caller.
@@ -615,6 +618,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         &[
             (hided::env::HOME.into(), target.home.clone().into()),
             ("HIDE_STATE_DIR".into(), target.state.clone().into()),
+            (hided::env::HIDE_DEVICE_CONNECT.into(), "1".into()),
         ],
     )
     .unwrap();
@@ -637,7 +641,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         "{}",
         looked.text()
     );
-    assert!(!hided::peer_host::endpoint_wanted(&target.state).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&target.state, true).unwrap());
 
     // One command pairs: no link, no words.
     let added = guest.run(&["device", "add", "studio", "--json"]);
@@ -688,4 +692,62 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     ]);
     assert!(removed.ok, "{}", removed.text());
     ssh.stop().unwrap();
+}
+
+/// A build that does not offer connections between two Hides (no
+/// `HIDE_DEVICE_CONNECT`, every build until that feature ships) says so in
+/// its hello, so its window shows no pairing, and refuses every pairing ask
+/// from a window and from a terminal while its SSH devices answer as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_to_its_window() {
+    let root = tempfile::tempdir().unwrap();
+    let running = hided::start_daemon(Env {
+        device_connect: false,
+        ..host_env(root.path())
+    })
+    .await
+    .unwrap();
+    let host = Terminal {
+        home: root.path().join("host-home"),
+        state: root.path().join("host-state"),
+        machine: None,
+    };
+
+    let mut window = Window::open(&running, "web").await;
+    let hello = window
+        .frame("the daemon frame", |frame| frame["type"] == "daemon")
+        .await;
+    assert_eq!(hello["payload"]["device_connect"], false, "{hello}");
+    window
+        .send(
+            "pairing_share",
+            json!({"request_id": "s1", "language": "en"}),
+        )
+        .await;
+    let refused = window.result("share").await;
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["reason"], "device_connect_unavailable", "{refused}");
+
+    // The terminal's own build refuses before it asks; one that offers
+    // pairing hears the daemon's refusal, which is the same.
+    let mut off = host.command(&["device", "share", "--json"]);
+    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    Ran::of(off.output().unwrap()).refused("device_connect_unavailable");
+    host.run(&["device", "pause", "studio", "--json"])
+        .refused("device_connect_unavailable");
+
+    // The SSH devices are the core's, as before pairing.
+    let mut list = host.command(&["device", "list", "--json"]);
+    list.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    let listed = Ran::of(list.output().unwrap());
+    assert!(listed.ok, "{}", listed.text());
+    assert!(
+        listed.json()["value"]["peers"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{}",
+        listed.text()
+    );
+    assert!(!hided::peer_host::endpoint_wanted(&host.state, false).unwrap());
+    assert!(!hide_kit::layout::machine_key(&host.state).exists());
 }
