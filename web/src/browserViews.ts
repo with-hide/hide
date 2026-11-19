@@ -571,10 +571,21 @@ function syncLoop(): BrowserSyncLoop | null {
   return loop;
 }
 
+/**
+ * One retained display as the host needs it: a web page carries its address
+ * and the load the core asked of it, so the host loads it while no desk on
+ * screen shows it (PRD lane-desk-pair-view B32); an outside HTML file carries
+ * neither, since its path stays in the host.
+ */
+export function retainedRow(row: NonNullable<SnapshotRest["browser_views"]>[number]): BrowserSync["retained"][number] {
+  const base = { workspace: workspaceKey(row), id: row.view_id, area_id: row.area_id };
+  return row.url ? { ...base, url: row.url, load: row.load ?? 0 } : base;
+}
+
 /** The core's browser displays and positive area authority, whenever the snapshot changes them. */
-export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: { device_id: string; path: string; view_id: string; area_id: string }[], scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null): void {
+export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: NonNullable<SnapshotRest["browser_views"]>, scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null): void {
   syncLoop()?.setFront(workspace ? { workspace: workspaceKey(workspace), rows: browserDisplays(layout) } : null,
-    inventory.map((row) => ({ workspace: workspaceKey(row), id: row.view_id, area_id: row.area_id })),
+    inventory.map(retainedRow),
     scopes.map((row) => ({ workspace: workspaceKey(row), area_id: row.area_id, incarnation: row.incarnation })),
     externalGrants);
 }

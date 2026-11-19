@@ -4,7 +4,7 @@ import { initializeInterfaceI18n } from "../../../web/src/i18n/instance";
 import { REGISTRY, type Command } from "../../../web/src/shortcuts";
 import { BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
-import { browserPartition } from "./browserSync";
+import { browserPartition, MAX_LIVE_VIEWS } from "./browserSync";
 import { session } from "electron";
 import { ExternalFiles, UNNAMED_GRANT_GRACE_MS, externalPartition } from "./externalFiles";
 import type { HostLog } from "./log";
@@ -706,6 +706,120 @@ describe("a page that closes itself", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("pages on no desk on screen (PRD lane-desk-pair-view B32)", () => {
+  const workspace = "local\u0000/checkout";
+  const rect = { x: 10, y: 20, width: 640, height: 480 };
+  const row = (id: string, load: number, url = `https://${id}.example/`) => ({ workspace, id, area_id: "shelf", url, load });
+
+  function host() {
+    let nextId = 0;
+    const views: { id: string; view: { webContents: EventEmitter & { id: number; close: ReturnType<typeof vi.fn> }; setVisible: ReturnType<typeof vi.fn>; setBounds: ReturnType<typeof vi.fn> } }[] = [];
+    nativeView.make = () => {
+      const contents = Object.assign(new EventEmitter(), {
+        id: ++nextId, isDestroyed: () => false, isFocused: () => false, getZoomFactor: () => 1, getURL: () => "", getTitle: () => "", close: vi.fn(),
+        loadURL: vi.fn(() => new Promise(() => undefined)), setWindowOpenHandler: vi.fn(), setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined),
+        navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      });
+      const view = { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() };
+      views.push({ id: "", view });
+      return view;
+    };
+    Object.assign(session, { fromPartition: vi.fn(() => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), on: vi.fn(), webRequest: { onBeforeRequest: vi.fn() } })) });
+    const resolve = vi.fn<(workspace: string, id: string, load: number) => Promise<ResolvedPage>>(() => new Promise<ResolvedPage>(() => undefined));
+    const release = vi.fn();
+    const log = { event: vi.fn() };
+    let now = 1;
+    const subject = new BrowserViews(log as unknown as HostLog, () => true, resolve, release, vi.fn(), () => english, new ExternalFiles(vi.fn()), { bound: 1_000_000, every: 1_000_000, now: () => now });
+    const shellContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn(), focus: vi.fn(), getZoomFactor: () => 1 });
+    const removeChildView = vi.fn();
+    const window = Object.assign(new EventEmitter(), {
+      isFocused: () => true, isDestroyed: () => false, webContents: shellContents, getContentBounds: () => ({ x: 0, y: 0, width: 1400, height: 820 }),
+      contentView: { removeChildView, addChildView: vi.fn() },
+    });
+    subject.attach(window as never);
+    const pages = Reflect.get(subject, "pages") as Map<string, { id: string; view: unknown; visible: boolean }>;
+    const sync = (retained: ReturnType<typeof row>[], placed: { id: string; load: number; rect: typeof rect | null }[] = []) => {
+      now += 1;
+      Reflect.get(subject, "sync").call(subject, placed.length ? workspace : null,
+        placed.map((display) => ({ id: display.id, area_id: "shelf", url: `https://${display.id}.example/`, load: display.load, rect: display.rect, visible: display.rect !== null })), retained);
+    };
+    const live = () => [...pages.values()].map((page) => page.id).sort();
+    const viewOf = (id: string) => pages.get(`${workspace}\u0001${id}`)?.view as (typeof views)[number]["view"] | undefined;
+    return { subject, sync, resolve, release, removeChildView, views, live, viewOf, log };
+  }
+
+  it("loads a page the core asks for hidden, and the desk then shows that same page without loading it again", () => {
+    const { sync, resolve, views, viewOf } = host();
+    // The first sync finds a page opened before this window: nothing loads.
+    sync([row("earlier", 3)]);
+    expect(views).toHaveLength(0);
+    // An agent opens a page on no desk: it loads hidden, at the lane's width.
+    sync([row("earlier", 3), row("agent", 1)]);
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(workspace, "agent", 1);
+    const page = viewOf("agent")!;
+    expect(page.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 900, height: 820 });
+    expect(page.setVisible).not.toHaveBeenCalledWith(true);
+    // The operator puts it on the desk: the same contents take the slot, with no load.
+    sync([row("earlier", 3), row("agent", 1)], [{ id: "agent", load: 1, rect }]);
+    expect(views).toHaveLength(1);
+    expect(viewOf("agent")).toBe(page);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(page.setBounds).toHaveBeenLastCalledWith(rect);
+    expect(page.setVisible).toHaveBeenLastCalledWith(true);
+    // Taken off the desk again, it stays loaded and hidden; a reopen loads it again in place.
+    sync([row("earlier", 3), row("agent", 1)]);
+    expect(page.setVisible).toHaveBeenLastCalledWith(false);
+    sync([row("earlier", 3), row("agent", 2)]);
+    expect(views).toHaveLength(1);
+    expect(resolve).toHaveBeenLastCalledWith(workspace, "agent", 2);
+    // The page opened before this window loads when the core asks again.
+    sync([row("earlier", 4), row("agent", 2)]);
+    expect(resolve).toHaveBeenLastCalledWith(workspace, "earlier", 4);
+  });
+
+  it("keeps pages on no desk within the live-page cap and releases a closed View's page", () => {
+    const { sync, resolve, release, removeChildView, live, views, viewOf } = host();
+    sync([]);
+    const rows: ReturnType<typeof row>[] = [];
+    for (let index = 1; index <= MAX_LIVE_VIEWS + 2; index += 1) {
+      rows.push(row(`p${index}`, 1));
+      sync([...rows]);
+    }
+    // Twelve live at most; the newest asked is kept, the least recently loaded go.
+    expect(live()).toHaveLength(MAX_LIVE_VIEWS);
+    expect(live()).not.toContain("p1");
+    expect(live()).not.toContain("p2");
+    expect(live()).toContain(`p${MAX_LIVE_VIEWS + 2}`);
+    // An unloaded page is not loaded again on the next sync; only a new ask does that.
+    const loads = resolve.mock.calls.length;
+    sync([...rows]);
+    expect(resolve).toHaveBeenCalledTimes(loads);
+    // The core closes a View: its page ends and its route is let go.
+    const closed = viewOf("p5")!;
+    sync(rows.filter((entry) => entry.id !== "p5"));
+    expect(live()).not.toContain("p5");
+    expect(removeChildView).toHaveBeenCalledWith(closed);
+    expect(closed.webContents.close).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledWith(workspace, "p5", 1);
+    // Every View closed: nothing is left alive.
+    sync([]);
+    expect(live()).toEqual([]);
+    expect(views.every(({ view }) => view.webContents.close.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("does not load an evicted local file page again until the core asks", () => {
+    const { sync, resolve, live } = host();
+    sync([]);
+    const rows = Array.from({ length: MAX_LIVE_VIEWS + 1 }, (_, index) => row(`f${index}`, 1, `file:///checkout/f${index}.html`));
+    for (let index = 1; index <= rows.length; index += 1) sync(rows.slice(0, index));
+    expect(live()).toHaveLength(MAX_LIVE_VIEWS);
+    const loads = resolve.mock.calls.length;
+    sync(rows);
+    sync(rows);
+    expect(resolve).toHaveBeenCalledTimes(loads);
   });
 });
 

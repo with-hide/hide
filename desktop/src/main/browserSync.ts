@@ -115,12 +115,15 @@ export function parseSync(value: unknown): BrowserSync | null {
   const ownedAreas = new Map<string, string>();
   for (const entry of retained as unknown[]) {
     if (typeof entry !== "object" || entry === null) return null;
-    const { workspace: owner, id, area_id } = entry as Record<string, unknown>;
+    const { workspace: owner, id, area_id, url, load } = entry as Record<string, unknown>;
     if (!workspaceIdentity(owner) || !identity(id) || !identity(area_id)) return null;
+    // A web page names its address and load together, or neither (an outside file).
+    if ((url === undefined) !== (load === undefined)) return null;
+    if (url !== undefined && (!text(url) || typeof load !== "number" || !Number.isSafeInteger(load) || load < 0)) return null;
     const key = viewKey(owner, id);
     if (ownedAreas.has(key)) return null;
     ownedAreas.set(key, area_id);
-    owned.push({ workspace: owner, id, area_id });
+    owned.push({ workspace: owner, id, area_id, ...(url === undefined ? {} : { url: url as string, load: load as number }) });
   }
   const parsed: BrowserPlacement[] = [];
   const ids = new Set<string>();
@@ -348,6 +351,30 @@ export function viewKey(workspace: string, id: string): string {
 }
 
 export type LiveView = { key: string; visible: boolean; shownAt: number };
+
+/** The width a page no slot shows lays out at: the lane's width for a page (PRD lane-desk-pair-view B32). */
+export const OFF_SCREEN_WIDTH = 900;
+
+/**
+ * The bounds of a page loaded with no slot on screen: the lane's width for a
+ * page, or the window's when narrower, at the window's height, so an agent's
+ * snapshot and clicks meet the layout the operator would see.
+ */
+export function offScreenBounds(content: { width: number; height: number }): BrowserRect {
+  return { x: 0, y: 0, width: Math.max(1, Math.min(OFF_SCREEN_WIDTH, Math.round(content.width))), height: Math.max(1, Math.round(content.height)) };
+}
+
+/**
+ * Whether the core asked for a load of a retained page that no slot shows
+ * and that has no live page here: its load stamp moved past the one this
+ * window last saw for it, or it appeared with one after this window's first
+ * sync. A page the first sync finds was opened before this window, and loads
+ * when shown or driven, so a relaunch never loads every saved page at once.
+ */
+export function offScreenAsked(seen: number | undefined, load: number, seeded: boolean): boolean {
+  if (!seeded || load <= 0) return false;
+  return seen === undefined || load > seen;
+}
 
 /**
  * The hidden pages to close so no more than `cap` stay alive, least recently

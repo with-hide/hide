@@ -6,6 +6,8 @@
 // shell's bridge or the daemon's token.
 //
 //   shown      -> created on first show, then placed and made visible
+//   asked off screen -> a web page on no desk on screen whose load the core
+//                 asks for: created and loaded hidden (PRD lane-desk-pair-view B32)
 //   not shown  -> hidden, still alive; a move between areas never reloads
 //   closed     -> the core's inventory no longer names it: destroyed,
 //                 which ends its renderer process
@@ -25,10 +27,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TFunction } from "i18next";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect } from "../../../web/src/host";
+import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenAsked, offScreenBounds, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
@@ -164,6 +166,14 @@ export class BrowserViews {
   private readonly pages = new Map<string, Page>();
   /** Unloaded web pages by key, until their display closes or they show again. */
   private readonly unloaded = new Map<string, Unloaded>();
+  /**
+   * The load stamp last seen for each retained page with no live page here,
+   * so a newer one reads as the core asking for a load off screen (B32); one
+   * per display the core retains, dropped with it.
+   */
+  private readonly offScreenSeen = new Map<string, number>();
+  /** Whether this window has had its first sync, whose stamps predate it. */
+  private seeded = false;
   private idleTimer: NodeJS.Timeout | null = null;
   /** Area membership comes from the core's retained inventory, including hidden workspaces. */
   private cdpAreas = new Map<string, string>();
@@ -411,6 +421,8 @@ export class BrowserViews {
       if (this.window === window) {
         this.window = null;
         this.unloaded.clear();
+        this.offScreenSeen.clear();
+        this.seeded = false;
         if (this.idleTimer) clearInterval(this.idleTimer);
         this.idleTimer = null;
       }
@@ -500,7 +512,7 @@ export class BrowserViews {
     return true;
   }
 
-  private sync(workspace: string | null, displays: BrowserPlacement[], retained: { workspace: string; id: string; area_id?: string }[], attachmentEpoch?: string, authorizedScopes?: { workspace: string; area_id: string; incarnation?: number }[]): void {
+  private sync(workspace: string | null, displays: BrowserPlacement[], retained: BrowserSync["retained"], attachmentEpoch?: string, authorizedScopes?: { workspace: string; area_id: string; incarnation?: number }[]): void {
     const window = this.window;
     if (!window) return;
     this.reportWindowFocus(window.isFocused());
@@ -518,6 +530,7 @@ export class BrowserViews {
     this.cdpAreas = new Map(retained.flatMap((row) => row.area_id ? [[viewKey(row.workspace, row.id), row.area_id] as const] : []));
     const listed = new Set(retained.map((row) => viewKey(row.workspace, row.id)));
     for (const key of this.unloaded.keys()) if (!listed.has(key)) this.unloaded.delete(key);
+    for (const key of this.offScreenSeen.keys()) if (!listed.has(key)) this.offScreenSeen.delete(key);
     const placed = new Set(displays.map((display) => viewKey(workspace ?? "", display.id)));
     for (const page of [...this.pages.values()]) {
       if (!listed.has(page.key)) this.destroy(page, "closed");
@@ -531,6 +544,7 @@ export class BrowserViews {
     }
     const now = this.idle.now();
     const zoom = window.webContents.getZoomFactor();
+    const onSlot = new Set<string>();
     for (const display of displays) {
       const key = viewKey(workspace ?? "", display.id);
       let page = this.pages.get(key);
@@ -540,11 +554,9 @@ export class BrowserViews {
           page.placed = false;
           this.show(page, false);
         }
-        // An unloaded page follows the address and load the core asks of it now.
-        const record = this.unloaded.get(key);
-        if (record && !display.grant) Object.assign(record, { url: display.url, load: display.load });
         continue;
       }
+      onSlot.add(key);
       if (!page) page = this.create(window, workspace ?? "", display);
       else if (page.partition !== this.partitionOf(workspace ?? "", display)) {
         this.destroy(page, "replaced");
@@ -563,13 +575,60 @@ export class BrowserViews {
       page.shownAt = now;
       page.idleSince = now;
       this.unloaded.delete(key);
+      this.offScreenSeen.delete(key);
     }
+    for (const row of retained) if (!onSlot.has(viewKey(row.workspace, row.id))) this.offScreen(window, row, now);
+    this.seeded = true;
     this.evictOverCap();
     this.publishCdp();
     if (attachmentEpoch && /^[A-Za-z0-9-]{1,64}$/.test(attachmentEpoch) && attachmentEpoch !== this.attachmentEpoch) {
       this.attachmentEpoch = attachmentEpoch;
       for (const page of this.pages.values()) this.sendCdpAttached(page, this.cdpLeases.has(page.contentsId));
     }
+  }
+
+  /**
+   * A retained page no slot on screen shows: on no desk, on the desk of an
+   * Agent tab or a Workspace not in front, or under a folded desk (PRD
+   * lane-desk-pair-view B32, D-37). A web page the core asks to load is
+   * loaded here hidden, so an agent's `hide browser` commands and `--wait`
+   * find it loaded and the desk later shows the same page; it counts toward
+   * `MAX_LIVE_VIEWS` as just seen. One the core asks nothing of follows its
+   * address and stamp, for `cdpRevive`. An outside file names no address and
+   * loads only when shown.
+   */
+  private offScreen(window: BrowserWindow, row: BrowserSync["retained"][number], now: number): void {
+    if (row.url === undefined || row.load === undefined) return;
+    const key = viewKey(row.workspace, row.id);
+    const page = this.pages.get(key);
+    if (page) {
+      // A reopen of an address the page holds loads it again where it is.
+      if (!page.grant && row.load > page.applied) {
+        page.applied = row.load;
+        this.load(page, row.url);
+        page.shownAt = page.idleSince = now;
+        this.log.event("browser.loaded_off_screen", { id: page.id, live: this.pages.size });
+      }
+      return;
+    }
+    const record = this.unloaded.get(key);
+    const asked = offScreenAsked(this.offScreenSeen.get(key) ?? record?.load, row.load, this.seeded);
+    this.offScreenSeen.set(key, row.load);
+    if (!asked) {
+      // Only a web page enters CDP, so only it is loaded for an agent's connection.
+      if (record) Object.assign(record, { url: row.url, load: row.load, area_id: row.area_id });
+      else if (!isFileAddress(row.url)) this.unloaded.set(key, { workspace: row.workspace, id: row.id, area_id: row.area_id, url: row.url, load: row.load, device: null, bounds: null });
+      return;
+    }
+    const created = this.create(window, row.workspace, { id: row.id, area_id: row.area_id, url: row.url, load: row.load, rect: null, visible: false });
+    created.device = record?.device ?? null;
+    created.bounds = record?.bounds ?? offScreenBounds(window.getContentBounds());
+    created.view.setBounds(created.bounds);
+    this.emulate(created);
+    created.shownAt = created.idleSince = now;
+    this.unloaded.delete(key);
+    this.offScreenSeen.delete(key);
+    this.log.event("browser.loaded_off_screen", { id: created.id, live: this.pages.size });
   }
 
   /**
@@ -1316,8 +1375,9 @@ export class BrowserViews {
       else {
         page = this.create(window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
         page.device = record.device;
-        page.bounds = record.bounds;
-        if (record.bounds) page.view.setBounds(record.bounds);
+        // A page never shown here lays out where an off-screen load would (B32).
+        page.bounds = record.bounds ?? offScreenBounds(window.getContentBounds());
+        page.view.setBounds(page.bounds);
         this.emulate(page);
       }
       // Loaded again counts as seen, so the next check does not close it at once.
@@ -1363,6 +1423,9 @@ export class BrowserViews {
       }
       this.log.event("browser.unloaded", { id: page.id, reason: reason === "idle" ? "idle" : "cap" });
     }
+    // The load it held is not asked again off screen; the next sync forgets
+    // the stamp once the core lets go of the display (B32).
+    this.offScreenSeen.set(page.key, page.applied);
     for (const done of [...page.settled]) done();
     if (this.cycleInput?.page === page) this.cancelCycle();
     if (this.returnTo === page) this.returnTo = null;

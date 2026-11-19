@@ -38,6 +38,7 @@ const PAGES: Record<string, string> = {
   "/a.html": '<!doctype html><meta charset="utf-8"><title>Page A</title><body style="background:lavender"><h1>Page A</h1><input id="q" aria-label="query">',
   "/b.html": '<!doctype html><meta charset="utf-8"><title>Page B</title><body style="background:honeydew"><h1>Page B</h1><input id="q" aria-label="Page B input" autofocus>',
   "/c.html": '<!doctype html><meta charset="utf-8"><title>Page C</title><body style="background:mistyrose"><h1>Page C</h1>',
+  "/form.html": '<!doctype html><meta charset="utf-8"><title>Form</title><body style="background:beige"><input id="name" aria-label="Name"><button onclick="document.getElementById(\'out\').textContent=\'sent: \'+document.getElementById(\'name\').value">Send</button><p id="out"></p>',
   "/korean.html": '<!doctype html><meta charset="utf-8"><title>한글 브라우저</title><body style="font:16px system-ui"><h1>작업 공간 검증</h1><p>다른 영역의 내용과 선택은 읽을 수 있어야 합니다.</p><input aria-label="한글 입력" value="한글 확인"><script>window.tabKeys=0;addEventListener("keydown",e=>{if(e.code==="Tab")window.tabKeys++})</script>',
   "/signin.html": '<!doctype html><meta charset="utf-8"><title>Sign in</title><body style="background:aliceblue"><h1>Sign in</h1>',
   // A sign-in popup reports to the page that opened it and closes itself.
@@ -196,7 +197,8 @@ async function backgroundTab(label: string): Promise<{ tab: string; pane: string
   });
 }
 
-async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
+/** A `hide` command run in `pane`, with its exit status and what it printed. */
+async function paneOutput(args: string[], pane = fixture.panes[0]): Promise<{ status: number; stdout: string }> {
   // The pane is the one an agent runs in, whichever the operator is in: the command must not take the keyboard from it.
   const name = `desktop-cli-${++cliSequence}`;
   const result = await dumpOnFailure("pane command", async () => {
@@ -214,6 +216,11 @@ async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Rec
     argv: [path.resolve("..", "target", "debug", fixtureExecutable("hide")), ...args],
     stdout: true,
   }));
+  return { status: result.status, stdout: result.stdout };
+}
+
+async function cliFromPane(args: string[], pane = fixture.panes[0]): Promise<Record<string, unknown>> {
+  const result = await paneOutput(args, pane);
   return { status: result.status, ...(JSON.parse(result.stdout.trim().split("\n").at(-1) || "{}") as Record<string, unknown>) };
 }
 
@@ -272,66 +279,66 @@ async function displayIdOf(page: Page, text: string): Promise<string> {
 // The native child-view lifetime is shared; the pane CLI uses cmd on Windows
 // and a POSIX shell elsewhere, through the same portable fixture boundary.
 for (const width of [1500, 720]) {
-test.fixme(`browser: Agent tabs share one page per address through a background open and never move the operator (${width}px)`, { tag: "@platform" }, async () => {
-  // B32: 책상 밖 페이지 로드는 host 노드 (PRD lane-desk-pair-view B32, D-37; a background open lands on no desk, and a page lives on one desk, F14).
+test(`browser: a page an agent the operator is not watching opens loads on no desk, takes page commands and comes onto a desk as the same page (${width}px)`, { tag: "@platform" }, async () => {
+  // PRD lane-desk-pair-view B1, B32, D-37: a background open lands on no
+  // desk, still loads and takes every hide browser command; B10, D-20: put
+  // on a desk it is the page that loaded, never a second one.
   ({ app } = await launchShell(run.env));
   await fitWindow(app, { width, height: 900 });
   const page = await shellPage(app);
-  await enterWorkspace(page, "fixture");
+  await enterWorkspaceWithLane(page, "fixture");
   const { tab: other, pane: otherPane } = await backgroundTab("Other tab");
   const url = `${origin}/a.html`;
-  const chooseTab = async (id: string, callFiles = true) => {
-    // The lane over the agents can cover their tab strip: ⌘E closes it for
-    // the choice, and the documents come back after unless the next open
-    // calls them (PRD right-lane B2, B16; lane-two-columns B15).
-    const screen = page.locator("[data-workspace-screen]");
-    if ((await screen.getAttribute("data-lane-mode")) !== "closed") {
-      await menuClick("toggle_lane");
-      await expect(screen).toHaveAttribute("data-lane-mode", "closed");
-    }
-    await page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`).click();
-    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${id}"]`)).toHaveAttribute("aria-selected", "true");
-    if (callFiles) await showDocuments(page);
-  };
+  const form = `${origin}/form.html`;
   const opened = await openLoaded(url, { status: 0, ok: true, page: { state: "loaded" } });
   const a = (opened.result as { view_id: string }).view_id;
   await shownAndSelected(page, url, a);
   const mark = async (id: number, script: string) => app!.evaluate(({ webContents }, { id, script }) => webContents.fromId(id)!.executeJavaScript(script), { id, script });
   const original = await viewOf(url);
-  // The other tab is shown for the first time and has no bookmark: the
-  // checkout's one list stays as it is, and the same address opened from
-  // its pane is the page already there, not a second one (PRD
-  // lane-files-checkout-views B1, B3, B12).
-  await chooseTab(other);
-  await expect(tab(page, "Page A")).toHaveCount(1);
-  const again = await cliFromPane(["browser", "open", url, "--wait"], otherPane);
-  expect(again).toMatchObject({ status: 0, ok: true, result: { view_id: a } });
-  await expect.poll(async () => (await views()).filter((view) => view.url === url).length).toBe(1);
-  await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
-  // The reopen loaded the one page again; what the page holds from here must survive the background open.
   await mark(original.id, "window.marker='A'; document.getElementById('q').value='A 한글 입력'");
-  // Back on the first tab, the other tab's pane opens a page behind it: the
-  // page joins the strip, waits unloaded behind the one in front and moves
-  // nothing (B7).
-  await chooseTab(fixture.tab);
-  const waiting = await cliFromPane(["browser", "open", `${origin}/c.html`, "--wait"], otherPane);
-  expect(waiting).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_wait_timeout", page: { state: "pending" } });
+
+  // The other tab's agent opens a page: it loads with no slot and the
+  // operator's desk, tab and page stay as they were.
+  const background = await cliFromPane(["browser", "open", form, "--wait"], otherPane);
+  expect(background).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
+  const f = (background.result as { view_id: string }).view_id;
+  await expect(tab(page, "Form")).toHaveCount(0);
   await expect(page.locator(`[data-view-tab-bar] [aria-selected=true][data-display="${a}"]`)).toBeVisible();
-  // Still unloaded, the page has no title yet, so its tab names its address.
-  await expect(tab(page, "/c.html")).toBeVisible();
-  await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
-  expect(await mark(original.id, "[window.marker, document.getElementById('q').value]")).toEqual(["A", "A 한글 입력"]);
-  await tab(page, "/c.html").click();
-  await expect.poll(async () => (await viewOf(`${origin}/c.html`)).visible).toBe(true);
-  await windowShot(`background-tab-C-behind-${width}`, process.platform === "darwin");
-  // The other tab's pane asks for the page again: it stays behind the
-  // operator's c.html and the first tab stays on screen, since only the
-  // pane the operator is in moves the screen (B8).
-  expect(await cliFromPane(["browser", "open", url], otherPane)).toMatchObject({ status: 0, ok: true, result: { view_id: a } });
   await expect(page.locator(`[data-agent-tab-bar] [data-tab="${fixture.tab}"]`)).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator(`[data-view-tab-bar] [aria-selected=true][data-display="${a}"]`)).toHaveCount(0);
-  await expect.poll(async () => (await viewOf(`${origin}/c.html`)).visible).toBe(true);
-  await windowShot(`background-tab-A-stays-behind-${width}`, process.platform === "darwin");
+  const offDesk = await viewOf(form);
+  expect(offDesk.visible).toBe(false);
+  expect((await viewOf(url)).visible).toBe(true);
+  expect(await mark(original.id, "[window.marker, document.getElementById('q').value]")).toEqual(["A", "A 한글 입력"]);
+
+  // Its agent reads and drives it there.
+  const shot = await paneOutput(["browser", "snapshot", f], otherPane);
+  expect(shot.status, shot.stdout).toBe(0);
+  const refOf = (line: RegExp) => shot.stdout.split("\n").find((row) => line.test(row))?.trim().split(" ")[0];
+  const name = refOf(/textbox "Name"/), send = refOf(/button "Send"/);
+  expect([name, send], shot.stdout).toEqual([expect.stringMatching(/^@\d+$/), expect.stringMatching(/^@\d+$/)]);
+  expect(await cliFromPane(["browser", "fill", f, name!, "한글 이름"], otherPane)).toMatchObject({ status: 0, ok: true });
+  expect(await cliFromPane(["browser", "click", f, send!], otherPane)).toMatchObject({ status: 0, ok: true });
+  expect(await inPage(form, "document.getElementById('out').textContent")).toBe("sent: 한글 이름");
+  await expect.poll(async () => (await views()).filter((view) => view.url === url && view.visible).map((view) => view.id)).toEqual([original.id]);
+
+  // The operator goes to the other tab and its agent shows the page there:
+  // the same contents take the desk's slot, with what was typed still in it.
+  const screen = page.locator("[data-workspace-screen]");
+  if ((await screen.getAttribute("data-lane-mode")) !== "closed") {
+    // The lane over the agents can cover their tab strip (PRD right-lane B2).
+    await menuClick("toggle_lane");
+    await expect(screen).toHaveAttribute("data-lane-mode", "closed");
+  }
+  await page.locator(`[data-agent-tab-bar] [data-tab="${other}"]`).click();
+  await expect(page.locator(`[data-agent-tab-bar] [data-tab="${other}"]`)).toHaveAttribute("aria-selected", "true");
+  expect(await cliFromPane(["view", "select", f], otherPane)).toMatchObject({ status: 0, ok: true });
+  await showDocuments(page);
+  await shownAndSelected(page, form, f);
+  expect((await viewOf(form)).id).toBe(offDesk.id);
+  await expectOnSlot(page, form, f);
+  expect(await inPage(form, "document.getElementById('out').textContent")).toBe("sent: 한글 이름");
+  await expect.poll(async () => (await views()).filter((view) => view.url === form).length).toBe(1);
+  await windowShot(`off-desk-page-on-desk-${width}`, process.platform === "darwin");
 });
 }
 

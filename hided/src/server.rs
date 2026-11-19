@@ -1545,17 +1545,21 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
 }
 
 /// What the core knows of a display a `hide browser` command relays to:
-/// whether it is its area's selected View (the only one shown, so the CLI
-/// refuses input to any other before sending it) and `source_url`, the
-/// address the core keeps for it. A device's page loads from a loopback route
-/// on this machine, so the page reports that address and the CLI names this
-/// one instead. `None` when the checkout has no such display.
+/// whether it takes input, and `source_url`, the address the core keeps for
+/// it. A View on a desk takes input only as its area's selected View, so the
+/// CLI refuses one behind another tab before sending it; a page on no desk
+/// is on no screen for an action to be drawn over, so every one of them
+/// takes input (PRD lane-desk-pair-view B32). A device's page loads from a
+/// loopback route on this machine, so the page reports that address and the
+/// CLI names this one instead. `None` when the caller's checkout, whose
+/// Views alone `views` lists, has no such display.
 pub(crate) fn relay_facts(
     views: &[hide_core::workspace_control::View],
     display_id: &str,
 ) -> Option<Value> {
     let view = views.iter().find(|view| view.view_id == display_id)?;
-    Some(json!({"selected": view.selected, "source_url": view.target}))
+    let takes_input = view.selected || view.area_id == hide_core::workspace_views::SHELF_AREA;
+    Some(json!({"selected": takes_input, "source_url": view.target}))
 }
 
 /// The relay's answer to the CLI: `relay_facts` under the display's id.
@@ -5417,6 +5421,39 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// PRD lane-desk-pair-view B32: every page on no desk takes an agent's
+    /// input, a desk page behind another tab of its area does not, and a
+    /// display outside the caller's checkout, whose Views the list never
+    /// holds, is missing rather than driven.
+    #[test]
+    fn a_page_on_no_desk_takes_input_and_another_checkouts_page_is_missing() {
+        let view = |area: &str, id: &str, selected: bool| hide_core::workspace_control::View {
+            area_id: area.into(),
+            view_id: id.into(),
+            kind: "browser",
+            target: format!("https://{id}.test/"),
+            selected,
+            active_area: false,
+            page: None,
+            openers: Vec::new(),
+            operator: false,
+            unseen: true,
+        };
+        let shelf = hide_core::workspace_views::SHELF_AREA;
+        let views = vec![
+            view(shelf, "front-of-shelf", true),
+            view(shelf, "behind-on-shelf", false),
+            view("a1", "on-desk", true),
+            view("a1", "behind-on-desk", false),
+        ];
+        let takes_input = |id: &str| super::relay_facts(&views, id).map(|facts| facts["selected"] == true);
+        assert_eq!(takes_input("front-of-shelf"), Some(true));
+        assert_eq!(takes_input("behind-on-shelf"), Some(true));
+        assert_eq!(takes_input("on-desk"), Some(true));
+        assert_eq!(takes_input("behind-on-desk"), Some(false));
+        assert_eq!(takes_input("another-checkouts-page"), None);
+    }
+
     /// A daemon with no screen and `live` holder panes, ending after one
     /// idle second.
     fn idle(live: Result<usize, String>) -> crate::ending::Ending {

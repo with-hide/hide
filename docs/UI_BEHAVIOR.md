@@ -421,7 +421,7 @@ A last document reference waits for save protection; failure or conflict leaves 
 
 Matching checkout and path documents use one shared buffer, and the same address opened from two tabs is one page.
 Dirty-document close guards count every reference.
-A page added behind the front may stay pending until it first appears, and `--wait` proves only a real load.
+A page an agent opens loads even where no desk on screen shows it, on no desk or on the desk of a tab or Workspace not in front, and coming onto a desk it is the same page, scroll and typing kept (B32); `--wait` proves only a real load.
 
 Every desk and the Views on no desk are saved with the Workspace and survive restart and core moves (B27).
 A first start after the update moves an older file once (D-18, B34, B35): the checkout's open documents go to the desk of the Agent tab last seen, each pane's 보기 slot cards to the desk of that pane's tab in the order they stacked, a pinned lane opens over the agents, and documents, comments and unsaved drafts stay; the file is then saved only in the new form.
