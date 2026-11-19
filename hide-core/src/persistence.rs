@@ -412,6 +412,16 @@ fn moving_cards(
     if unread {
         unrecognized.push(UnrecognizedField::Detail);
     }
+    // What an older build's slots held at most: 20 cards each, the front
+    // slot and 64 kept ones. A file past that was not written by Hide; the
+    // move keeps the newest cards within it.
+    const SLOT_CARDS: usize = 20;
+    const SLOTS: usize = 65;
+    out.truncate(SLOTS);
+    for held in &mut out {
+        let older = held.cards.len().saturating_sub(SLOT_CARDS);
+        held.cards.drain(..older);
+    }
     out
 }
 

@@ -442,13 +442,11 @@ impl AreaItem for Display {
             }
             // Only a card display names a card, and it names nothing else;
             // the load drops one with no card (`workspace_views::settle`).
-            if (display.kind == DisplayKind::Card) != display.card.is_some()
-                || (display.kind == DisplayKind::Card
-                    && (!display.path.is_empty() || display.preview))
-            {
-                if display.kind != DisplayKind::Card {
-                    display.card = None;
+            if display.kind != DisplayKind::Card {
+                if display.card.take().is_some() {
+                    addresses += 1;
                 }
+            } else if display.card.is_none() || !display.path.is_empty() || display.preview {
                 display.path.clear();
                 display.preview = false;
                 addresses += 1;
