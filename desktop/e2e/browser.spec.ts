@@ -674,16 +674,16 @@ test("browser: a shell layer never has a page drawn over it, and a page tab's hi
   await expectOnSlot(page, url, a);
 });
 
-test("browser: waiting for a hidden page does not take the operator's keyboard target", async () => {
+test("browser: a hidden page that loads for its agent does not take the operator's keyboard target", async () => {
   ({ app } = await launchShell(run.env));
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const focusedLocator = page.locator('[data-pane-view][data-focused="true"]');
   await expect(focusedLocator).toHaveAttribute("data-pane-view", /./);
   const focused = await focusedLocator.getAttribute("data-pane-view");
-  // An agent in a tab the operator is not looking at opens the page, so it
-  // stays hidden; from the operator's own pane the open would call the lane
-  // (PRD right-lane B17).
+  // A pane in a tab the operator is not looking at opens the page, so it
+  // stays hidden, behind on the desk in front; it still loads (PRD
+  // lane-desk-pair-view B32), and its document's commit takes no keyboard.
   const created = await backgroundTab("Background");
   const agent = created.pane;
   // Until the core has projected the new tab, its pane is not a caller Hide
@@ -691,8 +691,9 @@ test("browser: waiting for a hidden page does not take the operator's keyboard t
   // agent in that tab, and its page would not be that tab's (issue 1125).
   await expect(page.locator(`[data-agent-tab-bar] [data-tab="${created.tab}"]`)).toHaveCount(1);
   const hidden = await cliFromPane(["browser", "open", `${origin}/b.html`, "--wait"], agent);
-  expect(hidden).toMatchObject({ status: 2, ok: false, applied: "applied", reason: "page_wait_timeout", page: { state: "pending" } });
-  expect(await cliFromPane(["view", "status", hidden.view_id as string], agent)).toMatchObject({ status: 0, ok: true, view: { page: { state: "pending" } } });
+  expect(hidden).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
+  expect(await cliFromPane(["view", "status", (hidden.result as { view_id: string }).view_id], agent)).toMatchObject({ status: 0, ok: true, view: { page: { state: "loaded" } } });
+  expect((await viewOf(`${origin}/b.html`)).visible).toBe(false);
   await expect(page.locator('[data-pane-view][data-focused="true"]')).toHaveAttribute("data-pane-view", focused!);
 });
 
