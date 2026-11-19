@@ -47,6 +47,19 @@ pub struct Prepared {
     /// whose composer is read before the letter is recorded (PRD
     /// engine-bundle-1 D-14).
     forced: Option<crate::engine::SharedEngine>,
+    /// Another core runs the command (PRD device-connect-iroh D-72): a
+    /// read or a start with no parent that names another machine's core.
+    forward: Option<Forwarded>,
+}
+
+/// A command another core runs, with what this core records before it
+/// asks.
+struct Forwarded {
+    forward: crate::core_calls::Forward,
+    /// A start: the machine it is asked of. Its asker is remembered first,
+    /// so the result report of what starts there finds it
+    /// (`ledger::CoreStart`).
+    start: Option<String>,
 }
 
 /// A step that follows a command's answer, given that answer.
@@ -170,7 +183,24 @@ impl Prepared {
             answered: None,
             then: None,
             forced: None,
+            forward: None,
         }
+    }
+
+    /// Has the core `forward` names run the command; `start` is the
+    /// machine a start is asked of.
+    pub(crate) fn forwarded(
+        mut self,
+        forward: crate::core_calls::Forward,
+        start: Option<String>,
+    ) -> Self {
+        self.forward = Some(Forwarded { forward, start });
+        self
+    }
+
+    /// Who the command's letter goes to, when it names one.
+    pub(crate) fn target_actor(&self) -> Option<&Actor> {
+        self.target.as_ref().map(|target| &target.actor)
     }
 
     /// Words what the command hands over in `language`.
@@ -203,6 +233,20 @@ impl Prepared {
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
         let result = if let Some(answer) = self.answered {
             Ok(answer)
+        } else if let Some(Forwarded { forward, start }) = self.forward {
+            match start {
+                Some(machine) => self
+                    .client
+                    .submit(
+                        Effect::CoreStart {
+                            origin: self.actor,
+                            machine,
+                        },
+                        timeout,
+                    )
+                    .and_then(|_| forward.run(timeout)),
+                None => forward.run(timeout),
+            }
         } else if let Command::Agents { command } = self.command {
             crate::coordination::run(self.client, self.authority, self.actor, command)
         } else if let (Some(engine), Some(target)) = (&self.forced, &self.target)
@@ -349,6 +393,24 @@ pub(crate) enum Effect {
     Owed {
         recipient: Actor,
         owed: hide_agent_hooks::owed::Owed,
+    },
+    /// The core of `machine` took letter `id` for the agent it calls
+    /// `name` (`Ledger::settle_core`).
+    CoreSettled {
+        id: String,
+        machine: String,
+        name: String,
+    },
+    /// Letter `id`, which an agent of another core sent, is `core_id` in
+    /// its sender's ledger (`Ledger::name_core_letter`).
+    CoreName {
+        id: String,
+        core_id: String,
+    },
+    /// `origin` asks `machine`'s core for a start (`Ledger::note_core_start`).
+    CoreStart {
+        origin: Actor,
+        machine: String,
     },
 }
 
@@ -884,6 +946,18 @@ fn apply(
             let changed = !confirmed.is_empty();
             return Ok((json!(confirmed), changed));
         }
+        Effect::CoreSettled { id, machine, name } => {
+            let settled = ledger.settle_core(id, machine, name, now);
+            return Ok((json!({ "settled": settled }), settled));
+        }
+        Effect::CoreName { id, core_id } => {
+            ledger.name_core_letter(id, core_id);
+            return Ok((Value::Null, false));
+        }
+        Effect::CoreStart { origin, machine } => {
+            ledger.note_core_start(origin, machine, now);
+            return Ok((Value::Null, false));
+        }
         Effect::Deferred { id, recipient } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
                 letter.id == *id
@@ -1051,9 +1125,10 @@ fn run(
                     guard.delivery_undeliverable(),
                     guard.delivery_tool_connections(),
                     guard.delivery_present_holds(),
+                    guard.delivery_core_machines(),
                 ))
             });
-        let (state, gone, rebinds, reach, asleep, woken, undeliverable, tools, present) =
+        let (state, gone, rebinds, reach, asleep, woken, undeliverable, tools, present, cores) =
             match state {
                 Ok(state) => state,
                 Err(code) => {
@@ -1079,6 +1154,9 @@ fn run(
                 && !tools
                     .as_deref()
                     .is_some_and(|tools| crate::coordination::tools_left_behind(&state, tools))
+                && !cores
+                    .as_deref()
+                    .is_some_and(|cores| crate::coordination::cores_left_behind(&state, cores))
                 && !state.reach_moves(&reach, now)
                 && !state.letters.iter().any(|letter| {
                     (letter.intake_overdue(&state.node_clocks, now)
@@ -1104,6 +1182,7 @@ fn run(
             undeliverable,
             tools,
             present,
+            cores,
         };
         let Settled {
             ledger: candidate,
@@ -1424,7 +1503,12 @@ fn current(
                         if matches!(command, Command::Send { .. } | Command::WatchAssign { .. }) {
                             target.actor.require_native_identity()?;
                         }
-                        let current = if target.actor.code_owned() {
+                        let current = if target.actor.core_address().is_some() {
+                            // An agent of another core: its machine still
+                            // takes this caller's letter.
+                            matches!(command, Command::Send { .. })
+                                && guard.core_recipient_current(actor, &target.actor, command)
+                        } else if target.actor.code_owned() {
                             false
                         } else if matches!(command, Command::Send { .. }) {
                             // A sleeping recipient takes letters too.
@@ -1479,6 +1563,10 @@ struct Upkeep {
     /// their deadline is renewed rather than reached
     /// (`Ledger::renew_present`).
     present: std::collections::HashSet<String>,
+    /// The machines this core is paired with, by device id, once it was
+    /// told them: what an agent of any other machine keeps ends
+    /// (`coordination::end_gone_cores`).
+    cores: Option<Vec<String>>,
 }
 
 type Moved = Vec<(String, Actor)>;
@@ -1505,7 +1593,11 @@ impl Upkeep {
             .tools
             .as_deref()
             .is_some_and(|tools| crate::coordination::end_gone_tools(ledger, tools, now));
-        (moved, ended, tools)
+        let cores = self
+            .cores
+            .as_deref()
+            .is_some_and(|cores| crate::coordination::end_gone_cores(ledger, cores, now));
+        (moved, ended, tools | cores)
     }
 }
 
@@ -2559,6 +2651,7 @@ mod tests {
             rebinds: Default::default(),
             tools: None,
             present: Default::default(),
+            cores: None,
         }
     }
 

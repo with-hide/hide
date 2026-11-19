@@ -111,7 +111,7 @@ pub fn guest_pane(id: &str) -> Option<(&str, &str)> {
     }
 }
 
-const CORE_PREFIX: &str = "core:";
+pub const CORE_PREFIX: &str = "core:";
 
 /// What an address of another core names: one of its agents, by the id or
 /// the name that core registered it under, or one of its panes, by the id
@@ -669,7 +669,12 @@ mod tests {
             )))
         );
         // An id of this core's is not read here at all.
-        for id in ["w1:p1", "agent-12", "remote:mini:pane:w1:p1", "guest:mini:pane:w1:p1"] {
+        for id in [
+            "w1:p1",
+            "agent-12",
+            "remote:mini:pane:w1:p1",
+            "guest:mini:pane:w1:p1",
+        ] {
             assert_eq!(CoreAddress::parse(id), None, "{id}");
         }
         for id in [

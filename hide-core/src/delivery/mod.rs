@@ -78,6 +78,15 @@ pub const HIDE_DESK_ROLE: &str = "desk";
 /// D-10): `hide:access:<connection id>`, one per connection, which acts as
 /// Desk's does, and only while its connection stands at Act.
 pub const HIDE_ACCESS_ROLE: &str = "access";
+/// The role of another machine's agent as this core knows it (PRD
+/// device-connect-iroh D-72): `hide:core:<device>:agent|pane:<id>`, which is
+/// `hide:` before that agent's address on its own core
+/// (`hide_node_link::address::CoreAddress`), one identity per agent. It
+/// stands as the sender of what that agent asks of this core, and as the
+/// recipient of what this core's agents write to it.
+pub const HIDE_CORE_ROLE: &str = "core";
+/// The most characters of another machine's agent name this core keeps.
+const CORE_NAME_CHARS: usize = 96;
 /// The kind of the operator's own code-owned identity: the sender of the
 /// feedback letters the desktop app's Send makes from the operator's View
 /// comments (PRD view-opener-feedback D-17). It has no pane, reads no
@@ -139,6 +148,78 @@ impl Actor {
             .strip_prefix(':')
     }
 
+    /// Another machine's agent as this core, on `node`, knows it (PRD
+    /// device-connect-iroh D-72): `address` is the agent on its own core,
+    /// `machine` that machine's name and `name` the agent's name there, so a
+    /// letter's recipient reads which machine wrote it. Its pane slot is the
+    /// address, which names one agent of one machine whatever either is
+    /// called later, and its session is of that slot, so the same agent is
+    /// the same identity however it was named when it was written to.
+    pub fn core(
+        address: crate::address::CoreAddress<'_>,
+        machine: &str,
+        name: &str,
+        node: &str,
+    ) -> Self {
+        let pane_id = format!("{HIDE_PREFIX}{address}");
+        Self {
+            session: crate::engine::tokens::session_digest(&pane_id),
+            name: Self::core_name(machine, name),
+            pane_id,
+            kind: HIDE_KIND.into(),
+            device_id: node.into(),
+        }
+    }
+
+    /// The agent on another machine's core this identity stands for.
+    /// The name another machine's agent goes by here: its machine's name,
+    /// then its own, cut to what a name may hold.
+    pub fn core_name(machine: &str, name: &str) -> String {
+        let own: String = name
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(CORE_NAME_CHARS)
+            .collect();
+        format!("{HIDE_PREFIX}{HIDE_CORE_ROLE}:{machine}:{own}")
+    }
+
+    pub fn core_address(&self) -> Option<crate::address::CoreAddress<'_>> {
+        if self.kind != HIDE_KIND {
+            return None;
+        }
+        crate::address::CoreAddress::parse(self.pane_id.strip_prefix(HIDE_PREFIX)?)?.ok()
+    }
+
+    /// The machine a letter to this identity is handed over on: the other
+    /// core's for an agent of another core, which this core reaches only
+    /// while the two are connected, and the identity's own otherwise.
+    pub fn machine(&self) -> &str {
+        self.core_address()
+            .map_or(self.device_id.as_str(), |address| address.device)
+    }
+
+    /// What a letter to this identity waits on to be handed over, as the
+    /// ledger's clocks name it (`Ledger::node_clocks`): its machine, and
+    /// for an agent of another core `core:<device>`, the connection between
+    /// the two cores, which stands or falls apart from this core's own node
+    /// on that machine.
+    pub fn reach(&self) -> &str {
+        match self.core_address() {
+            // The pane slot is `hide:` then the address, which begins with
+            // `core:<device>`.
+            Some(address) => {
+                let from = HIDE_PREFIX.len();
+                &self.pane_id[from..from + crate::address::CORE_PREFIX.len() + address.device.len()]
+            }
+            None => &self.device_id,
+        }
+    }
+
+    /// The name [`Self::reach`] gives an agent of the core on `device`.
+    pub fn core_reach(device: &str) -> String {
+        format!("{}{device}", crate::address::CORE_PREFIX)
+    }
+
     /// The operator's own code-owned identity on `node`, the core's own:
     /// the sender of a feedback letter (PRD view-opener-feedback D-17).
     pub fn operator(node: &str) -> Self {
@@ -169,10 +250,11 @@ impl Actor {
     }
 
     /// Whether this is Hide itself: Hide's own identity and never an
-    /// external tool's, which is code-owned too ([`Self::access_connection`]).
-    /// A gate that only Hide may pass asks this, not [`Self::hide_owned`].
+    /// external tool's or another machine's agent's, which are code-owned
+    /// too ([`Self::access_connection`], [`Self::core_address`]). A gate
+    /// that only Hide may pass asks this, not [`Self::hide_owned`].
     pub fn hide_itself(&self) -> bool {
-        self.hide_owned() && self.access_connection().is_none()
+        self.hide_owned() && self.access_connection().is_none() && self.core_address().is_none()
     }
 
     /// Mailbox authority requires a positively observed native session. Watch

@@ -173,6 +173,11 @@ pub enum Command {
     List {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         live: bool,
+        /// Another machine whose own core is asked for its agents (`hide
+        /// agent list --machine`, PRD device-connect-iroh B66); absent
+        /// lists this core's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     Show {
         id: String,
@@ -2758,6 +2763,76 @@ pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u
     crate::diagnostic!(json!({
         "component": "coordination",
         "kind": "access.tools_ended",
+        "records": ended,
+        "parties": parties.len(),
+    }));
+    true
+}
+
+/// An agent of another core whose machine this core is paired with no
+/// longer.
+fn core_gone(actor: &Actor, machines: &[String]) -> bool {
+    actor
+        .core_address()
+        .is_some_and(|address| !machines.iter().any(|held| held == address.device))
+}
+
+/// Whether the ledger holds anything of a machine no longer paired that
+/// [`end_gone_cores`] ends: an origin record of one of its agents, an
+/// answer owed on a letter to or from one, or a start asked of it.
+pub(crate) fn cores_left_behind(ledger: &Ledger, machines: &[String]) -> bool {
+    ledger
+        .agents
+        .iter()
+        .any(|record| !record.ended && core_gone(&record.actor, machines))
+        || ledger.letters.iter().any(|letter| {
+            letter.waiting_answer
+                && !letter.awaiting_intake()
+                && (core_gone(&letter.sender, machines) || core_gone(&letter.recipient, machines))
+        })
+        || ledger
+            .core_starts
+            .iter()
+            .any(|start| !machines.contains(&start.machine))
+}
+
+/// Ends what the agents of machines no longer paired keep in the ledger
+/// (PRD device-connect-iroh D-72), as [`end_gone_tools`] does for a tool:
+/// their origin records, the answer waits of their letters, and the starts
+/// asked of those machines. A letter still on its way to one ends at its
+/// delivery deadline. The store's upkeep runs it before every batch with
+/// the machines the core was told. Whether it changed anything.
+pub(crate) fn end_gone_cores(ledger: &mut Ledger, machines: &[String], now: u64) -> bool {
+    if !cores_left_behind(ledger, machines) {
+        return false;
+    }
+    let ended: Vec<String> = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && core_gone(&record.actor, machines))
+        .map(|record| record.id.clone())
+        .collect();
+    for id in &ended {
+        end_record(ledger, id, now);
+    }
+    let mut parties: Vec<Actor> = Vec::new();
+    for letter in &ledger.letters {
+        for party in [&letter.sender, &letter.recipient] {
+            if letter.waiting_answer
+                && core_gone(party, machines)
+                && !parties.iter().any(|known| known.same_identity(party))
+            {
+                parties.push(party.clone());
+            }
+        }
+    }
+    for party in &parties {
+        ledger.end_answer_waits_of(party, now);
+    }
+    ledger.forget_core_starts(machines);
+    crate::diagnostic!(json!({
+        "component": "coordination",
+        "kind": "core.machines_ended",
         "records": ended,
         "parties": parties.len(),
     }));

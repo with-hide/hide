@@ -32,6 +32,7 @@ mod checks_wait;
 mod clone;
 mod closed_registrations;
 mod control_lane;
+mod core_calls;
 pub(crate) mod core_move;
 pub(crate) mod delivery;
 mod desk;
@@ -1932,6 +1933,8 @@ pub struct Runtime {
     /// failed one leaves undelivered (PRD mission-worker-sleep).
     letter_wakes: agent_sleep::letters::LetterWakes,
     spent_bells: spent_bells::SpentBells,
+    /// Letters to and from other machines' cores (`core_calls`).
+    core_letters: core_calls::CoreLetters,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
     /// The letters owed to agents whose turn a move or a machine restart cut
@@ -2706,6 +2709,7 @@ impl Runtime {
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
             spent_bells: Default::default(),
+            core_letters: Default::default(),
             unreadable_letters: Default::default(),
             transition_letters: Default::default(),
             blocked_children: Default::default(),
