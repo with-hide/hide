@@ -5,6 +5,7 @@ import { DeviceChip } from "./components/device-chip";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
 import { Button } from "./components/ui/button";
+import { RowButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
 import { guestPanes, guestTabs, type GuestPane } from "./guestWork";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -113,21 +114,17 @@ function GuestTab({ tab, active, actions }: { tab: GuestPane; active: boolean; a
         if (id === "close") actions.askCloseGuestPane(tab.id);
       }}
     >
-      <button
-        type="button"
+      <RowButton
         role="tab"
         aria-selected={active}
         aria-label={t("pairing.work.rowAria", { label: tab.label, name: tab.machine })}
         data-guest-tab={tab.id}
-        className={cn(
-          "flex min-w-0 max-w-(--size-recent-location-max) shrink-0 items-center gap-xs px-sm text-caption outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
-          active ? "bg-background text-foreground" : "text-subtle-foreground hover:bg-accent",
-        )}
+        className={cn("w-auto max-w-(--size-recent-location-max) shrink-0 rounded-none px-sm py-0 text-caption", active ? "bg-background text-foreground hover:bg-background" : "text-subtle-foreground")}
         onClick={() => actions.openGuestPane(tab.id)}
       >
         <span className="min-w-0 truncate">{tab.label}</span>
         <GuestMark pane={tab} />
-      </button>
+      </RowButton>
     </EntryContextMenu>
   );
 }
@@ -152,7 +149,8 @@ function GuestTerminal({ paneId, actions }: { paneId: string; actions: Actions }
     focusTerminal(paneId);
     return park;
   }, [paneId, actions]);
-  return <div ref={host} className="min-h-0 min-w-0 flex-1 bg-background" data-guest-terminal={paneId} />;
+  // The terminal's element is placed against its host, as in a pane of this computer.
+  return <div ref={host} className="relative min-h-0 min-w-0 flex-1 bg-background" data-guest-terminal={paneId} />;
 }
 
 /** The confirmation before this window ends another machine's pane: the work in it stops (B10). */
