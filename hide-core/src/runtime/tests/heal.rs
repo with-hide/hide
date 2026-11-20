@@ -581,7 +581,7 @@ fn a_line_stays_owed_until_the_store_admits_it() {
         "w1:p1".to_owned(),
         "heal:go-on:agent-1:1000".to_owned(),
     );
-    assert_eq!(letters(), [sent.clone()]);
+    assert_eq!(letters(), std::slice::from_ref(&sent));
     assert!(go_on(&runtime.lock().unwrap()).is_empty());
     runtime.lock().unwrap().drive_heal_letters(3_000);
     settle("nothing more was sent");
