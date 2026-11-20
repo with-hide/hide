@@ -323,9 +323,37 @@ async fn agents_of_two_paired_hides_write_read_and_report_across() {
             }
             pane
         });
-        let started = mac.asks(&spawn);
-        finished.store(true, Ordering::Relaxed);
-        (started, reporter.join().unwrap())
+        let mut started = mac.asks(&spawn);
+        // On a slow machine the start answers before its agent's session
+        // is in, and says so: the same command asked again answers it once
+        // the Mac mini has registered the agent.
+        let unfinished = started.status != 0 && refusal(&started) == "native_identity_unavailable";
+        if !unfinished {
+            finished.store(true, Ordering::Relaxed);
+        }
+        let pane = reporter.join().unwrap();
+        if unfinished {
+            let ledger = hide_kit::layout::delivery_ledger(&mini.machine.terminal.state);
+            wait_within(
+                "the Mac mini's registration of the Conductor",
+                WITHIN,
+                || {
+                    let Ok(saved) = std::fs::read(&ledger) else {
+                        return Ok(None);
+                    };
+                    let saved: Value = serde_json::from_slice(&saved)?;
+                    Ok(saved["agents"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|agent| agent["name"] == "lead" && agent["ended"] == false)
+                        .then_some(()))
+                },
+            )
+            .unwrap_or_else(|error| panic!("{error:#}"));
+            started = mac.asks(&spawn);
+        }
+        (started, pane)
     });
     let started = started
         .value()
