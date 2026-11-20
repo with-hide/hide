@@ -1097,62 +1097,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_first_watch_warning_whose_escalation_is_owed_stays_when_a_full_ledger_drops_letters() {
-        // Every spawn record is live, so only finished letters can go: a
-        // first warning to the lead about agent-2, finished first, then two
-        // ordinary letters.
-        let full = |notified: bool| {
-            let mut ledger = Ledger {
-                agents: vec![agent(1, false), agent(2, false)],
-                next_id: 100_000,
-                ..Ledger::default()
-            };
-            let warning = crate::delivery::mailbox::send(
-                &mut ledger,
-                &actor(3),
-                &actor(1),
-                "warning",
-                &"w".repeat(9_000),
-                "watch",
-                None,
-                NOW,
-            )
-            .unwrap()
-            .id;
-            let letter = ledger
-                .letters
-                .iter_mut()
-                .find(|letter| letter.id == warning)
-                .unwrap();
-            letter.watch_warning = Some(crate::delivery::watch::WarningReceipt {
-                target: actor(2),
-                activity_at_unix_ms: NOW,
-                ordinal: 1,
-                parent_notified: notified,
-            });
-            letter.state = State::Delivered;
-            letter.hook_confirmed = Some(true);
-            letter.finished_at_unix_ms = Some(NOW);
-            let first = finished_letter(&mut ledger, 5, 9_000);
-            let second = finished_letter(&mut ledger, 9, 9_000);
-            fill_with_briefs(&mut ledger, "agent-2", 100);
-            long_letter(&mut ledger);
-            (ledger, warning, first, second)
-        };
-        // The operator may still be told the lead did not answer it.
-        let (mut ledger, warning, first, second) = full(false);
-        for_size(&mut ledger, &Held::default()).unwrap();
-        let kept = |ledger: &Ledger, id: &str| ledger.letters.iter().any(|letter| letter.id == id);
-        assert!(kept(&ledger, &warning));
-        assert!(!kept(&ledger, &first) && !kept(&ledger, &second));
-        // Once the operator was told, it goes first like any other.
-        let (mut ledger, warning, first, second) = full(true);
-        for_size(&mut ledger, &Held::default()).unwrap();
-        assert!(!kept(&ledger, &warning) && !kept(&ledger, &first));
-        assert!(kept(&ledger, &second));
-    }
-
-    #[test]
     fn a_ledger_at_its_file_limit_whose_every_record_is_live_refuses_a_letter_unchanged() {
         // agent-2 runs, so its spawn records stay, and the one letter is
         // still to be read.

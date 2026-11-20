@@ -1091,7 +1091,10 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
         activity + hide_core::delivery::INACTIVITY_MS,
     )
     .unwrap();
-    let warning = ledger.letters[0].body.clone();
+    // The warning is the observer's status cell, not a letter; the target's
+    // session stands for what no push may carry.
+    assert!(ledger.letters.is_empty() && ledger.watches[0].warning_count == 1);
+    let session = target.session.clone().unwrap();
     private(
         "delivery-ledger.json",
         serde_json::to_value(&ledger).unwrap(),
@@ -1161,13 +1164,13 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
     let body = URL_SAFE_NO_PAD.decode(&request.payload).unwrap();
     let plain: Value = serde_json::from_slice(&key.decrypt(&body)).unwrap();
     // The notice names the agent its observer did not confirm and the
-    // computer's room, and never the warning's text; Apple sees neither.
+    // computer's room, and never its session; Apple sees neither.
     assert_eq!(plain["state"], "observer_unconfirmed");
     assert_eq!(plain["place"], "worker");
     assert!(plain["room"].is_string());
-    assert!(!plain.to_string().contains(&warning));
+    assert!(!plain.to_string().contains(&session));
     let wire = ClientMessage::Push(request).encode().unwrap();
-    assert!(!wire.contains("worker") && !wire.contains(&warning));
+    assert!(!wire.contains("worker"));
     running.stop();
 }
 

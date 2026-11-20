@@ -36,7 +36,8 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionStopCause, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionAnswerHold, MissionAttentionReason, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionStopCause, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import { MISSION_ATTENTION_REASONS } from "../snapshot";
 import { useShellStore } from "../store";
 import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
@@ -586,9 +587,10 @@ function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest
 
 /**
  * The running mission with nothing on the operator's turn and the lines its
- * Conductor skipped on its own listed beside the map (`decided`), or with one
- * cause raised on five nodes that its Conductor left unsettled 25 minutes,
- * one safety net card for all five (`net`).
+ * Conductor skipped on its own listed beside the map (`decided`), or with
+ * cells its Conductor left unresolved over 20 minutes on five nodes, raises
+ * and other standing cells (a failed CI, changes asked for) alike, one safety
+ * net card for all five (`net`, letters-missions-simplify B15).
  */
 function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "decided" | "net"): { mission: Mission; rest: SnapshotRest } {
   mission.decision = null;
@@ -601,10 +603,23 @@ function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest 
     return { mission, rest };
   }
   const raised = mission.nodes.filter((one) => one.status === "working" || one.status === "planned").slice(0, 5);
+  // Each cell names its node's own pull request where it is about one.
+  const cells = [
+    { reason: "wake_refused", pr: false },
+    { reason: "ci_failed", pr: true },
+    { reason: "worker_ended", pr: false },
+    { reason: "changes_requested", pr: true },
+    { reason: "warning_no_push", pr: false },
+  ] as const;
   const held = raised.map((one, index) => {
     const since = now - (25 - index) * MINUTE;
-    one.attention = { reason: "wake_refused", pr: null, to: "conductor", since_unix_ms: since, on_row: false, item: false, choices: ["leave", "drop"] };
-    return { key: one.key, title: one.title, reason: "wake_refused" as const, pr: null, since_unix_ms: since };
+    const at = cells[index % cells.length]!;
+    const cell = { reason: at.reason, pr: at.pr ? one.pr : null };
+    // A raise stands on its node; any other standing cell is the Conductor's alone.
+    if (MISSION_ATTENTION_REASONS.some((reason) => reason === cell.reason)) {
+      one.attention = { reason: cell.reason as MissionAttentionReason, pr: cell.pr, to: "conductor", since_unix_ms: since, on_row: false, item: false, choices: ["leave", "drop"] };
+    }
+    return { key: one.key, title: one.title, reason: cell.reason, pr: cell.pr, since_unix_ms: since };
   });
   mission.safety_net = { conductor_present: true, since_unix_ms: now - 25 * MINUTE, nodes: held };
   return { mission, rest };

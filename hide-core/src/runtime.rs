@@ -56,7 +56,6 @@ pub(crate) mod group_starts;
 mod guardrails;
 mod heal_letters;
 mod herdr_import;
-mod hide_notes;
 mod home_retire;
 mod hosts;
 mod human_turn;
@@ -116,6 +115,7 @@ mod session_thread;
 mod snapshot_delta;
 mod ssh_hosts;
 pub(crate) mod start_hook;
+mod status_cells;
 mod strays;
 mod suggestion_apply;
 mod suggestion_evidence;
@@ -128,6 +128,12 @@ mod tree_close;
 mod tree_reopen;
 pub(crate) mod turn_answer;
 pub(crate) mod typed_input;
+#[cfg(test)]
+pub(crate) use status_cells::Cell as StatusCell;
+pub(crate) use status_cells::{
+    child_subject as status_subject_child, letter_subject as status_subject_letter,
+    recipient_key as status_recipient, render as status_text, with_status,
+};
 mod unreadable_letters;
 mod unseen_views;
 pub(crate) mod usage_ledger;
@@ -1982,6 +1988,9 @@ pub struct Runtime {
     /// Each delegated child's block, and the note its parent is owed
     /// (`blocked_children.rs`); session-only.
     blocked_children: blocked_children::BlockedChildren,
+    /// Hide's own notices as one cell per subject, and what each agent saw
+    /// of them (`status_cells.rs`).
+    status_cells: status_cells::StatusCells,
     /// Panes with a Reopen running or just refused, until the pane connects,
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
@@ -2756,6 +2765,7 @@ impl Runtime {
             unreadable_letters: Default::default(),
             heal_letters: Default::default(),
             blocked_children: Default::default(),
+            status_cells: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
             fork_sequence: 0,

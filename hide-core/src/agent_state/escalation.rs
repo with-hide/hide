@@ -95,6 +95,25 @@ pub(crate) fn of(
         });
     }
     let ledger = ledger?;
+    // Its observer did not look at its warning within the hour, and the
+    // operator was told (`delivery::human::claim`) for this quiet episode.
+    if let Some(watch) = ledger.watches.iter().find(|watch| {
+        watch.operator_notified
+            && watch.target.pane_id == child.pane_id
+            && watch.target.session == child.lineage_session
+            && watch.parent.pane_id == parent
+            && child
+                .declared_parent_session
+                .as_ref()
+                .is_none_or(|session| watch.parent.session.as_ref() == Some(session))
+    }) {
+        return Some(Escalation {
+            cause: Cause::ObserverUnconfirmed,
+            letter_id: None,
+            since_unix_ms: watch.first_warning_at_unix_ms,
+            human_notice: true,
+        });
+    }
     for letter in &ledger.letters {
         if matches!(
             letter.state,
@@ -110,22 +129,7 @@ pub(crate) fn of(
         {
             continue;
         }
-        let cause = if let Some(warning) = &letter.watch_warning {
-            if warning.ordinal != 1
-                || !warning.parent_notified
-                || warning.target.pane_id != child.pane_id
-                || warning.target.session != child.lineage_session
-                || letter.recipient.pane_id != parent
-                || !ledger.watches.iter().any(|watch| {
-                    watch.target.same_identity(&warning.target)
-                        && watch.parent.same_identity(&letter.recipient)
-                        && watch.last_activity_at_unix_ms == warning.activity_at_unix_ms
-                })
-            {
-                continue;
-            }
-            Cause::ObserverUnconfirmed
-        } else {
+        let cause = {
             if letter.sender.pane_id != child.pane_id
                 || letter.sender.session != child.lineage_session
                 || letter.recipient.pane_id != parent
@@ -1050,45 +1054,27 @@ mod tests {
     }
 
     #[test]
-    fn session_watch_escalates_only_the_unanswered_human_notified_current_episode() {
+    fn session_watch_escalates_only_the_unseen_human_notified_current_episode() {
         let child = child();
         let mut ledger = Ledger::default();
         crate::delivery::watch::start(&mut ledger, &actor("parent"), &actor("child"), 100).unwrap();
-        mailbox::send(
-            &mut ledger,
-            &actor("observer"),
-            &actor("parent"),
-            "warning",
-            "warning",
-            "request",
-            None,
-            200,
-        )
-        .unwrap();
-        ledger.letters[0].watch_warning = Some(crate::delivery::watch::WarningReceipt {
-            target: actor("child"),
-            activity_at_unix_ms: 100,
-            ordinal: 1,
-            parent_notified: false,
-        });
+        ledger.watches[0].warning_count = 1;
+        ledger.watches[0].first_warning_at_unix_ms = Some(200);
         assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
-        ledger.letters[0]
-            .watch_warning
-            .as_mut()
-            .unwrap()
-            .parent_notified = true;
+        ledger.watches[0].operator_notified = true;
         let raised = of(&child, Some(&ledger), &BTreeMap::new(), LATER).unwrap();
         assert_eq!(raised.cause, Cause::ObserverUnconfirmed);
+        assert_eq!(raised.since_unix_ms, Some(200));
         assert!(
             raised.human_notice,
             "the existing watch notice owns the push"
         );
-        ledger.watches[0].last_activity_at_unix_ms = 300;
+        ledger.watches[0].operator_notified = false;
         assert!(
             of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
             "new activity ends the episode"
         );
-        ledger.watches[0].last_activity_at_unix_ms = 100;
+        ledger.watches[0].operator_notified = true;
         ledger.watches.clear();
         assert!(
             of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),

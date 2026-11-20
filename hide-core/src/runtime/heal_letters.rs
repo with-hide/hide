@@ -42,13 +42,12 @@
 //! until that line is admitted; so does one met while the ledger cannot be
 //! read.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde_json::json;
 
 use super::Runtime;
 use super::delivery::Observation;
-use super::hide_notes::{Note, NoteKind};
 use crate::coordination::AgentRecord;
 use crate::engine::ResumedPane;
 use crate::model::InterfaceLanguage;
@@ -77,8 +76,6 @@ pub(in crate::runtime) struct HealLetters {
     /// The last batch a parent's lost children were named in: each batch is
     /// a new letter, later than every one before, even after a restart.
     last_batch: u64,
-    /// The letters a thread is sending now; it is the only one.
-    sending: BTreeSet<String>,
     /// The panes each machine's engine names healing, by the machine's own
     /// pane ids, from the core's first read of each.
     healing: BTreeMap<String, BTreeMap<String, Healing>>,
@@ -92,6 +89,37 @@ struct Pending {
     /// The registration cut in the pane, once the core read it: a retry
     /// settles that one or none, never another agent that took the pane.
     cut: Option<Cut>,
+}
+
+/// A line due now: the key it is owed under, the agent it goes to, and its
+/// text.
+pub(in crate::runtime) struct Note {
+    pub(in crate::runtime) letter: String,
+    pub(in crate::runtime) target: Observation,
+    pub(in crate::runtime) body: String,
+}
+
+impl Note {
+    /// The line's cell: its subject, one per heal and entry, and its revision,
+    /// the heal's own moment and, for a parent's entry, how many children it
+    /// has said, so a name added updates the cell and a retry is the same.
+    fn cell(&self) -> (String, u64) {
+        let (key, count) = self
+            .letter
+            .rsplit_once(':')
+            .expect("a line's key ends with its moment or its count");
+        let count: u64 = count.parse().unwrap_or_default();
+        match key.strip_prefix("children:") {
+            Some(entry) => {
+                let batch = entry
+                    .rsplit_once(':')
+                    .and_then(|(_, batch)| batch.parse::<u64>().ok())
+                    .unwrap_or_default();
+                (format!("heal:{key}"), batch.saturating_add(count))
+            }
+            None => (format!("heal:{key}"), count),
+        }
+    }
 }
 
 struct Cut {
@@ -592,29 +620,26 @@ impl Runtime {
         self.give_up_healing(now_unix_ms);
         let letters = &self.heal_letters;
         if (letters.owed.is_empty() && letters.pending.is_empty() && letters.resumed.is_empty())
-            || !letters.sending.is_empty()
             || self.effects_held()
         {
             return;
         }
-        let notes = self.heal_notes_due();
-        if notes.is_empty() {
-            return;
+        // Each line is a news cell of the agent it goes to (PRD
+        // letters-missions-simplify D-16, B30): posted, it is admitted; one
+        // refused for room stays owed for the next tick.
+        let mut admitted = Vec::new();
+        for note in self.heal_notes_due() {
+            let (subject, revision) = note.cell();
+            match self.post_status(&note.target.actor, subject, note.body, true, revision) {
+                Ok(()) => admitted.push(note.letter),
+                Err(_) => crate::diagnostic!(json!({
+                    "component": "heal", "kind": "heal_letter.unsent",
+                    "letter_id": note.letter, "code": "status_full",
+                })),
+            }
         }
-        let letters: BTreeSet<String> = notes.iter().map(|note| note.letter.clone()).collect();
-        let kind = NoteKind {
-            role: HEAL_ROLE,
-            thread: "hide-heal-letters",
-            intent: "heal",
-            component: "heal",
-            unsent: "heal_letter.unsent",
-            now: false,
-        };
-        if self.send_hide_notes(kind, notes, |runtime, admitted| {
-            runtime.heal_lines_admitted(admitted);
-            runtime.heal_letters.sending.clear();
-        }) {
-            self.heal_letters.sending = letters;
+        if !admitted.is_empty() {
+            self.heal_lines_admitted(&admitted);
         }
     }
 
@@ -840,10 +865,5 @@ impl Runtime {
             .iter()
             .map(|held| held.resume.pane.clone())
             .collect()
-    }
-
-    /// Whether a thread is sending lines.
-    pub(in crate::runtime) fn heal_letters_sending(&self) -> bool {
-        !self.heal_letters.sending.is_empty()
     }
 }

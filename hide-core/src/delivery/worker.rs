@@ -1,6 +1,7 @@
 //! One bounded writer. Runtime owns the published immutable ledger; owned
 //! candidates are validated and persisted before a result or publication.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -208,7 +209,25 @@ impl Prepared {
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
-        let result = if let Some(answer) = self.answered {
+        // Hide's own notices are status cells, not letters (PRD
+        // letters-missions-simplify D-17): a turn's prompt reads the ones
+        // that changed after its letters, and `hide inbox` lists them.
+        let status = match &self.command {
+            Command::Pull {
+                point: hide_node_link::panes::PullPoint::Prompt,
+                ..
+            } => Some(false),
+            Command::Inbox { bundle: true } => Some(true),
+            _ => None,
+        };
+        let caller = status.map(|_| {
+            (
+                self.client.runtime.clone(),
+                self.actor.device_id.clone(),
+                self.actor.pane_id.clone(),
+            )
+        });
+        let mut result = if let Some(answer) = self.answered {
             Ok(answer)
         } else if let Command::Agents { command } = self.command {
             crate::coordination::run(self.client, self.authority, self.actor, command)
@@ -239,6 +258,23 @@ impl Prepared {
                 timeout,
             )
         };
+        if let (Some(inbox), Some((runtime, device, pane)), Ok(value)) =
+            (status, caller, result.as_mut())
+            && let Some(runtime) = runtime.upgrade()
+        {
+            crate::runtime::with_status(value, inbox, |room| {
+                let mut guard = runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let cells = guard.take_status(&device, &pane, room)?;
+                let text = if cells.is_empty() {
+                    String::new()
+                } else {
+                    crate::runtime::status_text(&cells)
+                };
+                Some((text, json!(cells)))
+            });
+        }
         if let Some(after) = self.then {
             after(&result);
         }
@@ -356,6 +392,13 @@ pub(crate) enum Effect {
     InputNoticed {
         id: String,
         attempt: u8,
+    },
+    /// What registration `recipient` has seen of its status cells now
+    /// (`runtime::status_cells`): the whole map, which replaces the one kept,
+    /// none to forget it.
+    StatusSeen {
+        recipient: String,
+        seen: BTreeMap<String, u64>,
     },
     /// What the hooks of `recipient`'s pane could not confirm, as the node
     /// of its machine handed it over (`mailbox::confirm_owed`).
@@ -888,6 +931,25 @@ fn apply(
                 letter.input_noticed = *attempt;
                 letter.input_noticed_at_unix_ms = now;
             }
+            return Ok((Value::Null, true));
+        }
+        Effect::StatusSeen { recipient, seen } => {
+            let before = ledger.status_seen.get(recipient);
+            if before == Some(seen) || (before.is_none() && seen.is_empty()) {
+                return Ok((Value::Null, false));
+            }
+            if seen.is_empty() {
+                ledger.status_seen.remove(recipient);
+            } else {
+                ledger.status_seen.insert(recipient.clone(), seen.clone());
+            }
+            // A registration the ledger let go keeps nothing seen.
+            let agents = &ledger.agents;
+            ledger.status_seen.retain(|id, _| {
+                agents
+                    .iter()
+                    .any(|record| record.id == *id && !record.ended)
+            });
             return Ok((Value::Null, true));
         }
         Effect::Owed { recipient, owed } => {
@@ -2046,11 +2108,17 @@ mod tests {
                 stopped + crate::delivery::QUESTION_WINDOW_MS,
             )
             .unwrap();
-            let lines: Vec<&str> = ledger
-                .letters
+            // The warning is the parent's status cell, read from the watch.
+            let lines: Vec<String> = ledger
+                .watches
                 .iter()
-                .filter_map(|letter| letter.body.lines().next())
+                .filter(|watch| watch.warning_count > 0)
+                .filter_map(|watch| {
+                    let line = watch::warning_line(watch, watch.first_warning_at_unix_ms?);
+                    line.lines().next().map(str::to_owned)
+                })
                 .collect();
+            assert!(ledger.letters.is_empty(), "no warning is a letter");
             match first_line {
                 Some(first) => {
                     assert_eq!(

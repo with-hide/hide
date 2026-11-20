@@ -206,6 +206,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -234,7 +238,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -561,6 +566,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -589,7 +598,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -929,6 +939,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -957,7 +971,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -1438,6 +1453,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -1466,7 +1485,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -3934,6 +3954,10 @@
                 "last_status": {
                     "type": "string"
                 },
+                "operator_notified": {
+                    "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                    "type": "boolean"
+                },
                 "parent": {
                     "$ref": "#/definitions/Actor"
                 },
@@ -3962,7 +3986,8 @@
                 "last_status",
                 "last_state_change_seq",
                 "status_changed_at_unix_ms",
-                "generation"
+                "generation",
+                "operator_notified"
             ],
             "title": "Watch",
             "type": "object"
@@ -4040,6 +4065,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -4068,7 +4097,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -8182,7 +8212,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:88881dc85be92722db803667508453a2b4b0d670bf3293dbbe1941808116d1a1",
+    "digest": "sha256:038e8436a2a8971480c754048d8b820d41ce60c3f3b56437a87c775b3f363384",
     "envelopes": {
         "access": {
             "answer": "value",

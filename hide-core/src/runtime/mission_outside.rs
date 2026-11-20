@@ -605,9 +605,6 @@ impl Runtime {
         {
             changed |= self.follow_outside_stored(&place.0, &place.1);
         }
-        if changed {
-            self.flush_mission_wakes();
-        }
         changed
     }
 

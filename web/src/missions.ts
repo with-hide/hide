@@ -15,7 +15,7 @@ import { orderByDependencies } from "./projectBoard";
 import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
-import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeHold, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -1046,7 +1046,7 @@ function prWords(pr: number | null, t: TFunction<"translation">): string {
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+export function attentionReasonText(reason: MissionAttentionReason | MissionHeldCellReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
   // A refused close says how many finished nodes have a line empty when the core counted them.
   if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
   return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });

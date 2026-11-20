@@ -93,9 +93,14 @@ fn seed_old_ledger(state: &Path) {
 }
 
 /// The daemon's `ledger.imported` record, once its first start moved the
-/// old ledger into the store. The deadline only ends a daemon that never
-/// reports, and then the whole log is the report.
+/// old ledger into the store.
 async fn imported(state: &Path) -> Value {
+    logged(state, "ledger.imported").await
+}
+
+/// The daemon's first record of `kind`. The deadline only ends a daemon that
+/// never reports, and then the whole log is the report.
+async fn logged(state: &Path, kind: &str) -> Value {
     let log = state.join("Logs/core.jsonl");
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -108,7 +113,7 @@ async fn imported(state: &Path) -> Value {
         if let Some(row) = text
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .find(|row| row["kind"] == "ledger.imported")
+            .find(|row| row["kind"] == kind)
         {
             assert!(
                 !text.contains(BODY),
@@ -118,9 +123,9 @@ async fn imported(state: &Path) -> Value {
         }
         assert!(
             Instant::now() < deadline,
-            "no ledger.imported record: {text}"
+            "no {kind} record: {text}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the daemon's ledger.imported record in its log
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the daemon's record of `kind` in its log
     }
 }
 
@@ -161,6 +166,9 @@ async fn a_folder_from_before_node_ids_keeps_its_old_ledger_file_byte_for_byte()
     assert!(!state.join("node.json").exists() && !state.join("delivery.sqlite3").exists());
     let _daemon = Daemon::start(root.path());
     assert_eq!(imported(&state).await["letters"], 1);
+    // The import runs inside the conversion, which names the folder's node
+    // only once every store is converted.
+    logged(&state, "node_migration.converted").await;
     assert_eq!(
         std::fs::read(state.join("delivery-ledger.json")).unwrap(),
         old
