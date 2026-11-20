@@ -1497,6 +1497,46 @@ fn a_start_refused_for_a_folder_gone_stops_the_automation() {
     assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
 }
 
+/// B23: a plain folder the catalog last read as gone, and that is back
+/// before the catalog reads it again, still starts the run: whether the
+/// folder is there is the spawn's to ask its machine right before the start,
+/// so the catalog's minutes-old read never stops the automation on its own.
+#[test]
+fn a_run_starts_in_a_folder_the_catalog_last_read_as_gone() {
+    const FOLDER: &str = "/srv/automation-notes";
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        let plain = workspace(
+            "w-notes",
+            "notes",
+            FOLDER,
+            vec![checkout("w-notes", "c-notes", FOLDER, None)],
+        );
+        runtime.snapshot.navigator.workspaces.push(plain);
+        runtime.catalog_paths =
+            crate::runtime::tests::path_read(FOLDER, Some(hide_project::ProjectKind::Folder));
+    }
+    let id = harness
+        .call(json!({
+            "call": "add", "name": "Notes", "task": "Sort the notes",
+            "schedule": {"kind": "daily", "time": later()}, "agent": {"kind": "claude"},
+            "folder": FOLDER, "worktree": false, "run_now": true,
+        }))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    harness.runtime.lock().unwrap().catalog_paths = crate::runtime::tests::path_read(FOLDER, None);
+    harness.tick(1);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    assert_eq!(harness.run(&id).0, "running");
+    let mut runtime = harness.runtime.lock().unwrap();
+    assert!(show(&mut runtime, &id).get("paused").is_none());
+    assert!(needs_you(&mut runtime).0.is_empty());
+}
+
 /// B23: an agent whose program this machine does not find stops the
 /// automation for a person before anything is typed, rather than leaving a
 /// shell that never starts an agent and reads as a start that stopped
