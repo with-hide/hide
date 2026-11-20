@@ -1035,9 +1035,9 @@ async fn an_older_relay_keeps_the_link_and_is_never_sent_a_push_request() {
     running.stop();
 }
 
-/// A real notice reaches an iOS app phone through the relay: a letter that
-/// missed its delivery deadline in a seeded ledger becomes the operator
-/// notice, and hided's delivery pass takes the app branch, encrypting it for
+/// A real notice reaches an iOS app phone through the relay: a watch warning
+/// its observer left unconfirmed for an hour in a seeded ledger becomes the
+/// operator notice, and hided's delivery pass takes the app branch, encrypting it for
 /// the registered key and handing it to the relay. Nothing calls the send
 /// directly. The pass runs once a minute, so this waits for it.
 #[cfg(unix)]
@@ -1045,7 +1045,6 @@ async fn an_older_relay_keeps_the_link_and_is_never_sent_a_push_request() {
 async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
     use hide_relay_protocol::admission::{PushOutcome, PushResult};
     use std::os::unix::fs::PermissionsExt;
-    const BODY: &str = "a letter body no push may carry";
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
@@ -1059,20 +1058,43 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    let actor = |name: &str| {
-        json!({"pane_id": name, "name": name, "kind": "claude", "device_id": "local",
-            "session": format!("{name}-session")})
+    // A watch whose observer never confirmed its warning, an hour after it:
+    // its target runs on a machine that is not connected, so the core keeps
+    // the watch as it is until the notice is claimed.
+    let actor = |name: &str, device: &str| hide_core::delivery::Actor {
+        pane_id: name.into(),
+        name: name.into(),
+        kind: "claude".into(),
+        device_id: device.into(),
+        session: Some(format!("{name}-session")),
     };
-    private(
-        "delivery-ledger.json",
-        json!({"version": 1, "next_id": 100, "watches": [], "letters": [{
-            "id": "letter-7", "intent": "held", "sender": actor("sender"),
-            "recipient": actor("lead"), "kind": "report", "body": BODY,
-            "state": "undelivered", "waiting_answer": false, "reply_to": null,
-            "created_at_unix_ms": now - 3_600_000, "finished_at_unix_ms": now,
-            "bell_errors": 0, "bell_sent": false, "human_notified": false,
-        }]}),
-    );
+    let (parent, target) = (actor("lead", "local"), actor("worker", "mini"));
+    let activity = now
+        - hide_core::delivery::INACTIVITY_MS
+        - hide_core::delivery::SECOND_WARNING_MS
+        - 60_000;
+    let mut ledger = hide_core::delivery::ledger::Ledger::default();
+    let watch = hide_core::delivery::watch::start(&mut ledger, &parent, &target, activity).unwrap();
+    hide_core::delivery::watch::tick(
+        &mut ledger,
+        &[hide_core::delivery::watch::Reading {
+            id: watch.id,
+            status: "idle".into(),
+            status_available: true,
+            state_change_seq: Some(activity),
+            engine: None,
+            status_changed_at_unix_ms: activity,
+            session_modified_at_unix_ms: None,
+            failure: None,
+            gone: false,
+            inactivity_ms: None,
+            asking: false,
+        }],
+        activity + hide_core::delivery::INACTIVITY_MS,
+    )
+    .unwrap();
+    let warning = ledger.letters[0].body.clone();
+    private("delivery-ledger.json", serde_json::to_value(&ledger).unwrap());
     private(
         "mobile.json",
         json!({"enabled": true, "method": "relay", "push_mode": "always"}),
@@ -1137,14 +1159,14 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
     .await;
     let body = URL_SAFE_NO_PAD.decode(&request.payload).unwrap();
     let plain: Value = serde_json::from_slice(&key.decrypt(&body)).unwrap();
-    // The notice names the letter's place and the computer's room, and never
-    // carries the letter's text; Apple sees neither.
-    assert_eq!(plain["state"], "letter_undelivered");
-    assert_eq!(plain["place"], "letter-7");
+    // The notice names the agent its observer did not confirm and the
+    // computer's room, and never the warning's text; Apple sees neither.
+    assert_eq!(plain["state"], "observer_unconfirmed");
+    assert_eq!(plain["place"], "worker");
     assert!(plain["room"].is_string());
-    assert!(!plain.to_string().contains(BODY));
+    assert!(!plain.to_string().contains(&warning));
     let wire = ClientMessage::Push(request).encode().unwrap();
-    assert!(!wire.contains("letter-7"));
+    assert!(!wire.contains("worker") && !wire.contains(&warning));
     running.stop();
 }
 

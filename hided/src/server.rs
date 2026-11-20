@@ -1456,7 +1456,7 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "No letter with that id was sent by you or to you, or it has left the ledger; ask the agent that named it to send you its body in a letter of its own"
         }
         "intent_conflict" => {
-            "Use a new --intent for each new letter or spawn; send or spawn again with this intent only to repeat exactly what it was first used for (the same recipient, kind and body, or the same spawn)"
+            "Use a new --intent for each new spawn; spawn again with this intent only to repeat the same spawn"
         }
         "desk_spawn_args" => {
             "Desk passes no words to an agent's own CLI after `--`; choose the model and effort with --model and --effort and run the spawn again without `--`, or ask the operator to start that session themselves"
