@@ -101,7 +101,6 @@ mod issues;
 mod key_routing;
 #[path = "tests/kit_store.rs"]
 mod kit_store;
-mod store_cli;
 #[path = "tests/labels.rs"]
 mod labels;
 #[path = "tests/launch_choice.rs"]
@@ -178,6 +177,7 @@ mod snapshot_delta;
 mod ssh_hosts_list;
 mod ssh_sign_in;
 mod start_geometry;
+mod store_cli;
 mod strays;
 mod suggestions;
 #[path = "tests/terminal.rs"]

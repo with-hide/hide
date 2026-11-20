@@ -538,7 +538,13 @@ fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
     .unwrap();
     assert!(wire.contains("github"), "the snapshot carries the request");
     assert!(!wire.contains(KEY), "{wire}");
-    let answered = runtime.snapshot.status.store_answers.last().cloned().unwrap();
+    let answered = runtime
+        .snapshot
+        .status
+        .store_answers
+        .last()
+        .cloned()
+        .unwrap();
     assert!(!format!("{answered:?}").contains(KEY));
     assert!(!format!("{change:?}").contains(KEY));
     assert!(!records.is_empty());

@@ -1167,6 +1167,13 @@
                                 "permission"
                             ],
                             "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
+                            ],
+                            "type": "string"
                         }
                     ]
                 },
@@ -1603,6 +1610,13 @@
                             "description": "Granting access: an app connection, an OS permission.",
                             "enum": [
                                 "permission"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
                             ],
                             "type": "string"
                         }
@@ -3420,6 +3434,13 @@
                             "description": "Granting access: an app connection, an OS permission.",
                             "enum": [
                                 "permission"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
                             ],
                             "type": "string"
                         }
@@ -7617,7 +7638,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:69e1b985f345317196e1b08d44134bbffc67cfbaa607a2ba52706d050dbc2712",
+    "digest": "sha256:b4aaec1f5e3c9c344059d06097376acca26595335cc292d55dcb9b1292f78804",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -72,7 +72,13 @@ pub fn parse(kind: ItemKind, args: &[String]) -> Result<StoreCommand, String> {
             word => words.push(word.to_owned()),
         }
     }
-    let only = |allowed: bool| if allowed { Ok(()) } else { Err(usage.to_owned()) };
+    let only = |allowed: bool| {
+        if allowed {
+            Ok(())
+        } else {
+            Err(usage.to_owned())
+        }
+    };
     let reach = || -> Result<Reach, String> {
         match (url.clone(), program.clone()) {
             (Some(url), None) if env.is_empty() => Ok(Reach::Remote {
@@ -94,7 +100,8 @@ pub fn parse(kind: ItemKind, args: &[String]) -> Result<StoreCommand, String> {
             _ => Err(usage.to_owned()),
         }
     };
-    let changes_reach = url.is_some() || program.is_some() || sse || !env.is_empty() || !headers.is_empty();
+    let changes_reach =
+        url.is_some() || program.is_some() || sse || !env.is_empty() || !headers.is_empty();
     let command = match (verb, words.as_slice()) {
         ("list", []) => {
             only(agent.is_none() && names.is_empty() && !changes_reach)?;
@@ -198,9 +205,11 @@ fn source_spec(source: &str, elsewhere: bool) -> SourceSpec {
             }
         };
     }
-    let home = source
-        .strip_prefix("~/")
-        .and_then(|rest| hide_platform::host::home_dir().ok().map(|home| home.join(rest)));
+    let home = source.strip_prefix("~/").and_then(|rest| {
+        hide_platform::host::home_dir()
+            .ok()
+            .map(|home| home.join(rest))
+    });
     let local = home.unwrap_or_else(|| path.to_path_buf());
     if spelled_as_path || local.is_dir() {
         let absolute = std::path::absolute(&local).unwrap_or(local);
@@ -272,19 +281,30 @@ mod tests {
     #[test]
     fn an_mcp_server_is_read_from_its_command_or_its_address_with_key_names_only() {
         assert_eq!(
-            parse(ItemKind::Mcp, &words("add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github")),
+            parse(
+                ItemKind::Mcp,
+                &words(
+                    "add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github"
+                )
+            ),
             Ok(StoreCommand::AddMcp {
                 name: "github".to_owned(),
                 reach: Reach::Local {
                     command: "npx".to_owned(),
-                    args: vec!["-y".to_owned(), "@modelcontextprotocol/server-github".to_owned()],
+                    args: vec![
+                        "-y".to_owned(),
+                        "@modelcontextprotocol/server-github".to_owned()
+                    ],
                     env: vec!["GITHUB_TOKEN".to_owned()],
                 },
                 machine: None,
             })
         );
         assert_eq!(
-            parse(ItemKind::Mcp, &words("add linear --url https://mcp.linear.app/sse --sse --header Authorization")),
+            parse(
+                ItemKind::Mcp,
+                &words("add linear --url https://mcp.linear.app/sse --sse --header Authorization")
+            ),
             Ok(StoreCommand::AddMcp {
                 name: "linear".to_owned(),
                 reach: Reach::Remote {
@@ -299,11 +319,26 @@ mod tests {
 
     #[test]
     fn a_key_value_is_refused_as_an_argument_and_no_option_skips_the_confirm() {
-        assert!(parse(ItemKind::Mcp, &words("add github --env GITHUB_TOKEN=ghp_x -- npx server")).is_err());
-        assert!(parse(ItemKind::Mcp, &words("add linear --url https://a --header Authorization=Bearer")).is_err());
+        assert!(
+            parse(
+                ItemKind::Mcp,
+                &words("add github --env GITHUB_TOKEN=ghp_x -- npx server")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                ItemKind::Mcp,
+                &words("add linear --url https://a --header Authorization=Bearer")
+            )
+            .is_err()
+        );
         for skip in ["--yes", "--force", "--no-confirm", "--skip-confirm"] {
             assert_eq!(
-                parse(ItemKind::Skill, &words(&format!("add someone/archify {skip}"))),
+                parse(
+                    ItemKind::Skill,
+                    &words(&format!("add someone/archify {skip}"))
+                ),
                 Err(format!("unknown option {skip}")),
                 "{skip}"
             );
@@ -323,7 +358,10 @@ mod tests {
             })
         );
         assert_eq!(
-            parse(ItemKind::Skill, &words("add github.com/someone/archify --name archify --machine mini")),
+            parse(
+                ItemKind::Skill,
+                &words("add github.com/someone/archify --name archify --machine mini")
+            ),
             Ok(StoreCommand::Add {
                 source: SourceSpec::Git {
                     url: "github.com/someone/archify".to_owned()
@@ -333,7 +371,10 @@ mod tests {
             })
         );
         assert_eq!(
-            parse(ItemKind::Skill, &words("add /home/me/skills --machine mini")),
+            parse(
+                ItemKind::Skill,
+                &words("add /home/me/skills --machine mini")
+            ),
             Ok(StoreCommand::Add {
                 source: SourceSpec::Folder {
                     path: "/home/me/skills".to_owned()

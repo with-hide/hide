@@ -11886,7 +11886,10 @@ mod wire_enum_tests {
             assert_wire(&contract, "store_file_change", &changes);
             checked.insert("store_file_change");
 
-            let refusals = [StorePassRefusal::KeysSecretGone, StorePassRefusal::Unreadable];
+            let refusals = [
+                StorePassRefusal::KeysSecretGone,
+                StorePassRefusal::Unreadable,
+            ];
             for variant in refusals {
                 match variant {
                     StorePassRefusal::KeysSecretGone | StorePassRefusal::Unreadable => {}

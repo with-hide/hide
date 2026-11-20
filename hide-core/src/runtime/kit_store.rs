@@ -325,9 +325,7 @@ impl Runtime {
             );
             return true;
         }
-        self.stores
-            .exports
-            .insert(device_id.to_owned(), request_id);
+        self.stores.exports.insert(device_id.to_owned(), request_id);
         true
     }
 
@@ -425,9 +423,7 @@ impl Runtime {
     /// Mac's kit worker has nothing else to run.
     pub(crate) fn take_store_export(&mut self) -> Option<String> {
         let (device_id, request_id) = self.stores.exports.pop_first()?;
-        self.stores
-            .exporting
-            .insert(device_id.clone(), request_id);
+        self.stores.exporting.insert(device_id.clone(), request_id);
         Some(device_id)
     }
 
@@ -444,12 +440,10 @@ impl Runtime {
         let Some(request_id) = self.stores.exporting.remove(device_id) else {
             return false;
         };
-        let waiting = self
-            .snapshot
-            .status
-            .store_answers
-            .iter()
-            .any(|answer| answer.request_id == request_id && answer.state == AnswerState::Pending);
+        let waiting =
+            self.snapshot.status.store_answers.iter().any(|answer| {
+                answer.request_id == request_id && answer.state == AnswerState::Pending
+            });
         let reason = match exported {
             Err(reason) => reason,
             Ok(export) => match export.refused {

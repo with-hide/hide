@@ -182,7 +182,9 @@ pub fn next_action(code: &str) -> &'static str {
     match code {
         REFUSED => "The machine's store refused the change; the detail says why",
         DECLINED => "The operator declined it; ask them before trying again",
-        UNANSWERED => "The operator did not answer the confirm; ask them, then run the command again",
+        UNANSWERED => {
+            "The operator did not answer the confirm; ask them, then run the command again"
+        }
         NOT_FOUND => "hide skill list or hide mcp list shows what the machine holds",
         BUSY => "The store has many requests waiting; try again in a moment",
         INVALID => "hide skill help or hide mcp help shows the words each command takes",

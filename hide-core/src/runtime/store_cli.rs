@@ -24,8 +24,8 @@ use crate::agent_profiles::AnswerState;
 use crate::coordination::human_turn::HumanKind;
 use crate::model::{DeclaredHumanTurn, StoreAnswer};
 use crate::store_command::{
-    BUSY, CONFIRM_WAIT, DECLINED, INVALID, NOT_FOUND, PASS_WAIT, Prepared, REFUSED,
-    StoreCommand, UNANSWERED, UNAVAILABLE, Waiting,
+    BUSY, CONFIRM_WAIT, DECLINED, INVALID, NOT_FOUND, PASS_WAIT, Prepared, REFUSED, StoreCommand,
+    UNANSWERED, UNAVAILABLE, Waiting,
 };
 
 /// The most commands waiting at once; past it a command is refused, since
@@ -78,24 +78,38 @@ pub(super) struct StoreAskAnswerPayload {
 #[derive(PartialEq)]
 enum Plan {
     /// One request whose outcome is the answer.
-    Plain { item: Option<String> },
+    Plain {
+        item: Option<String>,
+    },
     /// Read the source, then ask for `names` (every new skill when empty).
     Install {
         source: SourceSpec,
         names: Vec<String>,
     },
     /// Read the update, then ask.
-    Update { item: String },
-    AddMcp { server: Server },
-    SetMcp { item: String, server: Server },
+    Update {
+        item: String,
+    },
+    AddMcp {
+        server: Server,
+    },
+    SetMcp {
+        item: String,
+        server: Server,
+    },
 }
 
 enum Stage {
     /// The source or the update is being read; `ended` once its request
     /// answered and the report holding it is in.
-    Reading { request: String, ended: bool },
+    Reading {
+        request: String,
+        ended: bool,
+    },
     Confirming(StoreAskSnapshot),
-    Applying { request: String },
+    Applying {
+        request: String,
+    },
 }
 
 struct Run {
@@ -192,7 +206,9 @@ impl Runtime {
             }
             StoreCommand::Show { kind, name, .. } => {
                 let item = item_of(kind, &name);
-                return Ok(ready(item.map(|item| json!({"machine": machine, "item": item}))));
+                return Ok(ready(
+                    item.map(|item| json!({"machine": machine, "item": item})),
+                ));
             }
             StoreCommand::Set {
                 kind,
@@ -236,15 +252,13 @@ impl Runtime {
                     vec![StoreChange::Delete { item }],
                 )
             }
-            StoreCommand::Add { source, names, .. } => {
-                (
-                    Plan::Install {
-                        source: source.clone(),
-                        names,
-                    },
-                    vec![StoreChange::Inspect { source }],
-                )
-            }
+            StoreCommand::Add { source, names, .. } => (
+                Plan::Install {
+                    source: source.clone(),
+                    names,
+                },
+                vec![StoreChange::Inspect { source }],
+            ),
             StoreCommand::Update { name, .. } => {
                 let item = match item_of(ItemKind::Skill, &name) {
                     Ok(item) => item.id.clone(),
@@ -291,9 +305,11 @@ impl Runtime {
         // gave up on the first one runs it, waits on the run already
         // standing instead of raising a second confirm (engineering rule
         // 11); the first waiter is told, so it takes nothing down.
-        if let Some((run_id, run)) = self.store_runs.runs.iter_mut().find(|(_, run)| {
-            run.device_id == machine && run.pane_id == pane_id && run.plan == plan
-        }) {
+        if let Some((run_id, run)) =
+            self.store_runs.runs.iter_mut().find(|(_, run)| {
+                run.device_id == machine && run.pane_id == pane_id && run.plan == plan
+            })
+        {
             let (reply, receiver) = channel();
             let _ = std::mem::replace(&mut run.reply, reply).send(Err(refused(
                 UNANSWERED,
@@ -316,7 +332,11 @@ impl Runtime {
             ))));
         }
         self.store_runs.seq += 1;
-        let run_id = format!("cli-{}-{}", super::kit_store::kit_store_now_ms(), self.store_runs.seq);
+        let run_id = format!(
+            "cli-{}-{}",
+            super::kit_store::kit_store_now_ms(),
+            self.store_runs.seq
+        );
         let (reply, receiver) = channel();
         let stage = match &plan {
             Plan::Plain { .. } => Stage::Applying {
@@ -447,7 +467,8 @@ impl Runtime {
             .runs
             .iter()
             .filter(|(_, run)| {
-                run.device_id == device_id && matches!(run.stage, Stage::Reading { ended: true, .. })
+                run.device_id == device_id
+                    && matches!(run.stage, Stage::Reading { ended: true, .. })
             })
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
@@ -517,7 +538,12 @@ impl Runtime {
                 names: asked,
             } => {
                 let names = names
-                    .map(|names| names.into_iter().filter(|name| asked.contains(name)).collect())
+                    .map(|names| {
+                        names
+                            .into_iter()
+                            .filter(|name| asked.contains(name))
+                            .collect()
+                    })
                     .unwrap_or_else(|| asked.clone());
                 if names.is_empty() {
                     self.finish_store_run(&id, Err(DECLINED.to_owned()));
@@ -679,7 +705,11 @@ fn column_of(report: &StoreReport, kind: ItemKind, agent: &str) -> Option<String
     columns
         .iter()
         .find(|column| column.id == agent)
-        .or_else(|| columns.iter().find(|column| column.agents.iter().any(|one| one == agent)))
+        .or_else(|| {
+            columns
+                .iter()
+                .find(|column| column.agents.iter().any(|one| one == agent))
+        })
         .map(|column| column.id.clone())
 }
 
