@@ -545,6 +545,8 @@ enum Answer {
 struct Starts {
     /// Each start's intent and first prompt, in order.
     asked: Vec<(String, Option<String>)>,
+    /// Each start's folder and branch, in order.
+    places: Vec<(String, Option<String>)>,
     answers: HashMap<String, VecDeque<Answer>>,
 }
 
@@ -665,6 +667,28 @@ impl Harness {
 
     fn call(&self, value: Value) -> Result<Value, String> {
         call(&mut self.runtime.lock().unwrap(), value)
+    }
+
+    /// Ends this core as a quitting daemon does, with its book on disk: the
+    /// core is dropped here, so its file's last save is written before this
+    /// returns. A worker that answered may still hold the core for a moment
+    /// after its answer applied; the core is taken once it is the last
+    /// holder, never dropped on that worker while the test reads the file.
+    fn stop(self) {
+        let mut runtime = self.runtime;
+        loop {
+            wait_for("the core's last holder", || {
+                Arc::strong_count(&runtime) == 1
+            });
+            // A worker may take the core again in between; then wait again.
+            match Arc::try_unwrap(runtime) {
+                Ok(core) => {
+                    drop(core);
+                    return;
+                }
+                Err(shared) => runtime = shared,
+            }
+        }
     }
 
     /// An automation in the repository, a worktree per run, started now.
@@ -882,12 +906,22 @@ fn scripted_start(
     ledger_path: PathBuf,
 ) -> Start {
     Arc::new(move |_, command| {
-        let crate::coordination::Command::Spawn { intent, brief, .. } = &command else {
+        let crate::coordination::Command::Spawn {
+            intent,
+            brief,
+            repo,
+            branch,
+            ..
+        } = &command
+        else {
             panic!("an automation starts its agent with a spawn");
         };
         let answer = {
             let mut starts = starts.lock().unwrap();
             starts.asked.push((intent.clone(), brief.clone()));
+            starts
+                .places
+                .push((repo.clone().unwrap_or_default(), branch.clone()));
             let queue = starts.answers.entry(intent.clone()).or_default();
             if queue.len() > 1 {
                 queue.pop_front()
@@ -1497,6 +1531,72 @@ fn a_start_refused_for_a_folder_gone_stops_the_automation() {
     assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
 }
 
+/// B23: a plain folder the catalog last read as gone, and that is back
+/// before the catalog reads it again, still starts the run: whether the
+/// folder is there is the spawn's to ask its machine right before the start,
+/// so the catalog's minutes-old read never stops the automation on its own.
+#[test]
+fn a_run_starts_in_a_folder_the_catalog_last_read_as_gone() {
+    const FOLDER: &str = "/srv/automation-notes";
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        let plain = workspace(
+            "w-notes",
+            "notes",
+            FOLDER,
+            vec![checkout("w-notes", "c-notes", FOLDER, None)],
+        );
+        runtime.snapshot.navigator.workspaces.push(plain);
+        runtime.catalog_paths =
+            crate::runtime::tests::path_read(FOLDER, Some(hide_project::ProjectKind::Folder));
+    }
+    let id = harness
+        .call(json!({
+            "call": "add", "name": "Notes", "task": "Sort the notes",
+            "schedule": {"kind": "daily", "time": later()}, "agent": {"kind": "claude"},
+            "folder": FOLDER, "worktree": false, "run_now": true,
+        }))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    harness.runtime.lock().unwrap().catalog_paths = crate::runtime::tests::path_read(FOLDER, None);
+    harness.tick(1);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    assert_eq!(
+        harness.starts.lock().unwrap().places,
+        [(FOLDER.to_owned(), None)]
+    );
+    assert_eq!(harness.run(&id).0, "running");
+    let mut runtime = harness.runtime.lock().unwrap();
+    assert!(show(&mut runtime, &id).get("paused").is_none());
+    assert!(needs_you(&mut runtime).0.is_empty());
+}
+
+/// B23, D-08: the same stale read makes a Git project's row look like a
+/// plain folder's, and an automation that asked for a new worktree per run
+/// still starts in one, never in the project's own folder.
+#[test]
+fn a_worktree_run_the_catalog_last_read_as_gone_still_starts_in_a_new_worktree() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        runtime.snapshot.navigator.workspaces[0].is_git = false;
+        runtime.catalog_paths = crate::runtime::tests::path_read(REPO, None);
+    }
+    harness.tick(1);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    assert_eq!(
+        harness.starts.lock().unwrap().places,
+        [(REPO.to_owned(), Some(format!("automation/{id}-r1")))]
+    );
+    assert_eq!(harness.run(&id).0, "running");
+}
+
 /// B23: an agent whose program this machine does not find stops the
 /// automation for a person before anything is typed, rather than leaving a
 /// shell that never starts an agent and reads as a start that stopped
@@ -1557,7 +1657,7 @@ fn a_starting_run_converges_on_its_intent_after_a_restart() {
     before.tick(1);
     assert_eq!(before.run(&id).0, "starting");
     let asked_before = before.starts.lock().unwrap().asked.clone();
-    drop(before);
+    before.stop();
     // The task edited while the core was off changes the next run's start,
     // not this one's.
     {
@@ -1589,7 +1689,7 @@ fn a_start_stored_in_a_shape_this_build_cannot_read_fails_only_that_attempt() {
     before.answer(&first, &[Answer::Refused("native_identity_unavailable")]);
     before.tick(1);
     assert_eq!(before.run(&id).0, "starting");
-    drop(before);
+    before.stop();
     {
         let path = state.path().join("automations.json");
         let mut book: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -1674,7 +1774,7 @@ fn a_close_that_fails_is_tried_again_after_a_restart() {
     before.tick(1);
     assert_eq!(before.run(&id).0, "stopped");
     assert_eq!(before.cleanups(), 1, "the failed release is kept");
-    drop(before);
+    before.stop();
 
     machine.lock().unwrap().worktree_refused = false;
     let mut after = Harness::on(&state, Arc::clone(&machine));
@@ -1725,7 +1825,7 @@ fn the_book_written_reads_back_as_it_was() {
         let runtime = harness.runtime.lock().unwrap();
         (runtime.automation_cleanups(), show_book(&runtime))
     };
-    drop(harness);
+    harness.stop();
     let (_, read, _) = crate::runtime::automations::restore(path);
     assert_eq!(read.schema_version, 1);
     assert_eq!(
@@ -2423,7 +2523,7 @@ fn a_run_going_when_the_core_moved_ends_and_its_terminal_stays_the_old_machines(
             })
         })
     });
-    drop(before);
+    before.stop();
     let mut book = crate::automations::decode(&std::fs::read(&path).unwrap()).unwrap();
     for automation in &mut book.automations {
         automation.machine = "another-machine".into();

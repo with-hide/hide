@@ -861,6 +861,16 @@ impl Runtime {
         let kind = self.checkout_kind(&node, &folder.path);
         let branch = match kind {
             Some(CheckoutKind::Folder) => None,
+            // A folder the catalog last read as gone may be back by now, and
+            // the catalog may read it so for minutes: whether it is there is
+            // the spawn's to ask its machine right before the start
+            // (`coordination::executor` `folder_there`), which refuses one
+            // still gone as folder missing (B23). The same stale read makes a
+            // Git project's row look plain, so the automation's own choice
+            // says where the run works: a new worktree when it asked for one
+            // (D-08), which the spawn refuses in a folder that is no
+            // repository, else the folder itself.
+            Some(CheckoutKind::Unreadable) => folder.worktree.then(|| automation.run_branch(key.1)),
             Some(CheckoutKind::Git) if folder.worktree => Some(automation.run_branch(key.1)),
             // The project's own folder: the branch it has out, so the run
             // works in the folder itself (D-08). One with none out is a
@@ -875,9 +885,6 @@ impl Runtime {
                     );
                 }
             },
-            Some(CheckoutKind::Unreadable) => {
-                return self.attempt_failed(key, Failure::Person(PauseReason::FolderMissing), now);
-            }
             Some(CheckoutKind::Unread) | None => {
                 if late {
                     return self.attempt_failed(
