@@ -11,8 +11,9 @@
 //! machine clocks, identity waits and declared turns, each bounded by the
 //! records) is one row. What each registered agent saw of its status cells
 //! (`Ledger::status_seen`) is a row of its own per agent, in the `seen`
-//! table schema version 2 added; a version-1 file gets the table, empty, on
-//! its first open. A write is the rows that changed between the ledger
+//! table. That table is additive: every open makes it when it is missing
+//! ([`ADDITIVE`]) and the schema version stays 1, so a build that does not
+//! know it opens the file as before and leaves the table alone. A write is the rows that changed between the ledger
 //! the file holds and the one to keep, in one transaction
 //! ([`LedgerStore::write`]): a sent letter is one new row, not a new file.
 //!
@@ -48,9 +49,10 @@ use crate::coordination::identity_wait::IdentityWait;
 use crate::coordination::{AGENT_LIMIT, AgentRecord, SPAWN_LIMIT, SpawnRecord};
 
 /// The tables this build makes and reads. A file of a higher version was
-/// made by a newer build and is refused; one of version 1 gets the `seen`
-/// table on its first open ([`MIGRATE_1`]).
-pub const SCHEMA_VERSION: i64 = 2;
+/// made by a newer build and is refused. A table a build adds that an older
+/// one may ignore is made at open ([`ADDITIVE`]) without raising it, so
+/// going back to that older build still reads the ledger.
+pub const SCHEMA_VERSION: i64 = 1;
 
 const PAGE_BYTES: usize = 4_096;
 
@@ -70,12 +72,13 @@ const SCHEMA: &str = "\
     CREATE TABLE ledger (only INTEGER PRIMARY KEY CHECK (only = 1), body TEXT NOT NULL);\
     CREATE TABLE letters (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);\
     CREATE TABLE agents (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);\
-    CREATE TABLE spawns (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);\
-    CREATE TABLE seen (recipient TEXT PRIMARY KEY, body TEXT NOT NULL);";
+    CREATE TABLE spawns (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);";
 
-/// Version 1 to 2: what each agent saw of its status cells, one row per
-/// registration (`Ledger::status_seen`).
-const MIGRATE_1: &str = "CREATE TABLE seen (recipient TEXT PRIMARY KEY, body TEXT NOT NULL);";
+/// Tables an older build of the same schema version does not know and
+/// ignores, made at every open when missing: what each agent saw of its
+/// status cells, one row per registration (`Ledger::status_seen`).
+const ADDITIVE: &str =
+    "CREATE TABLE IF NOT EXISTS seen (recipient TEXT PRIMARY KEY, body TEXT NOT NULL);";
 
 /// How an open found the file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,13 +141,12 @@ impl LedgerStore {
             .map_err(|error| failed(path, &error))?;
         let opened = match version {
             SCHEMA_VERSION => Opened::Existing,
-            1 => {
-                migrate_1(&mut connection).map_err(|error| failed(path, &error))?;
-                Opened::Existing
-            }
             0 => import(&mut connection, path)?,
             _ => return Err(refused(path, "newer")),
         };
+        connection
+            .execute_batch(ADDITIVE)
+            .map_err(|error| failed(path, &error))?;
         Ok((Self { connection }, opened))
     }
 
@@ -184,20 +186,6 @@ impl LedgerStore {
     }
 }
 
-/// Adds version 2's `seen` table to a version-1 file, in one transaction: a
-/// start cut short before it commits finds version 1 and adds it again.
-fn migrate_1(connection: &mut Connection) -> rusqlite::Result<()> {
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    transaction.execute_batch(MIGRATE_1)?;
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    transaction.commit()?;
-    crate::diagnostic!(
-        json!({"component":"delivery","kind":"ledger.store_migrated",
-        "from":1,"to":SCHEMA_VERSION})
-    );
-    Ok(())
-}
-
 /// Makes this build's tables in a file that has none, holding what
 /// `delivery-ledger.json` beside `path` holds, in one transaction.
 fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
@@ -217,6 +205,7 @@ fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
         .map_err(|error| failed(path, &error))?;
     transaction
         .execute_batch(SCHEMA)
+        .and_then(|()| transaction.execute_batch(ADDITIVE))
         .map_err(|error| failed(path, &error))?;
     let ledger = imported.clone().unwrap_or_default();
     Changes::all(&ledger)
@@ -263,13 +252,17 @@ pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
             "SELECT (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM ledger) \
              + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM letters) \
              + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM agents) \
-             + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM spawns) \
-             + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM seen)",
+             + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM spawns)",
             [],
             |row| row.get(0),
         )
         .map_err(unavailable)?;
-    if stored > FILE_LIMIT as i64 {
+    let seen = seen_rows(connection)?;
+    let seen_bytes: usize = seen
+        .values()
+        .map(|subjects| serde_json::to_string(subjects).map_or(0, |body| body.len()))
+        .sum();
+    if stored as usize + seen_bytes > FILE_LIMIT {
         return Err("ledger_unavailable".into());
     }
     let rest: String = connection
@@ -279,14 +272,26 @@ pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
         .map_err(unavailable)?;
     let rest: Rest = serde_json::from_str(&rest).map_err(|_| "ledger_unavailable")?;
     let mut ledger = rest.with(rows(connection)?, rows(connection)?, rows(connection)?);
-    ledger.status_seen = seen_rows(connection)?;
+    ledger.status_seen = seen;
     ledger.validate().map_err(|_| "ledger_unavailable")?;
     Ok(ledger)
 }
 
-/// What each agent saw, from the `seen` table: one row per registration.
+/// What each agent saw, from the `seen` table: one row per registration;
+/// none in a file whose writer did not know the table (a copy a core move
+/// checks before the store that makes it opens it).
 fn seen_rows(connection: &Connection) -> Result<BTreeMap<String, BTreeMap<String, u64>>, String> {
     let unavailable = |_| "ledger_unavailable".to_owned();
+    let present: bool = connection
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'seen')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(unavailable)?;
+    if !present {
+        return Ok(BTreeMap::new());
+    }
     let mut statement = connection
         .prepare("SELECT recipient, body FROM seen")
         .map_err(unavailable)?;
@@ -1147,8 +1152,8 @@ mod tests {
         assert_eq!(load(&path).unwrap().status_seen, second.status_seen);
     }
 
-    /// A file version 1 made gets version 2's `seen` table on its first open
-    /// and keeps every row it held.
+    /// A file a build before the `seen` table made gets the table on its
+    /// first open, keeps every row it held, and stays at schema version 1.
     #[test]
     fn a_version_one_file_gets_the_seen_table_and_keeps_its_rows() {
         let (_root, state) = state();
@@ -1158,11 +1163,10 @@ mod tests {
         send(&mut ledger, "kept", "body", 1);
         store.write(&empty, &ledger).unwrap();
         drop(store);
-        {
-            let connection = Connection::open(&path).unwrap();
-            connection.execute_batch("DROP TABLE seen;").unwrap();
-            connection.pragma_update(None, "user_version", 1).unwrap();
-        }
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("DROP TABLE seen;")
+            .unwrap();
         let (mut store, read, opened) = LedgerStore::open(&path).unwrap();
         assert_eq!(opened, Opened::Existing);
         assert_eq!(read, ledger);
@@ -1170,12 +1174,62 @@ mod tests {
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, 1, "an additive table raises no version");
         let mut seen = ledger.clone();
         seen.status_seen
             .insert("agent-1".into(), BTreeMap::from([("letter:1".into(), 1)]));
         store.write(&ledger, &seen).unwrap();
         drop(store);
         assert_eq!(load(&path).unwrap(), seen);
+    }
+
+    /// Going back to a build that does not know the `seen` table (1.2.11)
+    /// reads the ledger as it did: the file is still version 1, and that
+    /// build's read, its four tables' size, its ledger row and its records,
+    /// finds every letter, the table left alone.
+    #[test]
+    fn an_older_reader_opens_a_file_that_has_the_seen_table() {
+        let (_root, state) = state();
+        let path = hide_kit::layout::delivery_store(&state);
+        let (mut store, empty, _) = LedgerStore::open(&path).unwrap();
+        let mut ledger = Ledger::default();
+        send(&mut ledger, "kept", "body", 1);
+        ledger
+            .status_seen
+            .insert("agent-1".into(), BTreeMap::from([("letter:1".into(), 1)]));
+        store.write(&empty, &ledger).unwrap();
+        drop(store);
+        // The read 1.2.11 makes, as it was written then.
+        let connection = Connection::open(&path).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let stored: i64 = connection
+            .query_row(
+                "SELECT (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM ledger) \
+                 + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM letters) \
+                 + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM agents) \
+                 + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM spawns)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored > 0 && stored <= FILE_LIMIT as i64);
+        let rest: String = connection
+            .query_row("SELECT body FROM ledger WHERE only = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let rest: Rest = serde_json::from_str(&rest).unwrap();
+        let older = rest.with(
+            rows(&connection).unwrap(),
+            rows(&connection).unwrap(),
+            rows(&connection).unwrap(),
+        );
+        older.validate().unwrap();
+        let mut expected = ledger.clone();
+        expected.status_seen.clear();
+        assert_eq!(older, expected, "every letter, nothing of what was seen");
     }
 }
