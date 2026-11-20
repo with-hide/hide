@@ -30,7 +30,6 @@ fn found(name: &str, taken: bool) -> FoundSkill {
         name: name.to_owned(),
         path: name.to_owned(),
         description: None,
-        files: Vec::new(),
         digest: format!("digest-{name}"),
         taken,
     }

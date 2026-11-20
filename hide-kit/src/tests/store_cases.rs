@@ -229,20 +229,6 @@ fn a_repository_skill_reaches_every_skills_folder_and_profile_and_a_second_pass_
     assert_eq!(names, ["archify", "notes"]);
     let archify = &preview.skills[0];
     assert_eq!(archify.path, "skills/archify");
-    let script = archify
-        .files
-        .iter()
-        .find(|file| file.path == "scripts/run.sh")
-        .unwrap();
-    assert!(script.executable, "a #! file is marked as one that runs");
-    assert!(
-        !archify
-            .files
-            .iter()
-            .find(|file| file.path == "SKILL.md")
-            .unwrap()
-            .executable
-    );
     assert_eq!(
         preview.agents.len(),
         agents::ADAPTERS.len(),
@@ -328,21 +314,7 @@ fn a_tagged_commit_shows_its_tag_and_a_newer_commit_is_an_update_taken_only_when
     let diff = previewed.diffs.last().unwrap();
     assert_eq!(diff.from, Version::Tag("v1.0.0".to_owned()));
     assert_eq!(diff.commit, newer);
-    assert_eq!(diff.new_executables, ["scripts/new.sh"]);
     assert_eq!(diff.summary, ["draw it better"]);
-    let changed: Vec<(&str, crate::store::FileChangeKind)> = diff
-        .files
-        .iter()
-        .map(|file| (file.path.as_str(), file.change))
-        .collect();
-    assert_eq!(
-        changed,
-        [
-            ("SKILL.md", crate::store::FileChangeKind::Modified),
-            ("scripts/new.sh", crate::store::FileChangeKind::Added),
-        ]
-    );
-
     let updated = store(
         &fixture,
         vec![StoreChange::Update {

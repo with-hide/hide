@@ -4,7 +4,7 @@
 // the store report's; nothing here decides what an agent supports.
 
 import { agentAdapter } from "../agentAdapters";
-import type { KitAgent, McpServer, StoreAnswer, StoreCell, StoreCellFailure, StoreCellState, StoreChange, StoreColumn, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreSource, StoreVersion } from "../snapshot";
+import type { KitAgent, McpServer, StoreAnswer, StoreCell, StoreCellFailure, StoreCellState, StoreChange, StoreColumn, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreSource, StoreVersion } from "../snapshot";
 import { agentInstalled } from "./agentRows";
 
 /**
@@ -307,12 +307,6 @@ export function addInput(text: string): { kind: "git"; url: string } | { kind: "
 export function madeBy(answer: StoreAnswer | null | undefined): string | null {
   if (answer?.state !== "done") return null;
   return answer.outcomes.find((outcome) => outcome.made)?.made ?? null;
-}
-
-/** The files a set of found skills brings, and how many of them run. */
-export function filesOf(skills: readonly StoreFoundSkill[]): { files: { path: string; executable: boolean }[]; executables: number } {
-  const files = skills.flatMap((skill) => skill.files.map((file) => ({ path: `${skill.name}/${file.path}`, executable: file.executable })));
-  return { files, executables: files.filter((file) => file.executable).length };
 }
 
 /** A preview's source as one line: the repository at its commit, or the folder. */

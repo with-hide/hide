@@ -686,7 +686,6 @@ function PathText({ path, home }: { path: string; home: string | null | undefine
 function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
   const files = item.files ?? [];
-  const executables = files.filter((file) => file.executable).length;
   const cells = columns.map((column) => ({ column, cell: cellOf(item, column) }));
   const fixes = cells.filter(({ cell }) => cell.state === "failed" || cell.state === "hand_written");
   // A row on for some agents and off for others says so, and what its switch does (D-40).
@@ -726,7 +725,6 @@ function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownCol
               <span className={label}>{t("store.detail.files")}</span>
               <span className={value}>
                 {t("store.detail.fileCount", { count: files.length })}
-                {executables > 0 ? <span className="text-warning">· {t("store.detail.executables", { count: executables })}</span> : null}
               </span>
             </>
           ) : null}

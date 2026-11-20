@@ -674,7 +674,6 @@ pub struct FoundSkill {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub files: Vec<FileEntry>,
     pub digest: String,
     /// An item of that name is already in the store.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -701,23 +700,6 @@ pub struct Preview {
     pub at_unix_ms: u64,
 }
 
-/// How a file differs in an update.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FileChangeKind {
-    Added,
-    Removed,
-    Modified,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FileChange {
-    pub path: String,
-    pub change: FileChangeKind,
-    pub added: u32,
-    pub removed: u32,
-}
-
 /// What an update of a git item would change (B23).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UpdateDiff {
@@ -726,9 +708,6 @@ pub struct UpdateDiff {
     pub from: Version,
     pub to: Version,
     pub commit: String,
-    pub files: Vec<FileChange>,
-    /// Files that are executable in the update and were not before (▲).
-    pub new_executables: Vec<String>,
     /// The subjects of the commits between the two versions that touched the
     /// skill, newest first, at most 20.
     pub summary: Vec<String>,
@@ -848,7 +827,7 @@ pub struct ItemReport {
     /// row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// The skill's files, for the confirm screens.
+    /// The skill's files, for Show files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
     /// The MCP server as the edit screen shows it: how it is reached and

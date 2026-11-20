@@ -20,9 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use super::skill::{self, Discovered};
 use super::{
-    Ctx, FileChange, FileChangeKind, FoundSkill, ItemKind, Latest, Preview, Source, StoreChange,
-    StoreItem, StoreRecord, StoreRefusal, StoreRefusalCause, UpdateDiff, Version, folder_name,
-    now_unix_ms,
+    Ctx, FoundSkill, ItemKind, Latest, Preview, Source, StoreChange, StoreItem, StoreRecord,
+    StoreRefusal, StoreRefusalCause, UpdateDiff, Version, now_unix_ms,
 };
 use crate::KitTarget;
 
@@ -574,7 +573,6 @@ fn found_skills(found: Vec<Discovered>, prefix: &str) -> Result<Vec<FoundSkill>,
             name: skill.name,
             path,
             description: body.description.clone(),
-            files: body.files,
             digest: body.digest,
             taken: false,
         });
@@ -801,8 +799,6 @@ fn preview_update(
             .run(&args, ASK_DEADLINE)
             .map(|log| log.lines().map(str::to_owned).collect())
             .unwrap_or_default();
-        let old = dir.join("items").join(folder_name(&item.id));
-        let (files, new_executables) = compare(&old, &staged)?;
         let _ = std::fs::remove_dir_all(&repo);
         Ok(UpdateDiff {
             id: id.clone(),
@@ -810,8 +806,6 @@ fn preview_update(
             from: Version::of_commit(current, tag.as_deref()),
             to: Version::of_commit(&commit, new_tag.as_deref()),
             commit,
-            files,
-            new_executables,
             summary,
             at_unix_ms: now_unix_ms(),
         })
@@ -820,74 +814,6 @@ fn preview_update(
         let _ = std::fs::remove_dir_all(&folder);
     }
     answer
-}
-
-/// What differs between two skill folders, file by file, with lines added
-/// and removed counted as a multiset of lines (cheap, and what a row needs),
-/// and the files that run in `new` and did not in `old`.
-fn compare(old: &Path, new: &Path) -> Result<(Vec<FileChange>, Vec<String>), StoreRefusal> {
-    let before = skill::body_of(old).ok();
-    let after = skill::body_of(new)?;
-    let before_files = before.map(|body| body.files).unwrap_or_default();
-    let mut changes = Vec::new();
-    let mut executables = Vec::new();
-    for file in &after.files {
-        let was = before_files.iter().find(|old| old.path == file.path);
-        if file.executable && !was.is_some_and(|was| was.executable) {
-            executables.push(file.path.clone());
-        }
-        let new_text = std::fs::read(join_relative(new, &file.path)).unwrap_or_default();
-        match was {
-            None => changes.push(FileChange {
-                path: file.path.clone(),
-                change: FileChangeKind::Added,
-                added: lines(&new_text),
-                removed: 0,
-            }),
-            Some(_) => {
-                let old_text = std::fs::read(join_relative(old, &file.path)).unwrap_or_default();
-                if old_text != new_text {
-                    let (added, removed) = line_counts(&old_text, &new_text);
-                    changes.push(FileChange {
-                        path: file.path.clone(),
-                        change: FileChangeKind::Modified,
-                        added,
-                        removed,
-                    });
-                }
-            }
-        }
-    }
-    for file in &before_files {
-        if !after.files.iter().any(|new| new.path == file.path) {
-            let old_text = std::fs::read(join_relative(old, &file.path)).unwrap_or_default();
-            changes.push(FileChange {
-                path: file.path.clone(),
-                change: FileChangeKind::Removed,
-                added: 0,
-                removed: lines(&old_text),
-            });
-        }
-    }
-    changes.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok((changes, executables))
-}
-
-fn lines(bytes: &[u8]) -> u32 {
-    String::from_utf8_lossy(bytes).lines().count() as u32
-}
-
-fn line_counts(old: &[u8], new: &[u8]) -> (u32, u32) {
-    let mut counts: BTreeMap<String, i64> = BTreeMap::new();
-    for line in String::from_utf8_lossy(old).lines() {
-        *counts.entry(line.to_owned()).or_default() -= 1;
-    }
-    for line in String::from_utf8_lossy(new).lines() {
-        *counts.entry(line.to_owned()).or_default() += 1;
-    }
-    let added = counts.values().filter(|count| **count > 0).sum::<i64>();
-    let removed = -counts.values().filter(|count| **count < 0).sum::<i64>();
-    (added as u32, removed as u32)
 }
 
 #[cfg(test)]

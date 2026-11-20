@@ -28,7 +28,8 @@ async function openAsk(page: Page, fixture: StoreFixture) {
   await screenshot(page, "store-ask-needs-you");
   await task.locator("[data-human-turn-install]").click();
   const card = page.locator('[data-store-dialog="install"]');
-  await expect(card).toContainText("archify/scripts/render.py ▲ executable");
+  await expect(card.locator("[data-store-confirm-skills]")).toContainText("archify");
+  await expect(card).not.toContainText("▲");
   return card;
 }
 

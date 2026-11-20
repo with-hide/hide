@@ -2507,7 +2507,7 @@ export type StoreTrash = { id: string; kind: StoreItemKind; name: string; at_uni
 /** What the operator gave as a source (B3, B5). */
 export type StoreSourceSpec = { kind: "git"; url: string } | { kind: "folder"; path: string };
 
-export type StoreFoundSkill = { name: string; path: string; description?: string | null; files: StoreFile[]; digest: string; taken?: boolean };
+export type StoreFoundSkill = { name: string; path: string; description?: string | null; digest: string; taken?: boolean };
 
 /** What a source answered (B3-B6). */
 export type StorePreview = {
@@ -2522,8 +2522,6 @@ export type StorePreview = {
   at_unix_ms: number;
 };
 
-export type StoreFileChange = { path: string; change: "added" | "removed" | "modified"; added: number; removed: number };
-
 /** What an update would change (B23). */
 export type StoreUpdateDiff = {
   id: string;
@@ -2531,8 +2529,6 @@ export type StoreUpdateDiff = {
   from: StoreVersion;
   to: StoreVersion;
   commit: string;
-  files: StoreFileChange[];
-  new_executables: string[];
   summary: string[];
   at_unix_ms: number;
 };

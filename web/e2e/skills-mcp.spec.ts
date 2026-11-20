@@ -54,7 +54,7 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     await machine.locator('[data-store-row="skill:aside-browser"] td').first().click();
     const detail = machine.locator('[data-store-detail="skill:aside-browser"]');
     await expect(detail.locator("[data-store-path]")).toHaveAttribute("data-store-path", /\/aside-browser$/);
-    await expect(detail).toContainText("▲ 1 executable");
+    await expect(detail).not.toContainText("▲");
     await machine.locator('[data-store-row-toggle="mcp:github"]').click();
     const github = machine.locator('[data-store-detail="mcp:github"]');
     // A failure is one line: the agent, a few words and its file under ~, with Retry; the kit's sentence stays in the log.
@@ -79,10 +79,10 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     await expect(light.locator('[data-store-cell="skill:aside-browser:antigravity"]')).toHaveAttribute("data-store-cell-state", "on", { timeout: 60_000 }); // wait-ok: the kit's pass that writes the skill into Antigravity's folder
     await expect(light.locator('[data-store-detail="skill:aside-browser"]')).toBeVisible();
 
-    // Apply to all shows what comes in first: the copy, its files and the agents it goes to; Cancel takes nothing (B20).
+    // Apply to all shows what comes in first: the copy, its name and the agents it goes to; Cancel takes nothing (B20).
     await light.locator('[data-store-adopt="skill:ast-grep"]').click();
     const take = page.locator('[data-store-dialog="adopt"]');
-    await expect(take).toContainText("SKILL.md", { timeout: 60_000 }); // wait-ok: the kit's read of the copy's folder
+    await expect(take.locator("[data-store-confirm-skills]")).toContainText("ast-grep", { timeout: 60_000 }); // wait-ok: the kit's read of the copy's folder
     await expect(take).toContainText("ast-grep");
     await expect(take).toContainText("Claude");
     await take.locator("[data-store-cancel]").click();
@@ -105,7 +105,7 @@ test("a skill is added from a git address and from a folder, picked and confirme
     const machine = await openStore(page, fixture.daemon);
     await expect(machine.locator(`[data-store-empty="${fixture.daemon.node}"]`)).toContainText(/Nothing on This (Mac|PC|computer) yet/);
 
-    // A source with several skills asks which; the ones left ticked are confirmed with their files and agents.
+    // A source with several skills asks which; the ones left ticked are confirmed with their names, descriptions and agents.
     await machine.locator("[data-store-empty-add]").click();
     await page.locator("[data-store-add-input]").fill(fixture.repos.archify);
     await page.locator("[data-store-add-next]").click();
@@ -115,7 +115,9 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await screenshot(page, "store-add-pick");
     await pick.locator("[data-store-pick-next]").click();
     const confirm = page.locator('[data-store-dialog="install"]');
-    await expect(confirm).toContainText("archify/scripts/render.py ▲ executable");
+    await expect(confirm.locator("[data-store-confirm-skills]")).toContainText("archify");
+    await expect(confirm).not.toContainText("▲");
+    await expect(confirm).not.toContainText("render.py");
     await expect(confirm.locator("[data-store-agent-chip]")).toHaveCount(7);
     await expect(confirm).toContainText("Every profile included");
     await screenshot(page, "store-add-confirm");
@@ -174,8 +176,9 @@ test("an update shows what changes before it is taken, a delete can be undone, a
     // 업데이트 n walks the items a check found newer, each shown as its diff first (B23).
     await machine.locator("[data-store-updates]").click();
     const update = page.locator('[data-store-dialog="update"]');
-    await expect(update.locator("[data-store-diff-files]")).toContainText("scripts/merge.py", { timeout: 60_000 }); // wait-ok: the kit's read of the update's diff
-    await expect(update).toContainText("▲ new executable");
+    await expect(update).toContainText("Add merge command", { timeout: 60_000 }); // wait-ok: the kit's read of the update's diff
+    await expect(update).not.toContainText("▲");
+    await expect(update).not.toContainText("scripts/merge.py");
     await expect(update).toContainText("Add merge command");
     await screenshot(page, "store-update-confirm");
     await update.locator("[data-store-update-confirm]").click();

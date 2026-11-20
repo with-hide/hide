@@ -75,7 +75,7 @@ it("keeps an empty argument the server was read with, and leaves out only an add
 const folderPreview = (id: string, path: string, name: string, at: number): StorePreview => ({
   id,
   source: { kind: "folder", path },
-  skills: [{ name, path: name, files: [{ path: `${name}.md`, executable: false, size: 10 }], digest: `digest-${id}`, taken: false }],
+  skills: [{ name, path: name, digest: `digest-${id}`, taken: false }],
   agents: ["claude-code"],
   at_unix_ms: at,
 });
@@ -101,7 +101,9 @@ it("keeps showing its own reading when another pane's newer read lands, and Appl
     await draw([own, other]);
     const dialog = () => document.querySelector('[data-store-dialog="adopt"]')!.textContent ?? "";
     expect(dialog()).toContain("/skills/writer");
-    expect(dialog()).toContain("writer/writer.md");
+    expect(dialog()).toContain("Skillswriter");
+    expect(dialog()).not.toContain("Files");
+    expect(dialog()).not.toContain("▲");
     expect(dialog()).not.toContain("reader");
     await draw([own, other, folderPreview("later", "/elsewhere/later", "later", 3)]);
     expect(dialog()).toContain("/skills/writer");

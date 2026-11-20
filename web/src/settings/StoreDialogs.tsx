@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { Device, McpPastedServer, McpReach, McpServer, StoreAdoptConfirmation, StoreAsk, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreUpdateDiff } from "../snapshot";
-import { agentShortName, addInput, filesOf, keyNames, previewSource, serverLine, versionValue } from "./skillsMcp";
+import { agentShortName, addInput, keyNames, previewSource, serverLine, versionValue } from "./skillsMcp";
 import { useStoreRequest } from "./useStoreRequest";
 
 /** A refused store change in the operator's words; the kit's sentence stays in the log. */
@@ -83,7 +83,7 @@ type Stage = { kind: "source" } | { kind: "pick"; preview: string } | { kind: "c
 /**
  * + 추가 (scenes 2 and 3): one field takes a GitHub address, a folder or an
  * MCP paste; a source with several skills asks which, then the confirm shows
- * the files coming in (▲ executables) and the agents; a paste fills an MCP
+ * the chosen skill names, descriptions and the agents; a paste fills an MCP
  * server's fields, whose keys are typed here only and hidden once typed.
  */
 export function AddDialog({ device, name, report, shown, local, actions, onClose }: { device: Device; name: string; report: StoreReport; shown: ReadonlySet<string>; local: boolean; actions: Actions; onClose: () => void }) {
@@ -249,10 +249,9 @@ function PickSkills({ preview, onClose, onNext }: { preview: StorePreview; onClo
   );
 }
 
-/** 스킬 n개 설치: where they come from, every file coming in, and the agents that get them, every profile included. */
+/** 스킬 n개 설치: where they come from, their names and descriptions, and the agents that get them, every profile included. */
 function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onInstall, confirmLabel, header, title, data = "install" }: { preview: StorePreview; skills: StoreFoundSkill[]; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; onClose: () => void; onInstall: () => void; confirmLabel?: string; header?: ReactNode; title?: string; data?: string }) {
   const { t } = useInterfaceTranslation();
-  const { files } = filesOf(skills);
   const agents = preview.agents.filter((agent) => shown.has(agent));
   return (
     <StoreDialog
@@ -271,7 +270,16 @@ function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onI
       {header}
       <Facts>
         <Fact label={t("store.detail.source")} mono>{previewSource(preview)}</Fact>
-        <Fact label={t("store.detail.files")}><FileList files={files} /></Fact>
+        <Fact label={t("store.section.skill")}>
+          <span className="flex flex-col gap-sm" data-store-confirm-skills="true">
+            {skills.map((skill) => (
+              <span key={skill.name}>
+                <span className="block">{skill.name}</span>
+                {skill.description ? <span className="block text-caption text-muted-foreground">{skill.description}</span> : null}
+              </span>
+            ))}
+          </span>
+        </Fact>
         <Fact label={t("store.detail.agents")}>
           <AgentChips agents={agents} />
           <span className="mt-xs block text-caption text-muted-foreground">{t("store.add.everyProfile")}</span>
@@ -287,8 +295,8 @@ export type AdoptTarget = { kind: StoreItemKind; name: string; from?: string; pa
 
 /**
  * [모두에 적용] or [가져오기]: what is taken in, shown before anything moves
- * (B20). A skill's copy is read like a folder added: where it is, every file
- * (▲ an executable one) and the agents it goes to; a server's, as MCP 추가's
+ * (B20). A skill's copy is read like a folder added: its source, name,
+ * description and the agents it goes to; a server's, as MCP 추가's
  * confirm shows one (B9): the command and arguments or the address, its
  * keys' names and the agents, read from the copy's own place. A server Hide
  * cannot read offers no Apply. Only Apply takes it in.
@@ -582,23 +590,13 @@ export function FilesDialog({ item, onClose }: { item: StoreItem; onClose: () =>
   );
 }
 
-/** What an update changes: the version on each side, the changed files with their lines, any new executable, and the commits' first lines (B23). */
+/** An update's two versions and commit subjects, as confirmed on 2026-11-20. */
 function DiffFacts({ diff }: { diff: StoreUpdateDiff }) {
   const { t } = useInterfaceTranslation();
   const summary = diff.summary.slice(0, 3);
   return (
     <Facts>
       <Fact label={t("store.update.version")} mono>{`${versionValue(diff.from)} → ${versionValue(diff.to)}`}</Fact>
-      <Fact label={t("store.update.files")}>
-        <span className="flex flex-col font-mono" data-store-diff-files="true">
-          {diff.files.map((file) => (
-            <span key={file.path} className="break-all">
-              {file.path} {file.added > 0 ? <span className="text-diff-added">+{file.added}</span> : null} {file.removed > 0 ? <span className="text-diff-removed">-{file.removed}</span> : null}
-              {diff.new_executables.includes(file.path) ? <span className="font-sans text-warning"> {t("store.detail.newExecutable")}</span> : null}
-            </span>
-          ))}
-        </span>
-      </Fact>
       {summary.length > 0 ? (
         <Fact label={t("store.update.summary")}>
           <span className="flex flex-col">
