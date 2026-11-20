@@ -177,8 +177,30 @@ fn seat_out(seat: Seat) -> CoreMessage {
 struct Open {
     id: u64,
     out: mpsc::Sender<CoreMessage>,
+    /// What this stream is to tell whole, the latest only.
+    standing: Arc<Standing>,
     /// This side opened it.
     mine: bool,
+}
+
+/// What one stream tells whole and has not told yet: this machine's own
+/// work, to a machine that may open it, and this computer's seat, to a
+/// machine it may open (D-50, D-60). Each replaces what was told before, so
+/// one mark each is all a stream holds: its writer reads the value as it
+/// stands when the stream can send, and neither waits in the queue behind
+/// letters nor is lost when the queue is full.
+#[derive(Default)]
+struct Standing {
+    work: std::sync::atomic::AtomicBool,
+    seat: std::sync::atomic::AtomicBool,
+    moved: Notify,
+}
+
+impl Standing {
+    fn tell(&self, due: &std::sync::atomic::AtomicBool) {
+        due.store(true, Ordering::SeqCst);
+        self.moved.notify_one();
+    }
 }
 
 /// A call of this machine's agent that waits for the other core's answer.
@@ -333,12 +355,14 @@ impl PeerCore {
                         let mut held = lock(&self.told);
                         let moved = held.as_ref() != Some(&work);
                         if moved {
-                            *held = Some(work.clone());
+                            *held = Some(work);
                         }
                         moved
                     };
+                    // Marked after the list is held, so a stream that
+                    // writes at its mark never reads an older list.
                     if moved {
-                        self.tell_all(false, &CoreMessage::Work { work });
+                        self.tell_all(false, |standing| &standing.work);
                     }
                 }
                 Err(error) => hide_core::diagnostic!(json!({
@@ -362,24 +386,17 @@ impl PeerCore {
                 () = self.shutdown.ended() => return,
                 moved = moves.changed() => if moved.is_err() { return },
             }
-            self.tell_all(true, &seat_out(self.desktop.seat()));
+            self.tell_all(true, |standing| &standing.seat);
         }
     }
 
-    /// Writes `message` to every peer with a stream `mine` says who
-    /// opened: the machines this one may open, or the ones that may open
-    /// it. A stream that is full misses it, and the next one is whole.
-    fn tell_all(&self, mine: bool, message: &CoreMessage) {
-        let outs: Vec<(PeerKey, mpsc::Sender<CoreMessage>)> = lock(&self.open)
-            .iter()
-            .filter_map(|(key, streams)| {
-                let stream = streams.iter().find(|stream| stream.mine == mine)?;
-                Some((*key, stream.out.clone()))
-            })
-            .collect();
-        for (key, out) in outs {
-            if out.try_send(message.clone()).is_err() {
-                record("peer_core.not_told", &key, Value::Null);
+    /// Marks what `due` picks as to be told on every peer's stream `mine`
+    /// says who opened: the machines this one may open, or the ones that
+    /// may open it. Each stream tells it when it can send.
+    fn tell_all(&self, mine: bool, due: impl Fn(&Standing) -> &std::sync::atomic::AtomicBool) {
+        for streams in lock(&self.open).values() {
+            if let Some(stream) = streams.iter().find(|stream| stream.mine == mine) {
+                stream.standing.tell(due(&stream.standing));
             }
         }
     }
@@ -471,9 +488,11 @@ impl PeerCore {
         let mut reader = MessageReader::new(recv, frame::MAX_MESSAGE);
         let (out, mut outbound) = mpsc::channel(OUTBOUND);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let standing = Arc::new(Standing::default());
         lock(&self.open).entry(key).or_default().push(Open {
             id,
             out: out.clone(),
+            standing: Arc::clone(&standing),
             mine,
         });
         record("peer_core.opened", &key, json!({"mine": mine}));
@@ -481,20 +500,28 @@ impl PeerCore {
         // one stands: this computer's seat for a machine it may open, this
         // machine's own work for one that may open it.
         self.moved.notify_one();
-        let standing = if mine {
-            Some(seat_out(self.desktop.seat()))
-        } else {
-            lock(&self.told)
-                .clone()
-                .map(|work| CoreMessage::Work { work })
-        };
-        if let Some(message) = standing {
-            let _ = out.try_send(message);
-        }
+        standing.tell(if mine { &standing.seat } else { &standing.work });
         let calls = Arc::new(Semaphore::new(CALLS_AT_ONCE));
-        let ended = loop {
+        let ended = 'stream: loop {
             tokio::select! {
                 () = self.shutdown.ended() => break None,
+                () = standing.moved.notified() => {
+                    // Each as it stands now, read after its mark is taken:
+                    // a change that lands meanwhile marks it again.
+                    let work = standing.work.swap(false, Ordering::SeqCst);
+                    let seat = standing.seat.swap(false, Ordering::SeqCst);
+                    let told = [
+                        work.then(|| lock(&self.told).clone())
+                            .flatten()
+                            .map(|work| CoreMessage::Work { work }),
+                        seat.then(|| seat_out(self.desktop.seat())),
+                    ];
+                    for message in told.into_iter().flatten() {
+                        if let Err(error) = write_message(&mut send, &message).await {
+                            break 'stream Some(error.to_string());
+                        }
+                    }
+                }
                 message = reader.next() => match message {
                     Ok(Some(body)) => match CoreMessage::parse(&body) {
                         Ok(Some(message)) => {
@@ -966,6 +993,8 @@ mod tests {
         /// What each machine told of its own work, as it arrived; none
         /// once its stream ended.
         works: Mutex<Vec<(String, Option<Value>)>>,
+        /// Holds the next letter in this core until the test lets it go.
+        keeping: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         seen: watch::Sender<u64>,
     }
 
@@ -998,6 +1027,10 @@ mod tests {
             });
             lock(&self.taken).push(letter);
             self.moved();
+            let keeping = lock(&self.keeping).take();
+            if let Some(keeping) = keeping {
+                let _ = keeping.recv();
+            }
             answer
         }
 
@@ -1138,6 +1171,65 @@ mod tests {
             }),
             "node",
         ))
+    }
+
+    /// D-50 at the stream's cap: a list that changed while the stream held
+    /// all it may hold to be written is told when the stream can send
+    /// again, with no further change to bring it.
+    #[tokio::test]
+    async fn a_list_that_changed_while_the_stream_was_full_is_told_when_it_can_send() {
+        let pair = Pair::new(Duration::from_secs(30)).await;
+        pair.mac_core
+            .until("the PC's first list on the Mac", |core| {
+                !lock(&core.works).is_empty()
+            })
+            .await;
+        // The PC's core holds a letter, so its stream writes nothing, and
+        // the stream's queue fills.
+        let (release, keeping) = std::sync::mpsc::channel();
+        *lock(&pair.pc_core.keeping) = Some(keeping);
+        lock(&pair.mac_core.waiting).push((pair.pc_key.clone(), letter("letter-1")));
+        pair.mac_service.outbox_moved();
+        pair.pc_core
+            .until("the letter in the PC's core", |core| {
+                !lock(&core.taken).is_empty()
+            })
+            .await;
+        // An answer to a call nobody waits for is read and dropped.
+        let filler = || CoreMessage::CallAnswer {
+            call: u64::MAX,
+            answer: None,
+            refused: Some("capacity".to_owned()),
+        };
+        let mut queued = 0;
+        while Computers::tell(&*pair.pc_service, &pair.mac_key, filler()) {
+            queued += 1;
+            assert!(queued <= OUTBOUND, "the queue is bounded");
+        }
+        assert_eq!(queued, OUTBOUND);
+
+        // The PC's list changes once while nothing more can be queued.
+        let latest = list("needs_you", "question");
+        let told = serde_json::to_value(hide_core::peer_work::told(&latest)).unwrap();
+        pair.pc_list.send_replace(latest);
+        within("the PC's changed list held to be told", async {
+            while lock(&pair.pc_service.told).as_ref() != Some(&told) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            lock(&pair.mac_core.works)
+                .iter()
+                .all(|(_, work)| work.as_ref() != Some(&told))
+        );
+
+        release.send(()).unwrap();
+        pair.mac_core
+            .until("the PC's latest list on the Mac", |core| {
+                lock(&core.works).last() == Some(&(pair.pc_key.clone(), Some(told.clone())))
+            })
+            .await;
     }
 
     /// PRD device-connect-iroh D-50, D-60, B71: the machine that may open
