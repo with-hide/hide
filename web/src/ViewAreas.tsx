@@ -169,7 +169,8 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: pair === null ? <DeskPin displayId={front} actions={actions} /> : undefined },
+    // Pair view draws neither the desk's ✕ nor its pin: only its own ways out end it (D-42, D-46).
+    close: pair === null ? { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: <DeskPin displayId={front} actions={actions} /> } : undefined,
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };

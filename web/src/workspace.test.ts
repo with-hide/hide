@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Checkout, StripTab } from "./snapshot";
 import type { ViewDisplaySnapshot, ViewLayoutSnapshot } from "./snapshot";
-import { agentEntries, columnLanding, laneFrame, laneLanding, laneViewOf, DRAWN_PAGES_LIMIT, NO_CALLS_SEEN, NO_DRAWN_PAGES, pageLaneWidth, readDrawnPage, readCalls, TOOLS, TOOL_SCOPES, type DrawnPages, type LaneColumn, type LaneInput, type LaneSizes } from "./workspace";
+import { agentEntries, columnLanding, laneFrame, laneLanding, laneViewOf, DRAWN_PAGES_LIMIT, NO_CALLS_SEEN, NO_DRAWN_PAGES, pageLaneWidth, pairLanding, readDrawnPage, readCalls, TOOLS, TOOL_SCOPES, type DrawnPages, type LaneColumn, type LaneInput, type LaneSizes } from "./workspace";
 
 const strip: StripTab[] = [
   { id: "engine:1", kind: "engine", source_id: "t1", label: "1", preview: false },
@@ -241,5 +241,23 @@ describe("readCalls", () => {
 describe("the rail's tool scopes (PRD work-tab-pr-lens D-37)", () => {
   it("lists the Project's tools before the checkout's, so the rail draws one boundary", () => {
     expect(TOOLS.map((tool) => TOOL_SCOPES[tool])).toEqual(["project", "project", "checkout", "checkout"]);
+  });
+});
+
+describe("pair view's split (PRD lane-desk-pair-view D-46, D-47)", () => {
+  it("starts half and half, draws the desk whatever the lane's own state, and follows the mode's ratio", () => {
+    expect(frame({ open: false, view: "documents", pair: true, body: 1208 })).toMatchObject({ mode: "pair", agents: 1208, pane: 604, width: 1208 - 604 - 8 });
+    expect(frame({ view: "documents", pair: true, pairRatio: 600, body: 1200 })).toMatchObject({ mode: "pair", pane: 720, width: 1200 - 720 - 8 });
+  });
+
+  it("keeps each side above its minimum however far the ratio says", () => {
+    expect(frame({ view: "documents", pair: true, pairRatio: 900, body: 1200 }).pane).toBe(1200 - 8 - 360);
+    expect(frame({ view: "documents", pair: true, pairRatio: 100, body: 1200 }).pane).toBe(480);
+  });
+
+  it("lands a drag as the pane's share in thousandths, inside each side's minimum", () => {
+    expect(pairLanding({ x: 720, body: 1200, sizes })).toBe(600);
+    expect(pairLanding({ x: 10, body: 1200, sizes })).toBe(400);
+    expect(pairLanding({ x: 1190, body: 1200, sizes })).toBe(693);
   });
 });

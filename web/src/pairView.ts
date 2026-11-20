@@ -18,26 +18,23 @@ export function pairLabelKey(offer: PairOffer): "panes.menu.pair" | "panes.menu.
 }
 
 /**
- * The front tab's pair view while the screen draws it (B17, B26): the core
- * keeps it as the tab's state (D-15), and it is drawn while the lane shows
- * that tab's desk with something on it. The canvas that gives the pane up and
- * the layer that draws it read this one value, in one render, so the
- * terminal parks and is shown again in the same commit (D-26).
+ * The pair view drawn now (B17, D-45): the core publishes it while the
+ * window's mode is on and the pane the operator is on in the front tab has
+ * something to show. The canvas that gives the pane up and the layer that
+ * draws it read this one value, in one render, so the terminal parks and is
+ * shown again in the same commit (D-26).
  */
 export function drawnPair(view: WorkspaceView | null | undefined): PairView | null {
-  const pair = view?.tray.pair;
-  if (!pair || !view.open || !view.tray.shown || (view.layout?.display_count ?? 0) === 0) return null;
-  return pair;
+  return view?.tray.pair ?? null;
 }
 
-/**
- * The tabs the tab row and the sidebar mark as in pair view (D-17): every
- * paired tab while the lane is open, and the front one only while it is
- * drawn, so a lane closed with ⌘E leaves no mark on a screen that shows the
- * tab's own layout.
- */
+/** Whether the window's pair view mode is on (D-45), drawn or not: a shell pane draws its tab's own layout and the mode stays. */
+export function pairModeOn(view: WorkspaceView | null | undefined): boolean {
+  return view?.pair_mode?.on === true;
+}
+
+/** The tab and pane the tab row and the sidebar mark (D-17): the one pair view drawn, since the mode is the window's. */
 export function markedPairs(view: WorkspaceView | null | undefined): PairView[] {
-  if (!view?.open) return [];
   const drawn = drawnPair(view);
-  return (view.pairs ?? []).filter((pair) => pair.tab_id !== view.tray.tab_id || drawn !== null);
+  return drawn ? [drawn] : [];
 }
