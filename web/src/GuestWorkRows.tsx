@@ -124,7 +124,7 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="flex min-w-0 items-center gap-xs">
                 <span className="min-w-0 truncate text-foreground">{row.title}</span>
-                <DeviceChip label={machine} variant="remote" className="shrink-0" />
+                <DeviceChip label={machine} variant="remote" className="max-w-2/5" />
               </span>
               {row.detail || row.place ? <span className="min-w-0 truncate text-muted-foreground">{row.detail ?? row.place}</span> : null}
             </span>
