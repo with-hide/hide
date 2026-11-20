@@ -189,6 +189,18 @@ pub(crate) fn usage(lines: &str) -> String {
     text
 }
 
+/// A refusal of `hide agent`'s parser as it is printed. The parser names no
+/// reason with its own lines (`agent_cli::USAGE`); what is printed is the
+/// usage this build offers (`agent_cli::usage_here`).
+fn wrong_agent(reason: String) -> String {
+    let lines = crate::agent_cli::usage_here();
+    if reason == crate::agent_cli::USAGE {
+        usage(&lines)
+    } else {
+        format!("{reason}\n{}", usage(&lines))
+    }
+}
+
 /// A parse refusal as it is printed: the reason when the parser named one,
 /// then the topic's usage.
 fn wrong(reason: String, lines: &str) -> String {
@@ -204,7 +216,7 @@ fn wrong(reason: String, lines: &str) -> String {
 fn topic_usage(topic: &str) -> Option<String> {
     Some(match topic {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
-        "agent" => usage(crate::agent_cli::USAGE),
+        "agent" => usage(&crate::agent_cli::usage_here()),
         "ps" => usage(crate::ps_cli::USAGE),
         "device" => usage(crate::device_cli::usage_here()),
         "access" => usage(crate::access_cli::USAGE),
@@ -244,9 +256,10 @@ fn help_text() -> String {
     let mut text = String::from(
         "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide issue help           how to report a bug in Hide itself\n  hide contract --json      the commands tools call, as JSON\n",
     );
+    let agent = crate::agent_cli::usage_here();
     for lines in [
         crate::delivery_cli::USAGE,
-        crate::agent_cli::USAGE,
+        agent.as_str(),
         crate::ps_cli::USAGE,
         crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
@@ -402,7 +415,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("agent") if args[2..] == ["spawn", "--help"] => Ok(CommandKind::AgentSpawnHelp),
         Some("agent") if matches!(args.get(2).map(String::as_str), Some("sleep" | "archive")) => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(&crate::agent_cli::usage_here())))?;
             let archive = args[2] == "archive";
             let args = args[3..]
                 .iter()
@@ -417,7 +430,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                         CommandKind::AgentSleep { id, actor }
                     }
                 })
-                .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
+                .map_err(wrong_agent)
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("read") => {
             crate::cli_contract::admit(&args[1..])
@@ -442,7 +455,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(&crate::agent_cli::usage_here())))?;
             parse_catalog(&args[3..])
         }
         Some("mission") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
@@ -467,9 +480,9 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("agent") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(&crate::agent_cli::usage_here())))?;
             crate::agent_cli::parse(iter)
-                .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
+                .map_err(wrong_agent)
                 .map(|parsed| match parsed.brief_file {
                     Some(path) => CommandKind::AgentSpawnBriefFile {
                         command: parsed.command,
@@ -3848,7 +3861,7 @@ mod tests {
         for verb in ["register", "list", "show", "end"] {
             assert_eq!(
                 parse(&["hide", "agent", verb, "--help"]).unwrap(),
-                CommandKind::Usage(usage(crate::agent_cli::USAGE))
+                CommandKind::Usage(usage(&crate::agent_cli::usage_here()))
             );
         }
         let error = parse(&["hide", "agent", "spawn", "--no-watch"]).unwrap_err();
