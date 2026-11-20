@@ -464,6 +464,10 @@ pub(crate) struct Doorbell {
     /// pane: the node forgot it as it handed it over, so it is submitted
     /// again rather than asked for again.
     owed_taken: HashMap<String, (Actor, hide_agent_hooks::owed::Owed)>,
+    /// Each status ring that did not type, by recipient, until the pane's
+    /// episode moves or its retry time comes. Bounded by the receivers with a
+    /// subject they were never rung for.
+    status_tried: HashMap<String, Tried>,
 }
 
 /// A handed letter's ask of its pane's node.
@@ -903,6 +907,7 @@ impl Doorbell {
         }
         self.answers(owner, answers, stop, now, &mut count);
         self.inputs(owner, stop, now, &mut count);
+        self.status_rings(owner, stop, now, &mut count);
         if count < WORK_PER_PASS && !stop.load(Ordering::Acquire) {
             self.composer.check(owner, now);
         }
@@ -1008,6 +1013,130 @@ impl Doorbell {
         }
     }
 
+    /// Rings each resting receiver of a status cell about a subject it has
+    /// never seen, once (PRD letters-missions-simplify D-17, B12): the bell's
+    /// turn starts with its prompt pull, which gives the changed cells. A
+    /// receiver at work is not rung, and reads them at its next turn; an
+    /// update of a subject it was rung for or saw rings nothing.
+    fn status_rings(
+        &mut self,
+        owner: &Mutex<Runtime>,
+        stop: &AtomicBool,
+        now: u64,
+        count: &mut usize,
+    ) {
+        let due = owner
+            .lock()
+            .map(|mut guard| guard.status_rings_due())
+            .unwrap_or_default();
+        self.status_tried
+            .retain(|recipient, _| due.iter().any(|ring| &ring.recipient == recipient));
+        // Never mid-turn: the wait a letter has to sit out restarts each pass.
+        let rest = Patience {
+            arrived_at_unix_ms: now,
+            now: false,
+            forced: false,
+        };
+        for ring in due {
+            if stop.load(Ordering::Acquire) || *count >= WORK_PER_PASS {
+                break;
+            }
+            let Ok(observed) = owner
+                .lock()
+                .map(|guard| guard.delivery_bell_verdict(&ring.actor, rest, now))
+                .unwrap_or(Err(Hold::Absent))
+            else {
+                continue;
+            };
+            let Some((engine, language)) = owner.lock().ok().and_then(|guard| {
+                guard
+                    .delivery_engine(&ring.actor.device_id)
+                    .map(|engine| (engine, guard.interface_language()))
+            }) else {
+                continue;
+            };
+            let episode = Episode::from(&observed);
+            if self
+                .status_tried
+                .get(&ring.recipient)
+                .is_some_and(|last| last.episode == episode && now < last.retry_at)
+            {
+                continue;
+            }
+            // A pane a letter's bell rang in this episode reads the cells in
+            // that same turn.
+            if self
+                .rung
+                .get(&observed.actor.pane_id)
+                .is_some_and(|rung| rung.episode == episode)
+            {
+                if let Ok(mut guard) = owner.lock() {
+                    guard.status_rung(&ring.recipient, &ring.subjects);
+                }
+                continue;
+            }
+            *count += 1;
+            let line = super::bell::line(&super::bell::Ring {
+                sender: STATUS_SENDER,
+                kind: "progress",
+                body: &ring.line,
+                others: ring.others,
+                inbox: super::bell::names_inbox(&observed.actor.kind),
+                language,
+            });
+            match ring_status(owner, engine.as_ref(), &observed, &line, stop) {
+                Ok(Outcome::Rung(_)) => {
+                    self.status_tried.remove(&ring.recipient);
+                    if let Ok(mut guard) = owner.lock() {
+                        guard.status_rung(&ring.recipient, &ring.subjects);
+                    }
+                }
+                Ok(Outcome::Held(reason)) => {
+                    crate::diagnostic!(json!({"component":"status","kind":"status.ring_held",
+                        "recipient":ring.recipient,"pane_id":observed.actor.pane_id,
+                        "reason":reason.code()}));
+                    self.status_tried.insert(
+                        ring.recipient.clone(),
+                        Tried {
+                            episode,
+                            retry_at: now.saturating_add(RETRY_FIRST_MS),
+                            delay: RETRY_FIRST_MS,
+                            failed: false,
+                            forced: false,
+                        },
+                    );
+                }
+                Ok(Outcome::Stopped) => break,
+                Err(failure) => {
+                    let (code, typed) = match failure {
+                        SendFailure::NotTyped(code) => (code, false),
+                        SendFailure::MaybeTyped(code) => (code, true),
+                    };
+                    crate::diagnostic!(json!({"component":"status","kind":"status.ring_failed",
+                        "recipient":ring.recipient,"pane_id":observed.actor.pane_id,
+                        "code":code,"maybe_typed":typed}));
+                    // A line that may have been typed is not typed again.
+                    if typed {
+                        if let Ok(mut guard) = owner.lock() {
+                            guard.status_rung(&ring.recipient, &ring.subjects);
+                        }
+                        continue;
+                    }
+                    self.status_tried.insert(
+                        ring.recipient.clone(),
+                        Tried {
+                            episode,
+                            retry_at: now.saturating_add(RETRY_LIMIT_MS),
+                            delay: RETRY_LIMIT_MS,
+                            failed: true,
+                            forced: false,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     /// Typed input whose agent never recorded it (`typed.rs`): tells the
     /// agent that typed it, or wrote the letter, with the child's pane and
     /// how to read and answer its screen, and types a brief again once the
@@ -1087,7 +1216,7 @@ impl Doorbell {
                 let key = format!("notice:{id}");
                 if self.input_retry.get(&key).is_none_or(|at| now >= *at) {
                     *count += 1;
-                    match send_input_notice(owner, &item.key, notice) {
+                    match send_input_notice(owner, &item.key, notice, &item.observation) {
                         Ok(()) => {
                             self.input_retry.remove(&key);
                         }
@@ -1179,33 +1308,23 @@ fn send_input_notice(
     owner: &Mutex<Runtime>,
     key: &crate::runtime::typed_input::InputKey,
     notice: &crate::runtime::typed_input::Notice,
+    child: &Observation,
 ) -> Result<(), String> {
     use crate::runtime::typed_input::InputKey;
-    let (client, authority, actor) = owner
-        .lock()
-        .map_err(|_| "delivery_unavailable".to_owned())?
-        .hide_delivery(super::typed::INPUT_ROLE)?;
-    super::worker::Prepared::new(
-        client.clone(),
-        super::worker::Authority {
-            caller: authority.caller.clone(),
-            context: authority.context.clone(),
-            also_reads: Vec::new(),
-            proven: crate::delivery::worker::Proven::Now,
-        },
-        actor.clone(),
-        Some(notice.target.clone()),
-        super::Command::Send {
-            target: notice.target.actor.pane_id.clone(),
-            intent: notice.intent.clone(),
-            body: notice.body.clone(),
-            // Hide reads no answer; the agent acts on its child's screen.
-            kind: "progress".into(),
-            now: true,
-            force: false,
-        },
-    )
-    .run(PROMPT_TIMEOUT)?;
+    // The notice is the sender's or the parent's status cell about the
+    // child or the letter (PRD letters-missions-simplify D-16), news for
+    // each typing that was not taken.
+    let subject = match key {
+        InputKey::Spawn(_) => crate::runtime::status_subject_child(&child.actor.pane_id),
+        InputKey::Letter(id) => crate::runtime::status_subject_letter(id),
+    };
+    let (client, authority, actor) = {
+        let mut guard = owner
+            .lock()
+            .map_err(|_| "delivery_unavailable".to_owned())?;
+        guard.post_status(&notice.target.actor, subject, notice.body.clone(), true);
+        guard.hide_delivery(super::typed::INPUT_ROLE)?
+    };
     let effect = match key {
         InputKey::Spawn(id) => Effect::Agents {
             authority,
@@ -1877,6 +1996,46 @@ fn sent(delivered: super::ladder::Delivered) -> Result<Outcome, SendFailure> {
 /// conversation reads it as the operator's own message (D-13). Once
 /// `agent.prompt` is asked, a failed or timed-out reply or one Hide cannot
 /// read may follow a typed answer, so it is never typed again on its own.
+/// The name a status ring gives its writer: Hide itself.
+const STATUS_SENDER: &str = "Hide";
+
+/// Types a status ring's line into a resting receiver's pane, with every
+/// guard a letter's bell has but the letter's own reservation: what the
+/// ring is for lives in the core, and its turn's prompt pull reads it.
+fn ring_status(
+    owner: &Mutex<Runtime>,
+    engine: &dyn Engine,
+    observed: &Observation,
+    line: &str,
+    stop: &AtomicBool,
+) -> Result<Outcome, SendFailure> {
+    if stop.load(Ordering::Acquire) {
+        return Ok(Outcome::Stopped);
+    }
+    if let Err(unclear) = clear_to_type(engine, observed, false).map_err(SendFailure::NotTyped)? {
+        return Ok(Outcome::Held(unclear.hold()));
+    }
+    let target = {
+        let mut guard = owner
+            .lock()
+            .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?;
+        // The label reads the line as Hide's, never the operator's request.
+        guard.record_bell(
+            &observed.actor.pane_id,
+            line,
+            STATUS_SENDER,
+            crate::labels::input::Letter {
+                from: STATUS_SENDER.to_owned(),
+                kind: "progress".to_owned(),
+                operator: false,
+            },
+        );
+        guard.note_hide_typing(&observed.actor.pane_id);
+        guard.input_target(observed)
+    };
+    sent(super::ladder::deliver(engine, &target, line))
+}
+
 fn type_answer(
     owner: &Mutex<Runtime>,
     engine: &dyn Engine,
@@ -2615,16 +2774,7 @@ mod tests {
         let start = now();
         bell.pass(&mut doorbell, start);
         assert_eq!(bell.typed().len(), 1);
-        let notices = |bell: &Bell| -> Vec<Letter> {
-            let guard = bell.runtime.lock().unwrap();
-            let ledger = guard.delivery_state().unwrap();
-            ledger
-                .letters
-                .iter()
-                .filter(|letter| letter.sender.name == "hide:input")
-                .cloned()
-                .collect()
-        };
+        let notices = input_notices;
         // Within the record wait nothing is owed yet.
         bell.pass(&mut doorbell, start + RECORD_WAIT_MS / 2);
         assert!(notices(&bell).is_empty());
@@ -2639,23 +2789,15 @@ mod tests {
         let sent = notices(&bell);
         assert_eq!(sent.len(), 1, "the sender is told once");
         let notice = &sent[0];
-        assert_eq!(notice.recipient.pane_id, "sender");
-        assert_eq!(
-            notice.intent,
-            format!("input-unconfirmed:{}:1", bell.letter)
-        );
-        assert_eq!(notice.kind, "progress");
-        assert!(
-            notice.immediate,
-            "it reaches a working sender at its next gap"
-        );
-        let first_line = notice.body.lines().next().unwrap();
+        assert_eq!(notice.subject, format!("letter:{}", bell.letter));
+        assert!(notice.news, "the sender reads it once");
+        let first_line = notice.line.lines().next().unwrap();
         assert!(
             first_line.contains(&format!("your letter {}", bell.letter))
                 && first_line.contains("hide pane read recipient"),
             "{first_line}"
         );
-        assert!(notice.body.contains("Hide does not check consent"));
+        assert!(notice.line.contains("Hide does not check consent"));
         bell.pass(&mut doorbell, late + 1_000);
         assert_eq!(notices(&bell).len(), 1, "a later pass tells nothing more");
         assert_eq!(bell.typed().len(), 1, "nothing is typed again unasked");
@@ -2709,15 +2851,19 @@ mod tests {
     }
 
     /// What Hide's own `hide:input` told senders about bells not taken.
-    fn input_notices(bell: &Bell) -> Vec<Letter> {
+    /// The status cells Hide holds for the letter's sender: the notices that
+    /// were letters before (PRD letters-missions-simplify D-16).
+    fn input_notices(bell: &Bell) -> Vec<crate::runtime::StatusCell> {
         let guard = bell.runtime.lock().unwrap();
-        let ledger = guard.delivery_state().unwrap();
-        ledger
-            .letters
-            .iter()
-            .filter(|letter| letter.sender.name == "hide:input")
-            .cloned()
-            .collect()
+        let ledger = guard.delivery_state().ok();
+        let sender = crate::runtime::delivery::tests::observed(&guard, "sender").actor;
+        let key = crate::runtime::status_recipient(ledger.as_deref(), &sender);
+        guard.cells_of(&key)
+    }
+
+    /// Whether `cell` tells its sender the letter's bells are spent.
+    fn spent(cell: &crate::runtime::StatusCell) -> bool {
+        cell.line.contains("bells are spent")
     }
 
     /// The recipient's own prompt hook asks with `prompt`'s digest.
@@ -3726,12 +3872,8 @@ mod tests {
                     .unwrap()
                     .clone()
             };
-            let undelivered = |bell: &Bell| -> Vec<Letter> {
-                let intent = format!("letter-undelivered:{}", bell.letter);
-                input_notices(bell)
-                    .into_iter()
-                    .filter(|notice| notice.intent == intent)
-                    .collect()
+            let undelivered = |bell: &Bell| -> Vec<crate::runtime::StatusCell> {
+                input_notices(bell).into_iter().filter(spent).collect()
             };
             assert_eq!(letter().state, State::Pending, "{error}");
             bell.runtime.lock().unwrap().drive_spent_bells(at);
@@ -3745,12 +3887,8 @@ mod tests {
             bell.runtime.lock().unwrap().drive_spent_bells(at);
             until(|| !undelivered(&bell).is_empty());
             let note = &undelivered(&bell)[0];
-            assert_eq!(note.recipient.pane_id, "sender");
-            assert_eq!(note.kind, "progress");
-            assert!(
-                note.immediate,
-                "it reaches a working sender at its next gap"
-            );
+            assert_eq!(note.subject, format!("letter:{}", bell.letter));
+            assert!(note.news, "the sender reads it once");
             for part in [
                 "recipient did not get your report letter",
                 &bell.letter,
@@ -3758,7 +3896,7 @@ mod tests {
                 "hide pane read recipient",
                 "send the letter again with a new --intent",
             ] {
-                assert!(note.body.contains(part), "{error}: {part}: {}", note.body);
+                assert!(note.line.contains(part), "{error}: {part}: {}", note.line);
             }
             bell.runtime.lock().unwrap().drive_spent_bells(at + 1_000);
             assert_eq!(undelivered(&bell).len(), 1, "{error}: told once");
@@ -3901,15 +4039,10 @@ mod tests {
         bell.runtime.lock().unwrap().drive_spent_bells(judged);
         until(|| letter().state == State::Undelivered);
         bell.runtime.lock().unwrap().drive_spent_bells(judged);
-        let intent = format!("letter-undelivered:{}", bell.letter);
-        until(|| {
-            input_notices(&bell)
-                .iter()
-                .any(|notice| notice.intent == intent)
-        });
+        until(|| input_notices(&bell).iter().any(spent));
         let notes = input_notices(&bell);
-        let note = notes.iter().find(|notice| notice.intent == intent).unwrap();
-        assert!(note.body.contains(INTERRUPTED), "{}", note.body);
+        let note = notes.iter().find(|notice| spent(notice)).unwrap();
+        assert!(note.line.contains(INTERRUPTED), "{}", note.line);
     }
 
     /// A first bell a stopped core left on its way may sit typed in the
@@ -4095,23 +4228,15 @@ mod tests {
         until(|| letter().state == State::Undelivered);
         assert!(!letter().handed);
         bell.runtime.lock().unwrap().drive_spent_bells(judged);
-        let intent = format!("letter-undelivered:{}", bell.letter);
-        until(|| {
-            input_notices(&bell)
-                .iter()
-                .any(|notice| notice.intent == intent)
-        });
-        let notes: Vec<_> = input_notices(&bell)
-            .into_iter()
-            .filter(|notice| notice.intent.contains(bell.letter.as_str()))
-            .collect();
-        assert_eq!(notes.len(), 1, "one letter for its last bell");
+        until(|| input_notices(&bell).iter().any(spent));
+        let notes = input_notices(&bell);
+        assert_eq!(notes.len(), 1, "one cell for its last bell");
         assert!(
-            notes[0].body.contains("hook_not_taken")
-                && notes[0].body.contains("Give the work to another agent")
-                && !notes[0].body.contains("hide pane read"),
+            notes[0].line.contains("hook_not_taken")
+                && notes[0].line.contains("Give the work to another agent")
+                && !notes[0].line.contains("hide pane read"),
             "the sender is told the bell reached its agent and what to do: {}",
-            notes[0].body
+            notes[0].line
         );
     }
 
@@ -4167,11 +4292,16 @@ mod tests {
                 .unwrap()
                 .clone()
         };
-        let told = |bell: &Bell| -> Vec<String> {
+        let told = |bell: &Bell| -> Vec<&'static str> {
             input_notices(bell)
-                .into_iter()
-                .filter(|notice| notice.intent.contains(bell.letter.as_str()))
-                .map(|notice| notice.intent)
+                .iter()
+                .map(|notice| {
+                    if spent(notice) {
+                        "undelivered"
+                    } else {
+                        "unconfirmed"
+                    }
+                })
                 .collect()
         };
         passes_after_the_turn(&bell, &mut doorbell, start);
@@ -4181,19 +4311,18 @@ mod tests {
         assert!(letter().bell_failure.is_none());
         bell.runtime.lock().unwrap().drive_spent_bells(judged);
         until(|| !told(&bell).is_empty());
-        let undelivered = format!("letter-undelivered:{}", bell.letter);
         let notes = input_notices(&bell);
         let note = notes
             .iter()
-            .find(|notice| notice.intent == undelivered)
+            .find(|notice| spent(notice))
             .unwrap_or_else(|| panic!("{:?}", told(&bell)));
-        assert!(note.body.contains("not_recorded"), "{}", note.body);
+        assert!(note.line.contains("not_recorded"), "{}", note.line);
         passes_after_the_turn(&bell, &mut doorbell, judged);
         bell.runtime
             .lock()
             .unwrap()
             .drive_spent_bells(judged + RETRY_LIMIT_MS);
-        assert_eq!(told(&bell), [undelivered], "one letter for its last bell");
+        assert_eq!(told(&bell), ["undelivered"], "one cell for its last bell");
         assert_eq!(bell.typed().len(), 1, "nothing is typed again");
     }
 

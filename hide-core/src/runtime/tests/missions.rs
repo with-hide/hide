@@ -1705,10 +1705,18 @@ fn a_ci_letter_names_the_commit_the_result_and_the_failed_checks() {
     let mut failed: Vec<&str> = names.iter().map(String::as_str).collect();
     failed.push("job 0");
     runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    // Each result updates the node's one cell; the Conductor reads each.
+    let mut told: Vec<String> = Vec::new();
+    let read = |runtime: &mut Runtime, told: &mut Vec<String>| {
+        for cell in runtime.take_conductor_cells("mission-1") {
+            told.push(cell.line.lines().next().unwrap().to_owned());
+        }
+    };
     runtime.note_mission_pulls(
         node,
         &checked(7, "1234567890ab", PullRequestChecks::Failed, &failed),
     );
+    read(&mut runtime, &mut told);
     let mut cancelled = pull(7, "abcdef123456", PullRequestBadge::Open, None);
     cancelled.checks = PullRequestChecks::Failed;
     cancelled.work.checks_cancelled = true;
@@ -1717,20 +1725,10 @@ fn a_ci_letter_names_the_commit_the_result_and_the_failed_checks() {
         url: None,
     }];
     runtime.note_mission_pulls(node, &github(vec![cancelled], false));
+    read(&mut runtime, &mut told);
     runtime.note_mission_pulls(node, &checked(7, "fedcba", PullRequestChecks::Passing, &[]));
+    read(&mut runtime, &mut told);
 
-    let mission = runtime.missions.book.get("mission-1").unwrap();
-    let told: Vec<String> = mission
-        .wakes
-        .iter()
-        .map(|wake| {
-            crate::runtime::missions::wake_body(mission, wake)
-                .lines()
-                .next()
-                .unwrap()
-                .to_owned()
-        })
-        .collect();
     let at = r#"(mission mission-1 "Fix the bug", node fix)."#;
     assert_eq!(
         told,
@@ -1852,7 +1850,7 @@ fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
     mission.wakes = (0..PENDING_WAKE_LIMIT)
         .map(|at| PendingWake {
             seq: at as u64 + 1,
-            node: "docs".into(),
+            node: format!("docs-{at}"),
             pr: None,
             event: WakeEvent::NewHead,
             head: None,
@@ -1939,16 +1937,14 @@ fn a_result_told_on_a_commit_is_never_told_again() {
     assert!(first.is_some(), "the first head read starts the push clock");
     assert_eq!(runtime.note_mission_pulls(node, &failed).len(), 1);
     assert_eq!(runtime.note_mission_pulls(node, &passed).len(), 1);
-    let sent: Vec<(String, u64)> = runtime
-        .missions
-        .book
-        .get("mission-1")
-        .unwrap()
-        .wakes
-        .iter()
-        .map(|wake| ("mission-1".to_owned(), wake.seq))
-        .collect();
-    runtime.mission_wakes_sent(&sent);
+    // The pass resolved the failure's cell; the Conductor reads the pass
+    // once, and the news goes with its reading.
+    let cells = runtime.take_conductor_cells("mission-1");
+    assert_eq!(cells.len(), 1, "{cells:?}");
+    assert!(
+        cells[0].news && cells[0].line.contains("CI passed"),
+        "{cells:?}"
+    );
     let stored: crate::missions::MissionBook =
         serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
     runtime.missions.book = stored;
@@ -2185,16 +2181,19 @@ fn a_missions_wake_waits_in_the_record_until_its_letter_is_delivered() {
             .map(|wake| wake.seq)
             .collect::<Vec<_>>()
     };
-    assert_eq!(waiting(&runtime), [1, 2]);
+    // The second ask updates the node's one cell rather than adding one.
+    assert_eq!(waiting(&runtime), [2]);
     let stored: crate::missions::MissionBook =
         serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
     assert_eq!(
         stored.get("mission-1").unwrap().wakes.len(),
-        2,
-        "a restart reads them back"
+        1,
+        "a restart reads it back"
     );
-
-    runtime.mission_wakes_sent(&[("mission-1".to_owned(), 1)]);
+    // Read, a standing cell stays until its cause goes, but is not given
+    // again unchanged.
+    assert_eq!(runtime.take_conductor_cells("mission-1").len(), 1);
+    assert!(runtime.take_conductor_cells("mission-1").is_empty());
     assert_eq!(waiting(&runtime), [2]);
 
     // A Conductor that takes the mission over is the recipient its wakes
@@ -9111,8 +9110,9 @@ fn a_reopened_mission_whose_node_worked_and_finished_again_closes_again() {
     assert_ne!(mission_status(&runtime), MissionStatus::Running);
 }
 
-/// PRD mission-node-simple B28: with every letter slot taken a new wake is
-/// refused and those waiting keep their place.
+/// PRD mission-node-simple B28: a node keeps one cell, so the same node's
+/// news replaces its last; with a cell standing for every slot a new
+/// subject is refused and those standing keep their place.
 #[test]
 fn a_full_wake_queue_keeps_what_waits() {
     use crate::missions::{PENDING_WAKE_LIMIT, WakeEvent};
@@ -9125,11 +9125,11 @@ fn a_full_wake_queue_keeps_what_waits() {
     )
     .unwrap();
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    for _ in 0..PENDING_WAKE_LIMIT {
+    for at in 0..PENDING_WAKE_LIMIT {
         assert!(
             crate::runtime::missions::record_wake(
                 mission,
-                "a".into(),
+                format!("a{at}"),
                 None,
                 WakeEvent::Merged,
                 None,
@@ -9138,6 +9138,19 @@ fn a_full_wake_queue_keeps_what_waits() {
             .is_some()
         );
     }
+    assert!(
+        crate::runtime::missions::record_wake(
+            mission,
+            "a0".into(),
+            None,
+            WakeEvent::Closed,
+            None,
+            None
+        )
+        .is_some(),
+        "a known subject updates its cell"
+    );
+    assert_eq!(mission.wakes.len(), PENDING_WAKE_LIMIT);
     assert!(
         crate::runtime::missions::record_wake(
             mission,
@@ -9150,7 +9163,10 @@ fn a_full_wake_queue_keeps_what_waits() {
         .is_none()
     );
     assert_eq!(mission.wakes.len(), PENDING_WAKE_LIMIT);
-    assert_eq!(mission.wakes[0].seq, 1);
+    assert_eq!(
+        mission.wakes[0].seq, 2,
+        "the first subject's oldest went for its update"
+    );
     // A worker's wake is capped apart, so the Conductor's letters never
     // starve it.
     let worker = crate::missions::PendingWake {
@@ -10230,7 +10246,7 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
     mission.wakes = (0..PENDING_WAKE_LIMIT)
         .map(|at| PendingWake {
             seq: at as u64 + 1,
-            node: "docs".into(),
+            node: format!("docs-{at}"),
             pr: None,
             event: WakeEvent::NewHead,
             head: None,
@@ -10638,6 +10654,8 @@ const MINUTE: u64 = 60_000;
 struct StoppedCase {
     warnings: Vec<crate::missions::NodeWarning>,
     letters: Vec<String>,
+    /// The Conductor's cells about the node: one at most (D-24).
+    cells: usize,
     work: Option<crate::runtime::missions::NodeWork>,
     watch_waits: bool,
 }
@@ -10690,6 +10708,11 @@ fn stopped_case(
             .filter(|wake| wake.event == crate::missions::WakeEvent::Warning)
             .map(|wake| super::super::missions::wake_body(mission, wake))
             .collect(),
+        cells: mission
+            .wakes
+            .iter()
+            .filter(|wake| wake.node == "fix" && wake.standing())
+            .count(),
         work: node_view(&runtime, "fix").work,
         watch_waits: runtime.mission_worker_waits(&worker),
     }
@@ -10961,7 +10984,8 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
     let mut wrong = Vec::new();
     for (name, shape, setup, expected) in &rows {
         // Already warned, then turned into the row: a stop keeps its one
-        // warning and letter, a wait takes both away.
+        // warning, and the node's one cell tells it or a newer fact (a
+        // failed CI); a wait takes both away.
         let case = stopped_case(shape, setup, 6 * MINUTE, true);
         let kinds: Vec<_> = case.warnings.iter().map(|warning| warning.kind).collect();
         let stop_letters = case
@@ -10972,7 +10996,8 @@ fn a_worker_stopped_with_nothing_to_wait_on_warns_its_conductor_once_with_why() 
         let holds = match expected {
             Some(_) => {
                 kinds == [WarningKind::Stopped]
-                    && case.letters.len() == 1
+                    && case.cells == 1
+                    && case.letters.len() <= 1
                     && matches!(case.work, Some(NodeWork::Stopped { .. }))
             }
             None => !kinds.contains(&WarningKind::Stopped) && stop_letters == 0,
@@ -17993,7 +18018,7 @@ fn a_check_line_passed_on_a_commit_the_folder_left_opens_again_for_the_nodes_wai
 /// and a held node whose line passes is not told it can start: its hold
 /// keeps any worker off it.
 #[test]
-fn each_line_that_opens_again_is_its_own_letter_and_a_held_node_is_not_told_to_start() {
+fn each_line_that_opens_again_updates_its_nodes_cell_and_a_held_node_is_not_told_to_start() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -18059,15 +18084,9 @@ fn each_line_that_opens_again_is_its_own_letter_and_a_held_node_is_not_told_to_s
         .iter()
         .filter_map(|wake| wake.line.as_ref().map(ToString::to_string))
         .collect();
-    assert_eq!(told, ["core:c1", "core:c2"]);
-    let mission = runtime.missions.book.get("mission-1").unwrap();
-    let intents: std::collections::HashSet<String> = mission
-        .wakes
-        .iter()
-        .filter(|wake| wake.event == WakeEvent::LineReopened)
-        .map(|wake| crate::runtime::missions::wake_intent(mission, wake))
-        .collect();
-    assert_eq!(intents.len(), 2, "two letters, not one kept twice");
+    // Both openings are facts about node core: its one cell tells the
+    // newest (PRD letters-missions-simplify D-24).
+    assert_eq!(told, ["core:c2"]);
 }
 
 /// mission-82 c2: a line that opens again after the nodes waiting on it
@@ -18149,7 +18168,9 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
     );
     assert_eq!(node_view(&runtime, "host").status, NodeStatus::Working);
 
-    // Passing and opening once more is a second opening, and a second letter.
+    // Passing and opening once more is a second opening, which updates the
+    // node's one cell.
+    let first_seq = told[0].seq;
     command(
         &mut runtime,
         "recipient",
@@ -18168,6 +18189,285 @@ fn a_line_that_opens_again_after_its_dependents_started_is_told_once_and_stops_n
     )
     .unwrap();
     runtime.drive_mission_health(now + 7);
-    assert_eq!(line_wakes(&runtime, WakeEvent::LineReopened).len(), 2);
+    let again = line_wakes(&runtime, WakeEvent::LineReopened);
+    assert_eq!(again.len(), 1, "one cell per node");
+    assert!(again[0].seq > first_seq, "the second opening is a new fact");
     assert_eq!(node_view(&runtime, "host").status, NodeStatus::Working);
+}
+
+/// The letters Hide itself wrote to anyone: none, now that its notices are
+/// status cells (PRD letters-missions-simplify B8).
+fn hide_letters(runtime: &Runtime) -> usize {
+    runtime.delivery_state().map_or(0, |ledger| {
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.sender.hide_owned())
+            .count()
+    })
+}
+
+/// A pull request's news is the Conductor's one cell about the node, never
+/// a letter, and a new fact about the node updates that cell (B8, B9, B10):
+/// a failure stands, a failure on the next commit replaces it, and a pass
+/// resolves it into news the Conductor reads once (B11).
+#[test]
+fn a_nodes_ci_is_one_cell_that_a_new_fact_updates_and_a_pass_resolves() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    let wakes = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .clone()
+    };
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
+    );
+    let first = runtime.take_conductor_cells("mission-1");
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0].subject, "node:mission-1:fix");
+    assert!(!first[0].news, "a failed CI stands until it passes");
+    assert!(
+        first[0].line.contains("CI failed on commit a1"),
+        "{first:?}"
+    );
+
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "b2", PullRequestChecks::Failed, &["verify"]),
+    );
+    assert_eq!(wakes(&runtime).len(), 1, "one cell per node");
+    let second = runtime.take_conductor_cells("mission-1");
+    assert_eq!(second.len(), 1, "the update is the one change: {second:?}");
+    assert!(second[0].line.contains("commit b2"), "{second:?}");
+    assert!(second[0].revision > first[0].revision);
+
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
+    let passed = runtime.take_conductor_cells("mission-1");
+    assert_eq!(passed.len(), 1, "{passed:?}");
+    assert!(
+        passed[0].news && passed[0].line.contains("CI passed"),
+        "{passed:?}"
+    );
+    assert!(
+        wakes(&runtime).is_empty(),
+        "the failure went with the pass, the news with its reading"
+    );
+    assert!(runtime.take_conductor_cells("mission-1").is_empty());
+    assert_eq!(hide_letters(&runtime), 0, "Hide wrote no letter");
+}
+
+/// What only the node's work answers (its CI, a review) is no longer the
+/// Conductor's once it starts the node again or names another worker (B10).
+#[test]
+fn a_node_the_conductor_starts_again_drops_the_cells_its_work_answered() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    without_gate(&mut runtime);
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
+    );
+    let standing = |runtime: &Runtime| {
+        runtime
+            .missions
+            .book
+            .get("mission-1")
+            .unwrap()
+            .wakes
+            .iter()
+            .filter(|wake| wake.to.is_none())
+            .count()
+    };
+    assert_eq!(standing(&runtime), 1);
+    // A change that starts nothing keeps the cell: nothing answered it yet.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"branch": "m83/fix"}}),
+    )
+    .unwrap();
+    assert_eq!(standing(&runtime), 1);
+    // Another worker takes the node.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-3"}}),
+    )
+    .unwrap();
+    assert_eq!(standing(&runtime), 0, "the Conductor's move answered it");
+    assert!(runtime.take_conductor_cells("mission-1").is_empty());
+}
+
+/// The Conductor reads only what changed since it last looked: a standing
+/// cell it read is not given again until it changes, and news is gone once
+/// read (B11, B12).
+#[test]
+fn the_conductor_is_given_only_the_cells_that_changed_since_it_looked() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
+    );
+    assert_eq!(runtime.take_conductor_cells("mission-1").len(), 1);
+    assert!(
+        runtime.take_conductor_cells("mission-1").is_empty(),
+        "unchanged"
+    );
+    // Read again from the book after a restart, it is still the one seen.
+    let stored: crate::missions::MissionBook =
+        serde_json::from_value(serde_json::to_value(&runtime.missions.book).unwrap()).unwrap();
+    runtime.missions.book = stored;
+    assert!(
+        runtime.take_conductor_cells("mission-1").is_empty(),
+        "after a restart"
+    );
+    let mut asked = pull(
+        7,
+        "a1",
+        PullRequestBadge::Open,
+        Some(ReviewDecision::ChangesRequested),
+    );
+    asked.checks = PullRequestChecks::Failed;
+    runtime.note_mission_pulls(node, &github(vec![asked], false));
+    let changed = runtime.take_conductor_cells("mission-1");
+    assert_eq!(changed.len(), 1, "{changed:?}");
+    assert!(
+        changed[0].line.contains("review asking for changes"),
+        "{changed:?}"
+    );
+}
+
+/// with-hide/hide-private 11-20 (`intent_conflict` 268 times): a wake
+/// whose text is built again from the live mission was refused under its
+/// fixed intent and sent again at every flush. One cause is now one cell,
+/// however often it is evaluated and however the mission's words move, and
+/// nothing is sent (B30).
+#[test]
+fn one_cause_is_one_cell_and_no_send_however_often_it_is_evaluated() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    fixing_seven(&mut runtime);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    let failed = checked(7, "a1", PullRequestChecks::Failed, &["verify"]);
+    for round in 0..20 {
+        runtime.missions.book.get_mut("mission-1").unwrap().title = format!("Fix the bug {round}");
+        runtime.note_mission_pulls(node, &failed);
+    }
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    assert_eq!(mission.wakes.len(), 1, "{:?}", mission.wakes);
+    let cells = runtime.take_conductor_cells("mission-1");
+    assert_eq!(cells.len(), 1, "{cells:?}");
+    assert!(
+        cells[0].line.contains("Fix the bug 19"),
+        "read from the mission as it is now"
+    );
+    assert!(runtime.take_conductor_cells("mission-1").is_empty());
+    assert_eq!(hide_letters(&runtime), 0, "nothing was sent");
+}
+
+/// B15 (D-23, D-25): the safety net counts the Conductor's unresolved raise
+/// cells. Two nodes held by one cause 20 minutes are one card for the
+/// mission, its rows the cells' nodes and typed reasons (which the screen
+/// words in the operator's language), and a resolved cell leaves the card.
+#[test]
+fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
+    use crate::missions::{AttentionReason, WakeEvent};
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let then = now - 25 * MINUTE;
+    runtime.drive_mission_health(then);
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    for key in ["cause", "fix"] {
+        assert!(
+            !crate::runtime::mission_health::raise(
+                mission,
+                key,
+                AttentionReason::PrClosed,
+                Some(7),
+                then
+            )
+            .is_empty()
+        );
+    }
+    runtime.save_missions();
+    let cells: Vec<String> = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .wakes
+        .iter()
+        .filter(|wake| wake.standing() && wake.event == WakeEvent::Attention)
+        .map(|wake| wake.node.clone())
+        .collect();
+    assert_eq!(cells, ["cause", "fix"], "one cell per node");
+    let rows = |runtime: &Runtime| {
+        runtime
+            .mission_view_of("mission-1")
+            .unwrap()
+            .safety_net
+            .map(|net| {
+                net.nodes
+                    .into_iter()
+                    .map(|node| (node.key, node.reason))
+                    .collect::<Vec<_>>()
+            })
+    };
+    assert_eq!(
+        rows(&runtime),
+        Some(vec![
+            ("cause".to_owned(), AttentionReason::PrClosed),
+            ("fix".to_owned(), AttentionReason::PrClosed),
+        ]),
+        "one card, its rows the cells"
+    );
+    // The Conductor reading the cells does not resolve them.
+    assert_eq!(runtime.take_conductor_cells("mission-1").len(), 2);
+    assert!(rows(&runtime).is_some());
+    // The cause of one is resolved: its cell and its row go.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "cause")
+        .unwrap()
+        .attention = None;
+    crate::runtime::mission_health::prune_attention_wakes(mission);
+    runtime.save_missions();
+    assert_eq!(
+        rows(&runtime),
+        Some(vec![("fix".to_owned(), AttentionReason::PrClosed)])
+    );
+    assert!(
+        runtime.take_conductor_cells("mission-1").is_empty(),
+        "nothing changed"
+    );
 }

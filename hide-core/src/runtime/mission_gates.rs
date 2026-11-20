@@ -463,7 +463,6 @@ impl Runtime {
             "answer": answer.as_str(),
         }));
         self.record_mission_events(id, events);
-        self.flush_mission_wakes();
         Ok(true)
     }
 

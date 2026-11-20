@@ -292,18 +292,54 @@ pub(crate) fn delivery(
     command: hide_core::delivery::Command,
     hint: Option<String>,
 ) -> Result<Value, Failure> {
-    core.prepare_delivery(
-        &cap.context.device_id,
-        &cap.pane_id,
-        &cap.context,
-        cap.canonical_hint(hint),
-        command,
-    )
-    .and_then(|prepared| prepared.run(Duration::from_secs(5)))
-    .map_err(|code| {
-        let next = crate::server::delivery_next_action(&code);
-        (code, next)
-    })
+    // Hide's own notices are status cells, not letters (PRD
+    // letters-missions-simplify D-17): a turn's prompt reads the ones that
+    // changed after its letters, and `hide inbox` lists them.
+    let status = match &command {
+        hide_core::delivery::Command::Pull {
+            point: hide_node_link::panes::PullPoint::Prompt,
+            ..
+        } => Some(false),
+        hide_core::delivery::Command::Inbox { bundle: true } => Some(true),
+        _ => None,
+    };
+    let mut result = core
+        .prepare_delivery(
+            &cap.context.device_id,
+            &cap.pane_id,
+            &cap.context,
+            cap.canonical_hint(hint),
+            command,
+        )
+        .and_then(|prepared| prepared.run(Duration::from_secs(5)))
+        .map_err(|code| {
+            let next = crate::server::delivery_next_action(&code);
+            (code, next)
+        })?;
+    if let Some(inbox) = status
+        && let Value::Object(fields) = &mut result
+    {
+        // The hook refuses a context past its limit, letters and all
+        // (`hide_agent_hooks::delivery`), so the cells take what is left.
+        let used = match fields.get("context") {
+            Some(Value::String(context)) => context.len() + 1,
+            _ => 0,
+        };
+        let room = (!inbox).then(|| hide_core::delivery::HOOK_LIMIT.saturating_sub(used));
+        if let Some((text, cells)) = core.status_take(&cap.context.device_id, &cap.pane_id, room) {
+            if inbox {
+                fields.insert("status".to_owned(), cells);
+            } else if !text.is_empty()
+                && let Some(Value::String(context)) = fields.get_mut("context")
+            {
+                if !context.is_empty() && !context.ends_with('\n') {
+                    context.push('\n');
+                }
+                context.push_str(&text);
+            }
+        }
+    }
+    Ok(result)
 }
 
 pub(crate) fn memory(

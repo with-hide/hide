@@ -18,7 +18,6 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::Runtime;
-use super::hide_notes::{Note, NoteKind};
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::State;
 
@@ -33,8 +32,6 @@ pub(in crate::runtime) struct UnreadableLetters {
     dirty: bool,
     /// Letters whose sender was told, while they stay pending.
     noted: BTreeSet<String>,
-    /// A thread is telling senders; it is the only one.
-    noting: bool,
 }
 
 impl UnreadableLetters {
@@ -58,7 +55,7 @@ impl Runtime {
     /// read, once per letter. Run by the coordinator's tick; a tick with
     /// nothing moved is one flag test.
     pub(crate) fn drive_unreadable_letters(&mut self) {
-        if !self.unreadable_letters.dirty || self.unreadable_letters.noting || self.effects_held() {
+        if !self.unreadable_letters.dirty || self.effects_held() {
             return;
         }
         let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {
@@ -109,26 +106,15 @@ impl Runtime {
                 "component": "delivery", "kind": "delivery.recipient_unreadable",
                 "letter_id": letter.id, "pane_id": letter.recipient.pane_id, "reason": &reason,
             }));
-            notes.push(Note {
-                body: note_body(&letter.recipient.name, &letter.kind, &letter.id, &reason),
-                letter: letter.id.clone(),
-                target,
-            });
+            notes.push((
+                target.actor,
+                super::status_cells::letter_subject(&letter.id),
+                note_body(&letter.recipient.name, &letter.kind, &letter.id, &reason),
+            ));
         }
-        if notes.is_empty() {
-            return;
+        for (sender, subject, body) in notes {
+            self.post_status(&sender, subject, body, true);
         }
-        let kind = NoteKind {
-            role: DELIVERY_ROLE,
-            thread: "hide-unreadable-notes",
-            intent: "session-unreadable",
-            component: "delivery",
-            unsent: "delivery.unreadable_note_unsent",
-            now: false,
-        };
-        self.unreadable_letters.noting = self.send_hide_notes(kind, notes, |runtime| {
-            runtime.unreadable_letters.noting = false;
-        });
     }
 }
 

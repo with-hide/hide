@@ -2026,11 +2026,71 @@ fn a_finished_node_keeps_its_workers_plan_after_the_pane_closes() {
     assert_eq!(shown(&mut runtime), Some((WORKER.into(), 2, 2)));
 }
 
-/// with-hide/hide-private#675: the note that a letter's wake failed for good
-/// reaches a sender that works at its next tool call, not after five minutes
-/// of its work, since the sender may wait on that letter's answer. Hide's
-/// other notes keep their own timing.
+/// A node's fix for its sleeping worker is the worker's status cell, and the
+/// cell wakes it as the `request` it was before did: once per new cell, so a
+/// worker that wakes, does not look and sleeps again is not woken for the
+/// same cell, while a newer one wakes it (PRD letters-missions-simplify B8,
+/// B12).
 #[test]
-fn a_failed_wake_s_note_reaches_a_working_sender_at_its_next_tool_call() {
-    const { assert!(crate::runtime::agent_sleep::letters::WAKE_FAILED_NOTE.now) };
+fn a_workers_new_status_cell_wakes_it_asleep_once() {
+    use crate::missions::{FixReason, PendingWake, WakeEvent};
+    let mut runtime = mission_runtime();
+    let asleep = |runtime: &mut Runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert(WORKER.into(), record(WORKER));
+        runtime.letter_wakes.touch();
+    };
+    let fix = |runtime: &mut Runtime| {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.wake_seq += 1;
+        let wake = PendingWake {
+            seq: mission.wake_seq,
+            node: mission.nodes[0].key.clone(),
+            pr: Some(7),
+            event: WakeEvent::Fix,
+            head: Some("c3".into()),
+            to: Some("agent-2".into()),
+            reason: None,
+            why: Some(FixReason::CiFailed),
+            action: None,
+            warning: None,
+            ci: None,
+            line: None,
+            key: None,
+        };
+        crate::runtime::missions::push_wake(mission, wake).unwrap();
+        runtime.letter_wakes.touch();
+    };
+    asleep(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "no cell yet"
+    );
+    fix(&mut runtime);
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It wakes, does not look, and sleeps again.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    asleep(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the same cell does not wake it again"
+    );
+    fix(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Waking),
+        "a newer one does"
+    );
 }

@@ -918,6 +918,29 @@ impl Core {
         lock_recover(&self.runtime).plan_context(device, caller)
     }
 
+    /// The status cells of the agent in `caller`'s pane on `device` that
+    /// changed since it last looked, marked seen now
+    /// (`runtime::status_cells`): the text a turn's prompt shows after its
+    /// letters, in at most `room` bytes, empty with none, and the cells as
+    /// `hide inbox` lists them (`room` none). None for a caller in no pane.
+    pub fn status_take(
+        &self,
+        device: &str,
+        caller: &str,
+        room: Option<usize>,
+    ) -> Option<(String, serde_json::Value)> {
+        if !check_owner_thread(self, "status.take") {
+            return None;
+        }
+        let cells = lock_recover(&self.runtime).take_status(device, caller, room)?;
+        let text = if cells.is_empty() {
+            String::new()
+        } else {
+            crate::runtime::status_text(&cells)
+        };
+        Some((text, serde_json::json!(cells)))
+    }
+
     /// What the agent hook in `caller`'s pane on `device` reported
     /// (`HookCommand::Status`), with the processes from its sender up to the
     /// pane's shell when that machine's kernel could name them. A short
