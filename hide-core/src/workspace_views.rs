@@ -490,11 +490,7 @@ impl WorkspaceView {
             .unwrap_or(PENDING_TRAY)
             .to_owned();
         let next_id = layout.next_id;
-        self.trays.push(Tray {
-            tab,
-            layout,
-            shown,
-        });
+        self.trays.push(Tray { tab, layout, shown });
         // The shelf numbers after the documents, so no id repeats.
         self.shelf = shelf_layout(next_id);
     }

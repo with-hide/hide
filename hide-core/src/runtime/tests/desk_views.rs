@@ -1826,7 +1826,11 @@ fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_folds_the_desk() 
     assert_eq!(runtime.snapshot.status.last_error, None);
     let first = paired(TABS[0], "w-order:t1:p");
     assert_eq!(drawn_pair(&runtime), Some(first.clone()));
-    assert_eq!(fronts(&runtime, &directory), ["a.md"], "B18: its agent's View");
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["a.md"],
+        "B18: its agent's View"
+    );
     assert!(
         !runtime.dispatch_json(&explorer_event(
             "pair_view",

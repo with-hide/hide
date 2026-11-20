@@ -2835,13 +2835,9 @@ mod tests {
                 .workspaces
                 .iter()
                 .flat_map(|view| {
-                    view.trays.iter().map(|tray| {
-                        (
-                            view.device_id.clone(),
-                            view.path.clone(),
-                            tray.tab.clone(),
-                        )
-                    })
+                    view.trays
+                        .iter()
+                        .map(|tray| (view.device_id.clone(), view.path.clone(), tray.tab.clone()))
                 })
                 .collect();
             desks.sort();
