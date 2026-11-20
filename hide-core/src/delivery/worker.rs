@@ -1245,12 +1245,7 @@ fn settle(
     for (index, request) in batch.iter().enumerate() {
         let result = match current(runtime, request, &candidate, now) {
             Err(code) => Err(code),
-            // Checked after each request: a later one that drops a letter
-            // can bring the batch's end back under a limit this one broke.
-            Ok(()) => match apply(&mut candidate, request, now, &holds).and_then(|landed| {
-                candidate.check()?;
-                Ok(landed)
-            }) {
+            Ok(()) => match land(&mut candidate, request, now, &holds) {
                 Ok((value, publish)) => {
                     transitions |= publish;
                     accepted[index] = true;
@@ -1276,7 +1271,11 @@ fn settle(
     }
     // A letter this batch sent to a machine without a clock gets one.
     candidate.observe_reach(&upkeep.reach, now);
-    let bytes = (candidate != *state).then(|| candidate.bytes());
+    // The upkeep alone can take a full ledger past the file's limit.
+    let bytes = (candidate != *state).then(|| {
+        crate::coordination::room::for_size(&mut candidate, &holds)?;
+        candidate.bytes()
+    });
     Settled {
         ledger: candidate,
         bytes,
@@ -1509,6 +1508,23 @@ impl Upkeep {
     }
 }
 
+/// Applies `request` to the batch's copy and keeps the copy within the
+/// file's limit as it lands, making room by dropping finished records when
+/// it would pass it (`coordination::room::for_size`); a request the file
+/// still cannot hold is refused. Checked after each request, not once at the
+/// batch's end: a later request that drops a letter could bring the end back
+/// under a limit an earlier one broke.
+fn land(
+    ledger: &mut Ledger,
+    request: &Request,
+    now: u64,
+    holds: &dyn crate::coordination::Holds,
+) -> Result<(Value, bool), String> {
+    let landed = apply(ledger, request, now, holds)?;
+    crate::coordination::room::for_size(ledger, holds)?;
+    Ok(landed)
+}
+
 /// The batch's copy made again from `state`: the same upkeep, then the
 /// requests `accepted` marks, in their order, with whether any of them asks
 /// for a publish. Applying a request changes only the ledger it is given,
@@ -1531,7 +1547,7 @@ fn rebuild(
             if !accepted[index] {
                 continue;
             }
-            match apply(&mut ledger, request, now, holds) {
+            match land(&mut ledger, request, now, holds) {
                 Ok((value, publish)) => {
                     transitions |= publish;
                     results[index] = Ok(value);
@@ -2864,6 +2880,111 @@ mod tests {
         assert_eq!(stored(&settled.ledger, &state), expected);
         let bytes = settled.bytes.unwrap().unwrap();
         assert!(bytes.len() <= super::super::FILE_LIMIT);
+    }
+
+    /// The fixture's sender, registered as `agent-1` under its native
+    /// session, and an earlier `agent-2` whose spawn records, each keeping
+    /// its brief, fill the published ledger to 100 bytes short of the file's
+    /// limit; they have finished once `agent-2` has ended. Returns the
+    /// sender as its registration names it.
+    fn briefed_near_limit(runtime: &Mutex<Runtime>, finished: bool) -> Actor {
+        let session =
+            |pane: &str| crate::engine::tokens::session_digest(&format!("{pane}-session"));
+        let mut guard = runtime.lock().unwrap();
+        // A registration keeps its native session, which the pane's
+        // observation carries as its digest.
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working",
+             "state_change_seq":1,"lineage_session":session("sender")},
+        ]}))
+        .unwrap();
+        guard.observe_delivery_laid(
+            crate::node::TEST_NODE,
+            &payload,
+            Some("fixture-scope"),
+            None,
+        );
+        let actor = |pane: &str| Actor {
+            pane_id: pane.into(),
+            name: pane.into(),
+            kind: "codex".into(),
+            device_id: crate::node::TEST_NODE.into(),
+            session: session(pane),
+        };
+        let record = |id: &str, pane: &str, ended: bool| crate::coordination::AgentRecord {
+            id: id.into(),
+            name: Some(pane.into()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "fixture-scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: format!("{pane}-session"),
+            instance: format!("terminal-{pane}"),
+            pane: pane.into(),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: actor(pane),
+            ended,
+            terminal_id: None,
+            forked: false,
+        };
+        let mut ledger = Ledger {
+            agents: vec![
+                record("agent-1", "sender", false),
+                record("agent-2", "earlier", finished),
+            ],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        crate::coordination::room::tests::fill_with_briefs(&mut ledger, "agent-2", 100);
+        guard.publish_delivery(Arc::new(ledger), false);
+        actor("sender")
+    }
+
+    /// `lead` starts a spawn whose brief is as long as a brief may be.
+    fn reserve(lead: &Actor) -> Request {
+        Request {
+            effect: Effect::Agents {
+                authority: authority(lead),
+                actor: lead.clone(),
+                mutation: Box::new(crate::coordination::Mutation::Reserve {
+                    parent: "agent-1".into(),
+                    command: crate::coordination::room::tests::briefed("new-start"),
+                }),
+            },
+            reply: mpsc::sync_channel(1).0,
+        }
+    }
+
+    #[test]
+    fn a_spawn_past_the_file_limit_lands_by_dropping_the_oldest_finished_spawn_records() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        let lead = briefed_near_limit(&runtime, true);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let settled = settle(&runtime, &state, &upkeep(), &[reserve(&lead)], now());
+        assert_eq!(settled.results[0].as_ref().unwrap()["id"], "spawn-100000");
+        assert!(settled.made_room);
+        let (agents, spawns) = crate::coordination::dropped(&state, &settled.ledger);
+        assert!(agents.is_empty());
+        let spawns: Vec<&str> = spawns.iter().map(|spawn| spawn.id.as_str()).collect();
+        assert_eq!(spawns, ["spawn-3000", "spawn-3001"]);
+        let bytes = settled.bytes.unwrap().unwrap();
+        assert!(bytes.len() <= super::super::FILE_LIMIT);
+        assert_eq!(bytes, settled.ledger.bytes().unwrap());
+    }
+
+    #[test]
+    fn a_spawn_past_the_file_limit_is_refused_while_every_spawn_record_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        // agent-2 runs, so none of its spawn records has finished.
+        let lead = briefed_near_limit(&runtime, false);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let settled = settle(&runtime, &state, &upkeep(), &[reserve(&lead)], now());
+        assert_eq!(settled.results[0], Err("capacity".into()));
+        assert_eq!(settled.ledger, *state);
+        assert!(settled.bytes.is_none());
     }
 
     /// The intent and letter id each request at `indexes` was answered.
