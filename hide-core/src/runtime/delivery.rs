@@ -833,10 +833,9 @@ impl Runtime {
                     .is_some_and(|observation| {
                         !observation.actor.same_identity(&record.actor)
                             && observation.actor.session.is_some()
-                            && record
-                                .terminal_id
-                                .as_ref()
-                                .is_none_or(|terminal| observation.terminal_id.as_ref() == Some(terminal))
+                            && record.terminal_id.as_ref().is_none_or(|terminal| {
+                                observation.terminal_id.as_ref() == Some(terminal)
+                            })
                     })
             })
             .map(|record| {
@@ -2120,10 +2119,12 @@ impl Runtime {
         // A new letter names the registrations it is between, so its
         // parties are registered first when they have none (B3).
         let registers = match (&command, self.delivery_ledger.as_ref(), &target) {
-            (Command::Send { .. }, Ok(ledger), Some(target)) if !repeated => [&actor, &target.actor]
-                .into_iter()
-                .filter_map(|party| self.party_registration(ledger, party))
-                .collect(),
+            (Command::Send { .. }, Ok(ledger), Some(target)) if !repeated => {
+                [&actor, &target.actor]
+                    .into_iter()
+                    .filter_map(|party| self.party_registration(ledger, party))
+                    .collect()
+            }
             _ => Vec::new(),
         };
         let prepared = Prepared::new(

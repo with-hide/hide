@@ -476,17 +476,14 @@ pub fn apply_in(
             }
             // The answer goes to the agent that runs in its sender's place
             // now; a sender with no agent after it gets it as no recipient.
-            let line = original
+            let (recipient, ended) = match original
                 .from
                 .as_deref()
                 .and_then(|from| crate::coordination::live_successor(ledger, from))
-                .map(|line| match line {
-                    Ok(record) => Ok(record.actor.clone()),
-                    Err(record) => Err((record.id.clone(), record.actor.clone())),
-                });
-            let recipient = match &line {
-                Some(Ok(actor) | Err((_, actor))) => actor.clone(),
-                None => original.sender.clone(),
+            {
+                Some(Ok(record)) => (record.actor.clone(), None),
+                Some(Err(record)) => (record.actor.clone(), Some(record.id.clone())),
+                None => (original.sender.clone(), None),
             };
             let mut reply = send(
                 ledger,
@@ -498,8 +495,8 @@ pub fn apply_in(
                 Some(id.clone()),
                 now,
             )?;
-            if let Some(Err((ended, actor))) = line {
-                ledger.end_letters_to(&ended, &actor, now);
+            if let Some(ended) = ended {
+                ledger.end_letters_to(&ended, &recipient, now);
                 if let Some(stored) = ledger.letters.iter().find(|stored| stored.id == reply.id) {
                     reply = stored.clone();
                 }
@@ -1658,11 +1655,26 @@ mod tests {
         let other = apply(&mut ledger, &b, None, &reply_command(&second.id, "done"), 5).unwrap();
         assert_ne!(other["id"], reply["id"]);
         let state = |id: &serde_json::Value| {
-            let letter = ledger.letters.iter().find(|letter| letter.id == *id).unwrap();
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == *id)
+                .unwrap();
             (letter.state, letter.waiting_answer)
         };
-        assert_eq!(state(&reply["id"]), (State::Pending, false), "the first reply stays");
-        assert!(!ledger.letters.iter().find(|l| l.id == second.id).unwrap().waiting_answer);
+        assert_eq!(
+            state(&reply["id"]),
+            (State::Pending, false),
+            "the first reply stays"
+        );
+        assert!(
+            !ledger
+                .letters
+                .iter()
+                .find(|l| l.id == second.id)
+                .unwrap()
+                .waiting_answer
+        );
         assert_eq!(ledger.letters.len(), 4);
     }
 
@@ -1718,7 +1730,12 @@ mod tests {
         let applied = apply(&mut ledger, &a, Some(&c), &command, 4).unwrap();
         assert_eq!(applied["id"], elsewhere.id.as_str(), "a retry to c");
         assert_eq!(ledger.letters.len(), 2);
-        assert!(ledger.letters.iter().all(|letter| letter.state == State::Pending));
+        assert!(
+            ledger
+                .letters
+                .iter()
+                .all(|letter| letter.state == State::Pending)
+        );
     }
 
     /// B5: another body under the same intent to the same agent is a new
@@ -1731,11 +1748,21 @@ mod tests {
         let mut ledger = Ledger::default();
         let (a, b) = (actor("a"), actor("b"));
         let first = send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 1).unwrap();
-        let newer = apply(&mut ledger, &a, Some(&b), &send_command("once", "progress", "2/2"), 2)
-            .unwrap();
+        let newer = apply(
+            &mut ledger,
+            &a,
+            Some(&b),
+            &send_command("once", "progress", "2/2"),
+            2,
+        )
+        .unwrap();
         assert_ne!(newer["id"], first.id.as_str());
         let state = |ledger: &Ledger, id: &str| {
-            let letter = ledger.letters.iter().find(|letter| letter.id == id).unwrap();
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap();
             (letter.state, letter.finished_at_unix_ms)
         };
         assert_eq!(state(&ledger, &first.id), (State::Superseded, Some(2)));
@@ -1743,19 +1770,35 @@ mod tests {
         assert_eq!(state(&ledger, &id), (State::Pending, None));
         // The same body again, with or without a target, is the newer one.
         for target in [Some(&b), None] {
-            let again = apply(&mut ledger, &a, target, &send_command("once", "progress", "2/2"), 3)
-                .unwrap();
+            let again = apply(
+                &mut ledger,
+                &a,
+                target,
+                &send_command("once", "progress", "2/2"),
+                3,
+            )
+            .unwrap();
             assert_eq!(again["id"], id.as_str());
         }
         // Another body with no target is refused before anything is kept:
         // a new version needs its recipient.
         assert_eq!(
-            apply(&mut ledger, &a, None, &send_command("once", "progress", "3/3"), 4),
+            apply(
+                &mut ledger,
+                &a,
+                None,
+                &send_command("once", "progress", "3/3"),
+                4
+            ),
             Err("target_unavailable".into())
         );
         // Delivered, it is not replaced; another kind stands beside it.
-        ledger.letters.iter_mut().find(|letter| letter.id == id).unwrap().state =
-            State::Delivered;
+        ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == id)
+            .unwrap()
+            .state = State::Delivered;
         let third = send(&mut ledger, &a, &b, "once", "3/3", "progress", None, 5).unwrap();
         assert_eq!(state(&ledger, &id).0, State::Delivered);
         let asked = send(&mut ledger, &a, &b, "once", "3/3", "request", None, 6).unwrap();
@@ -1831,9 +1874,7 @@ mod tests {
 
     /// The doorbell typing `line` for the letter at `index`.
     fn ring(ledger: &mut Ledger, index: usize, line: &str) {
-        ledger.letters[index]
-            .reserve_bell(line.into())
-            .unwrap();
+        ledger.letters[index].reserve_bell(line.into()).unwrap();
     }
 
     #[test]
@@ -3614,7 +3655,11 @@ mod tests {
         for (id, state, ended) in [
             (&answered.id, State::Delivered, None),
             (&cancelled.id, State::Cancelled, None),
-            (&unreceived.id, State::Pending, Some(AnswerWaitEnd::Deadline)),
+            (
+                &unreceived.id,
+                State::Pending,
+                Some(AnswerWaitEnd::Deadline),
+            ),
         ] {
             let letter = letter_of(&ledger, id);
             assert_eq!(letter.state, state);

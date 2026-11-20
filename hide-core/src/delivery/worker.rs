@@ -2579,22 +2579,36 @@ mod tests {
         };
         watch::start(&mut ledger, &tool, &target, 1).unwrap();
         assert!(
-            !upkeep().apply(&mut ledger, 2, &crate::coordination::Held::default()).tools,
+            !upkeep()
+                .apply(&mut ledger, 2, &crate::coordination::Held::default())
+                .tools,
             "the list is not restored yet"
         );
         let held = Upkeep {
             tools: Some(vec!["00000000000000a1".into()]),
             ..upkeep()
         };
-        assert!(!held.apply(&mut ledger, 3, &crate::coordination::Held::default()).tools);
+        assert!(
+            !held
+                .apply(&mut ledger, 3, &crate::coordination::Held::default())
+                .tools
+        );
         assert_eq!(ledger.watches.len(), 1);
         let gone = Upkeep {
             tools: Some(Vec::new()),
             ..upkeep()
         };
-        assert!(gone.apply(&mut ledger, 4, &crate::coordination::Held::default()).tools);
+        assert!(
+            gone.apply(&mut ledger, 4, &crate::coordination::Held::default())
+                .tools
+        );
         assert!(ledger.watches.is_empty());
-        assert!(!gone.apply(&mut ledger, 5, &crate::coordination::Held::default()).tools, "nothing left to end");
+        assert!(
+            !gone
+                .apply(&mut ledger, 5, &crate::coordination::Held::default())
+                .tools,
+            "nothing left to end"
+        );
     }
 
     #[test]

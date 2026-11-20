@@ -461,8 +461,14 @@ fn a_reused_letter_intent_is_a_retry_a_new_version_or_a_letter_of_its_own() {
     assert_eq!(superseded["body"], "1/2");
     assert_eq!(superseded["state"], "superseded");
     for (reader, letter) in [("neighbor", &elsewhere), ("worker", &asked)] {
-        assert_eq!(mission.show(reader, &id(letter)).unwrap()["state"], "pending");
+        assert_eq!(
+            mission.show(reader, &id(letter)).unwrap()["state"],
+            "pending"
+        );
     }
     // The newer body again is the newer letter.
-    assert_eq!(send("worker", "progress", "2/2").unwrap()["id"], newer["id"]);
+    assert_eq!(
+        send("worker", "progress", "2/2").unwrap()["id"],
+        newer["id"]
+    );
 }

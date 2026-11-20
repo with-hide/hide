@@ -3253,8 +3253,10 @@ fn successor_of(
     let id = room::for_agent(ledger, holds)
         .and_then(|()| allocate(ledger, "agent"))
         .inspect_err(|code| {
-            crate::diagnostic!(json!({"component":"coordination","kind":"agent.succession_refused",
-                "agent_id":old.id,"pane_id":old.pane,"code":code}));
+            crate::diagnostic!(
+                json!({"component":"coordination","kind":"agent.succession_refused",
+                "agent_id":old.id,"pane_id":old.pane,"code":code})
+            );
         })
         .ok();
     let Some(id) = id else {
@@ -6498,7 +6500,11 @@ mod tests {
     }
 
     fn letter_of<'a>(ledger: &'a Ledger, id: &str) -> &'a crate::delivery::ledger::Letter {
-        ledger.letters.iter().find(|letter| letter.id == id).unwrap()
+        ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == id)
+            .unwrap()
     }
 
     /// B1, B2: a new conversation in a pane takes the registration there
@@ -6578,10 +6584,8 @@ mod tests {
         let mut elsewhere = record("p9", "second-conversation", None);
         elsewhere.machine = "local".into();
         for successor in [elsewhere, record("p1", "first-conversation", None)] {
-            let successions = std::collections::BTreeMap::from([(
-                parent.id.clone(),
-                Succession { successor },
-            )]);
+            let successions =
+                std::collections::BTreeMap::from([(parent.id.clone(), Succession { successor })]);
             assert!(succeed(&mut ledger, &successions, 5, &Held::default()).is_empty());
             assert_eq!(ledger, before);
         }
@@ -6714,10 +6718,8 @@ mod tests {
         let letter = ledger.letters.iter_mut().find(|l| l.id == id).unwrap();
         letter.bell_attempts = Some(3);
         letter.bell_ended = Some(3);
-        let rebinds = std::collections::BTreeMap::from([(
-            parent.id.clone(),
-            woken(&parent.actor, "woken"),
-        )]);
+        let rebinds =
+            std::collections::BTreeMap::from([(parent.id.clone(), woken(&parent.actor, "woken"))]);
         assert_eq!(rebind(&mut ledger, &rebinds).len(), 1);
         let letter = letter_of(&ledger, &id);
         assert_eq!(letter.attempts(), 0);
@@ -6730,7 +6732,10 @@ mod tests {
     #[test]
     fn a_letter_registers_its_unregistered_parties_once() {
         let mut ledger = Ledger::default();
-        let (a, b) = (record("a1", "a-session", None), record("b1", "b-session", None));
+        let (a, b) = (
+            record("a1", "a-session", None),
+            record("b1", "b-session", None),
+        );
         for (intent, body) in [("one", "first"), ("two", "second")] {
             for party in [&a, &b] {
                 register_party(&mut ledger, party, &Held::default()).unwrap();

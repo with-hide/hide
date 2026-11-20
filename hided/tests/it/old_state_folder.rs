@@ -101,7 +101,8 @@ async fn imported(state: &Path) -> Value {
     loop {
         let text = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(
-            !text.contains("\"ledger.store_refused\"") && !text.contains("\"ledger.import_refused\""),
+            !text.contains("\"ledger.store_refused\"")
+                && !text.contains("\"ledger.import_refused\""),
             "the daemon could not read its ledger: {text}"
         );
         if let Some(row) = text
@@ -109,10 +110,16 @@ async fn imported(state: &Path) -> Value {
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .find(|row| row["kind"] == "ledger.imported")
         {
-            assert!(!text.contains(BODY), "the log never carries a letter's text");
+            assert!(
+                !text.contains(BODY),
+                "the log never carries a letter's text"
+            );
             return row;
         }
-        assert!(Instant::now() < deadline, "no ledger.imported record: {text}");
+        assert!(
+            Instant::now() < deadline,
+            "no ledger.imported record: {text}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }

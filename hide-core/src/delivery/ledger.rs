@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use super::watch::Watch;
 use super::{
-    ANSWER_WAIT_MS, Actor, BODY_LIMIT, FILE_LIMIT, LETTER_LIMIT, OPEN_LIMIT,
-    RETENTION_MS, WATCH_LIMIT,
+    ANSWER_WAIT_MS, Actor, BODY_LIMIT, FILE_LIMIT, LETTER_LIMIT, OPEN_LIMIT, RETENTION_MS,
+    WATCH_LIMIT,
 };
 
 /// The bells one letter has: the doorbell types it at most this many
@@ -528,7 +528,10 @@ impl Ledger {
                 || !super::valid_key(&letter.intent)
                 || !letter.sender.valid()
                 || !letter.recipient.valid()
-                || letter.from.as_deref().is_some_and(|id| !super::valid_key(id))
+                || letter
+                    .from
+                    .as_deref()
+                    .is_some_and(|id| !super::valid_key(id))
                 || letter.to.as_deref().is_some_and(|id| !super::valid_key(id))
                 || !matches!(
                     letter.kind.as_str(),
@@ -542,7 +545,9 @@ impl Ledger {
                         || !hide_agent_hooks::delivery::valid_prompt_digest(&turn.digest)
                         || letter.recipient.session.as_ref() != Some(&turn.session)
                 })
-                || letter.bell_attempts.is_some_and(|attempts| attempts > BELLS)
+                || letter
+                    .bell_attempts
+                    .is_some_and(|attempts| attempts > BELLS)
                 || letter
                     .bell_ended
                     .is_some_and(|ended| ended > letter.attempts())
@@ -641,7 +646,11 @@ impl Ledger {
     /// (`Letter::recipient_ended`). A pending letter to Hide's own role or
     /// the operator keeps waiting. Run once, by the store that reads a ledger
     /// an earlier build wrote (`store::upgrade`).
-    pub(crate) fn address_letters(&mut self, notice: impl Fn(&Actor) -> bool, now: u64) -> Addressed {
+    pub(crate) fn address_letters(
+        &mut self,
+        notice: impl Fn(&Actor) -> bool,
+        now: u64,
+    ) -> Addressed {
         let mut addressed = Addressed::default();
         let agents = &self.agents;
         // The registration `actor` ran as: its live one, else its last.
@@ -649,7 +658,12 @@ impl Ledger {
             agents
                 .iter()
                 .find(|record| !record.ended && record.actor.same_identity(actor))
-                .or_else(|| agents.iter().rev().find(|record| record.actor.same_identity(actor)))
+                .or_else(|| {
+                    agents
+                        .iter()
+                        .rev()
+                        .find(|record| record.actor.same_identity(actor))
+                })
         };
         for letter in &mut self.letters {
             if letter.from.is_none() {
@@ -665,7 +679,9 @@ impl Ledger {
             if notice(&letter.sender) {
                 letter.end(State::Expired, now);
                 addressed.expired += 1;
-            } else if !letter.recipient.code_owned() && !recipient.is_some_and(|record| !record.ended) {
+            } else if !letter.recipient.code_owned()
+                && !recipient.is_some_and(|record| !record.ended)
+            {
                 letter.recipient_ended(now);
                 addressed.no_recipient += 1;
             }
@@ -1019,9 +1035,7 @@ mod tests {
             for attempt in 1..=3 {
                 let line = format!("🦉 sender 보고: 시도 {attempt}");
                 assert_eq!(
-                    ledger.letters[0]
-                        .reserve_bell(line.clone())
-                        .unwrap(),
+                    ledger.letters[0].reserve_bell(line.clone()).unwrap(),
                     attempt
                 );
                 save(&path, &ledger).unwrap();

@@ -1069,10 +1069,8 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
         session: Some(format!("{name}-session")),
     };
     let (parent, target) = (actor("lead", "local"), actor("worker", "mini"));
-    let activity = now
-        - hide_core::delivery::INACTIVITY_MS
-        - hide_core::delivery::SECOND_WARNING_MS
-        - 60_000;
+    let activity =
+        now - hide_core::delivery::INACTIVITY_MS - hide_core::delivery::SECOND_WARNING_MS - 60_000;
     let mut ledger = hide_core::delivery::ledger::Ledger::default();
     let watch = hide_core::delivery::watch::start(&mut ledger, &parent, &target, activity).unwrap();
     hide_core::delivery::watch::tick(
@@ -1094,7 +1092,10 @@ async fn an_operator_notice_reaches_an_app_phone_through_the_relay() {
     )
     .unwrap();
     let warning = ledger.letters[0].body.clone();
-    private("delivery-ledger.json", serde_json::to_value(&ledger).unwrap());
+    private(
+        "delivery-ledger.json",
+        serde_json::to_value(&ledger).unwrap(),
+    );
     private(
         "mobile.json",
         json!({"enabled": true, "method": "relay", "push_mode": "always"}),

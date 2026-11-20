@@ -908,12 +908,14 @@ mod tests {
                 "ended": ended, "forked": false,
             })
         };
-        let mut ledger = Ledger::default();
-        ledger.agents = vec![
-            serde_json::from_value(agent("agent-1", "w1:p2", false)).unwrap(),
-            serde_json::from_value(agent("agent-2", "w1:p3", true)).unwrap(),
-        ];
-        ledger.next_id = 3;
+        let mut ledger = Ledger {
+            agents: vec![
+                serde_json::from_value(agent("agent-1", "w1:p2", false)).unwrap(),
+                serde_json::from_value(agent("agent-2", "w1:p3", true)).unwrap(),
+            ],
+            next_id: 3,
+            ..Ledger::default()
+        };
         let to = |pane: &str| {
             let mut actor = actor(pane);
             actor.session = session(&format!("{pane}-native"));
@@ -926,10 +928,20 @@ mod tests {
         };
         let agent_letter = sent(&mut ledger, &actor("w1:p1"), &to("w1:p2"), "live");
         let to_ended = sent(&mut ledger, &actor("w1:p1"), &to("w1:p3"), "ended");
-        let notice = sent(&mut ledger, &Actor::hide("wake", "node"), &to("w1:p2"), "wake");
+        let notice = sent(
+            &mut ledger,
+            &Actor::hide("wake", "node"),
+            &to("w1:p2"),
+            "wake",
+        );
         let unregistered = sent(&mut ledger, &actor("w1:p1"), &actor("w1:p4"), "none");
         let left = sent(&mut ledger, &actor("w1:p1"), &to("w1:p2"), "left");
-        let work = sent(&mut ledger, &Actor::hide("desk", "node"), &to("w1:p2"), "work");
+        let work = sent(
+            &mut ledger,
+            &Actor::hide("desk", "node"),
+            &to("w1:p2"),
+            "work",
+        );
         // The file as the build before this one wrote it.
         hide_platform::fs::private::create_new_file(&path).unwrap();
         let mut connection = Connection::open(&path).unwrap();
@@ -991,12 +1003,19 @@ mod tests {
             assert_eq!(of(id).from, None, "{id}: no registration sent it");
         }
         for id in [&to_ended, &notice, &unregistered] {
-            assert!(!of(id).open() && of(id).finished_at_unix_ms.is_some(), "{id}");
+            assert!(
+                !of(id).open() && of(id).finished_at_unix_ms.is_some(),
+                "{id}"
+            );
         }
-        assert!(records.iter().any(|record| record["kind"] == "ledger.upgraded"
-            && record["imported"] == false
-            && record["no_recipient"] == 2
-            && record["expired"] == 1));
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "ledger.upgraded"
+                    && record["imported"] == false
+                    && record["no_recipient"] == 2
+                    && record["expired"] == 1)
+        );
         let connection = Connection::open(&path).unwrap();
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -1062,7 +1081,10 @@ mod tests {
             .unwrap()
             .map(|body| serde_json::from_str(&body.unwrap()).unwrap())
             .collect();
-        let spelled: Vec<&str> = rows.iter().map(|row| row["state"].as_str().unwrap()).collect();
+        let spelled: Vec<&str> = rows
+            .iter()
+            .map(|row| row["state"].as_str().unwrap())
+            .collect();
         assert_eq!(
             spelled,
             [

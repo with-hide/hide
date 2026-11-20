@@ -868,19 +868,34 @@ fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
     }
     // The store's next batch hands the registration over.
     client
-        .submit(crate::delivery::worker::Effect::HumanClaim, Duration::from_secs(10))
+        .submit(
+            crate::delivery::worker::Effect::HumanClaim,
+            Duration::from_secs(10),
+        )
         .unwrap();
     let runtime = fixture.runtime.lock().unwrap();
     let ledger = runtime.delivery_state().unwrap();
-    let old = ledger.agents.iter().find(|record| record.id == former).unwrap();
+    let old = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == former)
+        .unwrap();
     let successor = old.successor.clone().expect("taken over");
     assert!(old.ended);
-    let next = ledger.agents.iter().find(|record| record.id == successor).unwrap();
+    let next = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == successor)
+        .unwrap();
     assert_eq!(
         next.actor.session,
         crate::engine::tokens::session_digest("next-session")
     );
-    let child = ledger.agents.iter().find(|record| record.id == worker).unwrap();
+    let child = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == worker)
+        .unwrap();
     assert_eq!(child.parent.as_ref(), Some(&successor));
     let mission = &runtime.missions.book.missions[0];
     assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
@@ -11529,9 +11544,7 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     );
 
     let unreachable = conductor_letter(&mut runtime, 3 * MINUTE);
-    runtime
-        .delivery_holds
-        .insert(unreachable, Hold::Absent);
+    runtime.delivery_holds.insert(unreachable, Hold::Absent);
     assert_eq!(
         held(&runtime),
         Some((1, HeldFor::Draft)),

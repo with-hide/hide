@@ -10824,10 +10824,7 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_answer_failure", &failures);
             checked.insert("mission_answer_failure");
             use crate::delivery::held::HeldFor;
-            let held = [
-                HeldFor::Approval,
-                HeldFor::Draft,
-            ];
+            let held = [HeldFor::Approval, HeldFor::Draft];
             for variant in held {
                 match variant {
                     HeldFor::Approval | HeldFor::Draft => {}

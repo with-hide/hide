@@ -1135,7 +1135,10 @@ mod tests {
         // there are Hide's to settle, never the operator's (B14).
         for hold in [Hold::Exhausted, Hold::Absent, Hold::Session] {
             let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert!(of(&child, Some(&ledger), &holds, LATER).is_none(), "{hold:?}");
+            assert!(
+                of(&child, Some(&ledger), &holds, LATER).is_none(),
+                "{hold:?}"
+            );
         }
         // A letter that ended with no recipient raises nothing (B7).
         ledger.letters[0].state = State::NoRecipient;

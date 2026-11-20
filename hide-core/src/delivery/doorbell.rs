@@ -4010,7 +4010,7 @@ mod tests {
         passes_after_the_turn(&bell, &mut doorbell, judged);
         until(|| !told(&bell).is_empty());
         let unconfirmed = format!("input-unconfirmed:{}:3", bell.letter);
-        assert_eq!(told(&bell), [unconfirmed.clone()]);
+        assert_eq!(told(&bell), std::slice::from_ref(&unconfirmed));
         passes_after_the_turn(&bell, &mut doorbell, judged + RETRY_LIMIT_MS);
         assert_eq!(told(&bell), [unconfirmed], "one letter for its last bell");
         assert_eq!(letter().state, State::Pending);
