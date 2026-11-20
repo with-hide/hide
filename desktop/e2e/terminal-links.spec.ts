@@ -85,10 +85,10 @@ async function metaClick(page: Page, point: { x: number; y: number }): Promise<v
 }
 
 /**
- * Shows the files tool, so the lane is up over Agent Views (PRD
- * lane-desk-pair-view B16): it resizes no terminal, and past the first open,
- * which brings the documents beside the Explorer, a link that opens a file or
- * page moves nothing and the printed rows stay where the probe reads them.
+ * Shows the files tool, floating over Agent Views, which resizes no terminal;
+ * the first link pressed is a press outside it, which closes it, and what the
+ * link opens stands beside the panes (PRD lane-desk-pair-view D-50). The
+ * probe reads each link's place again after that.
  */
 async function showFiles(page: Page): Promise<void> {
   await showExplorer(page);
@@ -184,14 +184,15 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   );
 
   // A URL opens as a browser display in the Workspace, and the program hears
-  // no click. It opens in the viewing column beside the Explorer, which stays
-  // in its column (PRD lane-two-columns B5, B7).
+  // no click. The press closes the floating Explorer and the page's desk
+  // stands beside the panes (PRD lane-two-columns B5, B7; D-50).
   const clicksBefore = sent.get("terminal_mouse.press") ?? 0;
   let point = await pointOf(page, paneId, `${origin}/a.html`, { offset: 4 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
   await expect(viewTab(page, "Page A")).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
+  await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
   expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
   expect(dialogs).toEqual([]);

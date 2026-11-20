@@ -1558,7 +1558,7 @@ test("the rail, tools, kind marks and an open while the lane is closed keep work
     const row = page.locator(`[data-palette-row="${stack.root}/c.txt"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
     await row.click();
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => shape(page)).toBe("(a.txt >a.txt) | @(b.txt >c.txt*)");
     await expect(area(page, 1)).toHaveAttribute("data-active-area", "true");
     expect(laneSent()).toBe(sentBefore);
