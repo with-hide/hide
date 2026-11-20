@@ -9,7 +9,7 @@ import { McpFields } from "./StoreDialogs";
 
 // MCP 추가's fields keep the command and each argument as the paste parser
 // read them: Next hands on the same words, and an argument with a space in
-// it stays one argument (review F3 of PR #2743).
+// it stays one argument.
 afterEach(() => {
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
