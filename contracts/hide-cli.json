@@ -5153,6 +5153,7 @@
             ],
             "arguments": [],
             "command": "device share",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5235,6 +5236,7 @@
             ],
             "arguments": [],
             "command": "device allow",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5262,6 +5264,7 @@
                 }
             ],
             "command": "device pause",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5321,6 +5324,7 @@
                 }
             ],
             "command": "device resume",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5444,6 +5448,7 @@
                 }
             ],
             "command": "device request",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5476,6 +5481,7 @@
                 }
             ],
             "command": "device update",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5512,6 +5518,7 @@
                 }
             ],
             "command": "device address",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5579,6 +5586,7 @@
                 }
             ],
             "command": "device switch",
+            "hidden": true,
             "options": [
                 {
                     "name": "--install",
@@ -5625,6 +5633,7 @@
             ],
             "arguments": [],
             "command": "device look-ssh",
+            "hidden": true,
             "options": [],
             "refusals": [
                 "hide_unavailable",
@@ -5637,6 +5646,7 @@
             "answers": [],
             "arguments": [],
             "command": "device carry",
+            "hidden": true,
             "options": [],
             "refusals": [
                 "device_from_pane",
@@ -5653,6 +5663,7 @@
             ],
             "arguments": [],
             "command": "device accept-ssh",
+            "hidden": true,
             "options": [
                 {
                     "name": "--request",
@@ -5716,6 +5727,7 @@
             ],
             "arguments": [],
             "command": "device projects-ssh",
+            "hidden": true,
             "needs_one_of": [
                 "--project"
             ],
@@ -7653,7 +7665,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:c621169ffae6880c58af4027ad27553baea51a6bebcedd2f0ec1684e8ce2601c",
+    "digest": "sha256:9cae0c01b4afb5e25d72e476109894df69ddbcb2fe28b3734bd98ffe8390cbad",
     "envelopes": {
         "access": {
             "answer": "value",

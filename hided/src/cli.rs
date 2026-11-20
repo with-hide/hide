@@ -206,7 +206,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
-        "device" => usage(crate::device_cli::USAGE),
+        "device" => usage(crate::device_cli::usage_here()),
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
@@ -248,7 +248,7 @@ fn help_text() -> String {
         crate::delivery_cli::USAGE,
         crate::agent_cli::USAGE,
         crate::ps_cli::USAGE,
-        crate::device_cli::USAGE,
+        crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
         crate::pane_cli::USAGE,
@@ -487,10 +487,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("device") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::usage_here())))?;
             crate::device_cli::parse(iter)
                 .map(CommandKind::Device)
-                .map_err(|reason| wrong(reason, crate::device_cli::USAGE))
+                .map_err(|reason| wrong(reason, crate::device_cli::usage_here()))
         }
         Some("access") => {
             crate::cli_contract::admit(&args[1..])
@@ -1020,7 +1020,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
         CommandKind::AlwaysOn(command) => {
-            crate::always_on::cli::run(&command, &env.home, &env.state_dir)
+            crate::always_on::cli::run(&command, &env.home, &env.state_dir, env.device_connect)
         }
         CommandKind::Restart { daemon, started } => restart(&env, daemon, started),
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
@@ -3889,11 +3889,11 @@ mod tests {
             (&["hide", "ps", "--help"][..], usage(crate::ps_cli::USAGE)),
             (
                 &["hide", "device", "-h"][..],
-                usage(crate::device_cli::USAGE),
+                usage(crate::device_cli::usage_here()),
             ),
             (
                 &["hide", "device", "add", "--help"][..],
-                usage(crate::device_cli::USAGE),
+                usage(crate::device_cli::usage_here()),
             ),
             (
                 &["hide", "request", "send", "--help"][..],
@@ -3919,7 +3919,7 @@ mod tests {
             parse(&["hide", "device"]).unwrap_err(),
             format!(
                 "hide device needs a subcommand\n{}",
-                usage(crate::device_cli::USAGE)
+                usage(crate::device_cli::usage_here())
             )
         );
         assert!(
