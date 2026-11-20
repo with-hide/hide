@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { agentPane } from "./agent-pane";
+import { chord } from "./chords";
 import { focusPane, focusTab, newTab, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
@@ -115,9 +116,9 @@ test("an Agent tab's desk holds what the operator put on it, whichever pane they
 
     // B30: ⌘E closes the lane and brings the desk back.
     await terminal(page, watched).click();
-    await page.keyboard.press("Meta+KeyE");
+    await page.keyboard.press(chord("toggle_lane"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
-    await page.keyboard.press("Meta+KeyE");
+    await page.keyboard.press(chord("toggle_lane"));
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(front(page)).toHaveAttribute("aria-label", /\/c\.md/);
 
@@ -163,7 +164,7 @@ test("a crowded desk reads its front tab whole and shrinks the others, and the r
     await screenshot(page, "lane-desk-crowded");
 
     // B30: ⌘E closes the lane; the rail's desk button brings the desk back with the keyboard on its front tab, and Escape there closes it.
-    await page.keyboard.press("Meta+KeyE");
+    await page.keyboard.press(chord("toggle_lane"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await deskButton(page).click();
     await expect(front(page)).toBeFocused();

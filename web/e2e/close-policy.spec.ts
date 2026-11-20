@@ -59,8 +59,11 @@ test("close follows the keyboard and the lane never renders an empty surface", a
     await page.keyboard.press(chord("close_tab"));
     await expect(panes).toHaveCount(2);
     await expect(editor).toBeVisible();
-    // Escape closes the overlay; a terminal then owns close.
+    // Escape closes the overlay, from outside the editor whose own Escape lets Tab leave it
+    // (PRD lane-desk-pair-view B30); a terminal then owns close.
     await editor.click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Tab");
     await page.keyboard.press("Escape");
     await expect(screen).toHaveAttribute("data-lane-mode", "closed");
     const [first, second] = engine.panes;
