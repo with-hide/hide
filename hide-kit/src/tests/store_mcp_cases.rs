@@ -282,6 +282,59 @@ fn an_empty_argument_reaches_every_agents_file_in_its_place() {
 }
 
 #[test]
+fn a_copy_a_take_over_would_bring_in_is_reported_with_its_own_server_and_no_key_value() {
+    let fixture = mcp_agents();
+    // omp holds its own server named github; claude-code holds one Hide
+    // does not manage at all.
+    write(
+        &path_of(&fixture, "omp"),
+        "{\n  \"mcpServers\": {\n    \"github\": {\n      \"command\": \"docker\",\n      \"args\": [\"run\", \"-i\", \"ghcr.io/github/github-mcp-server\"],\n      \"env\": {\"GITHUB_TOKEN\": \"ghp_theirs\"}\n    }\n  }\n}\n",
+    );
+    write(
+        &path_of(&fixture, "claude-code"),
+        "{\n  \"mcpServers\": {\n    \"files\": {\n      \"command\": \"node\",\n      \"args\": [\"server.js\", \"--stdio\"],\n      \"env\": {\"FILES_TOKEN\": \"files-value-planted\"}\n    }\n  }\n}\n",
+    );
+
+    let report = add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+
+    let omp = report
+        .items
+        .iter()
+        .find(|item| item.id == "mcp:github")
+        .and_then(|item| item.cells.iter().find(|cell| cell.column == "omp"))
+        .unwrap();
+    assert_eq!(omp.state, CellState::HandWritten);
+    assert_eq!(
+        omp.server.as_ref().map(|server| &server.reach),
+        Some(&Reach::Local {
+            command: "docker".to_owned(),
+            args: ["run", "-i", "ghcr.io/github/github-mcp-server"]
+                .map(str::to_owned)
+                .to_vec(),
+            env: vec!["GITHUB_TOKEN".to_owned()],
+        }),
+        "the cell shows omp's own server, not Hide's"
+    );
+    let files = report
+        .unmanaged
+        .iter()
+        .find(|found| found.name == "files")
+        .unwrap();
+    assert_eq!(
+        files.copies[0].server.as_ref().map(|server| &server.reach),
+        Some(&Reach::Local {
+            command: "node".to_owned(),
+            args: ["server.js", "--stdio"].map(str::to_owned).to_vec(),
+            env: vec!["FILES_TOKEN".to_owned()],
+        })
+    );
+    let wire = serde_json::to_string(&report).unwrap();
+    for value in ["ghp_theirs", "files-value-planted", KEY] {
+        assert!(!wire.contains(value), "the report carries {value}");
+    }
+}
+
+#[test]
 fn an_agent_that_takes_no_sse_server_reads_unsupported_and_gets_nothing() {
     let fixture = mcp_agents();
     let asana = Server {

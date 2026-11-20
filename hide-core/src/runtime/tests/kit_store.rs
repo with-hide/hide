@@ -41,6 +41,7 @@ pub(super) fn store_report(
         changed_at_unix_ms,
         place: None,
         path: None,
+        server: None,
     };
     StoreReport {
         columns: [(

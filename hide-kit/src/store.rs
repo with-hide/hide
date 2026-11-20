@@ -793,6 +793,10 @@ pub struct Cell {
     /// screen to name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// A hand-written MCP cell's server as the agent's own file at `place`
+    /// holds it, key-less: what taking it over brings in (B20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<Server>,
 }
 
 /// One item's row.
@@ -850,6 +854,10 @@ pub struct FoundCopy {
     /// folder's other entries are listed as ever (B19).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// An MCP copy's server as this place holds it, key-less: what taking
+    /// it over brings in (B20). None for a skill or an unreadable copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<Server>,
 }
 
 /// An entry agents hold that Hide does not manage ('에이전트에만 있음', B19).
@@ -978,6 +986,10 @@ pub(crate) struct Entry {
     /// variables and headers); none for a kind without keys. A copy is an
     /// item, or the one Hide wrote, only when these agree too.
     pub(crate) keys: Option<mcp::KeyValues>,
+    /// An MCP server's own fields as the agent's file holds them, read with
+    /// the entry: the command and arguments or the address, and its keys'
+    /// names, never a value. None for a skill or an unreadable server.
+    pub(crate) server: Option<Server>,
 }
 
 /// One entry as a place's listing read it, or why it could not be read.
@@ -2310,8 +2322,9 @@ enum Held {
     Current,
     /// Hide's copy of an earlier content of the item.
     Older,
-    /// The operator's, or Hide's edited by them.
-    Theirs,
+    /// The operator's, or Hide's edited by them, with an MCP server's own
+    /// fields as that copy holds them.
+    Theirs(Option<Server>),
 }
 
 /// Why a place could not be judged or changed, by item id and place key.
@@ -2417,7 +2430,7 @@ fn reconcile(
                     record_written(store, place, item, &digest, keys.clone());
                     Ok(false)
                 }
-                Held::Theirs => Ok(false),
+                Held::Theirs(_) => Ok(false),
             }
         } else if !want.kept {
             match held {
@@ -2427,7 +2440,7 @@ fn reconcile(
                 }),
                 // An edited copy is the operator's now, and the record lets
                 // it go.
-                Held::Missing | Held::Theirs => {
+                Held::Missing | Held::Theirs(_) => {
                     forget_written(store, &place.key, &item.name);
                     Ok(false)
                 }
@@ -2504,7 +2517,7 @@ fn judge(
         .filter(|written| written.item == item.id);
     Ok(match applier.entry(place, &item.name)? {
         None => Held::Missing,
-        Some(entry) if !ours(written, &entry, secret) => Held::Theirs,
+        Some(entry) if !ours(written, &entry, secret) => Held::Theirs(entry.server),
         Some(entry) if entry.digest == digest => Held::Current,
         Some(_) => Held::Older,
     })
@@ -2679,6 +2692,19 @@ fn item_report(
                 .filter(|(place, _)| place.governed_by(&column.id))
                 .collect();
             let judged = cell_state(ctx, item, applier, column, &mine);
+            // A hand-written cell carries the server its place holds, the
+            // one a take-over of that place brings in.
+            let theirs = match judged.state {
+                CellState::HandWritten => mine.iter().find_map(|(place, held)| match held {
+                    Ok(Held::Theirs(server))
+                        if judged.about.is_some_and(|about| about.key == place.key) =>
+                    {
+                        server.clone()
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            };
             let place = judged
                 .about
                 .or_else(|| mine.first().map(|(place, _)| *place));
@@ -2694,6 +2720,7 @@ fn item_report(
                     .get(&item.id)
                     .and_then(|changed| changed.get(&column.id))
                     .copied(),
+                server: theirs,
             }
         })
         .collect();
@@ -2811,7 +2838,7 @@ fn cell_state<'p>(
     }
     if let Some((place, _)) = places
         .iter()
-        .find(|(_, held)| matches!(held, Ok(Held::Theirs)))
+        .find(|(_, held)| matches!(held, Ok(Held::Theirs(_))))
     {
         return Judged::plain(
             CellState::HandWritten,
@@ -2888,7 +2915,7 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                 }
                 // One entry that cannot be read is listed with why, and the
                 // folder's others as ever.
-                let (digest, link, refused) = match read {
+                let (digest, link, refused, server) = match read {
                     Ok(entry) => {
                         sameness
                             .entry((*kind, name.clone()))
@@ -2898,9 +2925,10 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                             entry.digest,
                             entry.link.as_ref().map(|link| link.display().to_string()),
                             None,
+                            entry.server,
                         )
                     }
-                    Err(reason) => (String::new(), None, Some(reason)),
+                    Err(reason) => (String::new(), None, Some(reason), None),
                 };
                 found
                     .entry((*kind, name.clone()))
@@ -2913,6 +2941,7 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                         link,
                         digest,
                         refused,
+                        server,
                     });
             }
         }

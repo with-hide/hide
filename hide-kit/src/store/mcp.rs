@@ -265,12 +265,14 @@ fn entry_of(found: &mcp::Found) -> Entry {
             link: None,
             whole: found.whole,
             keys: Some(KeyValues::of(server, keys)),
+            server: Some(server.clone()),
         },
         None => Entry {
             digest: "unreadable".to_owned(),
             link: None,
             whole: false,
             keys: None,
+            server: None,
         },
     }
 }
