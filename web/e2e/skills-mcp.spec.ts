@@ -122,7 +122,10 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await page.locator("[data-store-add-input]").fill("npx -y @modelcontextprotocol/server-github");
     await page.locator("[data-store-add-next]").click();
     const fields = page.locator('[data-store-dialog="mcp"]');
-    await expect(fields.locator("[data-store-mcp-line]")).toHaveValue("npx -y @modelcontextprotocol/server-github", { timeout: 60_000 }); // wait-ok: the paste parser's read of the README
+    await expect(fields.locator("[data-store-mcp-command]")).toHaveValue("npx", { timeout: 60_000 }); // wait-ok: the paste parser's read of the README
+    await expect(fields.locator("[data-store-mcp-arg]")).toHaveCount(2);
+    await expect(fields.locator('[data-store-mcp-arg="0"]')).toHaveValue("-y");
+    await expect(fields.locator('[data-store-mcp-arg="1"]')).toHaveValue("@modelcontextprotocol/server-github");
     await fields.locator("[data-store-mcp-name]").fill("github");
     await fields.locator("[data-store-mcp-extra]").fill("GITHUB_TOKEN");
     await fields.getByRole("button", { name: "Add", exact: true }).click();

@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import { PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { Note } from "../components/settings-rows";
@@ -306,20 +307,26 @@ function KeyFields({ names, keys, onChange, kept = false }: { names: string[]; k
   );
 }
 
-/** MCP 추가: the paste read as a name, a kind, a command or an address, and its keys (scene 3, left). */
-function McpFields({ report, server, pasted, onClose, onNext }: { report: StoreReport; server: McpServer; pasted: McpPastedServer | null; onClose: () => void; onNext: (server: McpServer, keys: Record<string, string>) => void }) {
+/**
+ * MCP 추가: the paste read as a name, a kind, a command and its arguments or
+ * an address, and its keys (scene 3, left). The command and each argument
+ * are fields of their own, as the paste parser read them, so an argument
+ * with a space in it (a folder path, `C:\\Program Files`) stays one.
+ */
+export function McpFields({ report, server, pasted, onClose, onNext }: { report: StoreReport; server: McpServer; pasted: McpPastedServer | null; onClose: () => void; onNext: (server: McpServer, keys: Record<string, string>) => void }) {
   const { t } = useInterfaceTranslation();
   const [title, setTitle] = useState(server.name);
   const [reach, setReach] = useState<McpReach>(server.reach);
-  const [line, setLine] = useState(serverLine(server));
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState("");
   const names = keyNames({ name: title, reach });
   const taken = report.items.some((item) => item.kind === "mcp" && item.name === title.trim());
+  const args = reach.kind === "local" ? (reach.args ?? []) : [];
+  const setArgs = (next: string[]) => setReach((now) => (now.kind === "local" ? { ...now, args: next } : now));
+  const reached = reach.kind === "local" ? reach.command.trim() : reach.url.trim();
   const built = (): McpServer => {
-    if (reach.kind === "remote") return { name: title.trim(), reach: { ...reach, url: line.trim() } };
-    const [command = "", ...args] = line.trim().split(/\s+/);
-    return { name: title.trim(), reach: { ...reach, command, args } };
+    if (reach.kind === "remote") return { name: title.trim(), reach: { ...reach, url: reach.url.trim() } };
+    return { name: title.trim(), reach: { ...reach, command: reach.command.trim(), args: args.filter((arg) => arg !== "") } };
   };
   const addKey = () => {
     const key = extra.trim();
@@ -335,7 +342,7 @@ function McpFields({ report, server, pasted, onClose, onNext }: { report: StoreR
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button disabled={!title.trim() || !line.trim() || taken} onClick={() => onNext(built(), Object.fromEntries(Object.entries(keys).filter(([key, value]) => value && names.includes(key))))} data-store-mcp-next="true">
+          <Button disabled={!title.trim() || !reached || taken} onClick={() => onNext(built(), Object.fromEntries(Object.entries(keys).filter(([key, value]) => value && names.includes(key))))} data-store-mcp-next="true">
             {t("store.add.next")}
           </Button>
         </>
@@ -356,9 +363,35 @@ function McpFields({ report, server, pasted, onClose, onNext }: { report: StoreR
             </SelectContent>
           </Select>
         </Fact>
-        <Fact label={t(reach.kind === "local" ? "store.mcp.command" : "store.mcp.url")}>
-          <Input mono value={line} onChange={(event) => setLine(event.target.value)} aria-label={t(reach.kind === "local" ? "store.mcp.command" : "store.mcp.url")} data-store-mcp-line="true" />
-        </Fact>
+        {reach.kind === "local" ? (
+          <>
+            <Fact label={t("store.mcp.command")}>
+              <Input mono value={reach.command} onChange={(event) => setReach({ ...reach, command: event.target.value })} aria-label={t("store.mcp.command")} data-store-mcp-command="true" />
+            </Fact>
+            <Fact label={t("store.mcp.args")}>
+              <span className="flex flex-col gap-xs">
+                {args.map((arg, index) => (
+                  <span key={index} className="flex items-center gap-xs">
+                    <Input mono value={arg} onChange={(event) => setArgs(args.map((kept, at) => (at === index ? event.target.value : kept)))} aria-label={t("store.mcp.argNumbered", { n: index + 1 })} data-store-mcp-arg={index} />
+                    <Button variant="row-action" size="icon-xs" aria-label={t("store.mcp.removeArg", { n: index + 1 })} onClick={() => setArgs(args.filter((_, at) => at !== index))} data-store-mcp-arg-remove={index}>
+                      <XIcon aria-hidden="true" />
+                    </Button>
+                  </span>
+                ))}
+                <span>
+                  <Button variant="secondary" size="sm" onClick={() => setArgs([...args, ""])} data-store-mcp-arg-add="true">
+                    <PlusIcon aria-hidden="true" />
+                    {t("store.mcp.addArg")}
+                  </Button>
+                </span>
+              </span>
+            </Fact>
+          </>
+        ) : (
+          <Fact label={t("store.mcp.url")}>
+            <Input mono value={reach.url} onChange={(event) => setReach({ ...reach, url: event.target.value })} aria-label={t("store.mcp.url")} data-store-mcp-url="true" />
+          </Fact>
+        )}
         <Fact label={t(reach.kind === "local" ? "store.mcp.env" : "store.mcp.headers")}>
           <KeyFields names={names} keys={keys} onChange={setKeys} />
           <span className="mt-xs flex items-center gap-sm">

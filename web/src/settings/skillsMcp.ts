@@ -237,9 +237,13 @@ export function hostOf(url: string): string {
   }
 }
 
-/** An MCP server as one line: its command with its arguments, or its address. */
+/** An MCP server as one line to read: its command with its arguments, each with a space or a quote in it quoted, or its address. */
 export function serverLine(server: McpServer): string {
-  return server.reach.kind === "local" ? [server.reach.command, ...(server.reach.args ?? [])].join(" ") : server.reach.url;
+  return server.reach.kind === "local" ? [server.reach.command, ...(server.reach.args ?? [])].map(shownWord).join(" ") : server.reach.url;
+}
+
+function shownWord(word: string): string {
+  return word === "" || /[\s"']/.test(word) ? `"${word.replace(/(["\\])/g, "\\$1")}"` : word;
 }
 
 /** The names of an MCP server's keys: a local server's variables, a remote one's headers. */
