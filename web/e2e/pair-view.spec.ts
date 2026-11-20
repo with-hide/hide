@@ -341,6 +341,16 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await page.keyboard.press(chord("pair_view"));
     await expect(pairPane).toBeVisible();
     await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
+
+    // Off is off: on the usual screen, ⌘E opening the lane and a desk tab pressed keep the desk floating over the agents, with no pair view.
+    await page.keyboard.press(chord("pair_view"));
+    await expect(strip(page)).toHaveCount(0);
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await front(page).click();
+    await quietFor(page, 300, "a hidden pair view would have been drawn by now");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(strip(page)).toHaveCount(0);
   } finally {
     daemon?.stop();
     engine.stop();
