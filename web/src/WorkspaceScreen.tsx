@@ -84,14 +84,16 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const laneView = pair !== null ? "documents" : laneViewOf(view, hasViews);
   const front = view ? workspaceKey(view) : null;
   // A page's widening is drawn from the frame that asks for it until the
-  // core acknowledges that request, so a desk that stands for the page
+  // core acknowledges that request, or the stored width moves for any other
+  // reason (the operator's divider wins), so a desk that stands for the page
   // moves the panes once, not at its saved width and then again (D-50).
-  const [widening, setWidening] = useState<{ front: string; request: string; width: number } | null>(null);
+  const [widening, setWidening] = useState<{ front: string; request: string; from: number | null; width: number } | null>(null);
   const widened = widening !== null && widening.front === front ? widening.width : null;
   const echoed = view?.width_request_id ?? null;
+  const stored = view?.document_width ?? null;
   useLayoutEffect(() => {
-    if (widening !== null && (widening.front !== front || echoed === widening.request)) setWidening(null);
-  }, [widening, front, echoed]);
+    if (widening !== null && (widening.front !== front || echoed === widening.request || stored !== widening.from)) setWidening(null);
+  }, [widening, front, echoed, stored]);
   const input: LaneInput = {
     open: view?.open === true,
     view: laneView,
@@ -135,7 +137,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     if (actions.setWorkspaceView({ document_width: documentWidth, width_request_id: request }) === false) {
       useShellStore.getState().noteDiagnostic(`document_width: widening for a page refused (${documentWidth})`);
     } else {
-      setWidening({ front: pageWiden, request, width: documentWidth });
+      setWidening({ front: pageWiden, request, from: view?.document_width ?? null, width: documentWidth });
     }
   }, [pageWiden, front, width, expanded, drawnView, view?.document_width, beside, sizes, actions]);
   // The rail, the chords and the close shortcut read what is drawn.

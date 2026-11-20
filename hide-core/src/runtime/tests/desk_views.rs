@@ -2616,6 +2616,8 @@ fn a_shown_desk_with_no_view_floats_when_a_file_comes_beside_a_floating_tool() {
     let tab = runtime.front_tab(&key);
     let store = runtime.workspace_views.as_mut().unwrap();
     store.views.entry(&key.0, &key.1).tray_entry(&tab).shown = true;
+    // The operator's screen has the shown, empty desk: published, not drawn.
+    runtime.sync_workspace_view();
     open(&mut runtime, &checkout, &directory, "a.md");
     runtime.sync_workspace_view();
     assert!(lane_documents(&runtime), "the desk is drawn");

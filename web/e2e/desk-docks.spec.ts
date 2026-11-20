@@ -204,7 +204,7 @@ test("coming back to a Workspace whose desk stands fits each terminal to its nar
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => widths(stack)).toEqual(standing);
     await quietFor(page, 500, "every terminal's fit has landed");
-    // Each terminal attaches again with one fit at its narrowed width; a first grid at the whole body would add one each.
+    // Pins the count: each terminal attaches again with one fit at its narrowed width.
     expect(resizes(stack)).toBe(before + stack.fixture.panes.length);
   } finally {
     stack.daemon.stop();
