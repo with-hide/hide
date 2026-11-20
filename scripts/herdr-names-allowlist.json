@@ -44,7 +44,7 @@
     "docs/VERIFICATION.md": {"max": 6, "reason": "to-rewrite"},
     "docs/agent-hooks.md": {"max": 39, "reason": "to-rewrite"},
     "docs/delivery.md": {"max": 12, "reason": "measured"},
-    "docs/status-model.md": {"max": 5, "reason": "to-rewrite"},
+    "docs/status-model.md": {"max": 3, "reason": "to-rewrite"},
     "hide-agent-adapter/agents/amp.toml": {"max": 4, "reason": "attribution"},
     "hide-agent-adapter/agents/antigravity.toml": {"max": 4, "reason": "attribution"},
     "hide-agent-adapter/agents/claude-code.toml": {"max": 4, "reason": "attribution"},
