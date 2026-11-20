@@ -1067,10 +1067,11 @@ fn run(
                     guard.delivery_registrations_gone(),
                     guard.delivery_registration_rebinds(),
                     guard.delivery_successions(),
+                    guard.delivery_closed(),
                     guard.delivery_tool_connections(),
                 ))
             });
-        let (state, gone, rebinds, successions, tools) = match state {
+        let (state, gone, rebinds, successions, closed, tools) = match state {
             Ok(state) => state,
             Err(code) => {
                 for request in batch {
@@ -1088,6 +1089,7 @@ fn run(
             if gone.is_empty()
                 && rebinds.is_empty()
                 && successions.is_empty()
+                && !closed_letters_wait(&state, &closed)
                 && !tools
                     .as_deref()
                     .is_some_and(|tools| crate::coordination::tools_left_behind(&state, tools))
@@ -1103,6 +1105,7 @@ fn run(
             gone,
             rebinds,
             successions,
+            closed,
             tools,
         };
         let Settled {
@@ -1496,6 +1499,9 @@ struct Upkeep {
     /// The registrations whose pane now runs another agent, which takes
     /// their place (`coordination::succeed`).
     successions: std::collections::BTreeMap<String, crate::coordination::Succession>,
+    /// The agents closed through Hide that Reopen closed can bring back: the
+    /// letters waiting for them end (`Runtime::delivery_closed`).
+    closed: Vec<crate::agent_sleep::DormantRegistration>,
     /// The external tools' connections the core holds, by id, once its list
     /// is restored: what a tool not among them keeps ends
     /// (`coordination::end_gone_tools`).
@@ -1515,14 +1521,33 @@ struct Upkept {
     moved: Moved,
     succeeded: Succeeded,
     ended: Ended,
+    /// Whether it ended letters waiting for a closed agent.
+    closed: bool,
     /// Whether it ended what a gone tool kept, which the screens show.
     tools: bool,
 }
 
 impl Upkept {
     fn any(&self) -> bool {
-        self.tools || !self.moved.is_empty() || !self.succeeded.is_empty() || !self.ended.is_empty()
+        self.tools
+            || self.closed
+            || !self.moved.is_empty()
+            || !self.succeeded.is_empty()
+            || !self.ended.is_empty()
     }
+}
+
+/// Whether a letter still waits for one of the `closed` agents, which the
+/// store's next pass ends.
+fn closed_letters_wait(ledger: &Ledger, closed: &[crate::agent_sleep::DormantRegistration]) -> bool {
+    !closed.is_empty()
+        && ledger.letters.iter().any(|letter| {
+            letter.awaiting_intake()
+                && closed.iter().any(|agent| match &letter.to {
+                    Some(to) => *to == agent.id,
+                    None => letter.recipient.same_identity(&agent.actor),
+                })
+        })
 }
 
 impl Upkeep {
@@ -1539,6 +1564,10 @@ impl Upkeep {
         let moved = crate::coordination::rebind(ledger, &self.rebinds);
         let succeeded = crate::coordination::succeed(ledger, &self.successions, now, holds);
         let ended = crate::coordination::end_gone(ledger, &self.gone, now);
+        let mut closed = false;
+        for agent in &self.closed {
+            closed |= ledger.end_letters_to(&agent.id, &agent.actor, now);
+        }
         let tools = self
             .tools
             .as_deref()
@@ -1548,6 +1577,7 @@ impl Upkeep {
             moved,
             succeeded,
             ended,
+            closed,
             tools,
         }
     }
@@ -2559,6 +2589,7 @@ mod tests {
             gone: Default::default(),
             rebinds: Default::default(),
             successions: Default::default(),
+            closed: Default::default(),
             tools: None,
         }
     }

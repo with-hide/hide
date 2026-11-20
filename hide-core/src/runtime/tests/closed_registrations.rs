@@ -289,10 +289,13 @@ fn a_restart_ends_the_registration_of_an_agent_closed_before_it() {
     assert_eq!(runtime.delivery_registrations_gone().len(), 1);
 }
 
-/// A letter sent to the closed agent waits, and its reopen carries it to
-/// the new pane, as one to a sleeping agent waits for its wake.
+/// A letter waiting for an agent ends when its pane closes, and one sent
+/// to it while closed ends too, each with no recipient for its sender (PRD
+/// letters-missions-simplify B2, B7): a close can stay on the list for
+/// days. The reopen brings the same agent back, and the ended letters stay
+/// ended.
 #[test]
-fn a_letter_to_a_closed_agent_waits_and_follows_it_to_the_reopened_pane() {
+fn a_closed_agents_letters_end_with_no_recipient_and_its_reopen_keeps_them_ended() {
     let root = tempfile::tempdir().unwrap();
     let runtime =
         super::workspace_view::with_views_only(closed_agent(), &root.path().join("views.json"));
@@ -338,6 +341,31 @@ fn a_letter_to_a_closed_agent_waits_and_follows_it_to_the_reopened_pane() {
         assert_eq!(sent["state"], "pending", "{target}");
         assert_eq!(sent["recipient"]["pane_id"], PANE, "{target}");
     }
+    let pass = || {
+        client
+            .submit(
+                crate::delivery::worker::Effect::HumanClaim,
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap();
+    };
+    let sent = |runtime: &Runtime| {
+        let ledger = runtime.delivery_state().unwrap();
+        let mut sent = ledger
+            .letters
+            .iter()
+            .filter(|letter| letter.intent == "by-id" || letter.intent == "by-pane")
+            .map(|letter| (letter.intent.clone(), letter.state))
+            .collect::<Vec<_>>();
+        sent.sort_by(|left, right| left.0.cmp(&right.0));
+        sent
+    };
+    let no_recipient = vec![
+        ("by-id".to_owned(), crate::delivery::ledger::State::NoRecipient),
+        ("by-pane".to_owned(), crate::delivery::ledger::State::NoRecipient),
+    ];
+    pass();
+    assert_eq!(sent(&shared.lock().unwrap()), no_recipient);
 
     let pane = {
         let mut runtime = shared.lock().unwrap();
@@ -346,22 +374,17 @@ fn a_letter_to_a_closed_agent_waits_and_follows_it_to_the_reopened_pane() {
         runtime.advance_reopens();
         pane
     };
-    // The store's pass moves the registration and its letters.
-    client
-        .submit(
-            crate::delivery::worker::Effect::HumanClaim,
-            std::time::Duration::from_secs(5),
-        )
-        .unwrap();
-    let ledger = shared.lock().unwrap().delivery_state().unwrap();
-    let sent = ledger
-        .letters
+    // The store's pass moves the registration, and leaves its letters ended.
+    pass();
+    let runtime = shared.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    let record = ledger
+        .agents
         .iter()
-        .filter(|letter| letter.intent == "by-id" || letter.intent == "by-pane")
-        .collect::<Vec<_>>();
-    assert_eq!(sent.len(), 2);
-    for letter in sent {
-        assert_eq!(letter.recipient.pane_id, pane, "{}", letter.intent);
-        assert_eq!(letter.state, crate::delivery::ledger::State::Pending);
-    }
+        .find(|record| record.id == AGENT)
+        .unwrap();
+    assert!(!record.ended);
+    assert_eq!(record.pane, pane);
+    assert_eq!(record.parent.as_deref(), Some("agent-1"));
+    assert_eq!(sent(&runtime), no_recipient);
 }

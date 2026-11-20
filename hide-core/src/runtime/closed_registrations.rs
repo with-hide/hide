@@ -7,10 +7,15 @@
 //! `closed_panes`) for as long as its item can be reopened: while the close
 //! settles, while a tree close records its entry, and while the item is on
 //! `recent_closed`. Its pane's absence then ends neither the registration
-//! nor the watches on it. A reopen moves each registration whose
-//! conversation resumed to its new pane through the delivery store's rebind,
-//! the wake's own continuation (`take_over_registration`), so its letters,
-//! the watch on it, its parent and its spawn receipt follow it. A close that
+//! nor the watches on it, while the letters waiting for it end at once, as
+//! an ended agent's do (PRD letters-missions-simplify B2, B7;
+//! `Runtime::delivery_closed`): a close can stay on the list for days, and
+//! its senders would wait that long with no answer. A reopen moves each
+//! registration whose conversation resumed to its new pane through the
+//! delivery store's rebind, the wake's own continuation
+//! (`take_over_registration`), so the watch on it, its parent, its children
+//! and its spawn receipt follow it; a letter that ended meanwhile stays
+//! ended, and its sender sends it again if it still needs to. A close that
 //! settled without an item, an item pushed off the list, and an agent whose
 //! conversation did not resume let theirs go, to end with the closed pane as
 //! any other.
@@ -90,9 +95,9 @@ impl Runtime {
 
     /// The registered agent a letter to `target` reaches while its pane is
     /// closed: named by its registration's id or name, or by the pane it was
-    /// closed from. The letter waits with no bell, as one to a sleeper does,
-    /// and the reopen's continuation carries it to the new pane; its hour
-    /// runs meanwhile.
+    /// closed from. The letter is kept and the store's next pass ends it
+    /// with no recipient (`Runtime::delivery_closed`), so its sender reads
+    /// why it went nowhere.
     pub(super) fn closed_target(
         &self,
         ledger: &crate::delivery::ledger::Ledger,
@@ -113,6 +118,15 @@ impl Runtime {
             status: "closed".into(),
             ..super::agent_sleep::letters::asleep_observation(actor.clone())
         })
+    }
+
+    /// The registrations of agents closed and not being reopened, for the
+    /// delivery store's pass: the letters waiting for them end with no
+    /// recipient (PRD letters-missions-simplify B2, B7), while the
+    /// registrations themselves stay for Reopen closed. One being reopened
+    /// is coming back, so a letter to it waits.
+    pub(crate) fn delivery_closed(&self) -> Vec<DormantRegistration> {
+        self.closed_registrations().cloned().collect()
     }
 
     /// The ids of the registrations whose agent is closed, which read closed.
