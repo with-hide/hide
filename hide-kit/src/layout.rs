@@ -633,6 +633,41 @@ pub fn device_node_state(home: &Path) -> PathBuf {
     hide_home(home).join("device-node")
 }
 
+/// The record in a device helper's node folder of the paired machine that
+/// took the folder over (PRD device-connect-iroh D-49, D-75): that
+/// machine's whole key, and the helper root its helper ran from. Its node
+/// runs on the helper's panes from then on, from that root in place of an
+/// install root of its own, and every other machine's node gets a folder
+/// of its own ([`guest_dir`]). One machine holds it, the first that asked.
+pub fn device_node_guest(home: &Path) -> PathBuf {
+    device_node_guest_in(&device_node_state(home))
+}
+
+/// [`device_node_guest`] by the node folder itself, as the node that runs
+/// there reads it.
+pub fn device_node_guest_in(node_dir: &Path) -> PathBuf {
+    node_dir.join("guest.json")
+}
+
+/// What [`device_node_guest`] holds.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct HelperGuest {
+    /// The paired machine's connection key, 64 lower hex characters.
+    pub key: String,
+    /// The helper root, an absolute path.
+    pub root: PathBuf,
+}
+
+impl HelperGuest {
+    /// The record in the node folder `node_dir`; none when no machine took
+    /// the folder, or the record is not one this build reads.
+    pub fn read(node_dir: &Path) -> Option<Self> {
+        std::fs::read(device_node_guest_in(node_dir))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+}
+
 /// The folder a state folder keeps its connections to other Hide machines
 /// in (PRD device-connect-iroh D-52): the machine key, the grants this
 /// machine gives, the hosts it is a guest of, and its inboxes.
@@ -688,6 +723,23 @@ pub fn guest_dir(state_dir: &Path, guest: &PeerKey) -> PathBuf {
         .join(guest.short())
 }
 
+/// The folder every guest's folder is in.
+pub fn guests(state_dir: &Path) -> PathBuf {
+    state_dir.join(hide_peer_protocol::launch::GUESTS_DIR)
+}
+
+/// The host's mark that a guest was taken off this machine, with how its
+/// node is to end: what is left of it goes once nothing of it runs here.
+pub fn guest_removed(state_dir: &Path, guest: &PeerKey) -> PathBuf {
+    guest_host_side(state_dir, guest).join("removed")
+}
+
+/// What the host build remembers of a guest's node between its own
+/// starts: the build to run it from and the guest's device id.
+pub fn guest_node_record(state_dir: &Path, guest: &PeerKey) -> PathBuf {
+    guest_host_side(state_dir, guest).join("node.json")
+}
+
 /// The file in a guest's folder that holds its whole key.
 pub fn guest_key(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::KEY_FILE)
@@ -715,6 +767,18 @@ pub fn guest_node_side(state_dir: &Path, guest: &PeerKey) -> PathBuf {
 /// the version folders its pane holders run from (D-77 (2)).
 pub fn guest_install_root(state_dir: &Path, guest: &PeerKey) -> PathBuf {
     guest_dir(state_dir, guest).join(hide_peer_protocol::launch::INSTALL_SIDE)
+}
+
+/// The name of the installation whose builds sit under `root`, which its
+/// hook entries carry and its panes name: a guest's own kind for a guest's
+/// install root ([`guest_install_root`]), whose entries act in its own
+/// panes alone, and a helper root's for every other folder.
+pub fn install_of_root(root: &Path) -> String {
+    if hide_peer_protocol::launch::is_install_root(root) {
+        hide_agent_hooks::route::install_of_guest_root(root)
+    } else {
+        hide_agent_hooks::route::install_of_root(root)
+    }
 }
 
 /// One build of a guest, named by the first 16 hex characters of its
@@ -876,6 +940,38 @@ mod tests {
             peer_inbox(state, &key),
             state.join("peers").join("inbox").join("abababababababab")
         );
+    }
+
+    /// A guest's install root names a guest's installation, the kind whose
+    /// entries act in its own panes alone, spelled as the peer contract
+    /// spells it for the host's build that takes them out; a helper root,
+    /// and a folder that only looks alike, name a helper root's.
+    #[test]
+    fn only_a_guest_s_install_root_names_a_guest_s_installation() {
+        use hide_agent_hooks::route;
+        use hide_peer_protocol::launch;
+        assert_eq!(route::GUEST_INSTALL_PREFIX, launch::HOOKS_INSTALL_PREFIX);
+        let state = Path::new("/home/me/state");
+        let root = guest_install_root(state, &PeerKey::from_bytes([0xab; 32]));
+        assert_eq!(
+            install_of_root(&root),
+            format!("{}{}", launch::HOOKS_INSTALL_PREFIX, root.display())
+        );
+        for other in [
+            helper_root(Path::new("/home/me")),
+            state.join("g").join("abababababababab"),
+            state.join("g").join("abababababababab").join("n"),
+            state.join("g").join("not-a-key").join("i"),
+            state.join("x").join("abababababababab").join("i"),
+            PathBuf::from("i"),
+        ] {
+            assert_eq!(
+                install_of_root(&other),
+                route::install_of_root(&other),
+                "{}",
+                other.display()
+            );
+        }
     }
 
     #[test]

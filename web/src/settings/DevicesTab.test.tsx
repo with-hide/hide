@@ -23,7 +23,7 @@ const kit = (components: KitComponent[], over: Partial<Kit> = {}): Kit => ({ una
 
 const host: DeviceHost = { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: "SHA256:abc", granted_at_unix_ms: 1, state: "ready", message: null, platform: "macos aarch64", helper_path: "~/.hide/host-helper/current/hided" };
 
-const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id, label: id === "mini" ? "Mac mini" : "Studio", kind: "remote", state: "ready", message: null, ssh_alias: id, agent_count: 0, test: null, host, kit: kit([part("cli", "installed"), part("claude_code_hook", "installed"), part("codex_hook", "installed")]), ...over });
+const remote = (id: string, over: Partial<Device> = {}): Device => ({ agent_scope: emptyScope(), id, label: id === "mini" ? "Mac mini" : "Studio", kind: "remote", state: "ready", message: null, ssh_alias: id, agent_count: 0, test: null, host, switchable: true, kit: kit([part("cli", "installed"), part("claude_code_hook", "installed"), part("codex_hook", "installed")]), ...over });
 
 const state = (devices: Device[]) => ({
   connection: "live" as const,
@@ -58,6 +58,17 @@ async function mount(next: ReturnType<typeof state>) {
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
 
+it("says in one line which device the last Add over SSH did not add, and why (B41)", async () => {
+  const shown = state([remote("mini")]);
+  (shown.rest.navigator as Record<string, unknown>).device_not_added = { label: "lab", reason: "ssh_mac_signed_out" };
+  const { q, unmount } = await mount(shown);
+  expect(q('[data-device-not-added="ssh_mac_signed_out"]')?.textContent).toBe("lab was not added · Log in on that Mac");
+  await unmount();
+  const none = await mount(state([remote("mini")]));
+  expect(none.q("[data-device-not-added]")).toBeNull();
+  await none.unmount();
+});
+
 it("says nothing about a healthy kit on a device row, and names the device by alias and platform (B54)", async () => {
   const { row, q, unmount } = await mount(state([remote("mini")]));
   const mini = row("mini")!;
@@ -65,8 +76,10 @@ it("says nothing about a healthy kit on a device row, and names the device by al
   expect(mini.querySelector("[data-machine-kit], [data-kit-part], [data-kit-problem], [data-kit-reinstall], [data-device-host]")).toBeNull();
   // The old rows named the hide command, the hook files and the helper: none of it is on the row.
   expect(mini.textContent).not.toMatch(/hide command|Claude Code hook|Codex hook|installs to|bound to/);
-  // Test and the menu are the only controls a healthy device row carries.
-  expect(mini.querySelectorAll("button")).toHaveLength(2);
+  // Test, the switch to the new connection and the menu are the only controls a healthy helper device row carries.
+  expect(mini.querySelectorAll("button")).toHaveLength(3);
+  expect(q('[data-device-old-link="mini"]')?.textContent).toBe("·old connection");
+  expect(q('[data-device-switch="mini"]')?.textContent).toBe("Switch");
   expect(q('[data-device-test="mini"]')).not.toBeNull();
   expect(q('[data-device-menu="mini"]')?.getAttribute("aria-label")).toBe("More actions for Mac mini");
   await unmount();
@@ -204,6 +217,20 @@ it.each([
   } finally {
     await view.unmount();
   }
+});
+
+it("shows a paired machine once, as its pairing's row, and an SSH device beside it as its own (PRD device-connect-iroh B24)", async () => {
+  const key = "ab".repeat(32);
+  // The core made a device of the machine this one opens: the rail and the panes go by it.
+  const next = state([remote("windows-pc", { label: "Windows PC", ssh_alias: null, peer_key: key }), remote("mini")]);
+  const peers = [{ key, device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: null, connected: true, path: "direct", reason: null, update: null }];
+  const { row, q, unmount } = await mount({ ...next, rest: { ...next.rest, navigator: { ...next.rest.navigator, peers } } } as never);
+  expect(document.querySelectorAll('[data-peer-row="windows-pc"]')).toHaveLength(1);
+  expect(row("windows-pc")).toBeNull();
+  expect(row("mini")).not.toBeNull();
+  // With the paired machine as the only other one, the list is not called empty.
+  expect(q('[data-peer-row="windows-pc"]')?.textContent).toContain("Windows PC");
+  await unmount();
 });
 
 it("opens Add device from one button above the list, and shows the Add dialog only then (B50)", async () => {

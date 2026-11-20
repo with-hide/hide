@@ -608,6 +608,7 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
                     caller: access_caller_id(connection, None),
                     context: crate::access::access_context(crate::node::TEST_NODE, connection),
                     also_reads: Vec::new(),
+                    proven: crate::delivery::worker::Proven::Now,
                 },
                 actor,
                 mutation: Box::new(crate::coordination::Mutation::Register {

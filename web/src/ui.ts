@@ -443,6 +443,10 @@ type UiStore = {
   /** Opens Settings on Devices with the Add device dialog in front. */
   openAddDevice: () => void;
   clearAddDeviceRequest: () => void;
+  /** The devices whose switch to their machine's own Hide landed while this window watched, until their screen has been shown once (PRD device-connect-iroh D-48). */
+  switchedDevices: string[];
+  markSwitched: (deviceId: string) => void;
+  clearSwitched: (deviceId: string) => void;
   /** Opens Settings › Devices with the move dialog at its give-up confirm, from the window's strip. */
   openMoveGiveUp: () => void;
   clearMoveGiveUpRequest: () => void;
@@ -531,6 +535,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  switchedDevices: [],
   moveGiveUpRequested: false,
   pendingClose: null,
   pendingArchive: null,
@@ -617,6 +622,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
+  clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
   clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),

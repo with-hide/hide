@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, mayRequest, openedMachines, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Peer } from "./pairing";
+import { NOTHING_UNDER_WAY, directionKey, isPairLink, joinFailureKey, listedDevices, mayRequest, openedMachines, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Peer } from "./pairing";
 import type { SnapshotRest } from "./snapshot";
 
 const peer = (over: Partial<Peer> = {}): Peer => ({ key: "ab".repeat(32), device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: null, connected: true, path: "direct", reason: null, update: null, ...over });
@@ -62,7 +62,7 @@ describe("this computer's own window (B52)", () => {
 });
 
 describe("the paired machines a screen reads", () => {
-  const rest = (peers: Peer[] | undefined) => ({ navigator: { peers } }) as unknown as SnapshotRest;
+  const rest = (peers: Peer[] | undefined, devices: { id: string; peer_key?: string | null }[] = []) => ({ navigator: { peers, devices } }) as unknown as SnapshotRest;
 
   it("is one stable empty list while nothing is paired, so a selector does not redraw", () => {
     expect(pairedMachines(rest(undefined))).toBe(pairedMachines(null));
@@ -72,6 +72,22 @@ describe("the paired machines a screen reads", () => {
     const opened = peer();
     const guest = peer({ key: "cd".repeat(32), device_id: "macbook", opens: null, opened_by: "active" });
     expect(openedMachines(rest([opened, guest]))).toEqual([opened]);
+  });
+
+  it("leaves a machine the core made a device of to that device's tile, so one machine is one tile", () => {
+    const confirmed = peer();
+    const waiting = peer({ key: "ef".repeat(32), device_id: "mini", opens: "confirming", connected: false });
+    const device = { id: "windows-pc", peer_key: confirmed.key };
+    expect(openedMachines(rest([confirmed, waiting], [{ id: "local" }, device]))).toEqual([waiting]);
+    // A pause keeps the device, and so its one tile.
+    expect(openedMachines(rest([peer({ opens: "paused" })], [device]))).toEqual([]);
+    // An SSH device that only says the same id is another machine: both have a tile.
+    expect(openedMachines(rest([confirmed], [{ id: "windows-pc", peer_key: null }]))).toEqual([confirmed]);
+  });
+
+  it("lists in Settings every device but a paired machine's, whose row is its pairing's", () => {
+    const devices: { id: string; peer_key?: string | null }[] = [{ id: "local" }, { id: "mini", peer_key: null }, { id: "windows-pc", peer_key: "ab".repeat(32) }, { id: "studio" }];
+    expect(listedDevices(devices).map((device) => device.id)).toEqual(["local", "mini", "studio"]);
   });
 });
 

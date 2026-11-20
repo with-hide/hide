@@ -14,12 +14,13 @@ import { deviceRemovalLines, draftExported, kitRemovalLine, unstoredDeviceDrafts
 import type { Device } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
+import { switchFailureKey } from "../deviceSwitch";
 import { AddByLink, AddDevice } from "./AddDevice";
 import { askMove, CoreMoveDialog, requestOfView, type MoveRequest } from "./CoreMoveDialog";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PairedRows } from "./PairingRows";
-import { ownWindow, pairedMachines } from "../pairing";
+import { listedDevices, ownWindow, pairedMachines } from "../pairing";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -57,8 +58,12 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const localHost = rows.find((device) => device.kind !== "remote")?.host ?? null;
   const localRoot = localHost?.helper_root ?? null;
   const localCliDir = localHost?.cli_dir ?? null;
-  const remoteRows = rows.filter((device) => device.kind === "remote");
+  // A paired machine's row is its pairing's; its device has none of its own.
+  const listed = listedDevices(rows);
+  const remoteRows = listed.filter((device) => device.kind === "remote");
   const paired = useShellStore((s) => pairedMachines(s.rest).length);
+  // What the last Add over SSH did not add, and why (B41).
+  const notAdded = useShellStore((s) => s.rest?.navigator?.device_not_added ?? null);
   // Adding a machine is this computer's own window's to do (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations);
@@ -120,7 +125,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       >
         {/* The Hides this computer is paired with stand in the same list as its SSH devices (B24). */}
         <PairedRows actions={actions} />
-        {rows.map((device) => (
+        {listed.map((device) => (
           <DeviceRow
             key={device.id}
             device={device}
@@ -138,7 +143,16 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             handlers={handlers}
           />
         ))}
-        {remoteRows.length === 0 && paired === 0 ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
+        {notAdded ? (
+          <Row
+            label={
+              <Note tone="warn" data-device-not-added={notAdded.reason}>
+                {t("devices.notAdded", { name: notAdded.label })} · {t(switchFailureKey(notAdded.reason))}
+              </Note>
+            }
+          />
+        ) : null}
+        {remoteRows.length === 0 && paired === 0 && !notAdded ? <Row label={<Note>{t("devices.noRemote")}</Note>} /> : null}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
       {adding !== null && ownScreen ? (

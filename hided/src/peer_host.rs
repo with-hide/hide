@@ -181,8 +181,8 @@ impl PeerHost {
         );
     }
 
-    /// Opens the endpoint when this machine is paired, at the daemon's
-    /// start. `None` when it is paired with nothing.
+    /// Opens the endpoint at the daemon's start when a saved grant or a
+    /// known host wants it ([`endpoint_wanted`]). `None` when nothing does.
     pub async fn start(self: &Arc<Self>) -> io::Result<Option<HostPeers>> {
         let state_dir = self.settings.state_dir.clone();
         let wanted = tokio::task::spawn_blocking(move || endpoint_wanted(&state_dir))
@@ -330,20 +330,148 @@ impl PeerHost {
     }
 }
 
+/// Two machines for a test: each a [`PeerHost`] on a loopback address with
+/// no relay, in a state folder of its own.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fixture {
     use std::net::Ipv4Addr;
     use std::time::Duration;
 
     use hide_peer::protocol::hello::GrantState;
-    use hide_peer::protocol::{CloseCode, PeerAddr, PeerKey};
-    use hide_peer::store::Via;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use hide_peer::protocol::{PeerAddr, PeerKey};
+    use hide_peer::store::{Host, KnownState, Via};
 
     use super::*;
 
     /// A hang guard, never a pause.
-    const WITHIN: Duration = Duration::from_secs(30);
+    pub(crate) const WITHIN: Duration = Duration::from_secs(30);
+
+    pub(crate) async fn within<T>(what: &str, wait: impl Future<Output = T>) -> T {
+        tokio::time::timeout(WITHIN, wait)
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+    }
+
+    pub(crate) struct Machine {
+        pub(crate) host: Arc<PeerHost>,
+        pub(crate) shutdown: Ending,
+        pub(crate) dir: tempfile::TempDir,
+    }
+
+    impl Machine {
+        pub(crate) fn new(name: &str) -> Self {
+            Self::at(name, tempfile::tempdir().unwrap())
+        }
+
+        /// A machine whose state folder is `dir`.
+        pub(crate) fn at(name: &str, dir: tempfile::TempDir) -> Self {
+            let shutdown = Ending::new();
+            let host = PeerHost::new(
+                Settings {
+                    state_dir: dir.path().to_path_buf(),
+                    build: "1.3.0-test".to_owned(),
+                    device: name.to_owned(),
+                    release: false,
+                    direct: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
+                },
+                shutdown.clone(),
+            );
+            Self {
+                host,
+                shutdown,
+                dir,
+            }
+        }
+
+        pub(crate) fn addr(&self) -> PeerAddr {
+            let peers = self.host.peers().expect("an open endpoint");
+            PeerAddr::new(peers.key(), self.host.candidates())
+        }
+    }
+
+    impl Drop for Machine {
+        fn drop(&mut self) {
+            self.shutdown.end();
+        }
+    }
+
+    /// Saves in `host`'s state folder the grant a finished pairing leaves,
+    /// before its endpoint is open, and returns the grant's id.
+    pub(crate) fn grant(host: &Machine, guest: PeerKey) -> String {
+        let mut grants = Grants::open(layout::peer_grants(host.dir.path())).unwrap();
+        let grant = grants
+            .grant_pending(guest, "macbook", "macbook", Via::Link, now_unix_ms())
+            .unwrap();
+        grants.confirm(&guest, &grant.id, now_unix_ms()).unwrap();
+        grant.id
+    }
+
+    /// A folder short enough that a guest's endpoints fit a Unix socket
+    /// address below it (docs/TESTING.md, Writing a Rust test, rule 7).
+    pub(crate) fn short_root() -> tempfile::TempDir {
+        #[cfg(unix)]
+        return tempfile::Builder::new()
+            .prefix("hg")
+            .tempdir_in("/tmp")
+            .unwrap();
+        #[cfg(not(unix))]
+        tempfile::tempdir().unwrap()
+    }
+
+    /// Pairs `guest` to `host` as a finished pairing leaves them, opens
+    /// both endpoints and answers the guest's connection once the host's
+    /// grant is active on it. The host's handlers are handed in first.
+    pub(crate) async fn paired(host: &Machine, guest: &Machine) -> Link {
+        let guest_peers = guest.host.open().await.unwrap();
+        let grant = grant(host, guest_peers.key());
+        let host_peers = host
+            .host
+            .start()
+            .await
+            .unwrap()
+            .expect("a machine with a grant opens its endpoint at start");
+        guest_peers
+            .known(|known| {
+                known.put(Host {
+                    key: host_peers.key(),
+                    device: "windows-pc".to_owned(),
+                    name: "windows-pc".to_owned(),
+                    grant,
+                    state: KnownState::Active,
+                    candidates: host.addr().candidates,
+                })
+            })
+            .unwrap();
+        let link = within("the dial", guest_peers.dial(&host.addr()))
+            .await
+            .unwrap();
+        let mut events = guest_peers.events();
+        if link.granted() != GrantState::Active {
+            within("the host's grant", async {
+                loop {
+                    if let hide_peer::PeerEvent::Granted {
+                        state: GrantState::Active,
+                        ..
+                    } = events.recv().await.unwrap()
+                    {
+                        break;
+                    }
+                }
+            })
+            .await;
+        }
+        link
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hide_peer::protocol::{CloseCode, PeerKey};
+    use hide_peer::store::Via;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::fixture::*;
+    use super::*;
 
     fn guest() -> PeerKey {
         PeerKey::from_bytes([7; 32])
@@ -409,62 +537,6 @@ mod tests {
         }
     }
 
-    async fn within<T>(what: &str, wait: impl Future<Output = T>) -> T {
-        tokio::time::timeout(WITHIN, wait)
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
-    }
-
-    struct Machine {
-        host: Arc<PeerHost>,
-        shutdown: Ending,
-        dir: tempfile::TempDir,
-    }
-
-    impl Machine {
-        fn new(name: &str) -> Self {
-            let dir = tempfile::tempdir().unwrap();
-            let shutdown = Ending::new();
-            let host = PeerHost::new(
-                Settings {
-                    state_dir: dir.path().to_path_buf(),
-                    build: "1.3.0-test".to_owned(),
-                    device: name.to_owned(),
-                    release: false,
-                    direct: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
-                },
-                shutdown.clone(),
-            );
-            Self {
-                host,
-                shutdown,
-                dir,
-            }
-        }
-
-        fn addr(&self) -> PeerAddr {
-            let peers = self.host.peers().expect("an open endpoint");
-            PeerAddr::new(peers.key(), self.host.candidates())
-        }
-    }
-
-    impl Drop for Machine {
-        fn drop(&mut self) {
-            self.shutdown.end();
-        }
-    }
-
-    /// Saves in `host`'s state folder the grant a finished pairing leaves,
-    /// before its endpoint is open, and returns the grant's id.
-    fn grant(host: &Machine, guest: PeerKey) -> String {
-        let mut grants = Grants::open(layout::peer_grants(host.dir.path())).unwrap();
-        let grant = grants
-            .grant_pending(guest, "macbook", "macbook", Via::Link, now_unix_ms())
-            .unwrap();
-        grants.confirm(&guest, &grant.id, now_unix_ms()).unwrap();
-        grant.id
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_machine_paired_with_nothing_opens_no_endpoint_and_makes_no_key() {
         let machine = Machine::new("windows-pc");
@@ -512,10 +584,6 @@ mod tests {
     async fn a_paired_machine_opens_at_start_and_each_stream_reaches_its_kinds_handler() {
         let host = Machine::new("windows-pc");
         let guest = Machine::new("macbook");
-        // The guest adds a machine, which opens its endpoint and makes its
-        // key; the host's start then finds the grant.
-        let guest_peers = guest.host.open().await.unwrap();
-        let grant = grant(&host, guest_peers.key());
         let (heard, mut hears) = mpsc::channel(4);
         host.host
             .handle(StreamKind::Management, move |mut incoming: Incoming| {
@@ -529,43 +597,10 @@ mod tests {
                         .unwrap();
                 }
             });
-        let host_peers = host
-            .host
-            .start()
-            .await
-            .unwrap()
-            .expect("a machine with a grant opens its endpoint at start");
-        guest_peers
-            .known(|known| {
-                known.put(Host {
-                    key: host_peers.key(),
-                    device: "windows-pc".to_owned(),
-                    name: "windows-pc".to_owned(),
-                    grant,
-                    state: KnownState::Active,
-                    candidates: host.addr().candidates,
-                })
-            })
-            .unwrap();
-
-        let link = within("the dial", guest_peers.dial(&host.addr()))
-            .await
-            .unwrap();
-        let mut events = guest_peers.events();
-        if link.granted() != GrantState::Active {
-            within("the host's grant", async {
-                loop {
-                    if let hide_peer::PeerEvent::Granted {
-                        state: GrantState::Active,
-                        ..
-                    } = events.recv().await.unwrap()
-                    {
-                        break;
-                    }
-                }
-            })
-            .await;
-        }
+        // The guest adds a machine, which opens its endpoint and makes its
+        // key; the host's start then finds the grant.
+        let link = paired(&host, &guest).await;
+        let guest_peers = guest.host.peers().unwrap();
         let mut management = link.open(StreamKind::Management).await.unwrap();
         management.send.write_all(b"hello").await.unwrap();
         management.send.flush().await.unwrap();

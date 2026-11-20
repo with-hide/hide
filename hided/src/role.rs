@@ -39,7 +39,7 @@ pub const USAGE: &str = "usage: hided [--version | --help]
   hided                   the daemon on the state folder HIDE_STATE_DIR names (hide connect starts it)
   hided core-login [--state-dir <absolute dir>]
                           the daemon, as the core's login item starts it
-  hided node serve|--version
+  hided node serve [--guest <folder>]|--version
   hided attach [--state-dir <absolute dir>]
   hided core-move <step> ...
   hided core-update ...
