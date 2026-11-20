@@ -260,6 +260,20 @@ fn starter() {
     };
     #[cfg(windows)]
     let _job = windows_job::enter(&setup);
+    let raised = if setup.contains("raise_open_files") {
+        // Started low, as launchd starts an app, so the raise moves it.
+        #[cfg(unix)]
+        set_soft_open_file_limit(STARTER_OPEN_FILES);
+        match hide_platform::process::raise_open_file_limit().unwrap() {
+            Some(limit) => format!(
+                "raised_before={} raised_after={}",
+                limit.before, limit.after
+            ),
+            None => "raised=none".to_owned(),
+        }
+    } else {
+        String::new()
+    };
     // An ordinary child beside the resident, started as any child is: it
     // stays in the starter's group (Unix) or job (Windows).
     let ordinary = setup.contains("ordinary").then(|| {
@@ -278,7 +292,7 @@ fn starter() {
             drop(writer);
             let report = line_after(reader, "RESIDENT ");
             println!(
-                "STARTED pid={} outer_job={} starter={} ordinary={} {report}",
+                "STARTED pid={} outer_job={} starter={} ordinary={} {raised} {report}",
                 resident.pid,
                 resident.outer_job,
                 std::process::id(),
@@ -354,11 +368,45 @@ fn describe_self() -> String {
     };
     format!(
         "pid={pid} sid={sid} parent={parent} tty={tty} streams_null={streams_null} \
-         foreign=[{}] hup={} int={} term_blocked={term_blocked}",
+         foreign=[{}] hup={} int={} term_blocked={term_blocked} open_files={}",
         foreign.join(","),
         disposition(libc::SIGHUP),
         disposition(libc::SIGINT),
+        soft_open_file_limit(),
     )
+}
+
+/// The soft open-file limit a starter sets itself before it raises it: below
+/// any system's ceiling, so the raise always moves it.
+#[cfg(unix)]
+const STARTER_OPEN_FILES: libc::rlim_t = 64;
+
+#[cfg(unix)]
+fn soft_open_file_limit() -> libc::rlim_t {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `getrlimit` writes into the structure we own.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    limit.rlim_cur
+}
+
+#[cfg(unix)]
+fn set_soft_open_file_limit(soft: libc::rlim_t) {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: plain calls on structures we own.
+    unsafe {
+        assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit), 0);
+        limit.rlim_cur = soft;
+        assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &limit), 0);
+    }
 }
 
 #[cfg(windows)]
@@ -505,6 +553,26 @@ fn a_resident_child_keeps_nothing_of_its_starter() {
         println!("JOBS test_job={test_job} {line}");
     }
     assert!(resident.is_running());
+}
+
+/// A starter that raised its open-file limit starts a resident with the
+/// limit it started with: a resident is a pane's holder, and the programs it
+/// runs are the operator's. Windows has no such limit to raise.
+#[test]
+fn a_resident_child_starts_with_the_open_file_limit_its_starter_started_with() {
+    let (_starter, line) = run_starter("raise_open_files");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let _resident = Started::new(field(&line, "pid").parse().unwrap());
+    #[cfg(unix)]
+    {
+        let started_with = STARTER_OPEN_FILES.to_string();
+        assert_eq!(field(&line, "raised_before"), started_with, "{line}");
+        let raised: libc::rlim_t = field(&line, "raised_after").parse().unwrap();
+        assert!(raised > STARTER_OPEN_FILES, "{line}");
+        assert_eq!(field(&line, "open_files"), started_with, "{line}");
+    }
+    #[cfg(windows)]
+    assert_eq!(field(&line, "raised"), "none", "{line}");
 }
 
 /// The starter's group and session (Unix), or its kill-on-close job
