@@ -975,6 +975,44 @@ fn the_same_address_from_two_tabs_is_one_page() {
     assert_eq!(runtime.snapshot.browser_views.len(), 1);
 }
 
+/// B32, D-37: a page on no desk names its address and the load the core
+/// asked of it, so the desktop host loads it with nothing on screen, and
+/// opening it again asks for a new load.
+#[test]
+fn a_page_on_no_desk_names_its_address_and_load_for_the_host() {
+    let (mut runtime, checkout, directory) = setup("off-desk-page");
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    let url = "https://example.test/off-desk";
+    let first = control(
+        &mut runtime,
+        "w-order:t1:p",
+        open_page(url),
+        "off-desk-first",
+    );
+    runtime.sync_workspace_view();
+    let row = runtime.snapshot.browser_views[0].clone();
+    assert_eq!(row.view_id, first.view_id);
+    assert_eq!(row.tray, None);
+    assert_eq!(row.url.as_deref(), Some(url));
+    assert!(row.load > 0);
+    control(
+        &mut runtime,
+        "w-order:t1:p",
+        open_page(url),
+        "off-desk-again",
+    );
+    runtime.sync_workspace_view();
+    let again = &runtime.snapshot.browser_views[0];
+    assert_eq!(
+        (again.view_id.as_str(), again.tray.as_deref()),
+        (first.view_id.as_str(), None)
+    );
+    assert!(
+        again.load > row.load,
+        "a second open asks the host to load the page again"
+    );
+}
+
 /// B27: every desk, its selection and the Views on no desk come back after a
 /// restart.
 #[test]

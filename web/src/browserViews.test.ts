@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressShown, addressUrl, browserDisplays, defaultBrowserAddress, fileUrl, hostKey, isHtmlFile, parseWorkspaceKey, placements, stillFits, stillWanted, withoutClosed } from "./browserViews";
+import { addressShown, addressUrl, browserDisplays, defaultBrowserAddress, fileUrl, hostKey, isHtmlFile, parseWorkspaceKey, placements, retainedRow, stillFits, stillWanted, withoutClosed } from "./browserViews";
 import type { ViewLayoutSnapshot } from "./snapshot";
 import { workspaceKey } from "./viewLayout";
 
@@ -131,5 +131,13 @@ describe("the idle still", () => {
     expect(stillWanted(cached, "https://a.test/b", rect, false)).toBe(true);
     expect(stillWanted(cached, "https://a.test/", { ...rect, height: 200 }, false)).toBe(true);
     expect(stillWanted(undefined, "https://a.test/", rect, false)).toBe(true);
+  });
+});
+
+describe("the retained pages the host is told of (PRD lane-desk-pair-view B32)", () => {
+  const where = { device_id: "local", path: "/r", view_id: "v1", area_id: "shelf", tray: null };
+  it("hands a web page's address and load on, and an outside file neither", () => {
+    expect(retainedRow({ ...where, url: "https://a.test/", load: 2 })).toEqual({ workspace: workspaceKey(where), id: "v1", area_id: "shelf", url: "https://a.test/", load: 2 });
+    expect(retainedRow({ ...where, url: null, load: 0 })).toEqual({ workspace: workspaceKey(where), id: "v1", area_id: "shelf" });
   });
 });

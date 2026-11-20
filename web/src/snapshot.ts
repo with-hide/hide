@@ -3722,8 +3722,11 @@ export type SnapshotRest = {
   /** The front Workspace's layout and tools (S6 D-10); absent when no Workspace is in front. */
   workspace_view?: import("./workspace").WorkspaceView | null;
   /** All retained Browser Views, including those outside the front Workspace. */
-  /** `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37). */
-  browser_views?: { device_id: string; path: string; view_id: string; area_id: string; tray?: string | null }[];
+  /**
+   * `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37).
+   * `url` and `load`: a web page's address and the load the core last asked of it, so the host loads a page no desk on screen shows (B32); null and 0 for an outside HTML file.
+   */
+  browser_views?: { device_id: string; path: string; view_id: string; area_id: string; tray?: string | null; url?: string | null; load?: number }[];
   /** Positive connected Workspace area authority from the core, including empty areas; incarnation changes on revoke/regrant. */
   browser_scopes?: { device_id: string; path: string; area_id: string; incarnation: number }[];
   /** The desktop grants every outside file's tab stands on, across every Workspace; absent while none does. */

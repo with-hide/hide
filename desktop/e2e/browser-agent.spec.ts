@@ -11,7 +11,7 @@ import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
 import { focusTab, openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
-import { enterWorkspace, showProjectRow } from "../../web/e2e/wire";
+import { enterWorkspaceWithLane, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, HIDE_CLI, launchShell, startStack, test, type Isolated, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
@@ -129,7 +129,8 @@ async function start(): Promise<void> {
   app = launched.app;
   shell = launched.page;
   await fitWindow(app, { width: 1200, height: 800 });
-  await enterWorkspace(launched.page, "fixture");
+  // The lane is up, so the page an open puts on the desk is drawn (PRD lane-desk-pair-view B2).
+  await enterWorkspaceWithLane(launched.page, "fixture");
 }
 
 test.beforeAll(async () => {

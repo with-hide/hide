@@ -535,8 +535,9 @@ fn printable(text: &str) -> String {
 }
 
 /// A picture of what `display` shows now, taken over a gateway socket the
-/// caller already opened (`mobile/page_shot.rs`). `selected` is whether the
-/// display is its area's front View; a hidden one is `display_hidden`.
+/// caller already opened (`mobile/page_shot.rs`). `selected` is whether a
+/// page command may act on the display (`server::takes_input`); one that may
+/// not is `display_hidden`.
 pub(crate) async fn still(
     socket: crate::workspace_cli::WorkspaceSocket,
     display: &str,

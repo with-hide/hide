@@ -36,8 +36,13 @@ export const deviceState = (home: string) => path.join(home, ".hide", "state");
 /** The folder holding one `bridge-*` folder per daemon that has the device open. */
 export const deviceBridges = (home: string) => path.join(deviceState(home), "workspace-bridges");
 
-/** An SSH config and known_hosts under the run's local HOME, one host entry per alias for the isolated server. */
-/** Each alias in `devices` reaches the isolated sshd as the machine whose id is its value, the id its device is named by. */
+/**
+ * An SSH config and known_hosts under the run's local HOME, one host entry per
+ * alias for the isolated server. Each alias in `devices` reaches the isolated
+ * sshd as the machine whose id is its value, the id its device is named by.
+ * Each entry names that known_hosts itself: ssh finds `~/.ssh/known_hosts` by
+ * the account's home, not `HOME`, so the account's own file would answer.
+ */
 export function writeSshConfig(localHome: string, devices: Record<string, string>): void {
   const ssh = path.join(localHome, ".ssh");
   fs.mkdirSync(ssh, { recursive: true });
@@ -45,6 +50,7 @@ export function writeSshConfig(localHome: string, devices: Record<string, string
   fs.writeFileSync(path.join(ssh, "config"), Object.entries(devices).flatMap(([alias, machine]) => [
     `Host ${alias}`, "  HostName 127.0.0.1", `  Port ${process.env.HIDE_E2E_SSH_PORT}`,
     `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none",
+    `  UserKnownHostsFile "${path.join(ssh, "known_hosts")}"`,
     `  SetEnv HIDE_MACHINE_ID=${machine}`, "",
   ]).join("\n"), { mode: 0o600 });
 }
