@@ -2549,3 +2549,57 @@ fn split_and_move_apply_to_a_desk_view_and_refuse_one_on_no_desk() {
     );
     assert_eq!(fronts(&runtime, &directory), ["a.md", "b.md"]);
 }
+
+fn desk_floats(runtime: &Runtime) -> bool {
+    runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .unwrap()
+        .tray
+        .floats
+}
+
+/// D-50: a file opened while the Explorer floats shows its desk floating
+/// with the Explorer; the tool closing settles the desk, which then stands
+/// with the lane open. A tool opened beside a standing desk leaves it
+/// standing, and ⌘E bringing back a lane that closed while the desk floated
+/// stands it.
+#[test]
+fn a_file_opened_beside_a_floating_tool_floats_with_it_until_the_tool_closes() {
+    let (mut runtime, checkout, directory) = setup("desk-floats");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    open(&mut runtime, &checkout, &directory, "a.md");
+    runtime.sync_workspace_view();
+    assert!(lane_documents(&runtime) && desk_floats(&runtime));
+    open(&mut runtime, &checkout, &directory, "b.md");
+    runtime.sync_workspace_view();
+    assert!(desk_floats(&runtime), "a second file keeps it floating");
+
+    view_event(&mut runtime, serde_json::json!({"tool": null}));
+    assert!(lane_documents(&runtime), "the desk stays");
+    assert!(!desk_floats(&runtime), "and settles");
+
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    open(&mut runtime, &checkout, &directory, "c.md");
+    runtime.sync_workspace_view();
+    assert_eq!(
+        lane_tool(&runtime),
+        Some(crate::workspace_views::Tool::Explorer)
+    );
+    assert!(!desk_floats(&runtime), "a standing desk keeps standing");
+
+    // A lane closed while the desk floats comes back with the desk standing.
+    view_event(
+        &mut runtime,
+        serde_json::json!({"tool": null, "documents": false}),
+    );
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    open(&mut runtime, &checkout, &directory, "d.md");
+    runtime.sync_workspace_view();
+    assert!(desk_floats(&runtime));
+    view_event(&mut runtime, serde_json::json!({"open": false}));
+    view_event(&mut runtime, serde_json::json!({"open": true}));
+    assert!(lane_documents(&runtime) && lane_tool(&runtime).is_some());
+    assert!(!desk_floats(&runtime));
+}
