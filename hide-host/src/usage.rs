@@ -57,7 +57,8 @@ pub fn fetch(
                 .unwrap_or(root);
             let result = codex_usage(home).map_err(|failure| {
                 codex_missing_or(failure, || {
-                    hide_platform::programs::find_cli(CODEX_BINARY).is_some()
+                    let search = hide_platform::programs::account_path()?;
+                    Some(hide_platform::programs::Program::find(&search, CODEX_BINARY).is_some())
                 })
             });
             let fallback = result
@@ -125,15 +126,20 @@ fn codex_credentials(home: &Path) -> Result<CodexCredentials, LimitFailure> {
     })
 }
 
-/// A Codex login this node cannot read, where the account's search finds no
-/// Codex either, is a Codex that is not there, as a Claude login read
-/// through a CLI that is missing is (`UsageError::NotInstalled`): what asks
-/// then says the agent is missing, not signed out. A login the server
+/// A Codex CLI login this node cannot read, where the account's search
+/// finds no `codex` either, is a Codex CLI that is not there, as a Claude
+/// Code login read through a CLI that is missing is
+/// (`UsageError::NotInstalled`): what asks then says the agent is missing,
+/// not signed out. `installed` is `None` when the account's search could not
+/// be read, which proves nothing, so the failure stands; a login the server
 /// refused is signed out whether or not the program is there.
-fn codex_missing_or(failure: LimitFailure, installed: impl FnOnce() -> bool) -> LimitFailure {
+fn codex_missing_or(
+    failure: LimitFailure,
+    installed: impl FnOnce() -> Option<bool>,
+) -> LimitFailure {
     if failure.disposition == FailureDisposition::Authentication
         && failure.kind == CREDENTIALS_UNREADABLE
-        && !installed()
+        && installed() == Some(false)
     {
         return LimitFailure::cli(hide_ai::UsageError::NotInstalled);
     }
@@ -582,29 +588,31 @@ mod tests {
     /// signed out either way.
     #[test]
     fn an_unreadable_codex_login_without_its_program_reads_as_not_installed() {
-        let read = |home: &Path, installed: bool| {
+        let read = |home: &Path, installed: Option<bool>| {
             codex_usage(home)
                 .map_err(|failure| codex_missing_or(failure, || installed))
                 .map_err(|failure| (failure.disposition, failure.kind))
         };
         let home = tempfile::tempdir().unwrap();
         assert_eq!(
-            read(home.path(), false),
+            read(home.path(), Some(false)),
             Err((FailureDisposition::NotInstalled, "not_installed".to_owned()))
         );
-        assert_eq!(
-            read(home.path(), true),
-            Err((
-                FailureDisposition::Authentication,
-                CREDENTIALS_UNREADABLE.to_owned()
-            ))
-        );
+        for found_or_unknown in [Some(true), None] {
+            assert_eq!(
+                read(home.path(), found_or_unknown),
+                Err((
+                    FailureDisposition::Authentication,
+                    CREDENTIALS_UNREADABLE.to_owned()
+                ))
+            );
+        }
         let refused = LimitFailure {
             status: Some(401),
             ..LimitFailure::new(FailureDisposition::Authentication, "http")
         };
         assert_eq!(
-            codex_missing_or(refused, || false).disposition,
+            codex_missing_or(refused, || Some(false)).disposition,
             FailureDisposition::Authentication
         );
     }
