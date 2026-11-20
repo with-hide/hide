@@ -22,6 +22,7 @@ pub mod agent_definitions;
 mod agent_kit;
 mod agent_update;
 pub mod agents;
+pub mod app;
 mod cli;
 mod codex_trust;
 mod coordination_retirement;
@@ -61,7 +62,7 @@ pub use current::CURRENT;
 pub use device::{device_target, guest_target, remove_guest};
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
-pub use record::{app_installed, kit_state_dir};
+pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
 pub use targets::{
     KitProfiles, ProfilePlace, ProfileReport, ProfileSource, prepare_account, trust_writable,

@@ -354,21 +354,6 @@ pub(crate) fn load(home: &Path, install: &str) -> Result<Record, crate::KitRefus
     Ok(record)
 }
 
-/// Whether the account whose home is `home` holds a desktop app's
-/// installation: its kit recorded the `hide` command of its own package,
-/// and that package is still there. A device helper another machine's Hide
-/// put on the account is not one, and neither is an app whose package has
-/// since been removed. From the day an account has one, its core is the
-/// app's to update, not a paired machine's (PRD device-connect-iroh B23).
-pub fn app_installed(home: &Path) -> Result<bool, crate::KitRefusal> {
-    let record = load(home, hide_agent_hooks::route::APP_INSTALL)?;
-    Ok(record
-        .app
-        .cli_destination
-        .as_deref()
-        .is_some_and(|cli| cli.is_file() && crate::local::bundled_kit_dir(cli).is_some()))
-}
-
 pub(crate) fn save(home: &Path, record: &Record) -> Result<(), String> {
     let record = Record {
         format: FORMAT,
@@ -505,46 +490,6 @@ mod tests {
         );
         forget(home, APP).unwrap();
         assert!(!path(home).exists());
-    }
-
-    /// An account has the app once the app's kit recorded the command of a
-    /// package that is still there: a device helper's part of the record,
-    /// a command outside any package and a package since removed are not
-    /// one (B23).
-    #[test]
-    fn an_account_has_the_app_while_its_recorded_package_is_there() {
-        let home = tempfile::tempdir().unwrap();
-        let home = home.path();
-        assert_eq!(app_installed(home), Ok(false));
-
-        // A device helper recorded its own command: no app.
-        let helper_cli = home.join("helper").join("hide");
-        std::fs::create_dir_all(helper_cli.parent().unwrap()).unwrap();
-        std::fs::write(&helper_cli, "").unwrap();
-        let mut helper = load(home, "root:/helper").unwrap();
-        assert!(helper.remember_cli(helper_cli.clone()));
-        save(home, &helper).unwrap();
-        assert_eq!(app_installed(home), Ok(false));
-
-        // The app's own, in its package.
-        let resources = home.join("Hide.app").join("Contents").join("Resources");
-        std::fs::create_dir_all(&resources).unwrap();
-        let packaged = resources.join("hide");
-        std::fs::write(&packaged, "").unwrap();
-        let mut app = load(home, APP).unwrap();
-        assert!(app.remember_cli(packaged.clone()));
-        save(home, &app).unwrap();
-        assert_eq!(app_installed(home), Ok(true));
-
-        // The package went: the record alone is not an app.
-        std::fs::remove_file(&packaged).unwrap();
-        assert_eq!(app_installed(home), Ok(false));
-
-        // A command the app's part names outside any package is not one.
-        let mut app = load(home, APP).unwrap();
-        assert!(app.remember_cli(helper_cli));
-        save(home, &app).unwrap();
-        assert_eq!(app_installed(home), Ok(false));
     }
 
     /// A record this build cannot read, one a newer build wrote or one that

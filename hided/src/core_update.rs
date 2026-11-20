@@ -27,9 +27,9 @@
 //! raises of two machines happen one after the other and the second finds
 //! what the first left. A core of this build or a newer one is left as it
 //! is; an older one is replaced as above, with this build put beside the
-//! one its starter runs. An account that has the desktop app is left to
-//! it: the app updates its core, and a core raised past the app's build
-//! would refuse the app's own connection.
+//! one its starter runs. A core a desktop app opened is left to that app
+//! (`hide_kit::app`): the app updates it, and a core raised past the app's
+//! build would refuse the app's own connection.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -78,8 +78,8 @@ pub enum Outcome {
     /// A raise found the core running a newer build, which is never
     /// lowered.
     Kept,
-    /// A raise found the desktop app on the account, which updates its
-    /// core from the day it is there (B23).
+    /// A raise found that a desktop app opened the core, which updates it
+    /// from that day on (B23).
     LeftToApp,
 }
 
@@ -308,7 +308,8 @@ struct Running {
 trait Account {
     /// The folder's core, when one answers.
     fn running(&self) -> Result<Option<Running>, String>;
-    /// Whether the account has the desktop app, which updates its core.
+    /// Whether a desktop app opened the folder's core and is still there
+    /// (`hide_kit::app`): the app updates its core.
     fn app(&self) -> Result<bool, String>;
     /// Whether a starter of the account's starts the folder's core again.
     fn kept(&self) -> Result<bool, String>;
@@ -348,7 +349,7 @@ impl Account for ThisAccount<'_> {
     }
 
     fn app(&self) -> Result<bool, String> {
-        hide_kit::app_installed(&self.home).map_err(|refusal| refusal.detail)
+        hide_kit::app::present(self.state_dir)
     }
 
     fn kept(&self) -> Result<bool, String> {
@@ -417,7 +418,7 @@ fn raise_with<S: Starter>(
         }
         Standing::Unordered => return Err(OTHER_BUILD.to_owned()),
     }
-    // The app on this account updates its core (B23): a core a paired
+    // The app that opened this core updates it (B23): a core a paired
     // machine raised past the app's build would refuse the app's own
     // connection, with no release for the app to catch up to.
     if account.app()? {
@@ -756,10 +757,10 @@ mod tests {
         let _ = previous;
     }
 
-    // B23: an account that has the desktop app is its app's to update: a
-    // raise of its older core touches nothing.
+    // B23: a core a desktop app opened is that app's to update: a raise of
+    // the older core touches nothing.
     #[test]
-    fn a_raise_leaves_an_account_that_has_the_app_to_its_app() {
+    fn a_raise_leaves_a_core_its_app_opened_to_the_app() {
         let root = tempfile::tempdir().unwrap();
         let (args, mut machine, _, uploaded) = raise_fixture(root.path());
         machine.app = true;
