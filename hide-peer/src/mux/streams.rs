@@ -359,6 +359,15 @@ impl Pipe {
         carrier: Carrier,
         dialed: bool,
     ) -> io::Result<(Self, mpsc::Receiver<(PipeSend, PipeRecv)>)> {
+        Self::start_on(carrier, dialed, &spawn_thread)
+    }
+
+    /// [`Pipe::start`], on threads `spawn` starts.
+    fn start_on(
+        carrier: Carrier,
+        dialed: bool,
+        spawn: super::Spawn<'_>,
+    ) -> io::Result<(Self, mpsc::Receiver<(PipeSend, PipeRecv)>)> {
         let (incoming, accepted) = mpsc::channel(BACKLOG);
         let shared = start_with(
             Side::Peer { dialed },
@@ -366,7 +375,7 @@ impl Pipe {
             None,
             Vec::new(),
             State::accepting(incoming),
-            &spawn_thread,
+            spawn,
         )?;
         shared.tell_with(HELLO, 0, &[VERSION]);
         Ok((
@@ -946,6 +955,69 @@ mod tests {
         assert_eq!(said, [PEER_STOP, PEER_FIN]);
         assert_eq!(acceptor.streams(), MAX_THEIRS);
         assert!(acceptor.ended().is_none());
+    }
+
+    /// An open the carrier already holds when the connection starts is
+    /// taken: where the other end's streams go is in place before the
+    /// thread that reads the carrier runs. The start here returns only once
+    /// that thread has read all the carrier held, the order in which a
+    /// stream was once refused for arriving first.
+    #[test]
+    fn an_open_the_carrier_holds_at_the_start_is_accepted() {
+        /// The other end's greeting and first open, then a word that its
+        /// reader came back for more (both frames are behind it then), and
+        /// nothing until the carrier is ended.
+        struct Holding {
+            said: io::Cursor<Vec<u8>>,
+            read: Option<std::sync::mpsc::Sender<()>>,
+            ended: std::sync::mpsc::Receiver<()>,
+        }
+
+        impl io::Read for Holding {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let held = io::Read::read(&mut self.said, buffer)?;
+                if held > 0 {
+                    return Ok(held);
+                }
+                if let Some(read) = self.read.take() {
+                    let _ = read.send(());
+                }
+                // Ends when the carrier's end drops the sender.
+                let _ = self.ended.recv();
+                Ok(0)
+            }
+        }
+
+        let mut said = frame(HELLO, 0, &[VERSION]);
+        said.extend(frame(PEER_OPEN, 1, &0_i32.to_be_bytes()));
+        let (read, drained) = std::sync::mpsc::channel();
+        let (end, ended) = std::sync::mpsc::channel();
+        let end = Mutex::new(Some(end));
+        let carrier = Carrier::new(
+            Holding {
+                said: io::Cursor::new(said),
+                read: Some(read),
+                ended,
+            },
+            io::sink(),
+            move || drop(lock(&end).take()),
+        );
+        let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
+            let started = spawn_thread(name, work)?;
+            if name == "link-mux-frames" {
+                drained
+                    .recv_timeout(WITHIN)
+                    .expect("the reader read what the carrier held");
+            }
+            Ok(started)
+        };
+        let (acceptor, mut accepts) = Pipe::start_on(carrier, false, &spawn).unwrap();
+        let (send, _recv) = accepts
+            .try_recv()
+            .expect("the stream the carrier held is accepted");
+        assert_eq!(send.id, 1);
+        assert_eq!(acceptor.streams(), 1);
+        acceptor.close(lost());
     }
 
     /// The other end names each stream's priority, and each priority keeps
