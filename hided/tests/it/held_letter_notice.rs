@@ -174,6 +174,37 @@ async fn a_state_folder_an_earlier_helper_left_open_is_closed_and_its_letters_ar
     );
 }
 
+/// D-20, B27: the first start of a state folder from before node ids, whose
+/// ledger names the machine `local`, converts the ledger's machine keys in
+/// the store it imports it into, and leaves `delivery-ledger.json` as that
+/// build wrote it, so the build still reads its own ledger if it runs again.
+#[tokio::test]
+async fn a_folder_from_before_node_ids_keeps_its_old_ledger_file_byte_for_byte() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    seed_undelivered_letters(&state, &["letter-7"]);
+    let old = std::fs::read(state.join("delivery-ledger.json")).unwrap();
+    assert!(!state.join("node.json").exists() && !state.join("delivery.sqlite3").exists());
+    let _daemon = Daemon::start(root.path());
+    // The core read the imported ledger and ran its first delivery pass.
+    assert_eq!(channels_failed(&state).await["letter_id"], "letter-7");
+    assert_eq!(
+        std::fs::read(state.join("delivery-ledger.json")).unwrap(),
+        old
+    );
+    let marker: Value =
+        serde_json::from_slice(&std::fs::read(state.join("node.json")).unwrap()).unwrap();
+    let node = marker["node"].as_str().unwrap();
+    let ledger = hide_core::delivery::store::load(&state.join("delivery.sqlite3")).unwrap();
+    let letter = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == "letter-7")
+        .unwrap();
+    assert_eq!(letter.sender.device_id, node);
+    assert_eq!(letter.recipient.device_id, node);
+}
+
 /// A stand-in push service on loopback (a debug build accepts that endpoint).
 /// It reads each whole request, answers the first with 201 and every later
 /// one with 500, and reports each request line.

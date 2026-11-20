@@ -235,7 +235,7 @@ fn a_letter_to_a_sleeping_agent_is_taken_and_waits() {
     let (_worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&runtime),
         crate::handle::ChangeNotifier::noop(),
-        root.path().join("ledger.json"),
+        root.path().join("delivery.sqlite3"),
     )
     .unwrap();
     runtime.lock().unwrap().install_delivery_client(client);
@@ -1652,7 +1652,7 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
     let (_worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&runtime),
         crate::handle::ChangeNotifier::noop(),
-        root.path().join("ledger.json"),
+        root.path().join("delivery.sqlite3"),
     )
     .unwrap();
     runtime.lock().unwrap().install_delivery_client(client);

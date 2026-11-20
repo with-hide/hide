@@ -2914,7 +2914,7 @@ mod tests {
     #[test]
     fn reacknowledging_a_legacy_report_records_durable_intake_and_preserves_a_rearmed_watch() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         let mut ledger = Ledger::default();
         let child = actor("child");
         let parent = actor("parent");
@@ -2946,8 +2946,8 @@ mod tests {
             )
             .unwrap();
         }
-        super::super::ledger::save(&path, &ledger).unwrap();
-        let mut restored = super::super::ledger::load(&path).unwrap();
+        super::super::store::save(&path, &ledger).unwrap();
+        let mut restored = super::super::store::load(&path).unwrap();
         let now = 2 + super::super::DELIVERY_EXPIRY_MS - 1;
         assert_eq!(
             pull(&restored, &parent).unwrap().ids,
@@ -2973,8 +2973,8 @@ mod tests {
         let acknowledged = apply(&mut restored, &parent, None, &ack, now).unwrap();
         assert_eq!(acknowledged["state"], "acknowledged");
         assert_eq!(acknowledged["hook_confirmed"], true);
-        super::super::ledger::save(&path, &restored).unwrap();
-        let mut restored = super::super::ledger::load(&path).unwrap();
+        super::super::store::save(&path, &restored).unwrap();
+        let mut restored = super::super::store::load(&path).unwrap();
         let shown = apply(
             &mut restored,
             &parent,
@@ -2999,12 +2999,12 @@ mod tests {
         )
         .unwrap();
         let rearmed = super::super::watch::start(&mut restored, &parent, &child, now).unwrap();
-        super::super::ledger::save(&path, &restored).unwrap();
-        let mut restored = super::super::ledger::load(&path).unwrap();
+        super::super::store::save(&path, &restored).unwrap();
+        let mut restored = super::super::store::load(&path).unwrap();
         let before = restored.clone();
         apply(&mut restored, &parent, None, &ack, now + 1).unwrap();
-        super::super::ledger::save(&path, &restored).unwrap();
-        let restored = super::super::ledger::load(&path).unwrap();
+        super::super::store::save(&path, &restored).unwrap();
+        let restored = super::super::store::load(&path).unwrap();
         assert_eq!(restored, before);
         assert!(restored.watches.iter().any(|watch| watch.id == rearmed.id));
         assert!(pull(&restored, &parent).unwrap().ids.is_empty());

@@ -5682,7 +5682,7 @@ mod tests {
             let (_worker, client) = crate::delivery::worker::Worker::store(
                 Arc::downgrade(&owner),
                 crate::handle::ChangeNotifier::noop(),
-                root.path().join("delivery.json"),
+                root.path().join("delivery.sqlite3"),
             )
             .unwrap();
             owner.lock().unwrap().install_delivery_client(client);

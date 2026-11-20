@@ -636,7 +636,7 @@ impl Harness {
                 notifier: crate::handle::ChangeNotifier::noop(),
             });
             guard.home_path = Some(state.path().join("home"));
-            if let Ok(ledger) = crate::delivery::ledger::load(&ledger_path) {
+            if let Ok(ledger) = crate::delivery::store::load(&ledger_path) {
                 guard.publish_delivery(Arc::new(ledger), false);
             }
             let mut project = checkout("w-repo", "c-repo", REPO, None);
@@ -1051,7 +1051,7 @@ fn lay_start(
         );
         apply(&mut ledger, &Mutation::Complete { id: spawn.clone() });
     }
-    crate::delivery::ledger::save(ledger_path, &ledger).unwrap();
+    crate::delivery::store::save(ledger_path, &ledger).unwrap();
     let child = ledger
         .spawns
         .iter()

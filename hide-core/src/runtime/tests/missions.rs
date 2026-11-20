@@ -16281,13 +16281,13 @@ fn an_open_mission_holds_its_conductor_worker_reviewer_and_verifier() {
 /// durable write must retain both its registration and spawn receipt.
 fn binding_during_a_full_ledger_save(register: bool) {
     use crate::coordination::{AGENT_LIMIT, Mutation, SPAWN_LIMIT};
-    use crate::delivery::{ledger, worker::Effect};
+    use crate::delivery::{store, worker::Effect};
     use std::sync::mpsc;
     use std::time::Duration;
 
     let fixture = conducting();
     drop(fixture._worker);
-    let path = fixture._root.path().join("full-ledger.json");
+    let path = fixture._root.path().join("delivery.sqlite3");
     let effect = {
         let mut runtime = fixture.runtime.lock().unwrap();
         with_worker_and_reviewer(&mut runtime);
@@ -16379,14 +16379,14 @@ fn binding_during_a_full_ledger_save(register: bool) {
         Arc::downgrade(&fixture.runtime),
         path.clone(),
         effect,
-        move |path, bytes| {
+        move |file, changes| {
             if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 saving.send(()).unwrap();
                 // Only a test failure can leave the store paused; keep its
                 // owner bounded on that path too.
                 resumed.recv_timeout(Duration::from_secs(5)).unwrap();
             }
-            ledger::write(path, bytes)
+            file.apply(changes)
         },
     );
     at_save.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -16403,7 +16403,7 @@ fn binding_during_a_full_ledger_save(register: bool) {
     let result = answer.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(bound.is_ok(), "{bound:?}");
     assert!(result.is_ok(), "{result:?}");
-    let saved = ledger::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+    let saved = store::load(&path).unwrap();
     let child = saved
         .agents
         .iter()

@@ -3236,7 +3236,7 @@ mod tests {
     #[test]
     fn a_legacy_record_holding_a_pane_id_as_its_name_reads_as_unnamed() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("delivery-ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         let mut ledger = Ledger::default();
         let (legacy, named) = (
             {
@@ -3262,8 +3262,8 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
-        crate::delivery::ledger::save(&path, &ledger).unwrap();
-        let loaded = crate::delivery::ledger::load(&path).unwrap();
+        crate::delivery::store::save(&path, &ledger).unwrap();
+        let loaded = crate::delivery::store::load(&path).unwrap();
         let by_id = |id: &str| loaded.agents.iter().find(|record| record.id == id).unwrap();
         assert_eq!(by_id(&legacy_id).name, None);
         assert_eq!(by_id(&legacy_id).wire_name(), legacy_id);

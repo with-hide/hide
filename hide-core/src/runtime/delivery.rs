@@ -3000,7 +3000,7 @@ pub(crate) mod tests {
             Arc::new(Mutex::new(runtime)),
             actor,
             target,
-            hide_kit::layout::delivery_ledger(&state),
+            hide_kit::layout::delivery_store(&state),
         )
     }
 
@@ -3988,8 +3988,8 @@ pub(crate) mod tests {
             }
             ledger.next_id = 3;
             ledger.validate().unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
         }
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
@@ -4022,7 +4022,7 @@ pub(crate) mod tests {
         );
         let report = kept("sender-terminal", "after-close").unwrap();
         assert_eq!(report["recipient"]["pane_id"], "recipient");
-        let letters = crate::delivery::ledger::load(&path).unwrap().letters;
+        let letters = crate::delivery::store::load(&path).unwrap().letters;
         let written = letters
             .iter()
             .find(|letter| letter.intent == "after-close")
@@ -4095,8 +4095,8 @@ pub(crate) mod tests {
             }
             ledger.next_id = 3;
             ledger.validate().unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
         }
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
@@ -4218,8 +4218,8 @@ pub(crate) mod tests {
                 apply(&mut ledger, &parent, &step, reserved_at).unwrap();
             }
             ledger.validate().unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
         };
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
@@ -4247,7 +4247,7 @@ pub(crate) mod tests {
         assert_eq!(send().err().as_deref(), Some("participant_unavailable"));
         drop(worker);
         assert!(
-            crate::delivery::ledger::load(&path)
+            crate::delivery::store::load(&path)
                 .unwrap()
                 .letters
                 .is_empty(),
@@ -4899,7 +4899,7 @@ pub(crate) mod tests {
         assert_eq!(result["sender"]["pane_id"], caller);
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let stored = crate::delivery::ledger::load(&path).unwrap();
+        let stored = crate::delivery::store::load(&path).unwrap();
         assert_eq!(stored.letters.len(), 1);
         assert_eq!(
             stored.letters[0].sender.session.as_deref(),
@@ -5114,7 +5114,7 @@ pub(crate) mod tests {
         );
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let stored = crate::delivery::ledger::load(&path).unwrap();
+        let stored = crate::delivery::store::load(&path).unwrap();
         assert_eq!(stored.letters.len(), 5);
     }
 
@@ -5122,7 +5122,7 @@ pub(crate) mod tests {
     fn a_checkout_bound_caller_is_refused_delivery_and_agent_commands_with_or_without_a_hint() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, _, path) = fixture(root.path());
-        let before = std::fs::read(&path).unwrap();
+        let before = crate::delivery::store::read_value(&path).unwrap();
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
@@ -5195,7 +5195,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         drop(guard);
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(crate::delivery::store::read_value(&path).unwrap(), before);
         let result = prepared.run(Duration::from_secs(5)).unwrap();
         assert_eq!(result["sender"]["pane_id"], "sender");
         drop(worker);
@@ -5205,7 +5205,7 @@ pub(crate) mod tests {
     fn prepared_command_refuses_a_changed_pane_context_without_saving() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, _, path) = fixture(root.path());
-        let before = std::fs::read(&path).unwrap();
+        let before = crate::delivery::store::read_value(&path).unwrap();
         let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
@@ -5248,7 +5248,7 @@ pub(crate) mod tests {
                 .letters
                 .is_empty()
         );
-        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(crate::delivery::store::read_value(&path).unwrap(), before);
         drop(worker);
     }
 
@@ -5323,8 +5323,8 @@ pub(crate) mod tests {
                 1,
             )
             .unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
             // A restarted core has no old in-memory observation to guess from.
             guard.delivery_observations.clear();
             let payload = serde_json::from_value(json!({
@@ -5347,7 +5347,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let child = &persisted.agents[1];
         assert_eq!(child.id, "agent-2");
         assert_eq!(child.pane, "moved-child");
@@ -5421,8 +5421,8 @@ pub(crate) mod tests {
                 1,
             )
             .unwrap();
-            crate::delivery::ledger::save(&path, &ledger).unwrap();
-            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+            crate::delivery::store::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::store::load(&path).unwrap()));
             guard.delivery_observations.clear();
             let payload = serde_json::from_value(json!({
                 "panes":[{"pane_id":"moved-child","terminal_id":"terminal-child"}],
@@ -5444,7 +5444,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let child = &persisted.agents[1];
         assert_eq!(child.actor.pane_id, "remote:device:pane:moved-child");
         assert_eq!(child.parent.as_deref(), Some("agent-1"));
@@ -5492,7 +5492,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let ended = |ledger: &Ledger| {
             ledger
                 .agents
@@ -5584,7 +5584,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         drop(worker);
-        let persisted = crate::delivery::ledger::load(&path).unwrap();
+        let persisted = crate::delivery::store::load(&path).unwrap();
         let ended = |ledger: &Ledger| {
             ledger
                 .agents
@@ -5696,7 +5696,7 @@ pub(crate) mod tests {
             .unwrap();
         // Stopped before its file is read: the store passes on its own too.
         drop(worker);
-        let mut persisted = crate::delivery::ledger::load(&path).unwrap();
+        let mut persisted = crate::delivery::store::load(&path).unwrap();
         let shown = crate::delivery::mailbox::apply(
             &mut persisted,
             &lead,
