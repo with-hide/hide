@@ -137,21 +137,36 @@ impl Runtime {
             }
         }
         self.open_tray_for(&key, &place);
+        // A pair view already on keeps the pane it returns the keyboard to;
+        // a new one takes the pane that holds it now.
+        let before = match self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(&key.0, &key.1))
+            .and_then(|view| view.tray(&tab))
+            .and_then(|tray| tray.pair.as_ref())
+        {
+            Some(pair) => pair.before.clone(),
+            None => self.tab_keyboard_pane(&key, &tab),
+        };
         if let Some(store) = self.workspace_views.as_mut() {
-            store.views.entry(&key.0, &key.1).tray_entry(&tab).pair =
-                Some(PairView { pane: pane.clone() });
+            store.views.entry(&key.0, &key.1).tray_entry(&tab).pair = Some(PairView {
+                pane: pane.clone(),
+                before,
+            });
             store.generation += 1;
         }
         self.persist_workspace_views();
         if focus {
-            self.focus_pair_left(&key, &pane);
+            self.focus_tab_pane(&key, &pane);
         }
         true
     }
 
-    /// Gives the keyboard to `pane`, the left of a pair view, on this
-    /// machine or on its device, bringing its tab in front.
-    fn focus_pair_left(&mut self, key: &WorkspaceKey, pane: &str) {
+    /// Gives the keyboard to `pane`, on this machine or on its device,
+    /// bringing its tab in front: the left of a pair view entered or chosen,
+    /// or the pane it returns the keyboard to.
+    fn focus_tab_pane(&mut self, key: &WorkspaceKey, pane: &str) {
         if key.0 == self.node.as_str() {
             if self.local_tab_pane(pane) {
                 self.focus_pane(pane.to_owned(), PaneFocusOrigin::Operator, None);
@@ -188,7 +203,34 @@ impl Runtime {
             store.generation += 1;
         }
         self.persist_workspace_views();
+        // The operator leaving, or closing the desk's last tab, gives the
+        // keyboard back to the pane that held it before (B26); a pair view
+        // that ends because its pane went, or another was chosen, leaves it.
+        if matches!(cause, "left" | "emptied" | "tray_emptied")
+            && let Some(before) = pair.before.filter(|before| {
+                *before != pair.pane && self.pane_tab(key, before).as_deref() == Some(tab)
+            })
+        {
+            self.focus_tab_pane(key, &before);
+        }
         true
+    }
+
+    /// The pane of `tab` that holds the keyboard now, on this machine or
+    /// its device.
+    fn tab_keyboard_pane(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
+        let focused = if key.0 == self.node.as_str() {
+            self.snapshot.focused.pane_id.clone()
+        } else {
+            self.snapshot
+                .status
+                .remote
+                .iter()
+                .find(|remote| remote.target_id == key.0)
+                .and_then(|remote| remote.session.as_ref())
+                .and_then(|session| session.focused_pane_id.clone())
+        };
+        focused.filter(|pane| self.pane_tab(key, pane).as_deref() == Some(tab))
     }
 
     /// The View of `pane`'s agent that pairs with it: the newest it opened
@@ -239,13 +281,15 @@ impl Runtime {
             .and_then(|store| store.views.get_mut(&key.0, &key.1))
             .and_then(|view| view.tray_mut(&tab))
         {
-            tray.pair = Some(PairView { pane: pane.clone() });
+            let before = tray.pair.take().and_then(|pair| pair.before);
+            tray.pair = Some(PairView { pane, before });
         }
         if let Some(store) = self.workspace_views.as_mut() {
             store.generation += 1;
         }
+        // The keyboard stays on the desk tab the operator chose; the left
+        // pane takes it only on an entry or a choice of a pane.
         self.persist_workspace_views();
-        self.focus_pair_left(key, &pane);
     }
 
     /// The pane of the agent a desk tab belongs to, the one rule the tab's

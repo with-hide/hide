@@ -184,6 +184,10 @@ pub struct Tray {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PairView {
     pub pane: String,
+    /// The pane of the tab that held the keyboard before pair view, which
+    /// gets it back when the operator leaves (B26).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
 }
 
 /// Where one of a checkout's Views sits: on one Agent tab's desk, or on the
@@ -1420,6 +1424,7 @@ mod tests {
         }
         entry.tray_entry("w1:t2").pair = Some(PairView {
             pane: "w1:p3".into(),
+            before: None,
         });
         entry.align_ids(&Place::Tray("w1:t2".into()));
         let card = entry.tray_mut("w1:t2").unwrap().layout.new_card_display(

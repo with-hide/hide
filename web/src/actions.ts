@@ -3176,7 +3176,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * in front and refuses a pane with nothing to show.
      */
     togglePairView(paneId: string) {
-      const pair = workspaceViewOf(rest())?.tray.pair;
+      // Pressed only while drawn: a pair view the closed lane hides is entered again.
+      const pair = drawnPair(workspaceViewOf(rest()));
       dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
     },
 

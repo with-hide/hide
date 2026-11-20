@@ -2023,11 +2023,12 @@ fn front_pair(runtime: &Runtime) -> crate::model::PairViewSnapshot {
         .expect("in pair view")
 }
 
-/// The pane on screen on the left is the one the keys reach: entering pair
-/// view with a pane that does not hold the keyboard gives it the keyboard,
-/// and a desk tab of another agent brought in front gives it to that one.
+/// Entering pair view with a pane that does not hold the keyboard gives it
+/// the keyboard; a desk tab of another agent the operator brings in front
+/// moves the left pane and leaves the keyboard where the operator pressed;
+/// leaving gives it back to the pane that held it before (B26).
 #[test]
-fn the_left_pane_of_a_pair_view_holds_the_keyboard() {
+fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     let (mut runtime, _checkout, directory) = setup("pair-keyboard");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2053,8 +2054,150 @@ fn the_left_pane_of_a_pair_view_holds_the_keyboard() {
     assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
-        Some("w-order:t1:p")
+        Some("w-order:t1:q"),
+        "a desk tab chosen keeps the keyboard where it was"
     );
+
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    pair_event(&mut runtime, None);
+    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t1:p"),
+        "B26: the pane that held the keyboard before entering"
+    );
+}
+
+/// B25 on a device: the operator choosing another pane of a device tab in
+/// pair view goes through the device's focus request, and the pair view
+/// follows it as it does on this machine; a pane with nothing to show ends it.
+#[test]
+fn choosing_a_device_pane_moves_its_tabs_pair_view() {
+    let (mut runtime, _checkout_id, _directory) = setup("pair-device");
+    let device = "studio";
+    let tab = crate::address::scoped_id(device, crate::address::Kind::Tab, "t1");
+    let [left, other] =
+        ["p1", "p2"].map(|id| crate::address::scoped_id(device, crate::address::Kind::Pane, id));
+    let key = (device.to_owned(), "/srv/remote".to_owned());
+    let mut project = workspace(
+        "remote-workspace",
+        "Remote",
+        "/srv/remote",
+        vec![checkout(
+            "remote-workspace",
+            "remote-checkout",
+            "/srv/remote",
+            Some(pane(&left, "/srv/remote")),
+        )],
+    );
+    project.device_id = device.to_owned();
+    project.remote_target_id = Some(device.to_owned());
+    project.checkouts[0].tabs[0].id = Some(tab.clone());
+    project.checkouts[0].tabs[0]
+        .panes
+        .push(pane(&other, "/srv/remote"));
+    project.checkouts[0].active_tab_id = Some(tab.clone());
+    runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
+        target_id: device.to_owned(),
+        state: "connected".to_owned(),
+        message: None,
+        session: Some(RemoteSessionSnapshot {
+            workspaces: vec![project],
+            agents: Vec::new(),
+            active_tab_ids: Default::default(),
+            focused_workspace_id: Some("remote-workspace".to_owned()),
+            focused_checkout_id: Some("remote-checkout".to_owned()),
+            focused_tab_id: Some(tab.clone()),
+            focused_pane_id: Some(left.clone()),
+            pane_layouts: Vec::new(),
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+        }),
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        unreachable_since_unix_ms: None,
+    });
+    let mut device_row = runtime.snapshot.navigator.devices[0].clone();
+    device_row.id = device.to_owned();
+    device_row.kind = "remote".to_owned();
+    device_row.state = "connected".to_owned();
+    runtime.snapshot.navigator.devices.push(device_row);
+    runtime.install_remote_control(RemoteControlContext::new(
+        device,
+        super::device_catalog::recording_engine(Arc::new(Mutex::new(Vec::new()))),
+        Weak::new(),
+        ChangeNotifier::noop(),
+    ));
+    runtime.set_front_device(Some(device.to_owned()));
+    runtime
+        .reconcile_agent_topology(&key, &[(tab.clone(), false)])
+        .unwrap();
+    let tray_pair = |runtime: &Runtime| {
+        runtime
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.views.get(device, "/srv/remote"))
+            .and_then(|view| view.tray(&tab))
+            .and_then(|tray| tray.pair.as_ref())
+            .map(|pair| pair.pane.clone())
+    };
+    let view = runtime
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(device, "/srv/remote");
+    view.tray_entry(&tab).pair = Some(crate::workspace_views::PairView {
+        pane: left.clone(),
+        before: None,
+    });
+    assert_eq!(tray_pair(&runtime), Some(left.clone()));
+
+    super::device_catalog::dispatch(
+        &mut runtime,
+        "remote_control",
+        serde_json::json!({
+            "target_id": device, "request_id": "pair-device-other", "focus_device": true,
+            "action": "focus_pane", "pane_id": other,
+        }),
+    );
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        tray_pair(&runtime),
+        None,
+        "the chosen pane has nothing to show, so the tab's own layout comes back"
+    );
+}
+
+/// D-41: a desk tab whose agent is in another Agent tab stays on the strip
+/// in pair view, like the operator's own; only another agent of the paired
+/// tab folds.
+#[test]
+fn a_desk_tab_of_an_agent_in_another_tab_stays_on_the_strip() {
+    let (mut runtime, _checkout, directory) = setup("pair-other-tab");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    let session = crate::links::ledger::SessionIdentity {
+        device_id: crate::node::TEST_NODE.to_owned(),
+        agent: "codex".to_owned(),
+        session_id: "session-w-order:t2:p".to_owned(),
+    };
+    runtime.dispatch_json(&explorer_event(
+        "detail_open",
+        serde_json::json!({"item": crate::model::DetailItem::Record { session }}),
+    ));
+    runtime.sync_workspace_view();
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        front_owner(&runtime),
+        ("card".into(), Some("w-order:t2:p".into()))
+    );
+    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
+    assert!(front_pair(&runtime).folded.is_empty(), "nothing folds");
 }
 
 /// D-41: the desk on screen folds the tabs another agent of the paired tab

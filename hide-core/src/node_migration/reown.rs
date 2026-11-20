@@ -2766,6 +2766,7 @@ mod tests {
             tray.shown = true;
             tray.pair = Some(crate::workspace_views::PairView {
                 pane: pane.to_owned(),
+                before: None,
             });
             serde_json::to_value(&view.trays).unwrap()
         };
