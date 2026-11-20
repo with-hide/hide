@@ -174,9 +174,8 @@ test("a pane's Show in Overview opens Work with its session chosen and gives the
     await openOverview(page, "projects");
     await page.keyboard.press("Escape");
     await expect(page.locator("[data-overview-page]")).toHaveCount(0);
-    // The pane menu's first item opens it; the header keeps no button of its own.
+    // The pane menu opens it; the header keeps no button of its own.
     await page.locator(`[data-pane-menu="${pane}"]`).click();
-    await expect(page.locator('[data-menu-item]').first()).toHaveAttribute("data-menu-item", "open_in_overview");
     await page.locator('[data-menu-item="open_in_overview"]').click();
     await expect(page.locator('[data-main-view="work"]')).toBeVisible();
     await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });

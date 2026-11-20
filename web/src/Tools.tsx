@@ -20,21 +20,21 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { ViewAreas } from "./ViewAreas";
 import { workspaceKey } from "./viewLayout";
-import { TOOLS, TOOL_SCOPES, type LaneFrame, type LaneSizes, type Tool, type WorkspaceView } from "./workspace";
+import { TOOLS, TOOL_SCOPES, agentEntries, type LaneFrame, type LaneSizes, type Tool, type WorkspaceView } from "./workspace";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 
 // The right lane and its tool rail (PRD lane-two-columns D-01, D-02, D-07;
 // PRD right-lane D-05, D-08): the lane is two columns, the viewing column at
-// the agents' side showing the desk of the Agent tab in front, its documents
-// and cards (PRD lane-desk-pair-view D-06, D-13), and the tool column beside
+// the agents' side showing the front Agent tab's desk (its View areas, cards
+// among their tabs; PRD lane-desk-pair-view D-06), and the tool column beside
 // the rail showing one tool, the Project tool (D-14), the Project's Memory,
-// Explorer (the file tree) or Changes (History). The rail at the body's right edge has the viewing
-// column's buttons above a rule and the tools below it; each brings its
-// column in front or folds it. Whether the lane is open, which columns show,
-// the tool and the widths are the front Workspace's, kept by the core;
-// whether the lane is expanded and which column a stacked lane draws are
-// this page's (`ui.ts`).
+// Explorer (the file tree) or Changes (History). The rail at the body's right
+// edge has the desk's button above a rule and the tools below it; each brings
+// its column in front or folds it. Which columns show, the tool and the
+// widths are the front Workspace's, and the desk the front tab's, kept by
+// the core; whether the lane is expanded and which column a stacked lane
+// draws are this page's (`ui.ts`).
 
 const TOOL_NAMES = { explorer: "panes.lane.explorer", changes: "panes.lane.changes", project: "projectTool.title", memory: "panes.lane.memory" } as const satisfies Record<Tool, MessageKey>;
 const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon, memory: BrainIcon };
@@ -53,11 +53,11 @@ const RAIL_BUTTON = "relative flex size-(--size-tool-rail-button) items-center j
  * checkout for the checkout's tools (Explorer, Changes), the Project for the
  * Project and Memory tools.
  */
-function useScope(checkout: Checkout | null): (tool: Tool | "documents") => string {
+function useScope(checkout: Checkout | null): (tool: Tool) => string {
   const project = useShellStore((s) => (checkout ? catalogWorkspaces(s.rest).find((row) => row.checkouts.some((candidate) => candidate.id === checkout.id)) ?? null : null));
   const name = checkout ? (checkout.branch ?? checkout.label) : "";
   const projectName = project?.label ?? name;
-  return (tool) => (tool !== "documents" && TOOL_SCOPES[tool] === "project" ? projectName : name);
+  return (tool) => (TOOL_SCOPES[tool] === "project" ? projectName : name);
 }
 
 /**
@@ -68,14 +68,21 @@ function useScope(checkout: Checkout | null): (tool: Tool | "documents") => stri
  * name, scope and chord in its hint, pressed while the tool column shows
  * it, opening the tool column on it or closing the column when it already
  * shows it. The Project tool counts its project's 흘린 것 and the Hide AI
- * tool what its two tabs ask of the operator, each no number at 0. With no document the documents button is off and says so.
- * At the bottom the `…` stays in place whether the lane is up or not and
- * whichever column it shows (B15).
+ * tool what its two tabs ask of the operator, each no number at 0. With an
+ * empty desk the button is off and says so. Its hint's scope is the front
+ * Agent tab, whose desk it counts (D-35), so the number is not read as the
+ * checkout's. At the bottom the `…` stays in place whether the lane is up or
+ * not and whichever column it shows (B15).
  */
 export function ToolRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const checkout = useShellStore((s) => frontCheckout(s.rest));
   const views = useShellStore((s) => (s.rest?.workspace_view as WorkspaceView | undefined)?.tray.count ?? 0);
+  // The desk's scope: the name the front Agent tab's strip tab shows.
+  const deskTab = useShellStore((s) => {
+    const tab = (s.rest?.workspace_view as WorkspaceView | undefined)?.tray.tab_id;
+    return tab && checkout ? agentEntries(checkout).find((entry) => entry.source_id === tab)?.label ?? "" : "";
+  });
   const drawn = useUiStore((s) => s.drawnLane);
   const strays = useShellStore((s) => frontProject(s.rest)?.agent_scope.status?.strays_total ?? 0);
   // The Hide AI tool's number is the core's: its 제안 and its Memory tab's own, none while its switch is off (PRD hide-ai-suggestions D-01, B3).
@@ -93,7 +100,7 @@ export function ToolRail({ actions }: { actions: Actions }) {
   useMemoryProject(actions);
   return (
     <nav className="flex w-(--size-tool-rail) shrink-0 flex-col items-center gap-xxs border-l border-border bg-sidebar py-xs" aria-label={t("panes.lane.rail")} data-tool-rail="true">
-      <Hint label={views > 0 ? `${t("panes.lane.documents")} · ${scope("documents")} · ${t("panes.workspace.viewsOpen", { count: views })}` : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
+      <Hint label={views > 0 ? [t("panes.lane.documents"), deskTab, t("panes.workspace.viewsOpen", { count: views })].filter(Boolean).join(" · ") : t("panes.lane.noDocuments")} shortcut={documentsChord || undefined} side="left">
         <button
           type="button"
           aria-pressed={documentsShown}

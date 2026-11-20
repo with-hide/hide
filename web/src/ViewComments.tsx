@@ -63,14 +63,19 @@ export function useViewFeedback(): ViewFeedback | undefined {
 
 // --- the opener's mark (B1-B7) ----------------------------------------------------
 
-/** The selected View toolbar's opener mark; a press goes to the agent's pane. */
-export function OpenerMark({ opener, actions }: { opener: ViewOpener; actions: Actions }) {
+/**
+ * The selected View toolbar's opener mark, or a card's agent (`owner`) at the
+ * end of its path line; a press goes to the agent's pane.
+ */
+export function OpenerMark({ opener, role = "opener", actions }: { opener: ViewOpener; role?: "opener" | "owner"; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const product = agentProductName(opener.provider);
   const closed = !opener.pane_id;
   const name = closed ? t("feedback.mark.closed", { name: opener.name }) : opener.name;
-  const lines = [name, t("feedback.mark.opened", { product }), ...(closed ? [] : [t("feedback.mark.go")])].join("\n");
-  const label = closed ? t("feedback.mark.labelClosed", { name: opener.name, product }) : t("feedback.mark.label", { name: opener.name, product });
+  const lines = [name, t(role === "owner" ? "feedback.mark.owner" : "feedback.mark.opened", { product }), ...(closed ? [] : [t("feedback.mark.go")])].join("\n");
+  const label = role === "owner"
+    ? t(closed ? "feedback.mark.ownerLabelClosed" : "feedback.mark.ownerLabel", { name: opener.name, product })
+    : t(closed ? "feedback.mark.labelClosed" : "feedback.mark.label", { name: opener.name, product });
   const mark = agentMarkOf(opener.provider);
   return (
     <Hint label={lines} side="top">

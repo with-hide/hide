@@ -117,7 +117,7 @@ it("says 작업 단계 with a cell per step and n/m while the plan runs, 검토 
   } finally { await none.unmount(); }
 });
 
-it("opens a checklist in the order the steps wait on, never a map or a record footer, whose Larger opens the plan in the 보기 slot (PRD mission-plan-visibility B3, B4, B7; hide-plan B11, D-29)", async () => {
+it("opens a checklist in the order the steps wait on, never a map or a record footer, whose Larger opens the plan as a card tab on a desk (PRD mission-plan-visibility B3, B4, B7; hide-plan B11, D-29)", async () => {
   const view = await mount([plan({ steps: [...plan().steps.slice(0, 3), step("docs", "dropped", ["spec"], { changed: true, change: "folded into web" })] })]);
   try {
     expect(view.popover()).toBeNull();

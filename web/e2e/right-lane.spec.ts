@@ -140,7 +140,12 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
     // Escape in the lane closes it as ⌘E does; the keyboard goes back to the pane.
+    // In the editor the first Escape is the editor's, which lets Tab leave it
+    // (PRD lane-desk-pair-view B30), so the lane closes from the tab strip.
     await documentArea(page).locator(".cm-content").click();
+    await page.keyboard.press("Escape");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await front(page).focus();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await expect(pane(page, lane.fixture.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
@@ -148,9 +153,11 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await quietFor(page, 500, "no terminal was fitted again while the lane came and went");
     expect(resizes(lane)).toBe(before);
 
-    // Escape on the rail closes it too.
+    // Escape on the rail closes it too (the press leaves the keyboard on the
+    // desk's front tab, whose Escape closes it as well: lane-desk.spec.ts).
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await railTool(page, "documents").focus();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
 

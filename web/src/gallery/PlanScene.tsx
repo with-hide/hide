@@ -2,7 +2,7 @@
 // `state` parameter: running, review, finished, and a plan whose steps are
 // handed to other agents, at work (`delegated`) and finished
 // (`delegated-finished`, PRD hide-plan-delegate B25-B30); `pick` presses a step's card to open its panel. The checklist the pane chip
-// opens (PRD mission-plan-visibility B3-B6) sits beside the map the 보기 slot
+// opens (PRD mission-plan-visibility B3-B6) sits beside the map a desk's card tab
 // draws, both the real components. Nothing leaves this scene.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";

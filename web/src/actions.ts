@@ -496,7 +496,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
-   * Puts `item` in a 보기 slot (PRD sidebar-task-lens B14, B15;
+   * Puts `item` as a card tab on a desk (PRD sidebar-task-lens B14, B15;
    * lane-two-columns B9) where it was pressed (operator decision
    * 2026-11-09): `here` the slot in front, the Workspace, its Agent tab and
    * the keyboard staying; `{ pane }` or `owner` the slot of that agent, whose
@@ -574,7 +574,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   };
 
   /**
-   * What a mission's detail opens in the 보기 slot (a node's plan, a worker's
+   * What a mission's detail opens as a card tab on a desk (a node's plan, a worker's
    * or checker's record) is drawn by the Workspace in front, not on the
    * mission screen, so the screen gives way to it first (PRD mission-screen
    * D-09); with no Workspace in front the screen stays.
@@ -596,15 +596,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * Brings the desk in front of the viewing column (B6, B11): the lane comes
    * up, a stacked lane draws them, and the keyboard goes
    * into the active area, so typing and ⌘W act on the document the operator
-   * brought back rather than on the terminal behind it.
+   * brought back rather than on the terminal behind it. From the rail's desk
+   * button it stops on the area's front tab instead: a click or Tab enters
+   * the editor, and Escape there closes the lane (PRD lane-desk-pair-view B30).
    */
-  const showDocuments = () => {
+  const showDocuments = (onTab = false) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     ui().setStackFront("view");
     if (!view.open || !view.tray.shown) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
-      followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
+      const workspace = { device_id: view.device_id, path: view.path };
+      if (onTab) ui().setViewFocusRequest({ workspace: workspaceKey(workspace), areaId: view.layout.active_area, tab: true });
+      else followFocus({ workspace, layout: view.layout }, { areaId: view.layout.active_area });
     }
   };
 
@@ -617,7 +621,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
-    showDocuments();
+    showDocuments(true);
   };
 
   /**
@@ -1977,7 +1981,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A Hide AI branch in the lane's 보기 slot (PRD hide-ai-branch-first-apply
+     * A Hide AI branch as a card tab on a desk (PRD hide-ai-branch-first-apply
      * B4): its card of files, or with `path` that file's diff against the
      * branch's base. One event; the checkout in front, its Agent tab and the
      * keyboard stay where they are.
@@ -1991,7 +1995,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A session link retains repository identity even when its maker moved
      * projects. `at` says where it was pressed: an agent's row passes its
-     * pane, a card in the 보기 slot `here`, and a place with no agent leaves
+     * pane, a card tab on the desk in front `here`, and a place with no agent leaves
      * it to the agent that made the pull request.
      */
     openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}, at: import("./snapshot").DetailPlace = "owner") {
@@ -2004,7 +2008,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A pull request's decision card (PRD sidebar-task-lens D-50, B14,
-     * B17): one event, and the core puts the card in the 보기 slot of the
+     * B17): one event, and the core puts the card on the desk of the
      * agent `at` names (operator decision 2026-11-09): by default the one
      * that made it, which comes forward with its pane. At Home the PR's
      * Workspace opens too, with the card in its lane. A project this core
@@ -2039,7 +2043,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A mission's map as a card in the lane's 보기 slot, under the same rules
+     * A mission's map as a card tab on a desk, under the same rules
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
      * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
      * You row and the Overview open it in the Conductor's slot, which the
@@ -2091,7 +2095,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
     },
 
-    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16); a card in the 보기 slot the core reads itself. */
+    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16); a card as a card tab on a desk the core reads itself. */
     missionShown(missionId: string | null) {
       dispatch({ schema_version: 2, kind: "mission_shown", payload: { mission: missionId } });
     },
@@ -2282,7 +2286,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * A task's row asked for from outside the list (B40): a pane head's agent
      * tree button or a started backlog item. The sidebar shows the 태스크 list
      * with the row unfolded and selected, and the agent's record opens in the
-     * 보기 slot, or in the Overview's panel at Home.
+     * desk, or in the Overview's panel at Home.
      */
     revealTask(paneId: string) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
@@ -3162,6 +3166,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
     },
 
+    /**
+     * ◧ on a pane's head or in its menus (PRD lane-desk-pair-view B18, B20,
+     * B26): the pane beside its tab's desk, or, pressed on the pane already
+     * there, the tab's own layout back. The core decides what the desk puts
+     * in front and refuses a pane with nothing to show.
+     */
+    togglePairView(paneId: string) {
+      const pair = workspaceViewOf(rest())?.tray.pair;
+      dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
+    },
+
     /** ⌘= / ⌘- / ⌘0 scale whichever surface is showing: an image or PDF
      * zooms when its display holds the keyboard, the document's text when an
      * editor tab owns the canvas, else the focused terminal pane's. */
@@ -3317,7 +3332,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
-     * 보기 slot of the agent `at` names (operator decision 2026-11-09), by
+     * desk of the agent `at` names (operator decision 2026-11-09), by
      * default the session's own, which the core brings forward with its
      * pane, where it starts its read, or in the Overview's panel when no
      * Workspace is in front. A session with no pane on this machine opens in
@@ -3335,7 +3350,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
     /**
-     * A session's plan, large in the lane's 보기 slot (PRD hide-plan B11), in
+     * A session's plan, large as a card tab on a desk (PRD hide-plan B11), in
      * the session's own slot as its record opens (operator decision
      * 2026-11-09); a mission node's `크게 ›` passes `here`, so the plan stays
      * in the slot the map was pressed in, as a worker's record does.
@@ -3447,7 +3462,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (lane) dispatch({ schema_version: 2, kind: "session_record_open", payload: { session: lane } });
       else dispatch({ schema_version: 2, kind: "session_record_close", payload: {} });
     },
-    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and the 보기 slot shows the same record. */
+    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and a desk shows the same record. */
     viewRecordInLane(deviceId: string, workspaceId: string, checkoutId: string, session: import("./snapshot").WorkSession) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);

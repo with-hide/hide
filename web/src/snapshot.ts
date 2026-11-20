@@ -819,7 +819,7 @@ export type PrFeedback = {
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
-/** `branch_diffs`: the Hide AI branch files read now, the 보기 slot's and the open 제안 row's, at most two. */
+/** `branch_diffs`: the Hide AI branch files read now, a card tab's and the open 제안 row's, at most two. */
 export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diffs?: BranchDiff[] };
 
 /** One file's committed diff on a Hide AI branch against its base, read on the Project's machine (PRD hide-ai-branch-first-apply B4). */
@@ -1634,7 +1634,7 @@ export type MissionEvent = {
   action?: MissionOperatorAction;
 };
 
-/** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
+/** The events of the mission open as a card tab on a desk (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
 export type MissionEventsSnapshot = { mission: string | null; events: MissionEvent[]; dropped: number };
 
 /** The brief of the node whose folded box the operator opened (`mission_brief`): one node at a time, `text` null when the node holds none. */
@@ -2937,7 +2937,7 @@ export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging
 /** What the attempt's agent was asked: commit on the branch, push it as one pull request, or make it again on its base. */
 export type SuggestionAttemptPurpose = "branch" | "pr" | "rebase";
 
-/** A ready branch as its row and the 보기 slot's branch card draw it (B3, B4). */
+/** A ready branch as its row and a branch card tab draw it (B3, B4). */
 export type SuggestionBranch = {
   name: string;
   base: string | null;
@@ -3539,7 +3539,7 @@ export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
-  /** The events of the mission open in the 보기 slot (PRD mission-plan-visibility D-22). */
+  /** The events of the mission open as a card tab on a desk (PRD mission-plan-visibility D-22). */
   mission_events?: MissionEventsSnapshot;
   /** The brief of the one node whose folded box was opened; `text` is null when it holds none. */
   mission_brief?: MissionBriefSnapshot;
