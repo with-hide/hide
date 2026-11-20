@@ -509,7 +509,9 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     // Desk's thread ⇄ terminal (session-docs-and-assistant B35) is listed only
     // while Desk is on, and Desk is off by default (D-76, B41).
     // The four directional terminal focus commands are listed too.
-    await expect(page.locator("[data-shortcut]")).toHaveCount(64);
+    await expect(page.locator("[data-shortcut]")).toHaveCount(65);
+    // Pair view's ⌘. (PRD lane-desk-pair-view B18) is a row of its own.
+    await expect(page.locator('[data-shortcut="pair_view"]')).toHaveCount(1);
     await expect(page.locator('[data-shortcut="desk_terminal"]')).toHaveCount(0);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
