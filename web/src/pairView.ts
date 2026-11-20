@@ -8,7 +8,7 @@ import type { PairView, WorkspaceView } from "./workspace";
 export type PairOffer = "off" | "on" | "none";
 
 export function pairOffer(view: WorkspaceView | null | undefined, paneId: string): PairOffer {
-  if (view?.tray.pair?.pane_id === paneId) return "on";
+  if (drawnPair(view)?.pane_id === paneId) return "on";
   return view?.pairable?.includes(paneId) ? "off" : "none";
 }
 
@@ -28,4 +28,16 @@ export function drawnPair(view: WorkspaceView | null | undefined): PairView | nu
   const pair = view?.tray.pair;
   if (!pair || !view.open || !view.tray.shown || (view.layout?.display_count ?? 0) === 0) return null;
   return pair;
+}
+
+/**
+ * The tabs the tab row and the sidebar mark as in pair view (D-17): every
+ * paired tab while the lane is open, and the front one only while it is
+ * drawn, so a lane closed with ⌘E leaves no mark on a screen that shows the
+ * tab's own layout.
+ */
+export function markedPairs(view: WorkspaceView | null | undefined): PairView[] {
+  if (!view?.open) return [];
+  const drawn = drawnPair(view);
+  return (view.pairs ?? []).filter((pair) => pair.tab_id !== view.tray.tab_id || drawn !== null);
 }

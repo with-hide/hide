@@ -398,6 +398,13 @@ pub struct TraySnapshot {
 pub struct PairViewSnapshot {
     pub tab_id: String,
     pub pane_id: String,
+    /// The desk tabs in front of the drawn desk that another agent of the
+    /// paired tab owns, which the desk folds into its `Others N` menu
+    /// (D-41); bringing one in front takes its agent to the left (B24). A
+    /// tab whose owner is in another Agent tab, like one nobody owns, stays
+    /// on the strip. Only the desk on screen carries them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<String>,
 }
 
 /// The Views of unsaved documents one pane's session alone opened.

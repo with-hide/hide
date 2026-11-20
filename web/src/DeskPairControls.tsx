@@ -5,33 +5,31 @@ import { Button } from "./components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
-import { cn } from "./lib/utils";
 import { allAgents } from "./paneAgents";
 import { commandLabel } from "./shortcutLabels";
 import type { ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 
 // The desk's own pair view controls (PRD lane-desk-pair-view B17, B24, D-08,
-// D-41): the pin beside the desk's ✕, and in pair view the one menu the
-// other agents' tabs fold into.
+// D-41, D-42): the pin beside the desk's ✕, and in pair view the one menu
+// the other agents' tabs fold into.
 
-/** The desk's pin: the tab in front beside its agent's pane, or, pressed in pair view, the tab's own layout back. */
-export function DeskPin({ displayId, paired, actions }: { displayId: string | null; paired: boolean; actions: Actions }) {
+/** The desk's pin, a way into pair view only (D-42): the tab in front beside its agent's pane. The desk draws none in pair view, whose ways out are the strip's, ⌘., the pressed ◧ and closing the desk. */
+export function DeskPin({ displayId, actions }: { displayId: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const label = t(paired ? "panes.menu.pairOff" : "panes.menu.pair");
+  const label = t("panes.menu.pair");
   return (
     <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
       <Button
         variant="ghost"
         size="icon-sm"
-        className={cn(paired ? "bg-secondary text-pair-view" : "text-muted-foreground")}
+        className="text-muted-foreground"
         aria-label={label}
-        aria-pressed={paired}
         disabled={displayId === null}
-        data-desk-pin={paired ? "on" : "off"}
+        data-desk-pin="off"
         onClick={() => displayId !== null && actions.pinPairView(displayId)}
       >
-        <PinIcon className={cn(paired && "fill-current")} />
+        <PinIcon />
       </Button>
     </Hint>
   );

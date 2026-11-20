@@ -221,6 +221,9 @@ struct DisplayFacts<'a> {
     wait: Option<String>,
     /// The checkout's comments, which each display counts its own of.
     feedback: Option<&'a crate::view_feedback::Feedback>,
+    /// The machine's live sessions by pane, which a record or plan card
+    /// names its owner from (`owner_pane`); read on the first card only.
+    sessions: std::cell::OnceCell<Vec<(String, crate::links::ledger::SessionIdentity)>>,
 }
 
 /// Where a document being read shows once it lands: the Workspace, the tray
@@ -3378,6 +3381,7 @@ impl Runtime {
                 .and_then(|store| store.views.get(&key.0, &key.1))
                 .map(|view| &view.feedback)
                 .filter(|feedback| !feedback.comments.is_empty()),
+            sessions: std::cell::OnceCell::new(),
         }
     }
 
@@ -3509,7 +3513,16 @@ impl Runtime {
             .opener
             .as_ref()
             .map(|opener| self.view_opener_snapshot(opener));
-        let owner_pane = self.owner_pane_of(display, opener.as_ref());
+        let none = [];
+        let sessions = if display.card.is_some() {
+            facts
+                .sessions
+                .get_or_init(|| self.live_sessions())
+                .as_slice()
+        } else {
+            &none
+        };
+        let owner_pane = self.owner_pane_of(display, opener.as_ref(), sessions);
         ViewDisplaySnapshot {
             id: display.id.clone(),
             tab_id: tab.map(|tab| tab.id.clone()),

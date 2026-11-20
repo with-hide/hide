@@ -87,9 +87,9 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(deskTabs(page)).toHaveCount(2);
     await quietFor(page, 500, "every pane's first fit has landed");
 
-    // B19: a shell with nothing to show has ◧ off with why, and ⌘. on it changes nothing.
-    await expect(pairButton(page, shell)).toHaveAttribute("data-pane-pair", "none");
-    await expect(pairButton(page, shell)).toHaveAttribute("aria-disabled", "true");
+    // The keyboard goes to the shell, so ◧ is pressed on a pane that does not hold it.
+    await paneView(page, shell).locator("[data-terminal-host]").click();
+    await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
     await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
     await pairButton(page, left!).hover();
     await expect(page.getByRole("tooltip")).toContainText("Pair view");
@@ -108,6 +108,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(paneView(page, other!)).toHaveCount(0);
     await expect(paneView(page, shell)).toHaveCount(0);
     await expect(pairButton(page, left!)).toHaveAttribute("aria-pressed", "true");
+    await expect(paneView(page, left!), "the pane on screen takes the keyboard").toHaveAttribute("data-focused", "true");
     await expect(page.locator(`[data-pair-tab="${engine.tab}"]`)).toBeVisible();
     await expect(page.locator(`[data-pair-row="${left}"]`).first()).toBeVisible();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
@@ -128,7 +129,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await page.locator("[data-pair-others-item]").first().click();
     await expect(page.locator(`[data-pair-pane="${other}"]`)).toBeVisible();
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
-    await expect(strip(page)).toBeVisible();
+    await expect(paneView(page, other!)).toHaveAttribute("data-focused", "true");
     // B24, D-21: a tab the operator opened belongs to nobody, so the left pane stays.
     await showTool(page, "explorer");
     await page.locator('[data-explorer-row$="/notes.md"]').click();
@@ -193,7 +194,9 @@ test("the desk's pin pairs the tab in front with its agent, pair view stays the 
     // B17: the pin puts the tab in front beside the pane of the agent it belongs to, not the focused one.
     await page.locator('[data-desk-pin="off"]').click();
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
-    await expect(page.locator('[data-desk-pin="on"]')).toBeVisible();
+    await expect(paneView(page, left!), "the pane on screen takes the keyboard").toHaveAttribute("data-focused", "true");
+    // D-42: the pin is a way in only; pair view draws none.
+    await expect(page.locator("[data-desk-pin]")).toHaveCount(0);
     await expect(strip(page)).toBeVisible();
 
     // B27: another tab shows its own layout; the strip marks the paired tab still, and coming back finds pair view.
@@ -209,7 +212,7 @@ test("the desk's pin pairs the tab in front with its agent, pair view stays the 
     await page.goto("about:blank");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible({ timeout: 20_000 }); // wait-ok: the restarted daemon reads the saved pair view and the page draws it again
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
     // B26: the strip's way back, then the pressed ◧, both bring the tab's own layout back.
@@ -229,6 +232,52 @@ test("the desk's pin pairs the tab in front with its agent, pair view stays the 
     await expect(paneView(page, other!)).toBeVisible();
     await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
     await expect(page.locator('[role="alert"]')).toHaveCount(0);
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
+test("⌘. puts the focused pane beside its desk, and on a shell with nothing to show it changes nothing and ◧ says why", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const sent = { pair: 0 };
+  page.on("websocket", (ws) => ws.on("framesent", (frame) => {
+    if (String(frame.payload).includes('"kind":"pair_view"')) sent.pair += 1;
+  }));
+  const engine = await startFixture({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const fixture = path.join(engine.root, "fixture");
+    daemon = await startHided(engine, "pair-view-key");
+    const [left] = engine.panes;
+    // An agent with its session and nothing opened: pair view shows its record.
+    await agentPane(engine, daemon.stateDir, left!);
+    const shell = await withControl(daemon, (control) => splitPane(control, engine.tab, fixture, { direction: "down" }));
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+
+    // B19: the shell's ◧ is off and its hint says why, with no chord.
+    await expect(pairButton(page, shell)).toHaveAttribute("data-pane-pair", "none");
+    await expect(pairButton(page, shell)).toHaveAttribute("aria-disabled", "true");
+    await pairButton(page, shell).hover();
+    await expect(page.getByRole("tooltip")).toContainText("Nothing to show beside it yet");
+    await expect(page.getByRole("tooltip")).not.toContainText(commandLabel("pair_view"));
+
+    // ⌘. on the shell sends nothing and the screen stays as it is.
+    await paneView(page, shell).locator("[data-terminal-host]").click();
+    await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
+    await page.keyboard.press(chord("pair_view"));
+    await quietFor(page, 300, "a refused ⌘. would have sent its event by now");
+    expect(sent.pair).toBe(0);
+    await expect(strip(page)).toHaveCount(0);
+
+    // B18: ⌘. on the agent's pane enters, its record on the desk.
+    await paneView(page, left!).locator("[data-terminal-host]").click();
+    await expect(paneView(page, left!)).toHaveAttribute("data-focused", "true");
+    await page.keyboard.press(chord("pair_view"));
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await expect(deskTabs(page)).toHaveCount(1);
   } finally {
     daemon?.stop();
     engine.stop();

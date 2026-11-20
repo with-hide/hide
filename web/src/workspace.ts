@@ -72,7 +72,8 @@ export type WorkspaceView = {
 /** One Agent tab's desk as the screen draws it. */
 export type TraySnapshot = { tab_id: string; shown: boolean; count: number; pair?: PairView | null };
 /** An Agent tab in pair view: the pane drawn beside its desk. */
-export type PairView = { tab_id: string; pane_id: string };
+/** An Agent tab in pair view: the pane drawn beside its desk, and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
+export type PairView = { tab_id: string; pane_id: string; folded?: string[] };
 
 /** The Views of unsaved documents one pane's session alone opened. */
 export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };

@@ -236,7 +236,7 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
   // In pair view the lane is the half beside the paired pane, under the tab
   // row and the strip (PRD lane-desk-pair-view B17, D-16); it is the same
   // element in every mode, so entering pair view mounts no desk again.
-  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-(--size-pair-desk-top) z-20" : "inset-y-0 right-0 z-20";
+  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-[calc(var(--size-tab-strip)*2)] z-20" : "inset-y-0 right-0 z-20";
 
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">

@@ -280,7 +280,8 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     {
       id: "toggle_zoom", menuLabel: translate(context.zoomed ? "menus.unzoom" : "menus.zoom"), icon: context.zoomed ? "unzoom" : "zoom",
       label: context.zoomed ? translate("panes.unzoom") : translate("panes.menu.zoom"),
-      unavailable: context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
+      // Pair view leaves the tab's zoom as it is (D-16), so the item says why rather than doing nothing.
+      unavailable: head?.pair === "on" ? translate("panes.menu.pairZoom") : context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
       shortcut: chords.zoom,
     },
     ...(head ? [pairEntry(head.pair)] : []),

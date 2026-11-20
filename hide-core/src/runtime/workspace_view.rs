@@ -1371,6 +1371,7 @@ impl Runtime {
                     .map(|pair| crate::model::PairViewSnapshot {
                         tab_id: tray.tab.clone(),
                         pane_id: pair.pane.clone(),
+                        folded: Vec::new(),
                     })
             };
             WorkspaceViewSnapshot {
@@ -1402,10 +1403,13 @@ impl Runtime {
                     },
                     shown: tray.is_some_and(|tray| tray.shown),
                     count: tray_layout.display_count(),
-                    pair: tray.and_then(pair_of),
+                    pair: tray.and_then(pair_of).map(|mut pair| {
+                        pair.folded = self.pair_folded(key, &pair, &layout.root);
+                        pair
+                    }),
                 },
                 pairs: view.trays.iter().filter_map(pair_of).collect(),
-                pairable: self.pairable_panes(key, &every),
+                pairable: self.pairable_panes(key),
                 // A pane's `N views` lists what its session opened, on a
                 // tray or not (PRD lane-desk-pair-view D-04, D-19).
                 feedback: self.view_feedback_snapshot(key, &every),

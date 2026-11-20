@@ -3187,20 +3187,19 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     pairViewKey() {
       const view = workspaceViewOf(rest());
-      if (view?.tray.pair) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      if (drawnPair(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
       const paneId = useShellStore.getState().focusedPaneId;
       if (!paneId || pairOffer(view, paneId) !== "off") return diagnostic(`pair_view: nothing to show beside ${paneId ?? "no pane"}`);
       dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
     },
 
     /**
-     * A desk tab's pin (B17, B26, D-21): that tab beside the pane of the
+     * A desk tab's pin (B17, D-21, D-42): that tab beside the pane of the
      * agent it belongs to, or the focused pane for a tab nobody's agent
-     * opened; pressed in pair view, the tab's own layout back.
+     * opened. The desk draws no pin in pair view.
      */
     pinPairView(displayId: string) {
       const view = workspaceViewOf(rest());
-      if (view?.tray.pair) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
       const owner = view?.layout ? locateDisplay(view.layout.root, displayId)?.display.owner_pane : null;
       const paneId = owner ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("pair_view: the pin has no pane to show beside the desk");

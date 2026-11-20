@@ -14,8 +14,17 @@ use serde::Deserialize;
 
 use super::workspace_view::WorkspaceKey;
 use super::*;
+use crate::links::ledger::SessionIdentity;
 use crate::model::DetailItem;
 use crate::workspace_views::{PairView, Place};
+
+/// What pair view puts on the desk beside a pane (B17, B19): the View its
+/// agent opened, else its session's record. The one rule `pairable`, the
+/// entries and the operator's choice of another pane read.
+enum PairContent {
+    View(String),
+    Record(SessionIdentity),
+}
 
 /// `pair_view`: the pane drawn on the left of its tab's tray, or none to
 /// end the pair view of the tab in front.
@@ -31,6 +40,14 @@ pub(super) struct PairViewPayload {
 
 impl Runtime {
     pub(super) fn set_pair_view(&mut self, payload: PairViewPayload) -> bool {
+        self.set_pair_view_with(payload, true)
+    }
+
+    /// `set_pair_view`, giving the left pane the keyboard when `focus`: the
+    /// pane on screen is the one the keys, ⇧⌘W and the text scale reach.
+    /// The operator's own focus of that pane (`follow_pair_focus`) passes
+    /// false, since the keyboard is already there.
+    fn set_pair_view_with(&mut self, payload: PairViewPayload, focus: bool) -> bool {
         let Some(key) = self.front_workspace_key() else {
             crate::diagnostic!(serde_json::json!({
                 "component": "pair_view", "kind": "pair_view.no_workspace",
@@ -61,6 +78,7 @@ impl Runtime {
             return true;
         };
         let place = Place::Tray(tab.clone());
+        let mut record = None;
         let shown = match payload.display_id {
             Some(id) if self.view_display(&key, &id).is_some() => Some(id),
             Some(id) => {
@@ -68,7 +86,14 @@ impl Runtime {
                 self.set_error(error.kind(), error.message(), false);
                 return true;
             }
-            None => self.pair_view_of(&key, &pane),
+            None => match self.pair_content(&key, &pane, &self.live_sessions()) {
+                Some(PairContent::View(id)) => Some(id),
+                Some(PairContent::Record(session)) => {
+                    record = Some(session);
+                    None
+                }
+                None => None,
+            },
         };
         // The same pane again, with its View already in front of the drawn
         // desk, changes nothing and publishes nothing.
@@ -101,12 +126,7 @@ impl Runtime {
                 });
             }
             None => {
-                let Some(session) = self
-                    .live_sessions()
-                    .into_iter()
-                    .find(|(live, _)| *live == pane)
-                    .map(|(_, session)| session)
-                else {
+                let Some(session) = record else {
                     crate::diagnostic!(serde_json::json!({
                         "component": "pair_view", "kind": "pair_view.nothing_to_show",
                         "device": key.0, "pane": pane,
@@ -123,10 +143,30 @@ impl Runtime {
             store.generation += 1;
         }
         self.persist_workspace_views();
-        if self.front_tab(&key) != tab && self.local_tab_pane(&pane) {
-            self.focus_pane(pane, PaneFocusOrigin::Operator, None);
+        if focus {
+            self.focus_pair_left(&key, &pane);
         }
         true
+    }
+
+    /// Gives the keyboard to `pane`, the left of a pair view, on this
+    /// machine or on its device, bringing its tab in front.
+    fn focus_pair_left(&mut self, key: &WorkspaceKey, pane: &str) {
+        if key.0 == self.node.as_str() {
+            if self.local_tab_pane(pane) {
+                self.focus_pane(pane.to_owned(), PaneFocusOrigin::Operator, None);
+            }
+            return;
+        }
+        self.request_remote_control(RemoteControlPayload {
+            target_id: key.0.clone(),
+            request_id: format!("pair-view:{}:{pane}", unix_milliseconds()),
+            report_pane_focus_outcome: false,
+            focus_device: false,
+            request: RemoteControlRequest::FocusPane {
+                pane_id: pane.to_owned(),
+            },
+        });
     }
 
     /// Ends `tab`'s pair view; whether it was in one.
@@ -183,9 +223,10 @@ impl Runtime {
         let Some(left) = paired else {
             return;
         };
+        let sessions = self.live_sessions();
         let Some(pane) = self
             .view_display(key, display_id)
-            .and_then(|display| self.owner_pane_of(display, None))
+            .and_then(|display| self.owner_pane_of(display, None, &sessions))
             .filter(|pane| {
                 *pane != left && self.pane_tab(key, pane).as_deref() == Some(tab.as_str())
             })
@@ -198,23 +239,29 @@ impl Runtime {
             .and_then(|store| store.views.get_mut(&key.0, &key.1))
             .and_then(|view| view.tray_mut(&tab))
         {
-            tray.pair = Some(PairView { pane });
+            tray.pair = Some(PairView { pane: pane.clone() });
+        }
+        if let Some(store) = self.workspace_views.as_mut() {
+            store.generation += 1;
         }
         self.persist_workspace_views();
+        self.focus_pair_left(key, &pane);
     }
 
     /// The pane of the agent a desk tab belongs to, the one rule the tab's
     /// path line, pair view's left pane and its folded tabs read (B24,
     /// D-41): a card's owner (`detail_owner_pane`), else the pane its
     /// opener is in now; none for what the operator opened. `opener` is the
-    /// opener's snapshot when the caller already holds it.
+    /// opener's snapshot when the caller already holds it, and `sessions`
+    /// the machine's live sessions by pane, read once by the caller.
     pub(super) fn owner_pane_of(
         &self,
         display: &crate::view_layout::Display,
         opener: Option<&crate::model::ViewOpenerSnapshot>,
+        sessions: &[(String, SessionIdentity)],
     ) -> Option<String> {
         if let Some(card) = display.card.as_ref() {
-            return self.detail_owner_pane(card);
+            return self.detail_owner_pane_among(card, sessions);
         }
         match opener {
             Some(opener) => opener.pane_id.clone(),
@@ -225,24 +272,70 @@ impl Runtime {
         }
     }
 
-    /// The panes of `key`'s Agent tabs that have something to show beside
-    /// the desk (B19): one whose agent opened a View of the checkout, or one
-    /// running a session whose record pair view opens. `every` is every View
-    /// of the checkout as this snapshot carries it. The bound is the
-    /// checkout's Views and the machine's live agents, read once each.
-    pub(super) fn pairable_panes(
+    /// The tabs of the drawn desk `root` that another agent of `pair`'s tab
+    /// owns (D-41), read from the owner each display already carries.
+    pub(super) fn pair_folded(
         &self,
         key: &WorkspaceKey,
-        every: &[crate::model::ViewDisplaySnapshot],
+        pair: &crate::model::PairViewSnapshot,
+        root: &crate::model::ViewNodeSnapshot,
     ) -> Vec<String> {
-        let mut panes: std::collections::BTreeSet<String> = every
-            .iter()
-            .filter_map(|display| display.opener.as_ref()?.pane_id.clone())
-            .collect();
-        panes.extend(self.live_sessions().into_iter().map(|(pane, _)| pane));
-        panes
+        fn walk<'a>(
+            node: &'a crate::model::ViewNodeSnapshot,
+            out: &mut Vec<&'a crate::model::ViewDisplaySnapshot>,
+        ) {
+            match node {
+                crate::model::ViewNodeSnapshot::Area(area) => out.extend(&area.displays),
+                crate::model::ViewNodeSnapshot::Split(split) => {
+                    walk(&split.first, out);
+                    walk(&split.second, out);
+                }
+            }
+        }
+        let mut displays = Vec::new();
+        walk(root, &mut displays);
+        displays
             .into_iter()
-            .filter(|pane| self.pane_tab(key, pane).is_some())
+            .filter(|display| {
+                display.owner_pane.as_ref().is_some_and(|owner| {
+                    *owner != pair.pane_id
+                        && self.pane_tab(key, owner).as_deref() == Some(pair.tab_id.as_str())
+                })
+            })
+            .map(|display| display.id.clone())
+            .collect()
+    }
+
+    /// What pair view shows beside `pane` (B17, B19): the newest View its
+    /// agent opened that the operator has not looked at, else the one it
+    /// opened last, else its session's record; none for a pane with
+    /// nothing to show. `sessions` is the machine's live sessions by pane.
+    fn pair_content(
+        &self,
+        key: &WorkspaceKey,
+        pane: &str,
+        sessions: &[(String, SessionIdentity)],
+    ) -> Option<PairContent> {
+        if let Some(id) = self.pair_view_of(key, pane) {
+            return Some(PairContent::View(id));
+        }
+        sessions
+            .iter()
+            .find(|(live, _)| live == pane)
+            .map(|(_, session)| PairContent::Record(session.clone()))
+    }
+
+    /// The panes of `key`'s Agent tabs that have something to show beside
+    /// the desk (B19), by `pair_content`, so ◧, ⌘. and the operator's
+    /// choice agree. It runs on each publish of the Workspace in front:
+    /// the checkout's panes times its Views (at most `MAX_TRAYS` desks of
+    /// `MAX_VIEW_DISPLAYS` and the shelf's), with the live sessions read once.
+    pub(super) fn pairable_panes(&self, key: &WorkspaceKey) -> Vec<String> {
+        let sessions = self.live_sessions();
+        self.checkout_tabs(key)
+            .flat_map(|tab| &tab.panes)
+            .filter(|row| self.pair_content(key, &row.id, &sessions).is_some())
+            .map(|row| row.id.clone())
             .collect()
     }
 
@@ -268,13 +361,17 @@ impl Runtime {
         if left.is_none_or(|left| left == pane) {
             return;
         }
-        let pairable = self.pair_view_of(&key, pane).is_some()
-            || self.live_sessions().iter().any(|(live, _)| live == pane);
-        if pairable {
-            self.set_pair_view(PairViewPayload {
-                pane_id: Some(pane.to_owned()),
-                display_id: None,
-            });
+        if self
+            .pair_content(&key, pane, &self.live_sessions())
+            .is_some()
+        {
+            self.set_pair_view_with(
+                PairViewPayload {
+                    pane_id: Some(pane.to_owned()),
+                    display_id: None,
+                },
+                false,
+            );
         } else {
             self.end_pair_view(&key, &tab, "chose_unpaired_pane");
         }

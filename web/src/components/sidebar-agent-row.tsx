@@ -28,6 +28,7 @@ import { ToolLed } from "./tool-mark";
 import { HumanTurnDone, HumanTurnLine } from "./human-turn";
 import type { Actions } from "../actions";
 import { PairMark } from "./pair-mark";
+import { markedPairs } from "../pairView";
 import { workspaceViewOf } from "../workspace";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
@@ -156,7 +157,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // Each row reads only the facts it draws, so a snapshot that moves nothing here renders nothing.
   const closing = useShellStore((s) => agentClosing(s.rest?.status?.async_operations, agent.pane_id));
   // The agent drawn in its tab's pair view wears the pair view mark (PRD lane-desk-pair-view B22).
-  const paired = useShellStore((s) => workspaceViewOf(s.rest)?.pairs?.some((pair) => pair.pane_id === agent.pane_id) ?? false);
+  const paired = useShellStore((s) => markedPairs(workspaceViewOf(s.rest)).some((pair) => pair.pane_id === agent.pane_id));
   // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
   const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
   const pulls = listed ?? rowPulls(agent, "own");

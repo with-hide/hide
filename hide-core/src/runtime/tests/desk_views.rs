@@ -2011,6 +2011,71 @@ fn choosing_another_pane_of_a_paired_tab_keeps_one_owner_on_both_sides() {
     );
 }
 
+fn front_pair(runtime: &Runtime) -> crate::model::PairViewSnapshot {
+    runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .expect("published")
+        .tray
+        .pair
+        .clone()
+        .expect("in pair view")
+}
+
+/// The pane on screen on the left is the one the keys reach: entering pair
+/// view with a pane that does not hold the keyboard gives it the keyboard,
+/// and a desk tab of another agent brought in front gives it to that one.
+#[test]
+fn the_left_pane_of_a_pair_view_holds_the_keyboard() {
+    let (mut runtime, _checkout, directory) = setup("pair-keyboard");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "b");
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t1:p")
+    );
+
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t1:q")
+    );
+
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t1:p")
+    );
+}
+
+/// D-41: the desk on screen folds the tabs another agent of the paired tab
+/// owns, and names them in the snapshot, so the web only reads the list.
+#[test]
+fn the_drawn_desk_folds_only_another_agent_of_the_paired_tab() {
+    let (mut runtime, checkout, directory) = setup("pair-fold");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    open(&mut runtime, &checkout, &directory, "c.md");
+    control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "b");
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(fronts(&runtime, &directory), ["b.md"]);
+    let a = display_id(&runtime, &directory, "a.md");
+    assert_eq!(
+        front_pair(&runtime).folded,
+        [a],
+        "p's tab folds; the operator's c.md stays"
+    );
+}
+
 /// B19: the snapshot lists the panes with something to show beside the
 /// desk; a plain shell is not among them, and choosing it in pair view
 /// ends the pair view rather than hiding the pane chosen.
