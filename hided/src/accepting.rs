@@ -170,13 +170,19 @@ pub fn accept_until_closed<S>(
 /// Waits `wait` on a park the listener's close ends early
 /// ([`CloseOnDrop::wakes`]); a spurious wake only shortens one wait.
 pub fn park_unless_closed(wait: Duration, closed: &AtomicBool) {
+    wait_unless_closed(wait, closed, std::thread::park_timeout);
+}
+
+/// [`park_unless_closed`] with the block it waits in passed in, which is
+/// called only after `closed` was last read as open.
+fn wait_unless_closed(wait: Duration, closed: &AtomicBool, mut block: impl FnMut(Duration)) {
     let until = Instant::now() + wait;
     while !closed.load(Ordering::SeqCst) {
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {
             break;
         }
-        std::thread::park_timeout(left);
+        block(left);
     }
 }
 
@@ -287,9 +293,15 @@ mod tests {
                 &closed,
                 &health,
                 ("test", "test.accept_failed"),
+                // The barrier sits after the wait's last read of `closed`
+                // and right before the park, so the close lands while the
+                // thread is parked or about to park; only the close's unpark
+                // (or its token) then ends the hour.
                 |_| {
-                    let _ = parking.send(());
-                    park_unless_closed(Duration::from_secs(3600), &closed);
+                    wait_unless_closed(Duration::from_secs(3600), &closed, |left| {
+                        let _ = parking.send(());
+                        std::thread::park_timeout(left);
+                    });
                 },
             );
             ended.send(()).unwrap();
