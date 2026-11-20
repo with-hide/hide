@@ -822,7 +822,9 @@ impl Runtime {
         let ended = crate::coordination::not_resumed_registrations(
             ledger, device, host_scope, &left, &shown,
         );
+        let ids: Vec<String> = ended.iter().map(|(id, _)| id.clone()).collect();
         self.registrations_gone.extend(ended);
+        self.heal_not_woken(&ids, crate::links::now_ms());
     }
 
     /// The registration the live execution in `pane` holds, which a sleep

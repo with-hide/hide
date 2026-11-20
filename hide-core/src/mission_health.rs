@@ -722,6 +722,7 @@ pub(crate) fn warn_acts(
         let fact = facts.get(at);
         let stopped =
             fact.and_then(|fact| stopped_worker(mission, node, fact, pulls, operator_waits));
+        let healing = fact.is_some_and(|fact| fact.healing);
         match standing(WarningKind::Stopped) {
             Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
                 node: at,
@@ -757,10 +758,13 @@ pub(crate) fn warn_acts(
         }
         let quiet = node.quiet_since();
         match standing(WarningKind::NoPush) {
+            // A warning not told yet is held while the worker is healed:
+            // the restart, not the worker, holds its push (B19).
             Some(warning)
                 if !works
                     || stopped.is_some()
-                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
+                    || quiet.is_some_and(|since| since > warning.from_unix_ms)
+                    || (healing && warning.told_unix_ms.is_none()) =>
             {
                 acts.push(WarnAct::Clear {
                     node: at,
@@ -769,7 +773,7 @@ pub(crate) fn warn_acts(
             }
             None if works
                 && stopped.is_none()
-                && !fact.is_some_and(|fact| fact.healing)
+                && !healing
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && quiet_waits(mission, node, pulls, operator_waits) == Some(false) =>
@@ -1729,6 +1733,21 @@ mod tests {
                 cause: None,
             }]
         );
+        // A warning raised before the heal and not told yet is held; one
+        // already told stays as it was.
+        let mut m = reviewed();
+        let mut untold = warn(WarningKind::NoPush, 0);
+        untold.told_unix_ms = None;
+        m.nodes[0].warnings.push(untold);
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late),
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::NoPush,
+            }]
+        );
+        m.nodes[0].warnings[0].told_unix_ms = Some(1);
+        assert!(warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late).is_empty());
     }
 
     /// with-hide/hide-private#552: a change at work warns at ninety minutes

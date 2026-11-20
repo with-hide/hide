@@ -1765,7 +1765,12 @@ impl<'g> Engine for OwnEngine<'g> {
             .healed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(healed.get(pane) == Some(&definition.id) && healed.remove(pane).is_some())
+        let healed = healed.get(pane) == Some(&definition.id) && healed.remove(pane).is_some();
+        if healed {
+            // The pane is no longer named healing: the next read says so.
+            self.changed();
+        }
+        Ok(healed)
     }
 
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
