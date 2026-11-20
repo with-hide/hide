@@ -700,7 +700,7 @@ fn a_line_stays_owed_until_the_store_admits_it() {
         next_id: 10,
         ..Default::default()
     };
-    crate::delivery::ledger::save(&hide_kit::layout::delivery_ledger(&state), &ledger).unwrap();
+    crate::delivery::store::save(&hide_kit::layout::delivery_store(&state), &ledger).unwrap();
     // The parent is not in its pane: its count stays owed, unsent.
     let go_on = |runtime: &Runtime| -> Vec<String> {
         let mut owed = runtime.heal_letters_owed();
@@ -711,7 +711,7 @@ fn a_line_stays_owed_until_the_store_admits_it() {
     let (worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
-        hide_kit::layout::delivery_ledger(&state),
+        hide_kit::layout::delivery_store(&state),
     )
     .unwrap();
     {
