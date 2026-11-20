@@ -56,7 +56,6 @@ pub(crate) mod group_starts;
 mod guardrails;
 mod heal_letters;
 mod herdr_import;
-mod hide_notes;
 mod home_retire;
 mod hosts;
 mod human_turn;
