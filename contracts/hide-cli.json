@@ -5153,7 +5153,6 @@
             ],
             "arguments": [],
             "command": "device share",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5236,7 +5235,6 @@
             ],
             "arguments": [],
             "command": "device allow",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5264,7 +5262,6 @@
                 }
             ],
             "command": "device pause",
-            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5324,7 +5321,6 @@
                 }
             ],
             "command": "device resume",
-            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5448,7 +5444,6 @@
                 }
             ],
             "command": "device request",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5487,7 +5482,6 @@
                 }
             ],
             "command": "device address",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5555,7 +5549,6 @@
                 }
             ],
             "command": "device switch",
-            "hidden": true,
             "options": [
                 {
                     "name": "--install",
@@ -5600,7 +5593,6 @@
             ],
             "arguments": [],
             "command": "device look-ssh",
-            "hidden": true,
             "options": [],
             "refusals": [
                 "hide_unavailable",
@@ -5615,7 +5607,6 @@
             ],
             "arguments": [],
             "command": "device accept-ssh",
-            "hidden": true,
             "options": [
                 {
                     "name": "--request",
@@ -5679,7 +5670,6 @@
             ],
             "arguments": [],
             "command": "device projects-ssh",
-            "hidden": true,
             "needs_one_of": [
                 "--project"
             ],
@@ -6491,6 +6481,9 @@
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
                 "mission_dependency_cycle",
+                "mission_dependency_line_unknown",
+                "mission_dependency_stack_split",
+                "mission_merge_order_stack",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -7614,7 +7607,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:9b5d3e352bdf4c05be902d04ce5a008b704cd0fb55aae2179b9f3ae1c1d8eae0",
+    "digest": "sha256:51cd16120eb3603dcedbb9c7445bbd2e68a2fcd465ef87d17ac4d4e095ad1817",
     "envelopes": {
         "access": {
             "answer": "value",

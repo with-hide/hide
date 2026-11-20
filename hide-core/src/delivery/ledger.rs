@@ -917,24 +917,48 @@ impl Ledger {
     }
 
     /// The check [`Self::bytes`] makes, counting the encoding instead of
-    /// keeping it, so it can follow every request of a batch.
+    /// keeping it.
     pub fn check(&self) -> Result<(), String> {
         self.validate()?;
-        match serde_json::to_writer(&mut Length(0), self) {
+        match serde_json::to_writer(&mut Length::up_to(FILE_LIMIT), self) {
             Ok(()) => Ok(()),
             Err(error) if error.is_io() => Err("capacity".into()),
             Err(_) => Err("ledger_unavailable".into()),
         }
     }
+
+    /// The length of the file [`Self::bytes`] would write, past the limit
+    /// too, counted without keeping it, so it can follow every request of a
+    /// batch and say how much room a full ledger has to make.
+    pub(crate) fn size(&self) -> Result<usize, String> {
+        self.validate()?;
+        encoded_len(self)
+    }
 }
 
-/// Counts the bytes written to it and refuses those past the file's limit.
-struct Length(usize);
+/// The length of `value`'s encoding in the file, counted without keeping it.
+pub(crate) fn encoded_len(value: &impl Serialize) -> Result<usize, String> {
+    let mut length = Length::up_to(usize::MAX);
+    serde_json::to_writer(&mut length, value).map_err(|_| "ledger_unavailable")?;
+    Ok(length.written)
+}
+
+/// Counts the bytes written to it and refuses those past `limit`.
+struct Length {
+    written: usize,
+    limit: usize,
+}
+
+impl Length {
+    fn up_to(limit: usize) -> Self {
+        Self { written: 0, limit }
+    }
+}
 
 impl std::io::Write for Length {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 += bytes.len();
-        if self.0 > FILE_LIMIT {
+        self.written += bytes.len();
+        if self.written > self.limit {
             return Err(std::io::ErrorKind::FileTooLarge.into());
         }
         Ok(bytes.len())
