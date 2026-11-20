@@ -1424,7 +1424,8 @@ test("page width: widening leaves Agent Views 480, never narrows, and leaves an 
   const loading = openLoaded(`${origin}/site.html`);
   await showDocuments(page);
   await loading;
-  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
+  // The desk stands beside Agent Views, which keeps 480 (D-50).
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
 
   // Narrowed to its minimum, the next page widens it only as far again.

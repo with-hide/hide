@@ -45,10 +45,10 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // divider lands (PRD lane-desk-pair-view D-50); a tool floats over the
 // agents at the right edge with the desk, if shown, on its left, the two one
 // layer, and resizes nothing; when it closes, the desk stands, so a View
-// opened from a floating tool settles then (`tray.floats`). A terminal click or an agent chosen leaves the desk up, a
-// press outside a floating tool closes the tool, and ⌘E or Escape closes the
-// lane (PRD right-lane B4; operator decision 2026-10-23); a drag moves only a
-// guide until it lands.
+// opened from a floating tool settles then (`tray.floats`). A terminal click
+// or an agent chosen leaves the desk up, a press outside a floating tool
+// closes the tool, and ⌘E or Escape closes the lane (PRD right-lane B4;
+// operator decision 2026-10-23); a drag moves only a guide until it lands.
 
 export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -240,8 +240,8 @@ function useWidth(element: HTMLElement | null): number {
 function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; width: number; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: string | null }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
-  // A terminal click leaves the lane where it is: only the operator closes
-  // it, with ⌘E or Escape (B4).
+  // A terminal click leaves the desk where it is, closing only a floating
+  // tool (D-50): the operator closes the lane with ⌘E or Escape (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
   // In pair view the lane is the half beside the paired pane, under the tab
   // row and the strip (PRD lane-desk-pair-view B17, D-16); it is the same
