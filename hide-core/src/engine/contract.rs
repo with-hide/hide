@@ -717,7 +717,6 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
             windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
@@ -878,7 +877,6 @@ fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
             windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
@@ -1340,7 +1338,6 @@ fn resumes_through_the_nodes_file(shell: &str) {
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::new(AnsweringStart {
                 node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
                 program: "standin",
@@ -1465,9 +1462,6 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
-    use hide_agent_hooks::counters::{Change, Reporter, Said, apply};
-    use hide_agent_hooks::report::HookTurn;
-
     use crate::agent_start::{ShellStart, start_at_shell_reusing_name};
     use crate::codex_launch::CodexDaemon;
 
@@ -1503,7 +1497,6 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
         let place = super::own::Place {
             engine_dir: engine_dir.clone(),
             home: hide_platform::path::to_wire(&home).unwrap(),
-            hooks_records: Some(home.join(".hide").join("agent-hooks")),
             node: Arc::clone(&node) as Arc<dyn hide_node_link::NodeLink>,
             windows: false,
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
@@ -1550,23 +1543,10 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
         )
         .unwrap_or_else(|error| panic!("{kind} starts: {error:?}"));
         until(&format!("{kind} runs"), || runs(kind) == "\n");
-        // Its hook names the conversation and says its turn was running.
+        // Its hook names the conversation.
         first
             .hook_session(pane, kind, session, None)
             .expect("the hook's session is taken");
-        apply(
-            &home,
-            pane,
-            Change::None,
-            Reporter {
-                agent: Some(kind),
-                session: Some(session),
-            },
-            Said::Turn(HookTurn::Working),
-            None,
-            hide_agent_hooks::counters::Told::default(),
-        )
-        .unwrap();
     }
     let save = hide_kit::layout::engine_session_in(&engine_dir);
     until("the save names both conversations", || {

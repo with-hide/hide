@@ -1054,6 +1054,7 @@ impl Runtime {
                     unmet,
                     stopped,
                     operator_waits: self.waits_on_operator(mission, node),
+                    healing: record.is_some_and(|record| self.healing(record)),
                 }
             })
             .collect();

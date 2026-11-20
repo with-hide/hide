@@ -195,8 +195,10 @@ pub(crate) trait Engine: Send + Sync {
     /// engine that starts and resumes agents itself keeps it as the pane's
     /// agent's session, saved with the pane, so a reboot resumes that
     /// conversation. Answers true once for the first session of an agent
-    /// the engine resumed after its turn was cut off under it (PRD
-    /// engine-bundle-4-herdr-removal D-22), which the core then tells.
+    /// a heal resumed after its pane was cut under it (an engine switch, a
+    /// reboot, a lost holder, a device's return); the core then reads whether
+    /// the agent was at work and owes it its line (PRD
+    /// letters-missions-simplify D-19, B17).
     /// `lineage` is the processes from the report's sender up to the pane's
     /// shell, as the pane's kernel named them: a session an agent the
     /// pane's agent ran names (`claude -p` from its tool's shell, which
@@ -672,12 +674,8 @@ impl EngineHandle {
     /// `install` is the Hide installation whose panes this engine starts, as
     /// the embedder that owns this machine names it
     /// (`hide_host::kit::running_install`); the core never reads it from this
-    /// process itself (PRD core-host-node D-21). The hooks' records folder is
-    /// the state folder this engine was handed (never this process's
-    /// environment's) composed with it by the one rule those panes' hooks
-    /// apply, so `~/.hide/agent-hooks` for the desktop app on the account's
-    /// own state folder and that folder's `installs/<mark>` for a build
-    /// started from elsewhere.
+    /// process itself (PRD core-host-node D-21); the core composes the
+    /// hooks' records folder from it ([`Self::own_install`]).
     pub fn own(
         node: Arc<dyn hide_node_link::NodeLink>,
         state_dir: std::path::PathBuf,
@@ -686,14 +684,6 @@ impl EngineHandle {
         install: Option<String>,
     ) -> Result<Self, String> {
         let scope = hide_kit::layout::engine_dir(&state_dir);
-        let hooks_records =
-            hide_agent_hooks::route::records_of_state(&home, Some(&state_dir), install.as_deref())
-                .map_err(|error| {
-                    format!(
-                        "the hooks' records folder of {} could not be read: {error}",
-                        state_dir.display()
-                    )
-                })?;
         let home = hide_platform::path::to_wire(&home)
             .map_err(|error| format!("{} has no wire spelling: {error}", home.display()))?;
         // The choices this machine's agents were started with, which the
@@ -712,7 +702,6 @@ impl EngineHandle {
             own::Place {
                 engine_dir: scope.clone(),
                 home,
-                hooks_records: Some(hooks_records),
                 node,
                 // This machine's own node.
                 windows: cfg!(windows),

@@ -215,7 +215,6 @@
     "hide-core/src/runtime/tests/tree_close.rs": {"max": 2, "reason": "test"},
     "hide-core/src/runtime/tests/view_bookmarks.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/workspace_control.rs": {"max": 2, "reason": "test"},
-    "hide-core/src/runtime/transition_letters.rs": {"max": 2, "reason": "prd-slug"},
     "hide-core/src/sidebar.rs": {"max": 7, "reason": "import"},
     "hide-core/src/start_prompt.rs": {"max": 1, "reason": "measured"},
     "hide-core/src/usage_ledger/store/tests.rs": {"max": 1, "reason": "test"},
