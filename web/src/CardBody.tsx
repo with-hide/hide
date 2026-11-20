@@ -14,7 +14,6 @@ import { SlotSessionRecord } from "./SessionRecord";
 import { cardOwnerPane, cardPath, cardTitle } from "./cardTitle";
 import { OpenerMark } from "./ViewComments";
 import { useDeskFront } from "./deskFront";
-import { allAgents } from "./paneAgents";
 import { workKey } from "./sessionWork";
 import { catalogWorkspaces, type DetailItem, type ViewOpener } from "./snapshot";
 import { useShellStore } from "./store";
@@ -66,7 +65,7 @@ export function CardBody({ item, actions }: { item: DetailItem; actions: Actions
   const name = useShellStore((s) => cardPath(s, t, item));
   const front = useDeskFront(item);
   const ownerPane = useShellStore((s) => cardOwnerPane(s, item));
-  const ownerRow = useShellStore((s) => (ownerPane ? allAgents(s.agents, s.rest?.status?.remote).find((row) => row.pane_id === ownerPane) ?? null : null));
+  const ownerRow = useShellStore((s) => (ownerPane ? s.agents.find((row) => row.pane_id === ownerPane) ?? null : null));
   const owner: ViewOpener | null = ownerRow ? { name: ownerRow.identity_label, provider: ownerRow.agent_kind, device_id: ownerRow.device_id, pane_id: ownerRow.pane_id, resumable: false } : null;
   const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : `${item.kind}:${item.workspace_id}`;
   return (
@@ -87,7 +86,7 @@ export function CardBody({ item, actions }: { item: DetailItem; actions: Actions
             </Hint>
           </>
         ) : null}
-        {owner ? <OpenerMark opener={owner} actions={actions} /> : null}
+        {owner ? <OpenerMark opener={owner} role="owner" actions={actions} /> : null}
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col" key={key}>
         {item.kind === "pull_request"
