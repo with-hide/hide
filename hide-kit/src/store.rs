@@ -2914,12 +2914,32 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
         .collect()
 }
 
+/// The owners whose pictures the store keeps: its items' and the source
+/// answers' it still holds.
+pub(crate) fn avatar_owners(store: &StoreRecord) -> BTreeSet<&str> {
+    store
+        .items
+        .iter()
+        .filter_map(StoreItem::owner)
+        .chain(
+            store
+                .previews
+                .iter()
+                .filter_map(|preview| preview.url.as_deref().and_then(avatar::owner)),
+        )
+        .collect()
+}
+
 /// Drops the previews and update previews past their limits, with their
-/// staged files, and any staged folder no record names. A folder a fetch is
-/// still filling outside the lock (`source::FETCHING`) is left for an hour.
+/// staged files and the pictures only they used, and any staged folder no
+/// record names. A folder a fetch is still filling outside the lock
+/// (`source::FETCHING`) is left for an hour.
 fn trim_staging(ctx: &Ctx<'_>, store: &mut StoreRecord) {
     while store.previews.len() > PREVIEW_LIMIT {
         store.previews.remove(0);
+    }
+    if let Ok(dir) = store_dir(ctx.home(), false) {
+        avatar::keep_only(&dir, &avatar_owners(store));
     }
     while store.diffs.len() > PREVIEW_LIMIT {
         store.diffs.remove(0);

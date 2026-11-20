@@ -154,21 +154,23 @@ pub(crate) fn fetch(
         match change {
             StoreChange::Inspect { source } => {
                 let preview = inspect(target, &staging, source);
-                // The owner's picture comes with the source it was read with.
+                // The owner's picture comes with the source it was read with,
+                // and stays while the answer or an item of that owner does.
                 if let (SourceSpec::Git { url }, Ok(_)) = (source, &preview)
                     && let Ok(address) = parse(url)
                     && let Some(owner) = super::avatar::owner(&address.url)
                 {
-                    super::avatar::ensure(dir, owner);
+                    let mut used = super::avatar_owners(record);
+                    used.insert(owner);
+                    super::avatar::ensure(dir, owner, &used);
                 }
                 fetched.previews.push((source.clone(), preview));
             }
             StoreChange::CheckUpdates => {
                 fetched.latest = Some(check(target, record));
-                let owners: std::collections::BTreeSet<&str> =
-                    record.items.iter().filter_map(StoreItem::owner).collect();
-                for owner in owners {
-                    super::avatar::ensure(dir, owner);
+                let used = super::avatar_owners(record);
+                for owner in record.items.iter().filter_map(StoreItem::owner) {
+                    super::avatar::ensure(dir, owner, &used);
                 }
             }
             StoreChange::PreviewUpdate { item } => {
