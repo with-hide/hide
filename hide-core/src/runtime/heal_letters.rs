@@ -4,32 +4,34 @@
 //!
 //! An engine switch, a reboot, a lost holder and a device's reboot or link
 //! return all end in the one heal: the engine resumes every agent whose
-//! pane was cut and answers, once its hook names its session, that it
-//! healed it (`Engine::hook_session`). The core then reads whether the agent
-//! was at work when its engine went, from what it holds of the pane's last
-//! turn (`HookFacts::cut_pending`), which covers a device's panes as much as
-//! this machine's. Only an agent that was at work and is a mission's
-//! participant or another agent's child is owed the line; an agent at rest
-//! is only reopened, and the operator's own agents are never typed into. The
-//! line is the same whatever cut the work, in the operator's language.
+//! pane was cut and names each pane healing from before its resume is typed
+//! until its hook answers (`ProjectionState::healing`). The core settles
+//! what it owes when it first reads a pane so named: the registration
+//! running there, whether it was at work when its engine went (what the core
+//! holds of the pane's last turn, `HookFacts::cut_pending`, which covers a
+//! device's panes as much as this machine's), and its parent. Nothing waits
+//! for the resumed agent's first report, which can be lost.
 //!
-//! Each parent hears once per heal how many of its children came back
-//! (`Body::Resumed`), once none of their machines is still healing; a child
-//! its engine could not resume is said by name (`Body::NotWoken`), and a
-//! child that came back but could not be told to go on within [`OWED_FOR`]
-//! too (`Body::NotTold`). A mission worker the engine could not resume is
-//! its Conductor's `worker_ended` raise already, so it is not said twice.
+//! Only a registration that was at work and is a mission's participant or
+//! another agent's child is owed the line; an agent at rest is only
+//! reopened, and the operator's own agents are never typed into. The line is
+//! the same whatever cut the work, in the operator's language. Each parent
+//! hears once per heal how many of its children came back
+//! (`Body::Resumed`), once each was seen in its pane or could not be woken;
+//! a child its engine could not resume is said by name (`Body::NotWoken`),
+//! and a child whose registration ended before its line could go is said too
+//! (`Body::NotTold`). A mission worker the engine could not resume is its
+//! Conductor's `worker_ended` raise already, so it is not said twice.
 //!
-//! Every line is owed until the ledger admits it: a send that fails, a
-//! ledger that is full and a thread that does not start leave it owed, and
-//! the next tick sends it again under the same intent, which the ledger
-//! takes once. The intent names the heal it belongs to (the moment it was
-//! owed), so a second cut of the same conversation is a new line while a
-//! retry of one converges. What is owed is memory only, bounded per machine
-//! by [`OWED_PER_MACHINE`]: a pane is owed one line to go on at most and
-//! its parent one line about it, and a parent one count, so a machine's
-//! holder cap bounds them; a line that would pass it is refused in the log,
-//! and the cut it stands on stays unspent.
+//! Every line is owed to a registration, never to a pane, so a line never
+//! reaches another agent that took the pane; it stays owed until the ledger
+//! admits it, so a send that fails, a ledger that is full and a thread that
+//! does not start leave it to the next tick, sent again under the same
+//! intent, which the ledger takes once. The intent names the heal it belongs
+//! to (the moment it was owed), so a second cut of the same conversation is
+//! a new line. What is owed is memory only, bounded per machine by
+//! [`OWED_PER_MACHINE`]: a new line past it is refused in the log and the
+//! older ones stay.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,13 +51,11 @@ pub(crate) const HEAL_ROLE: &str = "heal";
 /// and the count its own children may owe it.
 const OWED_PER_MACHINE: usize = 3 * hide_kit::panes::HOLDER_CAP;
 
-/// How long a line may wait for its agent to show, or for the ledger to
-/// take it, before the heal gives it up.
-const OWED_FOR: u64 = 10 * 60 * 1000;
-
-/// How long a parent's count waits after its last child came back, so
-/// the children a heal brings back one after another are said once.
-const SETTLE_FOR: u64 = 5_000;
+/// How long the core reads a pane its engine names healing as healing,
+/// for a mission node's warnings and a parent's count: a resumed agent's
+/// answer can be lost (a hook that cannot reach a daemon still starting
+/// gives up), and an agent at rest says nothing more.
+const HEALING_FOR: u64 = 10 * 60 * 1000;
 
 /// The most children a count names; the rest are only counted.
 const NAMES_SAID: usize = 8;
@@ -65,45 +65,28 @@ pub(in crate::runtime) struct HealLetters {
     /// The lines owed, by their key (the intent after `heal:`), until the
     /// ledger admits them.
     owed: BTreeMap<String, Owed>,
-    /// The children each parent has seen come back in the heal running
-    /// now, by the parent's registration id.
+    /// The children each parent's count waits on, by the parent's
+    /// registration id.
     resumed: BTreeMap<String, Resumed>,
     /// The keys a thread is sending now; it is the only one.
     sending: BTreeSet<String>,
-    /// The panes each machine's engine names as being healed in its last
-    /// read (`ProjectionState::healing`), by the machine's own pane ids,
-    /// with when the core first saw each so named.
+    /// The panes each machine's engine names healing, by the machine's own
+    /// pane ids, from the core's first read of each.
     healing: BTreeMap<String, BTreeMap<String, Healing>>,
-}
-
-/// A pane its engine names healing. A resumed agent's first report can be
-/// lost (a hook that cannot reach a daemon still starting gives up), and an
-/// agent at rest may report nothing more, so the engine would name it
-/// healing for good: the core reads it so for [`OWED_FOR`] at most.
-struct Healing {
-    since: u64,
-    given_up: bool,
 }
 
 struct Owed {
     /// The machine of the agent the line is about: what the cap counts.
     machine: String,
-    to: To,
+    /// The registration the line goes to.
+    to: String,
     body: Body,
-    since: u64,
-}
-
-enum To {
-    /// The healed agent in this pane, by the core's name, once it shows.
-    Pane(String),
-    /// The agent registered under this id, observed or asleep.
-    Agent(String),
 }
 
 enum Body {
-    /// Go on with the work that was cut.
+    /// Go on with the work that was cut. Its parent is told when the
+    /// registration ends before the line goes.
     GoOn {
-        /// Who to tell when the line cannot go.
         parent: Option<String>,
         name: String,
     },
@@ -111,15 +94,31 @@ enum Body {
     Resumed { count: usize, names: Vec<String> },
     /// This child could not be brought back.
     NotWoken(String),
-    /// This child came back but could not be told to go on.
+    /// This child came back but ended before it could be told to go on.
     NotTold(String),
 }
 
+/// A parent's count: its children the heal is bringing back, by id.
 struct Resumed {
-    machines: BTreeSet<String>,
-    children: BTreeMap<String, String>,
     since: u64,
-    last: u64,
+    children: BTreeMap<String, Child>,
+}
+
+struct Child {
+    name: String,
+    machine: String,
+    /// The pane by its machine's own id.
+    pane: String,
+    woken: bool,
+}
+
+/// A pane its engine names healing.
+struct Healing {
+    since: u64,
+    given_up: bool,
+    /// What the heal owes for it is settled; not while the ledger is not
+    /// read yet.
+    settled: bool,
 }
 
 impl Body {
@@ -163,85 +162,123 @@ impl Body {
 }
 
 impl Runtime {
-    /// The agent in `caller`'s pane on `device` named its session `session`
-    /// after its hook reported: `healed` when a heal resumed it there. Its
-    /// parent counts it back; one that was at work when its engine went is
-    /// owed the line when it is a child or a participant. One the engine did
-    /// not heal was never cut, whatever the pane's last turn said, since its
-    /// holder kept it running.
-    pub(crate) fn hook_after_heal(
-        &mut self,
-        device: &str,
-        caller: &str,
-        session: &str,
-        healed: bool,
-        now_unix_ms: u64,
-    ) {
-        let pane = crate::address::named_pane_id(self.node.as_str(), device, caller);
+    /// Keeps the panes `device`'s engine named healing in its last read,
+    /// each from when the core first saw it so, and settles what the heal
+    /// owes for each pane named for the first time ([`Self::heal_began`]).
+    pub(crate) fn note_healing(&mut self, device: &str, panes: &[String], now_unix_ms: u64) {
+        let mut was = self.heal_letters.healing.remove(device).unwrap_or_default();
+        let mut named = BTreeMap::new();
+        for pane in panes {
+            let mut healing = was.remove(pane).unwrap_or(Healing {
+                since: now_unix_ms,
+                given_up: false,
+                settled: false,
+            });
+            if !healing.settled {
+                healing.settled = self.heal_began(device, pane, now_unix_ms);
+            }
+            named.insert(pane.clone(), healing);
+        }
+        if !named.is_empty() {
+            self.heal_letters.healing.insert(device.to_owned(), named);
+        }
+        self.give_up_healing(now_unix_ms);
+    }
+
+    /// The engine on `device` began healing `pane` (its own id): the
+    /// registration running there joins its parent's count, and is owed the
+    /// line when it was at work and is a child or a participant. Answers
+    /// false, to be asked again on the next read, while the ledger is not
+    /// read yet.
+    fn heal_began(&mut self, device: &str, pane: &str, now_unix_ms: u64) -> bool {
+        let named = crate::address::named_pane_id(self.node.as_str(), device, pane);
+        let Ok(ledger) = self.delivery_ledger.clone() else {
+            return false;
+        };
+        let node = self.node.as_str().to_owned();
+        let Some(record) = ledger
+            .agents
+            .iter()
+            .find(|record| !record.ended && record.pane_on(&node) == named)
+        else {
+            return true;
+        };
         let facts = self.hook_facts.clone();
         let facts = || {
             facts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         };
-        if !healed {
-            facts().forget_cut(&pane);
-            return;
-        }
-        let cut = facts().cut_pending(&pane);
-        let record = self.registration_in(&pane).cloned();
+        let cut = facts().cut_pending(&named);
         crate::diagnostic!(json!({
-            "component": "heal", "kind": "heal.resumed",
-            "pane_id": pane, "device": device, "cut": cut,
-            "agent_id": record.as_ref().map(|record| record.id.as_str()),
+            "component": "heal", "kind": "heal.began",
+            "pane_id": named, "agent_id": record.id, "cut": cut,
         }));
-        if let Some(record) = &record
-            && let Some(parent) = &record.parent
-        {
-            let resumed = self
-                .heal_letters
+        if let Some(parent) = &record.parent {
+            self.heal_letters
                 .resumed
                 .entry(parent.clone())
                 .or_insert_with(|| Resumed {
-                    machines: BTreeSet::new(),
-                    children: BTreeMap::new(),
                     since: now_unix_ms,
-                    last: now_unix_ms,
-                });
-            resumed.last = now_unix_ms;
-            resumed.machines.insert(device.to_owned());
-            resumed
+                    children: BTreeMap::new(),
+                })
                 .children
-                .insert(record.id.clone(), agent_name(record));
+                .insert(
+                    record.id.clone(),
+                    Child {
+                        name: agent_name(record),
+                        machine: device.to_owned(),
+                        pane: pane.to_owned(),
+                        woken: true,
+                    },
+                );
         }
         if !cut {
-            return;
+            return true;
         }
-        let Some(record) = record.filter(|record| self.participant_or_child(record)) else {
-            facts().take_cut(&pane);
+        if !self.participant_or_child(record) {
+            facts().take_cut(&named);
             crate::diagnostic!(json!({
-                "component": "heal", "kind": "heal_letter.operator_root", "pane_id": pane,
+                "component": "heal", "kind": "heal_letter.operator_root", "pane_id": named,
             }));
-            return;
-        };
+            return true;
+        }
         let owed = Owed {
             machine: device.to_owned(),
-            to: To::Pane(pane.clone()),
+            to: record.id.clone(),
             body: Body::GoOn {
                 parent: record.parent.clone(),
-                name: agent_name(&record),
+                name: agent_name(record),
             },
-            since: now_unix_ms,
         };
-        if self.owe_heal_line(format!("go-on:{pane}:{session}:{now_unix_ms}"), owed) {
-            facts().take_cut(&pane);
+        if self.owe_heal_line(format!("go-on:{}:{now_unix_ms}", record.id), owed) {
+            facts().take_cut(&named);
+        }
+        true
+    }
+
+    /// The agent in `caller`'s pane on `device` reported after its session
+    /// started: `healed` when a heal resumed it there. One the engine did not
+    /// heal was never cut, whatever the pane's last turn said, since its
+    /// holder kept it running.
+    pub(crate) fn hook_after_heal(&mut self, device: &str, caller: &str, healed: bool) {
+        let pane = crate::address::named_pane_id(self.node.as_str(), device, caller);
+        if healed {
+            crate::diagnostic!(json!({
+                "component": "heal", "kind": "heal.resumed", "pane_id": pane,
+            }));
+        } else {
+            self.hook_facts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .forget_cut(&pane);
         }
     }
 
-    /// The registrations the engine on `device` could not resume: each
-    /// child's parent is told by name, once, unless it is a mission's
-    /// worker, whose Conductor hears it as `worker_ended`.
-    pub(in crate::runtime) fn heal_not_woken(&mut self, ended: &[String], now_unix_ms: u64) {
+    /// The registrations the engine could not resume: each leaves its
+    /// parent's count, and its parent is told by name, once, unless it is a
+    /// mission's worker, whose Conductor hears it as `worker_ended`.
+    pub(in crate::runtime) fn heal_not_woken(&mut self, ended: &[String]) {
         let Ok(ledger) = self.delivery_ledger.clone() else {
             return;
         };
@@ -252,6 +289,14 @@ impl Runtime {
             let Some(parent) = &record.parent else {
                 continue;
             };
+            if let Some(child) = self
+                .heal_letters
+                .resumed
+                .get_mut(parent)
+                .and_then(|resumed| resumed.children.get_mut(id))
+            {
+                child.woken = false;
+            }
             let worker = self.missions.book.missions.iter().any(|mission| {
                 mission
                     .nodes
@@ -265,16 +310,16 @@ impl Runtime {
                 format!("not-woken:{id}"),
                 Owed {
                     machine: record.machine.clone(),
-                    to: To::Agent(parent.clone()),
+                    to: parent.clone(),
                     body: Body::NotWoken(agent_name(record)),
-                    since: now_unix_ms,
                 },
             );
         }
     }
 
     /// Owes `owed` under `key` and answers whether it is owed: a key owed
-    /// already stays as it is; a machine past its cap refuses it.
+    /// already stays as it is; a machine at its cap keeps the lines it owes
+    /// and refuses the new one.
     fn owe_heal_line(&mut self, key: String, owed: Owed) -> bool {
         let letters = &mut self.heal_letters;
         if letters.owed.contains_key(&key) {
@@ -296,34 +341,11 @@ impl Runtime {
         true
     }
 
-    /// Keeps the panes `device`'s engine named healing in its last read,
-    /// each from when the core first saw it so.
-    pub(crate) fn note_healing(&mut self, device: &str, panes: &[String], now_unix_ms: u64) {
-        let healing = &mut self.heal_letters.healing;
-        if panes.is_empty() {
-            healing.remove(device);
-            return;
-        }
-        let mut was = healing.remove(device).unwrap_or_default();
-        let now: BTreeMap<String, Healing> = panes
-            .iter()
-            .map(|pane| {
-                let kept = was.remove(pane).unwrap_or(Healing {
-                    since: now_unix_ms,
-                    given_up: false,
-                });
-                (pane.clone(), kept)
-            })
-            .collect();
-        healing.insert(device.to_owned(), now);
-        self.give_up_healing(now_unix_ms);
-    }
-
-    /// Reads a pane named healing past [`OWED_FOR`] as healed no more.
+    /// Reads a pane named healing past [`HEALING_FOR`] as healing no more.
     fn give_up_healing(&mut self, now_unix_ms: u64) {
         for (device, panes) in &mut self.heal_letters.healing {
             for (pane, healing) in panes.iter_mut() {
-                if !healing.given_up && now_unix_ms.saturating_sub(healing.since) > OWED_FOR {
+                if !healing.given_up && now_unix_ms.saturating_sub(healing.since) > HEALING_FOR {
                     healing.given_up = true;
                     crate::diagnostic!(json!({
                         "component": "heal", "kind": "heal.unconfirmed",
@@ -334,26 +356,26 @@ impl Runtime {
         }
     }
 
-    /// Whether `device`'s engine names a pane healing that the core still
-    /// reads so.
-    fn still_healing(&self, device: &str, pane: Option<&str>) -> bool {
-        self.heal_letters.healing.get(device).is_some_and(|panes| {
-            panes
-                .iter()
-                .any(|(named, healing)| !healing.given_up && pane.is_none_or(|pane| pane == named))
-        })
+    /// Whether `device`'s engine names `pane` (its own id) healing and the
+    /// core still reads it so.
+    fn still_healing(&self, device: &str, pane: &str) -> bool {
+        self.heal_letters
+            .healing
+            .get(device)
+            .and_then(|panes| panes.get(pane))
+            .is_some_and(|healing| !healing.given_up)
     }
 
     /// Whether the agent `record` names is being healed: its engine has yet
-    /// to bring it back, or it is back and still owed its line. Nothing it
-    /// does or leaves undone in that time is its own (B19).
+    /// to bring it back, or it is still owed its line. Nothing it does or
+    /// leaves undone in that time is its own (B19).
     pub(crate) fn healing(&self, record: &AgentRecord) -> bool {
-        let pane = record.pane_on(self.node.as_str());
-        self.still_healing(&record.machine, Some(&record.pane))
-            || self.heal_letters.owed.values().any(|owed| {
-                matches!(owed.body, Body::GoOn { .. })
-                    && matches!(&owed.to, To::Pane(to) if *to == pane)
-            })
+        self.still_healing(&record.machine, &record.pane)
+            || self
+                .heal_letters
+                .owed
+                .values()
+                .any(|owed| matches!(owed.body, Body::GoOn { .. }) && owed.to == record.id)
     }
 
     /// Sends each owed line whose agent can be reached
@@ -368,7 +390,7 @@ impl Runtime {
         {
             return;
         }
-        let notes = self.heal_notes_due(now_unix_ms);
+        let notes = self.heal_notes_due();
         if notes.is_empty() {
             return;
         }
@@ -396,25 +418,24 @@ impl Runtime {
         }
     }
 
-    /// The notes to send now: each parent's count once none of its
-    /// children's machines still heals and none came back for
-    /// [`SETTLE_FOR`], and each owed line whose agent is reached. A line to
-    /// go on that waited [`OWED_FOR`] becomes its parent's line that it
-    /// could not go, and any other line is given up in the log. Nothing is
-    /// settled here: a line stays owed until the ledger admits it
-    /// ([`Self::heal_lines_admitted`]).
-    pub(in crate::runtime) fn heal_notes_due(&mut self, now_unix_ms: u64) -> Vec<Note> {
+    /// The notes to send now: each parent's count once each of its children
+    /// was seen in its pane, could not be woken or is healing no more, and
+    /// each owed line whose registration can be reached. A line to go on
+    /// whose registration ended becomes its parent's line that it could not
+    /// go; a line to a parent whose registration ended is given up in the
+    /// log, as is a line to go on for an agent no longer a child or a
+    /// participant. A line stays owed until the ledger admits it.
+    pub(in crate::runtime) fn heal_notes_due(&mut self) -> Vec<Note> {
         let settled: Vec<String> = self
             .heal_letters
             .resumed
             .iter()
             .filter(|(_, resumed)| {
-                (now_unix_ms.saturating_sub(resumed.last) >= SETTLE_FOR
-                    && resumed
-                        .machines
-                        .iter()
-                        .all(|machine| !self.still_healing(machine, None)))
-                    || now_unix_ms.saturating_sub(resumed.since) > OWED_FOR
+                resumed.children.iter().all(|(id, child)| {
+                    !child.woken
+                        || !self.still_healing(&child.machine, &child.pane)
+                        || self.observed_registration(id).is_some()
+                })
             })
             .map(|(parent, _)| parent.clone())
             .collect();
@@ -422,47 +443,64 @@ impl Runtime {
             let Some(resumed) = self.heal_letters.resumed.remove(&parent) else {
                 continue;
             };
+            // A child that ended since is not one that came back.
+            let names: Vec<String> = resumed
+                .children
+                .into_iter()
+                .filter(|(id, child)| child.woken && self.registration(id).is_some())
+                .map(|(_, child)| child.name)
+                .collect();
+            if names.is_empty() {
+                continue;
+            }
             let machine = self.registration(&parent).map_or_else(
                 || self.node.as_str().to_owned(),
                 |record| record.machine.clone(),
             );
             let owed = Owed {
                 machine,
-                to: To::Agent(parent.clone()),
+                to: parent.clone(),
                 body: Body::Resumed {
-                    count: resumed.children.len(),
-                    names: resumed.children.into_values().take(NAMES_SAID).collect(),
+                    count: names.len(),
+                    names: names.into_iter().take(NAMES_SAID).collect(),
                 },
-                since: now_unix_ms,
             };
             self.owe_heal_line(format!("resumed:{parent}:{}", resumed.since), owed);
         }
 
-        let expired: Vec<String> = self
+        let unreachable: Vec<String> = self
             .heal_letters
             .owed
             .iter()
-            .filter(|(_, owed)| now_unix_ms.saturating_sub(owed.since) > OWED_FOR)
+            .filter(|(_, owed)| {
+                self.registration(&owed.to).is_none_or(|record| {
+                    matches!(owed.body, Body::GoOn { .. }) && !self.participant_or_child(record)
+                })
+            })
             .map(|(key, _)| key.clone())
             .collect();
-        for key in expired {
+        for key in unreachable {
             let Some(owed) = self.heal_letters.owed.remove(&key) else {
                 continue;
             };
+            let ended = self.registration(&owed.to).is_none();
             crate::diagnostic!(json!({
-                "component": "heal", "kind": "heal_letter.expired", "key": key,
+                "component": "heal", "kind": "heal_letter.unaddressed",
+                "key": key, "ended": ended,
             }));
-            if let Body::GoOn {
-                parent: Some(parent),
-                name,
-            } = owed.body
+            if let (
+                true,
+                Body::GoOn {
+                    parent: Some(parent),
+                    name,
+                },
+            ) = (ended, owed.body)
             {
                 let key = format!("not-told:{}", key.trim_start_matches("go-on:"));
                 let owed = Owed {
                     machine: owed.machine,
-                    to: To::Agent(parent),
+                    to: parent,
                     body: Body::NotTold(name),
-                    since: now_unix_ms,
                 };
                 self.owe_heal_line(key, owed);
             }
@@ -473,9 +511,10 @@ impl Runtime {
             .owed
             .iter()
             .filter_map(|(key, owed)| {
-                let target = match &owed.to {
-                    To::Pane(pane) => self.delivery_observations.get(pane).cloned(),
-                    To::Agent(id) => self.registered_target(id),
+                let target = match owed.body {
+                    // The line to go on waits for the agent in its pane.
+                    Body::GoOn { .. } => self.observed_registration(&owed.to),
+                    _ => self.registered_target(&owed.to),
                 }?;
                 Some(Note {
                     letter: key.clone(),
@@ -484,17 +523,6 @@ impl Runtime {
                 })
             })
             .collect()
-    }
-
-    /// The live registration whose agent runs in `pane`, by the core's name.
-    fn registration_in(&self, pane: &str) -> Option<&AgentRecord> {
-        let node = self.node.as_str();
-        self.delivery_ledger
-            .as_ref()
-            .ok()?
-            .agents
-            .iter()
-            .find(|record| !record.ended && record.pane_on(node) == pane)
     }
 
     /// The live registration `id`.
@@ -507,19 +535,32 @@ impl Runtime {
             .find(|record| !record.ended && record.id == id)
     }
 
+    /// The agent registered as `id`, observed in its pane.
+    fn observed_registration(&self, id: &str) -> Option<Observation> {
+        let record = self.registration(id)?;
+        let observed = self
+            .delivery_observations
+            .get(&record.pane_on(self.node.as_str()))?;
+        observed
+            .actor
+            .same_identity(&record.actor)
+            .then(|| observed.clone())
+    }
+
     /// Where a line to the agent registered as `id` goes: the agent observed
     /// in its pane, else that pane's agent asleep, whose mailbox keeps it
     /// for its next wake.
     fn registered_target(&self, id: &str) -> Option<Observation> {
-        let record = self.registration(id)?;
-        let pane = record.pane_on(self.node.as_str());
-        if let Some(observed) = self.delivery_observations.get(&pane)
-            && observed.actor.same_identity(&record.actor)
-        {
-            return Some(observed.clone());
+        if let Some(observed) = self.observed_registration(id) {
+            return Some(observed);
         }
+        let record = self.registration(id)?;
         let ledger = self.delivery_ledger.as_ref().ok()?;
-        self.sleeping_target(ledger, Some(&record.actor), &pane)
+        self.sleeping_target(
+            ledger,
+            Some(&record.actor),
+            &record.pane_on(self.node.as_str()),
+        )
     }
 
     /// Whether the agent `record` registers is another agent's child or the
@@ -545,5 +586,10 @@ impl Runtime {
     /// The keys owed, in order.
     pub(in crate::runtime) fn heal_letters_owed(&self) -> Vec<String> {
         self.heal_letters.owed.keys().cloned().collect()
+    }
+
+    /// Whether a thread is sending lines.
+    pub(in crate::runtime) fn heal_letters_sending(&self) -> bool {
+        !self.heal_letters.sending.is_empty()
     }
 }

@@ -824,7 +824,7 @@ impl Runtime {
         );
         let ids: Vec<String> = ended.iter().map(|(id, _)| id.clone()).collect();
         self.registrations_gone.extend(ended);
-        self.heal_not_woken(&ids, crate::links::now_ms());
+        self.heal_not_woken(&ids);
     }
 
     /// The registration the live execution in `pane` holds, which a sleep

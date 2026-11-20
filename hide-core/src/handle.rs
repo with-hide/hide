@@ -941,16 +941,9 @@ impl Core {
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
             match engine.hook_session(&pane, &report.runtime, session, lineage) {
-                // A healed agent that was at work is owed one line; one the
-                // engine did not heal was never cut (PRD
+                // One the engine did not heal was never cut (PRD
                 // letters-missions-simplify D-19, B17).
-                Ok(healed) => lock_recover(&self.runtime).hook_after_heal(
-                    device,
-                    caller,
-                    session,
-                    healed,
-                    crate::links::now_ms(),
-                ),
+                Ok(healed) => lock_recover(&self.runtime).hook_after_heal(device, caller, healed),
                 Err(error) => crate::diagnostic!(serde_json::json!({
                     "component": "agent_hooks", "kind": "hook_session.refused",
                     "pane": caller, "device": device, "agent": report.runtime,
