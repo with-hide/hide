@@ -126,17 +126,25 @@ export function versionText(version: StoreVersion, t: (key: "store.version.folde
   }
 }
 
-/** A path under the machine's home spelled with `~`; any other path as it is. */
+/**
+ * A path under the machine's home spelled with `~`; any other path as it is.
+ * The path is the machine's own, so a Windows one is separated by `\` (or
+ * `/`) and compared without case, the way Windows names it.
+ */
 export function homePath(path: string, home: string | null | undefined): string {
   if (!home) return path;
-  const root = home.replace(/\/+$/, "");
-  if (path === root) return "~";
-  return path.startsWith(`${root}/`) ? `~${path.slice(root.length)}` : path;
+  const root = home.replace(/[\\/]+$/, "");
+  const windows = /^[A-Za-z]:/.test(root) || root.includes("\\");
+  const same = (a: string, b: string) => (windows ? a.toLowerCase() === b.toLowerCase() : a === b);
+  if (same(path.replace(/[\\/]+$/, ""), root)) return "~";
+  const head = path.slice(0, root.length);
+  return same(head, root) && /[\\/]/.test(path.charAt(root.length)) ? `~${path.slice(root.length)}` : path;
 }
 
-/** A path cut before its last name, so a line can shorten the front and keep the name (the middle ellipsis). */
+/** A path cut before its last name, `/` or `\` alike, so a line can shorten the front and keep the name (the middle ellipsis). */
 export function pathParts(path: string): { head: string; tail: string } {
-  const cut = path.replace(/\/+$/, "").lastIndexOf("/");
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return cut > 0 ? { head: path.slice(0, cut), tail: path.slice(cut) } : { head: "", tail: path };
 }
 
