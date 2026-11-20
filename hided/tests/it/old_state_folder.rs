@@ -121,10 +121,7 @@ async fn logged(state: &Path, kind: &str) -> Value {
             );
             return row;
         }
-        assert!(
-            Instant::now() < deadline,
-            "no {kind} record: {text}"
-        );
+        assert!(Instant::now() < deadline, "no {kind} record: {text}");
         tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the daemon's record of `kind` in its log
     }
 }
