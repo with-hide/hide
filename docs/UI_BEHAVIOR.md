@@ -3047,7 +3047,7 @@ Test and Retry are offered for a device this core dials, never for a machine tha
 No row offers to move the core, and no command does: every computer runs a core of its own (PRD device-connect-iroh D-35, B44).
 On a window of a machine whose core runs elsewhere, which only a core moved before 1.2.0 left, that window's own row offers `Mac mini core와 연결 끊기…`, and its menu has no Remove…, since a machine does not remove itself.
 `연결 끊기…` asks once, saying that the core refuses this Mac's pane input, file reads and browser actions at once and that reconnecting allows them again, and the window's strip then offers `다시 연결` (B16).
-When that machine could not be made a Hide of its own on this connection, its own row says so in one line with `다시 시도`: `새 연결로 이전하지 못했어요 · ` and the cause, `SSH로 Mac mini에 연결하지 못했어요`, `Mac mini의 Hide가 거절했어요` or `이 컴퓨터에 저장하지 못했어요` (PRD device-connect-iroh B45; `splitFailureLine` in `web/src/coreLink.ts`).
+When that machine could not be made a Hide of its own on this connection, its own row says so in one line with `다시 시도`: `새 연결로 이전하지 못했어요 · ` and the cause, `SSH로 Mac mini에 연결하지 못했어요`, `Mac mini의 Hide가 거절했어요`, `Mac mini에 새 연결로 닿지 못했어요` or `이 컴퓨터에 저장하지 못했어요` (PRD device-connect-iroh B45; `splitFailureLine` in `web/src/coreLink.ts`).
 The window goes on as the node of its core meanwhile; `다시 시도` ends the link and tries once more, and the line goes with it.
 
 Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).

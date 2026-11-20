@@ -59,7 +59,7 @@ export function CoreLinkScene({ scene, theme, state, content, language }: CoreLi
     // A node's window names its machine in the address, as `hide connect` does.
     window.history.replaceState(null, "", side === "node" ? `${window.location.pathname}${window.location.search}#node=${NODE_DEVICE}` : `${window.location.pathname}${window.location.search}`);
     const shown = WINDOW_STATES[state];
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, connection: shown?.connection ?? "live", coreLink: shown?.link ?? null, coreSplit: state === "node-split-failed" ? "split_refused" : null });
+    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, connection: shown?.connection ?? "live", coreLink: shown?.link ?? null, coreSplit: state === "node-split-failed" ? "split_not_connected" : null });
     useUiStore.setState({ screen: { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "herdr-ide" } });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

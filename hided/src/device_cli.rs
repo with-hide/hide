@@ -500,8 +500,18 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 look
             };
             match pairing(env, json!({"verb":"status"})) {
-                Ok(_) => {
-                    println!("{}", json!({"ok":true,"value":{"look":look(true)}}));
+                Ok(status) => {
+                    let mut look = look(true);
+                    // What the running core says of itself, which a node
+                    // reads before it asks to be split from it
+                    // (`pairing_ssh::core_on`); a core before 1.2.0 says
+                    // nothing of it.
+                    if let Some(core) = status["core"].as_object() {
+                        for said in ["node", "build", "release"] {
+                            look[said] = core.get(said).cloned().unwrap_or(Value::Null);
+                        }
+                    }
+                    println!("{}", json!({"ok":true,"value":{"look":look}}));
                     Ok(Printed::Done)
                 }
                 // No daemon answered: a Hide of this account's own that is

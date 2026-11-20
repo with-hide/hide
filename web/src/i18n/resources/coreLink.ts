@@ -23,6 +23,7 @@ export const coreLinkEnglish = {
   "coreLink.reconnect": "Reconnect",
   "coreLink.split.notReached": "Could not migrate to the new connection · {{machine}} was not reached over SSH",
   "coreLink.split.refused": "Could not migrate to the new connection · Hide on {{machine}} refused",
+  "coreLink.split.notConnected": "Could not migrate to the new connection · the new connection to {{machine}} could not be made",
   "coreLink.split.notSaved": "Could not migrate to the new connection · this computer could not save it",
 } as const;
 
@@ -46,6 +47,7 @@ const ko = {
   "coreLink.reconnect": "다시 연결",
   "coreLink.split.notReached": "새 연결로 이전하지 못했어요 · SSH로 {{machine}}에 연결하지 못했어요",
   "coreLink.split.refused": "새 연결로 이전하지 못했어요 · {{machine}}의 Hide가 거절했어요",
+  "coreLink.split.notConnected": "새 연결로 이전하지 못했어요 · {{machine}}에 새 연결로 닿지 못했어요",
   "coreLink.split.notSaved": "새 연결로 이전하지 못했어요 · 이 컴퓨터에 저장하지 못했어요",
 } satisfies Catalog<typeof coreLinkEnglish>;
 
@@ -69,6 +71,7 @@ const zhCN = {
   "coreLink.reconnect": "重新连接",
   "coreLink.split.notReached": "未能迁移到新连接 · 无法通过 SSH 连接 {{machine}}",
   "coreLink.split.refused": "未能迁移到新连接 · {{machine}} 上的 Hide 拒绝了",
+  "coreLink.split.notConnected": "未能迁移到新连接 · 无法与 {{machine}} 建立新连接",
   "coreLink.split.notSaved": "未能迁移到新连接 · 无法保存到此电脑",
 } satisfies Catalog<typeof coreLinkEnglish>;
 
@@ -92,6 +95,7 @@ const ja = {
   "coreLink.reconnect": "再接続",
   "coreLink.split.notReached": "新しい接続へ移行できませんでした · SSH で {{machine}} に接続できませんでした",
   "coreLink.split.refused": "新しい接続へ移行できませんでした · {{machine}} の Hide が拒否しました",
+  "coreLink.split.notConnected": "新しい接続へ移行できませんでした · {{machine}} との新しい接続を作れませんでした",
   "coreLink.split.notSaved": "新しい接続へ移行できませんでした · このコンピュータに保存できませんでした",
 } satisfies Catalog<typeof coreLinkEnglish>;
 

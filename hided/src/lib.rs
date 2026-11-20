@@ -573,13 +573,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     });
     seat.starting("core.peers");
     let peers = peer_host::PeerHost::new(
-        peer_host::Settings {
-            state_dir: env.state_dir.clone(),
-            build: build_order::Release::of_this_build().version,
-            device: peer_device.clone(),
-            release: build_order::Release::of_this_build().is_official(),
-            direct: env.peer_direct,
-        },
+        peer_host::Settings::of(&env, &peer_device),
         shutdown.clone(),
     );
     peer_dial.attach(Arc::clone(&peers));
@@ -615,6 +609,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
         Arc::clone(&core),
+        env.build.clone(),
         always_on.clone(),
         hide_peer::pairing::Me {
             name: host_name()
@@ -888,6 +883,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             .map(|packages| node_role::Updates {
                 packages,
                 state_dir: env.state_dir.clone(),
+                peer: peer_host::Settings::of(&env, node.as_str()),
             }),
     )?;
     hide_core::diagnostic!(serde_json::json!({

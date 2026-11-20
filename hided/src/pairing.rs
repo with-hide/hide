@@ -377,6 +377,9 @@ struct Relay {
 pub struct Pairing {
     host: Arc<PeerHost>,
     core: Arc<CoreHandle>,
+    /// The build this daemon's environment pins (`Env::build`), as its
+    /// node link's hello reads it.
+    build: Option<String>,
     /// What keeps this machine's core on once it is paired.
     always_on: crate::always_on::Follower,
     me: Me,
@@ -441,6 +444,7 @@ impl Pairing {
     pub fn new(
         host: Arc<PeerHost>,
         core: Arc<CoreHandle>,
+        build: Option<String>,
         always_on: crate::always_on::Follower,
         me: Me,
         ssh: pairing_ssh::Reach,
@@ -449,6 +453,7 @@ impl Pairing {
         let pairing = Arc::new(Self {
             host: Arc::clone(&host),
             core,
+            build,
             always_on,
             me,
             service: OnceCell::new(),
@@ -744,6 +749,24 @@ impl Pairing {
         }
     }
 
+    /// What this core says of itself to a machine that reads it before it
+    /// asks anything (`hide device look-ssh`): its node, and its build and
+    /// release as its node link's hello names them (`attach::CoreHello`).
+    async fn itself(&self) -> Value {
+        let pinned = self.build.clone();
+        // The hash of the executable, read once: never on a runtime thread.
+        let build =
+            tokio::task::spawn_blocking(move || crate::build_id::of_daemon(pinned.as_deref()))
+                .await
+                .ok()
+                .and_then(Result::ok);
+        json!({
+            "node": self.core.node().as_str(),
+            "build": build,
+            "release": crate::build_order::Release::of_this_build(),
+        })
+    }
+
     async fn run(self: &Arc<Self>, ask: Ask, caller: Caller) -> Result<Value, &'static str> {
         // Reading opens nothing: a machine paired with nothing has nothing
         // to say and no endpoint to open for it.
@@ -755,9 +778,12 @@ impl Pairing {
                     .map(|paired| hide_core::peer_machines::answer(&paired.machine))
                     .collect()
             };
+            let core = self.itself().await;
             let Some(service) = self.service.get() else {
                 let machines = answers(self.recorded().await);
-                return Ok(json!({ "pairing": View::default(), "machines": machines }));
+                return Ok(json!({
+                    "pairing": View::default(), "machines": machines, "core": core,
+                }));
             };
             // The pairings under way, with their link and words, are the
             // operator's: an agent in a pane reads the machines and holds
@@ -775,7 +801,7 @@ impl Pairing {
                 true => json!(*service.view().borrow()),
                 false => json!(View::default()),
             };
-            return Ok(json!({ "pairing": pairing, "machines": machines }));
+            return Ok(json!({ "pairing": pairing, "machines": machines, "core": core }));
         }
         // Looking at a machine over SSH opens nothing here and changes
         // nothing there.

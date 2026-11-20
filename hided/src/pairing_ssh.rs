@@ -236,6 +236,32 @@ fn look_of(said: Said) -> Looked {
     }
 }
 
+/// The core a target runs, as it says of itself in its look: its node, and
+/// its build and release as its node link's hello would name them.
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq)]
+pub struct CoreThere {
+    pub node: String,
+    pub build: String,
+    #[serde(default)]
+    pub release: crate::build_order::Release,
+}
+
+/// Reads the core the target runs, on `upstream`'s session, and changes
+/// nothing there. `None` from a target that says nothing of it: a Hide
+/// before 1.2.0, one that is not running, or none.
+pub fn core_on(upstream: &Upstream, reach: &Reach) -> Result<Option<CoreThere>, SessionError> {
+    Ok(core_of(run(upstream, reach, &["look-ssh"])?))
+}
+
+fn core_of(said: Said) -> Option<CoreThere> {
+    match said {
+        Said::Answer(answer) if answer["ok"] == true => {
+            serde_json::from_value(answer["value"]["look"].clone()).ok()
+        }
+        Said::Answer(_) | Said::NoProgram | Said::Unread => None,
+    }
+}
+
 /// Asks the machine `alias` names whether it can pair over SSH. Blocks for
 /// as long as ssh takes to sign in and the target to answer.
 pub fn look(reach: &Reach, alias: &str) -> Looked {
@@ -709,6 +735,53 @@ mod tests {
             look_of(said(1, &line(json!({"ok":false,"error":{"code":"usage"}})))),
             Looked::UpdateThere
         );
+    }
+
+    /// A running core's look names it, node and build, which is what a node
+    /// reads before it asks to be split from it; a look that names none (a
+    /// Hide before 1.2.0, one that is not running, none at all) reads as no
+    /// core to split from.
+    #[test]
+    fn a_look_names_the_running_core_and_only_a_running_one() {
+        let release = crate::build_order::Release {
+            version: "1.2.11".to_owned(),
+            order: 1043,
+            commit: None,
+        };
+        let named = json!({"ok":true,"value":{"look":{
+            "system":"macos","core":true,"node":"studio","build":"b1","release":release,
+        }}});
+        assert_eq!(
+            core_of(said(0, &line(named))),
+            Some(CoreThere {
+                node: "studio".to_owned(),
+                build: "b1".to_owned(),
+                release,
+            })
+        );
+        for unnamed in [
+            said(
+                0,
+                &line(json!({"ok":true,"value":{"look":{"system":"macos","core":true}}})),
+            ),
+            said(
+                0,
+                &line(json!({"ok":true,"value":{"look":{
+                    "system":"macos","core":true,"node":"studio","build":null,"release":null,
+                }}})),
+            ),
+            said(
+                1,
+                &line(json!({
+                    "ok":false,"error":{"code":"hide_unavailable"},
+                    "look":{"system":"macos","core":true},
+                })),
+            ),
+            said(2, b"usage: hide device list\n"),
+            said(127, b""),
+        ] {
+            assert_eq!(core_of(unnamed), None);
+        }
     }
 
     /// A Mac takes a Hide over SSH only from a Mac, and only while someone

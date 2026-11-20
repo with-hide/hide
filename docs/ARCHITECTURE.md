@@ -3162,7 +3162,9 @@ Each label worker asks the node of the machine that runs its engine for the lock
 ### Splitting a moved core's two machines
 
 A node and the core it dials become two Hides, each with a core of its own and paired both ways (PRD device-connect-iroh D-46, B45), the first time M's node reaches C's core on M's own build.
-M's node asks before it serves a link: at the handshake, once C's hello shows the same build (an older core is updated first, [Updating the core](#updating-the-core)), the attach is ended without a node hello and the split runs on the same SSH connection (`node_role::split_from_core`, `LinkFailure::SplitDue`), asking nobody.
+M's node asks before it attaches, on the one sign-in of its dial (`node_role::try_link`, `split_from_core`): the SSH session is signed in first, the split runs on it, and the attach takes the same session when the split did not happen, so a login that asks, a password or a key's passphrase, is answered once for both.
+Before anything is asked of C, the node reads the core C runs with `hide device look-ssh`, which changes nothing there and names a running core's node, build and release as its link's hello would (`pairing_ssh::core_on`, `Pairing::itself`).
+Only the core the placement names, running M's build, is split from; any other is asked nothing and left to the link's handshake as before: an older core is updated first ([Updating the core](#updating-the-core)) and split from on the dial that follows, a newer or another build is refused, and so is another node.
 The move was the consent, so no link, words or allow window are shown on either machine.
 
 The split is `moved_core::split`, and every step before its last leaves M the node it was and is the same when run again:
@@ -3173,7 +3175,10 @@ The split is `moved_core::split`, and every step before its last leaves M the no
 3. M records the folder its node ran panes in, `~/.hide/device-node`, as C's work on M (`HelperGuest` with `panes`, the installation those panes name; a folder another paired machine already took stays that machine's).
 4. M asks C again with `--grant <id>`: C settles its grant for M and adopts M as a host by that grant (`Ask::AcceptSsh` in `hided/src/pairing.rs`).
    C takes a grant this way only from a machine its core already runs work for, one registered as a node that dials in (`hide_core::dialing_nodes`) or one it already opens, and refuses any other with `device_unknown`.
-5. M sets `core-placement.json` aside as `moved-out/core-placement.json` (`placement::set_aside`), which is the commit: nothing the move left is deleted.
+5. M meets C once on the connection two Hides use (`peer_host::meets`), since an SSH login that works says nothing of that connection: an endpoint of M's own key, opened as its core role would open it (`peer_host::Settings::open`) and closed again before the step ends, dials the addresses C answered and reads on the link that C names a grant for M.
+   The meeting settles nothing: M's endpoint answers no stream C opens, C's confirm of the pairing among them, so C's record of M stays unconfirmed and C goes on taking M's link over SSH (a registration becomes a paired machine's only once that machine is confirmed with, [The peer connection](#the-peer-connection)).
+   It proves the path and the two keys; that C's work is taken up on M over that connection is what the two cores do after the commit.
+6. M sets `core-placement.json` aside as `moved-out/core-placement.json` (`placement::set_aside`), which is the commit: nothing the move left is deleted.
 
 The link thread then ends and the supervisor's `node_turn` starts the core role in the same process, on the same seat, so M's windows reconnect to M's own core; their address loses the node's name once `/health` answers `core` (`addressForRole` in `web/src/ws.ts`).
 M's core dials C and confirms, C's core registers M's connection, and on C the registration M held as a node that dials in becomes the paired machine's device in place (`reconcile_peer_devices`, `LinkOrigin::becomes_peer`, `switch_device_link`): the id, the name and every record that names the device stay.
@@ -3188,9 +3193,10 @@ Without that, a hook report from one of C's agents on M would be recorded by M's
 
 C's login item is kept through this: `always_on::paired` counts a core that a node still dials as kept on, so the item a move placed is not taken out as an unpaired machine's before M can reach it, and once the two are paired it is kept as any paired machine's.
 
-A split that fails is tried once per connection, as a core update is (`State::split_failed`): M links as before, a screen the core draws is told the cause once (`core_link` frame with phase `live` and `split_failed`: `split_not_reached`, `split_refused` or `split_not_saved`), M's own row in Settings › Devices says it with Retry, and the Retry ends the link and tries again (`NodeRole::connect_again` with a screen).
-While C is not reached at all, the link waits as it always did and the split follows the first link that finds C on this build.
-A move that was cut short before 1.2.0 is not split: `moved_core::unfinished` refuses the start and names the release that finishes it.
+A split that fails is tried once per connection, as a core update is (`State::split_failed`): M links as before on the session the split ran on, a screen the core draws is told the cause once (`core_link` frame with phase `live` and `split_failed`: `split_not_reached`, `split_refused`, `split_not_connected` when the two did not meet in step 5, or `split_not_saved`), M's own row in Settings › Devices says it with Retry, and the Retry ends the link and tries again (`NodeRole::connect_again` with a screen).
+That Retry's dial holds no press, because the screen that pressed is drawn through the link and ends with it: a login that asks stops it as it stops any dial nobody pressed for, and the Retry on that wait signs in for the split and the link together.
+While C is not reached at all, the link waits as it always did and the split is asked on the first dial that finds C on this build.
+A move that was cut short before 1.2.0 is not split: `moved_core::unfinished` refuses the start and names the release that finishes it, for a move this machine left unfinished (`core-move.json`, `core-handover.json`) and for one it gave up or took back while its other machine still owed a step (`core-move-abandoned.json`), and for any of the three that does not read.
 
 ### The peer connection
 
@@ -3273,7 +3279,7 @@ Reading opens nothing: only sharing, adding a machine, answering for an SSH pair
 
 **Pairing over SSH.**
 A machine this one reaches over SSH and that already runs its own Hide is paired with no words, because whoever signs in to that account already holds its authority (`hided/src/pairing_ssh.rs`).
-This machine runs two commands there, on the session `hide_node`'s upstream signs in: `hide device look-ssh`, which changes nothing and says whether that account's Hide runs, and `hide device accept-ssh`, which has it save a `pending` grant and answer its ids and addresses.
+This machine runs two commands there, on the session `hide_node`'s upstream signs in: `hide device look-ssh`, which changes nothing and says whether that account's Hide runs and, when it does, the running core's node, build and release, and `hide device accept-ssh`, which has it save a `pending` grant and answer its ids and addresses.
 This machine saves the host as confirming, with the address the SSH login reached at the target endpoint's own port first when the alias has no proxy command and no jump host, and confirms over the connection; the same request run again within 10 minutes is answered the same there, so a session lost midway is asked again as itself.
 A dial here asks nobody: a login that needs a password, a passphrase, a code, an unknown host key or a key touch ends as not reached, and at most four such `ssh` run at once.
 The target's command is `hide` in its account's command folder (`~/.local/bin`, or `HIDE_HOST_CLI_DIR`), started from that account's own `HOME`.

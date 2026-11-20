@@ -475,11 +475,7 @@ fn attach_stopped(message: &str) {
 
 impl AttachService {
     fn build(&self) -> Result<String, String> {
-        static OWN: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
-        match &self.build {
-            Some(build) => Ok(build.clone()),
-            None => OWN.get_or_init(crate::build_id::of_current_exe).clone(),
-        }
+        crate::build_id::of_daemon(self.build.as_deref())
     }
 }
 

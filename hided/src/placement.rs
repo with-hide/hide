@@ -200,6 +200,44 @@ mod tests {
         );
     }
 
+    /// The operator's disconnect is in the record itself, so a daemon that
+    /// starts anew reads it and dials nothing; their reconnect takes it out
+    /// again, and neither touches what else the record says (PRD
+    /// core-host-node-move B16).
+    #[test]
+    fn the_operator_s_disconnect_is_read_again_from_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let placement = Placement {
+            alias: "mini".to_owned(),
+            node: "core-node".to_owned(),
+            program: "/opt/hided".to_owned(),
+            state_dir: None,
+            disconnected: false,
+        };
+        super::write(dir.path(), &placement).unwrap();
+        let saved = || std::fs::read_to_string(record_path(dir.path())).unwrap();
+        assert!(!saved().contains("disconnected"), "{}", saved());
+
+        assert_eq!(
+            update(dir.path(), OWN, |record| record.disconnected = true),
+            Ok(true)
+        );
+        assert!(saved().contains("\"disconnected\": true"), "{}", saved());
+        assert_eq!(
+            read(dir.path(), OWN),
+            Ok(Some(Placement {
+                disconnected: true,
+                ..placement.clone()
+            }))
+        );
+
+        assert_eq!(
+            update(dir.path(), OWN, |record| record.disconnected = false),
+            Ok(true)
+        );
+        assert_eq!(read(dir.path(), OWN), Ok(Some(placement)));
+    }
+
     #[test]
     fn a_record_naming_this_machine_or_shared_with_others_is_refused() {
         let dir = tempfile::tempdir().unwrap();

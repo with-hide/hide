@@ -290,6 +290,9 @@ it("says on a node's own row why its machine was not made a Hide of its own, wit
   expect(q("[data-device-split]")).toBeNull();
   await act(async () => useShellStore.setState({ coreSplit: "split_refused" }));
   expect(q('[data-device-row="mbp"] [data-device-split="split_refused"]')?.textContent).toContain("Hide on Mac Studio refused");
+  // An SSH login that worked while the new connection did not is its own cause.
+  await act(async () => useShellStore.setState({ coreSplit: "split_not_connected" }));
+  expect(q('[data-device-row="mbp"] [data-device-split="split_not_connected"]')?.textContent).toContain("the new connection to Mac Studio could not be made");
   // Only the window's own machine says it: the other rows are the core's to draw.
   expect(document.querySelectorAll("[data-device-split]")).toHaveLength(1);
   await act(async () => q('[data-device-split-retry="mbp"]')!.click());

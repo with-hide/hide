@@ -6,14 +6,18 @@
 //! [`split`] is how the two become two Hides (B45): the node's machine pairs
 //! with its core's over the SSH login the move used, both ways and without
 //! a question, hands the folder its panes run in to the core's work there,
-//! sets its placement record aside and runs a core of its own.
+//! meets the core's machine once on the connection two Hides use, and only
+//! then sets its placement record aside and runs a core of its own.
 //!
-//! A move wrote two records while it ran: the driver's journal
-//! (`core-move.json`), which stays after the move with the phase it ended
-//! in, and the handover (`core-handover.json`) on the other machine, which
-//! the move's last step removed. A folder whose journal names a phase that
-//! is not an end, or that still holds a handover, was left in the middle of
-//! a move, and only a build that still moves cores can finish or undo it.
+//! A move wrote three records: the driver's journal (`core-move.json`),
+//! which stays after the move with the phase it ended in; the handover
+//! (`core-handover.json`) on the other machine, which the move's last step
+//! removed; and, for a move given up or taken back while the other machine
+//! still owed its own end of it, an entry in `core-move-abandoned.json`,
+//! removed once that machine had done it. A folder whose journal names a
+//! phase that is not an end, or that still holds a handover or such an
+//! entry, was left in the middle of a move, and only a build that still
+//! moves cores can finish or undo it.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -60,21 +64,58 @@ struct Handover {
     intent: String,
 }
 
+/// The version of `core-move-abandoned.json` every build that wrote one
+/// used.
+const ABANDONED_VERSION: u32 = 1;
+
+/// The moves this machine gave up, or took back, whose other machine still
+/// owes its step: the journal of each already names an end.
+#[derive(Deserialize)]
+struct Abandoned {
+    version: u32,
+    moves: Vec<Owed>,
+}
+
+/// The part of such a move that names it.
+#[derive(Deserialize)]
+struct Owed {
+    intent: String,
+}
+
 /// Why `state_dir` starts no role: a move from before 1.2.0 was left
 /// unfinished in it. `None` for every other folder. A record that cannot be
 /// read is an error, since nothing says how its move ended.
 pub fn unfinished(state_dir: &Path) -> Result<Option<String>, String> {
-    let journal: Option<Journal> = read(&hide_kit::layout::core_move_journal(state_dir))?;
-    let handover: Option<Handover> = read(&hide_kit::layout::core_handover(state_dir))?;
-    let intent = match (journal, handover) {
-        (Some(journal), _) if !journal.phase.ended() => journal.intent,
-        (_, Some(handover)) => handover.intent,
+    let journal: Option<Journal> = read(&layout::core_move_journal(state_dir))?;
+    let handover: Option<Handover> = read(&layout::core_handover(state_dir))?;
+    let owed = owed(&layout::core_move_abandoned(state_dir))?;
+    let intent = match (journal, handover, owed) {
+        (Some(journal), _, _) if !journal.phase.ended() => journal.intent,
+        (_, Some(handover), _) => handover.intent,
+        (_, _, Some(owed)) => owed.intent,
         _ => return Ok(None),
     };
     Ok(Some(format!(
         "a core move from before Hide 1.2.0 ({intent}) was left unfinished in {}, and this build moves no core: open Hide {LAST_MOVING_RELEASE} on both machines once, which finishes or undoes it, then update again",
         state_dir.display()
     )))
+}
+
+/// The first move `path` still names: one whose other machine never ended
+/// or retired the core it held. A record of another version is one this
+/// build cannot read.
+fn owed(path: &Path) -> Result<Option<Owed>, String> {
+    let Some(abandoned) = read::<Abandoned>(path)? else {
+        return Ok(None);
+    };
+    if abandoned.version != ABANDONED_VERSION {
+        return Err(format!(
+            "{}: version {} is not one this build reads",
+            path.display(),
+            abandoned.version
+        ));
+    }
+    Ok(abandoned.moves.into_iter().next())
 }
 
 /// The node's machine, about to run a core of its own.
@@ -116,6 +157,11 @@ impl SplitFailure {
 pub type AskCore<'a> =
     dyn Fn(&str, &PeerKey, Option<&str>) -> Result<serde_json::Value, &'static str> + 'a;
 
+/// Meets the core's machine once on the connection two Hides use, from an
+/// endpoint of this machine's own key, with the grant that machine gave in
+/// force on it (`peer_host::meets`). Why they did not meet, otherwise.
+pub type MeetCore<'a> = dyn Fn(&Accepted) -> Result<(), String> + 'a;
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -140,11 +186,16 @@ fn refused(code: &'static str) -> SplitFailure {
 /// peer records, which the core role opens its endpoint on; the folder this
 /// machine's node ran its panes in is recorded as the core's work here, so
 /// those panes go on under the core's node; the core takes this machine's
-/// grant; and last the placement record is set aside, which is the commit:
-/// the next role this process runs is a core. Every step before it leaves
-/// the node as it was and is the same when run again, so a split that
-/// stops is asked again whole.
-pub fn split(splitting: &Splitting<'_>, ask: &AskCore<'_>) -> Result<(), SplitFailure> {
+/// grant; the two meet once on the connection they use from then on, since
+/// an SSH login that works says nothing of it; and last the placement
+/// record is set aside, which is the commit: the next role this process
+/// runs is a core. Every step before it leaves the node as it was and is
+/// the same when run again, so a split that stops is asked again whole.
+pub fn split(
+    splitting: &Splitting<'_>,
+    ask: &AskCore<'_>,
+    meet: &MeetCore<'_>,
+) -> Result<(), SplitFailure> {
     let state = splitting.state_dir;
     let (key, _) = MachineKey::load_or_create(&layout::machine_key(state), splitting.machine)
         .map_err(|error| SplitFailure::not_saved("the machine key", error))?;
@@ -193,6 +244,13 @@ pub fn split(splitting: &Splitting<'_>, ask: &AskCore<'_>) -> Result<(), SplitFa
         });
     }
     save_host(state, &adopted)?;
+    // Until the two have met there, this machine goes on as the node it is
+    // (B45): its core's machine keeps taking its link, since that machine
+    // makes it a paired machine's device only on such a connection.
+    meet(&adopted).map_err(|detail| SplitFailure {
+        code: "split_not_connected",
+        detail,
+    })?;
     crate::placement::set_aside(state)
         .map_err(|error| SplitFailure::not_saved("the placement record", error))?;
     hide_core::diagnostic!(json!({
@@ -380,12 +438,57 @@ mod tests {
         assert!(reason.contains("move-2"), "{reason}");
     }
 
+    fn abandoned(dir: &Path, moves: &str) {
+        private(
+            &hide_kit::layout::core_move_abandoned(dir),
+            &format!(r#"{{"version":1,"moves":[{moves}]}}"#),
+        );
+    }
+
+    /// A move given up before the other machine ended its core, and a move
+    /// back taken here before that machine retired, each wrote an end in the
+    /// journal and left the other machine's step owed: the folder starts
+    /// nothing until that step is done, and starts once it is.
+    #[test]
+    fn a_move_whose_other_machine_still_owes_its_step_starts_nothing() {
+        let peer =
+            r#"{"device":"mini","alias":"mini","node":"c","program":"/x/hided","state_dir":"/s"}"#;
+        for (phase, step) in [
+            (r#"{"direction":"forward","phase":"abandoned"}"#, "abandon"),
+            (r#"{"direction":"back","phase":"done"}"#, "retire"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            journal(dir.path(), phase);
+            abandoned(
+                dir.path(),
+                &format!(r#"{{"intent":"move-3","peer":{peer},"step":"{step}"}}"#),
+            );
+            let reason = unfinished(dir.path()).unwrap().expect(step);
+            assert!(
+                reason.contains("move-3") && reason.contains("1.2.10"),
+                "{reason}"
+            );
+            abandoned(dir.path(), "");
+            assert_eq!(unfinished(dir.path()), Ok(None), "{step}");
+        }
+    }
+
     /// A record that is not one this build can read says nothing of how its
     /// move ended, so the start stops on it.
     #[test]
     fn a_record_that_cannot_be_read_stops_the_start() {
         let dir = tempfile::tempdir().unwrap();
         private(&hide_kit::layout::core_move_journal(dir.path()), "{");
+        assert!(unfinished(dir.path()).is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        journal(dir.path(), r#"{"direction":"forward","phase":"abandoned"}"#);
+        private(&hide_kit::layout::core_move_abandoned(dir.path()), "[");
+        assert!(unfinished(dir.path()).is_err());
+        private(
+            &hide_kit::layout::core_move_abandoned(dir.path()),
+            r#"{"version":2,"moves":[]}"#,
+        );
         assert!(unfinished(dir.path()).is_err());
     }
 
@@ -425,7 +528,16 @@ mod tests {
             Self { home, state }
         }
 
+        /// A split whose two machines meet on the new connection.
         fn split(&self, ask: &AskCore<'_>) -> Result<(), SplitFailure> {
+            self.split_meeting(ask, &|_| Ok(()))
+        }
+
+        fn split_meeting(
+            &self,
+            ask: &AskCore<'_>,
+            meet: &MeetCore<'_>,
+        ) -> Result<(), SplitFailure> {
             let me = Me {
                 device: "m-node".to_owned(),
                 name: "MacBook".to_owned(),
@@ -440,6 +552,7 @@ mod tests {
                     panes: self.panes(),
                 },
                 ask,
+                meet,
             )
         }
 
@@ -562,6 +675,45 @@ mod tests {
         // Split already: asked once more, nothing is asked of it twice over.
         moved.split(&core_answers("g-core", &asked)).unwrap();
         assert_eq!(moved.given().unwrap(), first);
+    }
+
+    /// An SSH login that works says nothing of the connection the two Hides
+    /// use: while they have not met on it, nothing is set aside and this
+    /// machine is the node it was, whatever the core's machine answered over
+    /// SSH; once they meet, the same split goes through with the grant it
+    /// gave the first time (B45).
+    #[test]
+    fn a_split_whose_machines_do_not_meet_on_the_new_connection_leaves_the_node() {
+        let moved = Moved::new();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let met = std::cell::RefCell::new(Vec::new());
+        let apart = |host: &Accepted| {
+            met.borrow_mut().push(host.grant.clone());
+            Err("dial: timed out".to_owned())
+        };
+        let failure = moved
+            .split_meeting(&core_answers("g-core", &asked), &apart)
+            .unwrap_err();
+        assert_eq!(
+            failure,
+            SplitFailure {
+                code: "split_not_connected",
+                detail: "dial: timed out".to_owned(),
+            }
+        );
+        assert!(moved.is_node());
+        assert!(!layout::moved_out(&moved.state).exists());
+        assert_eq!(asked.borrow().len(), 2, "both asks came before the meeting");
+        assert_eq!(
+            *met.borrow(),
+            ["g-core"],
+            "met with the grant the core holds"
+        );
+        let first = moved.given().unwrap();
+
+        moved.split(&core_answers("g-core", &asked)).unwrap();
+        assert_eq!(moved.given().unwrap(), first);
+        assert!(!moved.is_node());
     }
 
     /// An answer from a machine that is not the core's saves nothing, and a

@@ -25,10 +25,11 @@ export type CoreLink = {
 
 /**
  * Why this machine was not made a Hide of its own, paired with its core's machine, on this connection (PRD
- * device-connect-iroh B45): the core's machine was not reached over SSH, its Hide refused, or this machine could not
- * save its side. The node goes on as before, and the window's own device row says the cause with a Retry.
+ * device-connect-iroh B45): the core's machine was not reached over SSH, its Hide refused, the two did not meet on the
+ * connection two Hides use, or this machine could not save its side. The node goes on as before, and the window's own
+ * device row says the cause with a Retry.
  */
-export type SplitFailure = "split_not_reached" | "split_refused" | "split_not_saved";
+export type SplitFailure = "split_not_reached" | "split_refused" | "split_not_connected" | "split_not_saved";
 
 /**
  * What a node's daemon tells a screen the core draws (`core_link` frame, phase `live`): only what the core cannot
@@ -41,6 +42,8 @@ export function splitFailureLine(failure: SplitFailure, machine: string, t: TFun
   switch (failure) {
     case "split_not_reached":
       return t("coreLink.split.notReached", { machine });
+    case "split_not_connected":
+      return t("coreLink.split.notConnected", { machine });
     case "split_not_saved":
       return t("coreLink.split.notSaved", { machine });
     default:

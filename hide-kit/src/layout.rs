@@ -427,6 +427,14 @@ pub fn core_move_journal(state_dir: &Path) -> PathBuf {
     state_dir.join("core-move.json")
 }
 
+/// The record a build before 1.2.0 kept of the moves this machine gave up
+/// or took back while their other machine still owed a step, each removed
+/// when that machine had done it; no build writes it now, and a move it
+/// still names never finished there (`hided::moved_core`).
+pub fn core_move_abandoned(state_dir: &Path) -> PathBuf {
+    state_dir.join("core-move-abandoned.json")
+}
+
 /// The marker that the core on `state_dir` is to keep running: while it
 /// exists the login item starts the core again after any exit, and without
 /// it the item's start ends at once; `hide stop` removes it, and `hide
