@@ -7,7 +7,7 @@ pub mod human_turn;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
-mod room;
+pub(crate) mod room;
 pub(crate) mod started;
 
 pub(crate) use room::{Held, Holds, dropped};
