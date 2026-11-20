@@ -184,20 +184,33 @@ pub(crate) fn retried_send<'a>(
 /// Where the finished letter that finished first stands: the one a full
 /// ledger drops to make room. An open letter is never a candidate.
 fn oldest_finished(ledger: &Ledger) -> Option<usize> {
+    finished(ledger).min().map(|(_, index)| index)
+}
+
+/// Where every finished letter stands, the one that finished first first:
+/// the order a ledger past its file's limit drops them in (`Ledger::fit`).
+pub(crate) fn finished_oldest_first(ledger: &Ledger) -> Vec<usize> {
+    let mut order: Vec<_> = finished(ledger).collect();
+    order.sort_unstable();
+    order.into_iter().map(|(_, index)| index).collect()
+}
+
+/// Each finished letter as `(when it finished, where it stands)`, which
+/// orders them by when they finished, ties by the earlier sent.
+fn finished(ledger: &Ledger) -> impl Iterator<Item = (u64, usize)> + '_ {
     ledger
         .letters
         .iter()
         .enumerate()
         .filter(|(_, letter)| !letter.open())
-        .min_by_key(|(index, letter)| {
+        .map(|(index, letter)| {
             (
                 letter
                     .finished_at_unix_ms
                     .unwrap_or(letter.created_at_unix_ms),
-                *index,
+                index,
             )
         })
-        .map(|(index, _)| index)
 }
 
 #[expect(

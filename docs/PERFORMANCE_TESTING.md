@@ -191,6 +191,7 @@ The app's existing size policy may trim trailing clear tags to fit, so a prepare
 Worktree, GitHub and disk readers also run on changed explicit requests; those requests are not extra permanent timers (`worktrees.rs`, `github.rs`, `disk.rs`).
 Their command, walk and storage bounds remain in the feature cost contracts below and must still be reviewed when changed.
 Agent registration and spawn records share the durable delivery worker: 2,048 agent records, 4,096 spawn intents, 128 native arguments totaling 8 KiB, the 16 MiB ledger bound and a 64-slot admitted-operation queue.
+A request that would pass the 16 MiB bound makes room by dropping finished letters and spawn records down to 14 MiB: within the bound it costs the one counted encoding the check always made, past it two more encodings and one of each dropped record, once per 2 MiB of growth rather than once per write ([delivery.md](delivery.md#persistence-clocks-and-limits)).
 The shared `BackgroundRead` has one in-flight request and observes the latest desired request at its next poll; only owners that explicitly cancel and call `join_pending` obtain that shutdown guarantee (`reader.rs`, `session_sync/process_info.rs`).
 
 ## The opener guard hook on a shell call

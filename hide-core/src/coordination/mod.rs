@@ -10,7 +10,7 @@ pub(crate) mod naming;
 mod room;
 pub(crate) mod started;
 
-pub(crate) use room::{Held, Holds, dropped};
+pub(crate) use room::{Held, Holds, droppable_spawns, dropped};
 
 use crate::delivery::answer::{AgentView, Connection, RegisterCheck, Runtime};
 use crate::delivery::{Actor, ledger::Ledger, watch};
