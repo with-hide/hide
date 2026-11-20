@@ -406,7 +406,7 @@ pub enum AttentionReason {
     /// The node could start, nothing holds it, and it was not started
     /// (`mission_health::stall_acts`).
     NotStarted,
-    /// A no-push or stopped warning its Conductor was sent stood with
+    /// A stopped warning its Conductor was sent stood with
     /// nothing moving (`mission_health::stall_acts`, `WarningKind::stalls`):
     /// raised to the Conductor as every other stall is.
     WarningStood,
@@ -571,9 +571,6 @@ pub enum WarningKind {
     /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
     /// (`MissionNode::review_fails`).
     ReviewFails,
-    /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
-    /// request does not just wait on others.
-    NoPush,
     /// Its worker's program runs, its turn ended and it waits on nothing
     /// (`mission_health::stopped_worker`), for
     /// `mission_health::STOPPED_THAT_WARNS_MS` (hide-private
@@ -585,15 +582,14 @@ impl WarningKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ReviewFails => "review_fails",
-            Self::NoPush => "no_push",
             Self::Stopped => "stopped",
         }
     }
 
     /// Whether the warning, still standing after its letter, is raised as a
     /// stall (`warning_stood`): the one rule raising and keeping that stall
-    /// read. A warning the worker's own move takes off (a push, the stopped
-    /// worker at work again) stands only while no move came. A failed review
+    /// read. A warning the worker's own move takes off (the stopped worker at
+    /// work again) stands only while no move came. A failed review
     /// or verification goes only once that line passes, which a worker fixing the findings
     /// does not reach for a whole round, so standing says nothing of a move:
     /// it stays the Conductor's warning and never reaches the operator.
@@ -625,14 +621,14 @@ impl StopCause {
 }
 
 /// A warning a node carries now: raised once with one letter to its
-/// Conductor, and gone when its fact goes (the review passes, a new push
-/// arrives, the node finishes).
+/// Conductor, and gone when its fact goes (the review passes, the worker
+/// moves, the node finishes or waits, `Mission::wait_of`).
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NodeWarning {
     pub kind: WarningKind,
     /// The fact it stands on, which keys its letter: for failed reviews when
-    /// the failure that reached the count was recorded, for no push the time
-    /// the quiet is counted from.
+    /// the failure that reached the count was recorded, for a stopped worker
+    /// when its stop was first seen.
     pub from_unix_ms: u64,
     /// When Hide raised it.
     pub since_unix_ms: u64,
@@ -1319,11 +1315,12 @@ pub struct MissionNode {
     pub launched: Option<NodeLaunch>,
     /// When Hide read a new head on one of the node's pull requests last,
     /// the first head it read of one included: the node's last push as
-    /// GitHub shows it. A book from before it has none.
+    /// GitHub shows it, a move that settles a pull request's long wait
+    /// (`WaitStood`). A book from before it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pushed_at_unix_ms: Option<u64>,
     /// When the node last went to work, from planned or from a finish: a
-    /// node back at work has gone without a push only since then. A book
+    /// node back at work counts its time of work from then. A book
     /// from before it has none, and `started_at_unix_ms` stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worked_at_unix_ms: Option<u64>,
@@ -1364,6 +1361,16 @@ pub const OPERATOR_MERGE_CHARS: usize = 80;
 pub struct NodeHold {
     pub why: String,
     pub until_unix_ms: u64,
+}
+
+/// A node's wait as every screen draws it (`Mission::wait_of`): why, until
+/// when, and whether it is the mission's delay rather than the node's own
+/// hold.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeWait {
+    pub why: String,
+    pub until_unix_ms: u64,
+    pub mission: bool,
 }
 
 /// A hold as a command asks for it: why, and for how many minutes.
@@ -1584,8 +1591,7 @@ impl MissionNode {
     }
 
     /// The node goes back to work from a finish at `now`: a new round for
-    /// the keys of Hide's acts (B27), the time its quiet without a push
-    /// counts from, and no showing of its gate, which was of the work that
+    /// the keys of Hide's acts (B27), the time its work counts from, and no showing of its gate, which was of the work that
     /// ended (`Criterion::shown`).
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
@@ -1599,17 +1605,8 @@ impl MissionNode {
         }
     }
 
-    /// A change at work delivered by pull request: the node a push is asked
-    /// of, whose quiet without one can warn its Conductor.
-    pub fn asks_push(&self) -> bool {
-        self.status == NodeStatus::Working
-            && self.kind == NodeKind::Change
-            && self.delivery == Some(Delivery::Pr)
-    }
-
-    /// When the node's time without a push counts from: its last push, or
-    /// when it went to work if that is later. None for a node that never
-    /// worked.
+    /// When the node last moved its pull requests: its last push, or when
+    /// it went to work if that is later. None for a node that never worked.
     pub fn quiet_since(&self) -> Option<u64> {
         let worked = self.worked_at_unix_ms.or(self.started_at_unix_ms);
         match (self.pushed_at_unix_ms, worked) {
@@ -1941,6 +1938,33 @@ impl Mission {
     /// rule the done check, the map and `hide mission show` read.
     pub(crate) fn operator_merges(&self, node: &MissionNode) -> bool {
         self.scope == MissionScope::Pr || node.operator_merge.is_some()
+    }
+
+    /// What the node waits on now that its Conductor set on purpose (PRD
+    /// letters-missions-simplify D-07, B21): its own hold (`hide mission node
+    /// --hold`), else the mission's delay (`hide mission delay`), which holds
+    /// every node of an open mission that is not done or dropped. The one
+    /// state the map, the phone and `hide mission show` draw as `기다리는 중 ·
+    /// 이유 · 언제까지`, and the one rule that keeps every warning and stall
+    /// off the node while it holds (`mission_health::stall_excused`). It ends
+    /// by itself at `until_unix_ms` (`Runtime::stall_missions`). A worker's
+    /// sleep is not one: its card says asleep.
+    pub(crate) fn wait_of(&self, node: &MissionNode) -> Option<NodeWait> {
+        if !self.status.open() || matches!(node.status, NodeStatus::Done | NodeStatus::Dropped) {
+            return None;
+        }
+        if let Some(hold) = &node.hold {
+            return Some(NodeWait {
+                why: hold.why.clone(),
+                until_unix_ms: hold.until_unix_ms,
+                mission: false,
+            });
+        }
+        Some(NodeWait {
+            why: self.delay.clone()?,
+            until_unix_ms: self.delay_until_unix_ms?,
+            mission: true,
+        })
     }
 
     /// Whether the open decision is about node `key` (`Question::names`):
@@ -4430,6 +4454,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         }
     }
     convert_old_kinds(&mut value)?;
+    drop_no_push(&mut value);
     let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
     for line in stored
         .book
@@ -4486,6 +4511,44 @@ fn convert_old_kinds(value: &mut serde_json::Value) -> Result<(), String> {
         node.entry("preset").or_insert_with(|| preset.into());
     }
     Ok(())
+}
+
+/// A book written while a node could warn of no push, in any schema, read
+/// as this build writes it (PRD letters-missions-simplify D-32): that
+/// warning and the letter waiting to tell it are gone, so a node that stood
+/// warned reads as warned of nothing. The schema stays, as for
+/// `convert_old_kinds`: a build from before reads the book this one writes,
+/// a node with no `no_push` warning being one it knows.
+fn drop_no_push(value: &mut serde_json::Value) {
+    let retired = |item: &serde_json::Value, field: &str| {
+        item.get(field).and_then(serde_json::Value::as_str) == Some("no_push")
+    };
+    let missions = value
+        .get_mut("missions")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten();
+    for mission in missions {
+        if let Some(wakes) = mission
+            .get_mut("wakes")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            wakes.retain(|wake| !retired(wake, "warning"));
+        }
+        let nodes = mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+            .into_iter()
+            .flatten();
+        for node in nodes {
+            if let Some(warnings) = node
+                .get_mut("warnings")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                warnings.retain(|warning| !retired(warning, "kind"));
+            }
+        }
+    }
 }
 
 /// A schema 1 book as schema 2 reads it (D-19, B23): every mission was made
@@ -5689,6 +5752,32 @@ pub(crate) mod tests {
             .0,
             "mission_external_invalid"
         );
+    }
+
+    /// PRD letters-missions-simplify D-32: a book a build kept while a node
+    /// could warn of no push reads with that warning and its waiting letter
+    /// gone and every other warning and letter as it was, in the schema it
+    /// was written in.
+    #[test]
+    fn a_book_that_kept_a_no_push_warning_reads_without_it() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([
+            {"key": "fix", "title": "Fix it", "kind": "change", "status": "working", "delivery": "pr",
+             "warnings": [
+                {"kind": "no_push", "from_unix_ms": 1, "since_unix_ms": 2, "told_unix_ms": 2},
+                {"kind": "stopped", "from_unix_ms": 3, "since_unix_ms": 4}]}]);
+        stored["wakes"] = serde_json::json!([
+            {"seq": 1, "node": "fix", "event": "warning", "warning": "no_push"},
+            {"seq": 2, "node": "fix", "event": "warning", "warning": "stopped"}]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": SCHEMA_VERSION, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let read = decode(&bytes).unwrap().book.missions.remove(0);
+        let kinds: Vec<_> = read.nodes[0].warnings.iter().map(|w| w.kind).collect();
+        assert_eq!(kinds, [WarningKind::Stopped]);
+        let wakes: Vec<_> = read.wakes.iter().map(|wake| wake.seq).collect();
+        assert_eq!(wakes, [2]);
     }
 
     /// PRD node-presets D-05, B7: a book written before general nodes, of

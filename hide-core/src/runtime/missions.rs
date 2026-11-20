@@ -331,13 +331,12 @@ pub struct NodeView {
     pub own_met_at_unix_ms: Option<u64>,
     /// When Hide last read a new head on one of its pull requests.
     pub pushed_at_unix_ms: Option<u64>,
-    /// A push is asked of it (`MissionNode::asks_push`), the node whose
-    /// quiet can warn: `hide mission show` says `push 없음` before its first.
-    pub asks_push: bool,
     /// The warnings it carries, its Conductor's alone: the card's `⚠`.
     pub warnings: Vec<crate::missions::NodeWarning>,
-    /// Why and until when its Conductor holds it (`MissionNode::hold`).
-    pub hold: Option<crate::missions::NodeHold>,
+    /// What it waits on that its Conductor set (`Mission::wait_of`): its
+    /// own hold or the mission's delay, why and until when; the map's and
+    /// the phone's `기다리는 중 · 이유 · 언제까지`.
+    pub wait: Option<crate::missions::NodeWait>,
     /// Who or what it waits on now (`waiting_on`), which `hide mission show`
     /// prints; none for a node that waits on nothing.
     pub waiting_on: Option<WaitingOn>,
@@ -1375,11 +1374,6 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                         ),
                     )
                 }
-                (Some(WarningKind::NoPush), _, Some(warning)) => (
-                    format!("has worked {} minutes with no push", minutes(warning)),
-                    "judge whether its worker needs another approach or the node a fresh worker"
-                        .to_owned(),
-                ),
                 (Some(WarningKind::Stopped), _, Some(warning)) => {
                     use crate::missions::StopCause;
                     let why = match &warning.cause {
@@ -5035,9 +5029,8 @@ impl Runtime {
                     worked_at_unix_ms: node.worked_at_unix_ms,
                     own_met_at_unix_ms: node.own_met_at_unix_ms,
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
-                    asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
-                    hold: node.hold.clone(),
+                    wait: mission.wait_of(node),
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),

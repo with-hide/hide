@@ -10761,12 +10761,11 @@ mod wire_enum_tests {
             use crate::missions::WarningKind;
             let warnings = [
                 WarningKind::ReviewFails,
-                WarningKind::NoPush,
                 WarningKind::Stopped,
             ];
             for variant in warnings {
                 match variant {
-                    WarningKind::ReviewFails | WarningKind::NoPush | WarningKind::Stopped => {}
+                    WarningKind::ReviewFails | WarningKind::Stopped => {}
                 }
             }
             assert_wire(&contract, "mission_warning_kind", &warnings);

@@ -2253,7 +2253,7 @@ impl Runtime {
     /// Whether the mission worker `target` waits on someone else now
     /// (`mission_health::quiet_waits`, D-06, B22, with-hide/hide#2300): its
     /// watch then reads it as active, so its quiet is counted from when the
-    /// wait ends. The rule its node's quiet warning reads too. A worker
+    /// wait ends. A worker
     /// whose node warns that it stopped waits on its Conductor, whom that
     /// warning's letter told, so its watch adds no second letter.
     pub(crate) fn mission_worker_waits(&self, target: &crate::delivery::Actor) -> bool {

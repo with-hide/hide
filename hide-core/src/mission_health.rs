@@ -629,8 +629,6 @@ pub(crate) fn review_limit(mission: &Mission) -> u32 {
     mission.strength.unwrap_or_default().review_rounds()
 }
 
-/// How long a node at work goes with no push before its Conductor is warned.
-pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
 /// How long a node's worker stands stopped (`stopped_worker`) before its
 /// Conductor is told (hide-private docs/missions.md, A stopped worker).
 pub(crate) const STOPPED_THAT_WARNS_MS: u64 = 5 * 60_000;
@@ -693,21 +691,17 @@ pub(crate) enum WarnAct {
 /// a node at work in a running mission warns once the round of its review
 /// or verification at the strength's limit (`review_limit`) failed, and
 /// the warning stands, through any round after it, until that line passes
-/// or is skipped, so the Conductor is told once; and once it went
-/// `QUIET_THAT_WARNS_MS` with no push
-/// while it had work of its own, a change by pull request whose pull request
-/// does not just wait on others. The first goes when that line passes or
-/// is skipped, the second when a new push arrives, and both when the node
-/// is no longer at work. A pull request GitHub's answer does not hold now
-/// decides nothing, so a stale answer raises no quiet warning on a node
-/// with one; a node that has none yet is judged without it.
-/// A node whose worker stood stopped `STOPPED_THAT_WARNS_MS`
-/// (`stopped_worker`) warns once with its cause, and the warning goes once
-/// that rule no longer holds: the worker works, waits or ends, or the node
-/// waits on someone. While the rule holds the worker, the quiet warning
-/// goes and none rises, since the stop's letter is the one that asks the
-/// Conductor to move; once it lets go, the quiet is judged again. `facts`
-/// and `operator_waits` hold one entry per node, in the record's order.
+/// or is skipped, so the Conductor is told once; it goes then, or when the
+/// node is no longer at work. A node whose worker stood stopped
+/// `STOPPED_THAT_WARNS_MS` (`stopped_worker`) warns once with its cause, and
+/// the warning goes once that rule no longer holds: the worker works, waits
+/// or ends, or the node waits on someone. A node that waits on purpose
+/// (`Mission::wait_of`) carries no warning of any kind: one standing goes
+/// and none rises until the wait ends, and a stop is timed from then (PRD
+/// letters-missions-simplify B22). There is no warning about pushes (D-32):
+/// a stopped worker is told by its stop, and one that goes round in circles
+/// by its review's round limit. `facts` and `operator_waits` hold one entry
+/// per node, in the record's order.
 pub(crate) fn warn_acts(
     mission: &Mission,
     pulls: Option<&GithubProjectSnapshot>,
@@ -717,7 +711,8 @@ pub(crate) fn warn_acts(
 ) -> Vec<WarnAct> {
     let mut acts = Vec::new();
     for (at, node) in mission.nodes.iter().enumerate() {
-        let works = node_works(mission, node);
+        let waits = mission.wait_of(node).is_some();
+        let works = node_works(mission, node) && !waits;
         let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
         let fact = facts.get(at);
         let stopped =
@@ -761,33 +756,6 @@ pub(crate) fn warn_acts(
                     from: last_review_at(node).unwrap_or(now),
                     cause: None,
                 })
-            }
-            _ => {}
-        }
-        let quiet = node.quiet_since();
-        match standing(WarningKind::NoPush) {
-            Some(warning)
-                if !works
-                    || stopped.is_some()
-                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
-            {
-                acts.push(WarnAct::Clear {
-                    node: at,
-                    kind: WarningKind::NoPush,
-                });
-            }
-            None if works
-                && stopped.is_none()
-                && node.asks_push()
-                && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
-                && quiet_waits(mission, node, pulls, operator_waits) == Some(false) =>
-            {
-                acts.push(WarnAct::Raise {
-                    node: at,
-                    kind: WarningKind::NoPush,
-                    from: quiet.unwrap_or(now),
-                    cause: None,
-                });
             }
             _ => {}
         }
@@ -884,15 +852,14 @@ pub(crate) fn stalls(
     out
 }
 
-/// Whether no move is owed now: a delay holds the mission or the node, a
+/// Whether no move is owed now: the node waits on purpose (`wait_of`), a
 /// decision holds the mission (`decision_holds`), or the node waits on the
 /// operator's answer to its gate alone. The one rule raising and settling a
 /// stall, and holding a node in the safety net, read. `operator_waits` has
 /// one entry per node, in the record's order: whether the node's gate asks
 /// and nothing else of it is open (`Runtime::operator_waits`).
 fn stall_excused(mission: &Mission, node: &MissionNode, operator_waits: &[bool]) -> bool {
-    mission.delay.is_some()
-        || node.hold.is_some()
+    mission.wait_of(node).is_some()
         || decision_holds(mission, operator_waits)
         || waits_on_operator(mission, node, operator_waits)
 }
@@ -1060,7 +1027,7 @@ fn last_review_at(node: &MissionNode) -> Option<u64> {
 /// merged, or waits on CI, a review or the merge (the merge queue too) with
 /// nothing failed. A node with no pull request or a failed line needs its
 /// worker; None while GitHub's answer does not hold the pull request. The
-/// one rule the quiet warning, the ended worker's raise (B11) and a refused
+/// one rule the parent's watch, the ended worker's raise (B11) and a refused
 /// wake's raise read.
 fn worker_waits(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> Option<bool> {
     let failed = node
@@ -1074,21 +1041,21 @@ fn worker_waits(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> Op
     Some(pull.badge == PullRequestBadge::Merged || waits_on_others(pull))
 }
 
-/// Whether `node`'s worker, quiet, waits on someone else now, so neither
-/// the quiet warning nor its parent's watch calls anyone about it (D-06,
-/// B22, with-hide/hide#2300): the node waits on an answer to a raise on it
-/// or to the Conductor's question about it (`hide mission decide --node`),
-/// or its pull request waits on CI, a review or the merge with nothing for
-/// the worker to do (`worker_waits`). A failed CI is its worker's to run
-/// again or fix, so it is no wait. None while GitHub's answer does not hold
-/// the pull request.
+/// Whether `node`'s worker, quiet, waits on someone else now, so its
+/// parent's watch calls no one about it (D-06, B22, with-hide/hide#2300):
+/// the node waits on purpose (`Mission::wait_of`), on an answer to a raise
+/// on it or to the Conductor's question about it (`hide mission decide
+/// --node`), or its pull request waits on CI, a review or the merge with
+/// nothing for the worker to do (`worker_waits`). A failed CI is its
+/// worker's to run again or fix, so it is no wait. None while GitHub's
+/// answer does not hold the pull request.
 pub(crate) fn quiet_waits(
     mission: &Mission,
     node: &MissionNode,
     pulls: Option<&GithubProjectSnapshot>,
     operator_waits: &[bool],
 ) -> Option<bool> {
-    if node.attention.is_some() {
+    if node.attention.is_some() || mission.wait_of(node).is_some() {
         return Some(true);
     }
     owed_elsewhere(mission, node, pulls, operator_waits)
@@ -1750,70 +1717,143 @@ mod tests {
         }
     }
 
-    /// with-hide/hide-private#552: a change at work warns at ninety minutes
-    /// with no push, not a moment before, and a new push takes it away.
+    /// PRD letters-missions-simplify D-32, B32: a change at work that went
+    /// hours without a push carries no warning; a stopped worker is told by
+    /// its stop and a looping one by its review's round limit.
     #[test]
-    fn a_change_ninety_minutes_without_a_push_warns_until_the_next_push() {
+    fn a_change_without_a_push_for_hours_raises_no_warning() {
+        let m = reviewed();
+        assert!(warn_acts(&m, None, &[], &[], 600 * MINUTE).is_empty());
+        let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
+        assert!(warn_acts(&m, Some(&waiting), &[], &[], 600 * MINUTE).is_empty());
+    }
+
+    /// PRD letters-missions-simplify D-07, B22: a node its Conductor set
+    /// waiting, by the mission's delay or its own hold, carries no warning
+    /// of any kind: one standing goes, none rises while the wait holds, and
+    /// once it ended each is judged again, a stop timed from then (the
+    /// runtime's stop clock restarts, read here as `since`).
+    #[test]
+    fn a_waiting_node_carries_no_warning_until_its_wait_ends() {
         let mut m = reviewed();
-        assert!(warn_acts(&m, None, &[], &[], 90 * MINUTE - 1).is_empty());
+        m.nodes[0].criteria[1].rounds = 3;
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
+        let stopped = |since| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            stopped: Some(WorkerStopped {
+                since_unix_ms: since,
+                cause: None,
+            }),
+            ..NodeFacts::default()
+        };
+        let pulls = listed(Vec::new());
+        let now = 100 * MINUTE;
         assert_eq!(
-            warn_acts(&m, None, &[], &[], 90 * MINUTE),
+            warn_acts(&m, Some(&pulls), &[stopped(0)], &[false], now).len(),
+            2,
+            "unheld, it warns of both"
+        );
+        m.delay = Some("disk".into());
+        m.delay_until_unix_ms = Some(now + 30 * MINUTE);
+        assert!(warn_acts(&m, Some(&pulls), &[stopped(0)], &[false], now).is_empty());
+        m.nodes[0].warnings = vec![
+            warn(WarningKind::ReviewFails, 5),
+            warn(WarningKind::Stopped, 5),
+        ];
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[stopped(0)], &[false], now),
+            [
+                WarnAct::Clear {
+                    node: 0,
+                    kind: WarningKind::Stopped,
+                },
+                WarnAct::Clear {
+                    node: 0,
+                    kind: WarningKind::ReviewFails,
+                },
+            ]
+        );
+        assert_eq!(quiet_waits(&m, &m.nodes[0], Some(&pulls), &[false]), Some(true));
+        // The wait ended: the review warns again at once, the stop only
+        // once it stood its own minutes from then.
+        m.nodes[0].warnings.clear();
+        m.delay = None;
+        m.delay_until_unix_ms = None;
+        let ended = now + 30 * MINUTE;
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[stopped(ended)], &[false], ended),
             [WarnAct::Raise {
                 node: 0,
-                kind: WarningKind::NoPush,
-                from: 0,
+                kind: WarningKind::ReviewFails,
+                from: 5,
                 cause: None,
             }]
         );
-        m.nodes[0].warnings.push(warn(WarningKind::NoPush, 0));
-        assert!(warn_acts(&m, None, &[], &[], 200 * MINUTE).is_empty());
-        m.nodes[0].pushed_at_unix_ms = Some(100 * MINUTE);
         assert_eq!(
-            warn_acts(&m, None, &[], &[], 101 * MINUTE),
-            [WarnAct::Clear {
-                node: 0,
-                kind: WarningKind::NoPush,
-            }]
+            warn_acts(
+                &m,
+                Some(&pulls),
+                &[stopped(ended)],
+                &[false],
+                ended + STOPPED_THAT_WARNS_MS
+            )
+            .len(),
+            2
         );
-        // Counted again from that push.
-        m.nodes[0].warnings.clear();
-        assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
-        assert_eq!(warn_acts(&m, None, &[], &[], 190 * MINUTE).len(), 1);
+    }
+
+    /// B23: a sleeping worker is no wait and gets no warning: its stop is
+    /// read only while its program runs.
+    #[test]
+    fn a_sleeping_worker_gets_no_warning_and_is_no_wait() {
+        let m = reviewed();
+        let asleep = NodeFacts {
+            worker: Some(WorkerLife::Asleep),
+            stopped: Some(WorkerStopped {
+                since_unix_ms: 0,
+                cause: None,
+            }),
+            ..NodeFacts::default()
+        };
+        let pulls = listed(Vec::new());
+        assert!(warn_acts(&m, Some(&pulls), &[asleep], &[false], 600 * MINUTE).is_empty());
+        assert_eq!(m.wait_of(&m.nodes[0]), None);
     }
 
     /// with-hide/hide-private#552: a pull request that only waits on CI, a
-    /// review or the merge is no quiet worker's; a failed line or check
-    /// gives the worker something to push again, and a stale answer
-    /// decides nothing.
+    /// review or the merge leaves its worker nothing to do, so its parent's
+    /// watch calls no one; a failed line or check gives the worker work, and
+    /// a stale answer decides nothing.
     #[test]
-    fn a_pull_request_that_waits_on_others_raises_no_quiet_warning() {
+    fn a_pull_request_that_waits_on_others_is_no_quiet_worker() {
         let mut m = reviewed();
         m.nodes[0].prs = vec![7];
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
-        let late = 120 * MINUTE;
+        let waits = |m: &Mission, pulls| quiet_waits(m, &m.nodes[0], pulls, &[]);
         let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
-        assert!(warn_acts(&m, Some(&waiting), &[], &[], late).is_empty());
-        assert!(warn_acts(&m, None, &[], &[], late).is_empty());
+        assert_eq!(waits(&m, Some(&waiting)), Some(true));
+        assert_eq!(waits(&m, None), None);
         let mut failing = waiting.clone();
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
+        assert_eq!(waits(&m, Some(&failing)), Some(false));
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
-        assert_eq!(warn_acts(&m, Some(&waiting), &[], &[], late).len(), 1);
+        assert_eq!(waits(&m, Some(&waiting)), Some(false));
     }
 
     /// with-hide/hide#2300: a node that waits on the operator's answer, to
     /// its Conductor's question about it or to a raise on it, is no quiet
     /// worker's, whatever its pull request needs; the same failed CI with
-    /// nothing asked still warns, since running it again is its worker's.
+    /// nothing asked is its worker's to run again.
     #[test]
-    fn a_node_waiting_on_the_operator_raises_no_quiet_warning() {
+    fn a_node_waiting_on_the_operator_is_no_quiet_worker() {
         let mut m = reviewed();
         m.nodes[0].prs = vec![7];
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
-        let late = 120 * MINUTE;
         let mut failing = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
         failing.pull_requests[0].checks = PullRequestChecks::Failed;
-        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
+        let waits =
+            |m: &Mission, operator: &[bool]| quiet_waits(m, &m.nodes[0], Some(&failing), operator);
+        assert_eq!(waits(&m, &[]), Some(false));
         m.decision = Some("첫 줄 캡처가 괜찮나요?".into());
         m.question = Some(crate::missions::Question {
             key: 1,
@@ -1826,7 +1866,7 @@ mod tests {
             views: Vec::new(),
             material_asked: false,
         });
-        assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
+        assert_eq!(waits(&m, &[]), Some(true));
         // Its gate's question holds it only once nothing else is open.
         let mut gate = crate::mission_criteria::Criterion::new(
             "human",
@@ -1834,54 +1874,37 @@ mod tests {
         );
         gate.asked = Some(1);
         m.nodes[0].criteria.push(gate);
-        assert_eq!(warn_acts(&m, Some(&failing), &[], &[false], late).len(), 1);
-        assert!(warn_acts(&m, Some(&failing), &[], &[true], late).is_empty());
+        assert_eq!(waits(&m, &[false]), Some(false));
+        assert_eq!(waits(&m, &[true]), Some(true));
         m.nodes[0].criteria.pop();
         // A question about another node, or about none, leaves it its worker's.
         m.question.as_mut().unwrap().node = None;
-        assert_eq!(warn_acts(&m, Some(&failing), &[], &[], late).len(), 1);
+        assert_eq!(waits(&m, &[]), Some(false));
         m.decision = None;
         m.question = None;
         m.nodes[0].attention = Some(attention(AttentionReason::PrClosed, Some(7)));
-        assert!(warn_acts(&m, Some(&failing), &[], &[], late).is_empty());
+        assert_eq!(waits(&m, &[]), Some(true));
     }
 
     /// with-hide/hide-private#552: only a node at work in a running mission
-    /// warns; one that finished drops what it carried, a node back at work
-    /// counts its quiet from then, and research has nothing to push.
+    /// warns; one that finished drops what it carried.
     #[test]
     fn only_a_change_at_work_warns() {
         let mut m = reviewed();
         m.nodes[0].criteria[1].rounds = 3;
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
-        m.nodes[0].warnings = vec![
-            warn(WarningKind::ReviewFails, 5),
-            warn(WarningKind::NoPush, 0),
-        ];
+        m.nodes[0].warnings = vec![warn(WarningKind::ReviewFails, 5)];
         m.nodes[0].status = NodeStatus::Done;
         assert_eq!(
             warn_acts(&m, None, &[], &[], 100 * MINUTE),
-            [
-                WarnAct::Clear {
-                    node: 0,
-                    kind: WarningKind::ReviewFails,
-                },
-                WarnAct::Clear {
-                    node: 0,
-                    kind: WarningKind::NoPush,
-                },
-            ]
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::ReviewFails,
+            }]
         );
         m.nodes[0].warnings.clear();
-        m.nodes[0].criteria[1].rounds = 0;
         m.nodes[0].status = NodeStatus::Working;
-        m.nodes[0].back_to_work(100 * MINUTE);
-        assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
         m.status = MissionStatus::Cancelled;
-        assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
-        m.status = MissionStatus::Running;
-        m.nodes[0].kind = NodeKind::General;
-        m.nodes[0].delivery = None;
         assert!(warn_acts(&m, None, &[], &[], 300 * MINUTE).is_empty());
     }
 
@@ -1927,6 +1950,7 @@ mod tests {
         assert!(stalls(&m, None, false, &[false, true], &[]).is_empty());
         let mut delayed = startable();
         delayed.delay = Some("disk".into());
+        delayed.delay_until_unix_ms = Some(60 * MINUTE);
         assert!(stalls(&delayed, None, false, &NONE_WAITS, &[]).is_empty());
         let mut asked = startable();
         asked.decision = Some("which way?".into());
@@ -1981,7 +2005,7 @@ mod tests {
     #[test]
     fn a_warning_stands_once_its_conductor_was_told() {
         let mut m = reviewed();
-        let mut untold = warn(WarningKind::NoPush, 90 * MINUTE);
+        let mut untold = warn(WarningKind::Stopped, 90 * MINUTE);
         untold.told_unix_ms = None;
         m.nodes[0].warnings.push(untold);
         assert!(stalls(&m, None, false, &[false], &[]).is_empty());
@@ -2066,7 +2090,14 @@ mod tests {
         assert!(clears(&started));
         let mut held = raised();
         held.delay = Some("disk".into());
+        held.delay_until_unix_ms = Some(60 * MINUTE);
         assert!(clears(&held));
+        let mut own = raised();
+        own.nodes[1].hold = Some(crate::missions::NodeHold {
+            why: "morning".into(),
+            until_unix_ms: 60 * MINUTE,
+        });
+        assert!(clears(&own));
         // Review of with-hide/hide#2584 (N1): a start gate's question holds
         // the mission as the raise judged it, so a sibling's stall goes.
         let mut gated = raised();

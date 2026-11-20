@@ -268,6 +268,19 @@ pub struct PhoneNode {
     /// change by pull request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merge: Option<PhoneMerge>,
+    /// What the step waits on that its Conductor set (`Mission::wait_of`):
+    /// its own hold or the mission's delay, the map's `기다리는 중 · 이유 ·
+    /// 언제까지`; absent while nothing holds it and from a core before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<PhoneWait>,
+}
+
+/// A step's wait as the map reads it (`NodeWait`), copied field by field.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PhoneWait {
+    pub why: String,
+    pub until_unix_ms: u64,
+    pub mission: bool,
 }
 
 /// A step's merge as the map reads it (`NodeMerge`), copied field by field:
@@ -461,6 +474,8 @@ struct NodeIn {
     gate: Option<PhoneGate>,
     #[serde(default)]
     merge: Option<PhoneMerge>,
+    #[serde(default)]
+    wait: Option<PhoneWait>,
 }
 
 /// A step's kind as the phone frame carries it (PRD node-presets D-11): a
@@ -706,6 +721,10 @@ fn phone_mission(
                 merge: source.merge.map(|merge| PhoneMerge {
                     why: merge.why.as_deref().map(cut),
                     ..merge
+                }),
+                wait: source.wait.map(|wait| PhoneWait {
+                    why: cut(&wait.why),
+                    ..wait
                 }),
             }
         })
