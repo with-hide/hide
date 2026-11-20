@@ -54,6 +54,7 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
             id: "skill:style".to_owned(),
             kind: ItemKind::Skill,
             name: "style".to_owned(),
+            owner: Some("acme".to_owned()),
             source: Source::Git {
                 url: "https://github.com/acme/skills".to_owned(),
                 path: "style".to_owned(),

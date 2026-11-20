@@ -23,6 +23,7 @@
 //! The pass runs under the kit's account lock; what reaches the network
 //! (`source`) runs before it, so a slow fetch never holds another pass up.
 
+mod avatar;
 mod mcp;
 mod skill;
 mod source;
@@ -229,6 +230,14 @@ pub struct StoreItem {
 }
 
 impl StoreItem {
+    /// The GitHub account a git source belongs to (the icon tile's picture).
+    pub(crate) fn owner(&self) -> Option<&str> {
+        match &self.source {
+            Source::Git { url, .. } => avatar::owner(url),
+            _ => None,
+        }
+    }
+
     pub fn id_of(kind: ItemKind, name: &str) -> String {
         format!("{}:{name}", kind.code())
     }
@@ -787,6 +796,10 @@ pub struct ItemReport {
     pub id: String,
     pub kind: ItemKind,
     pub name: String,
+    /// The GitHub account a git source belongs to, whose kept picture is
+    /// in [`StoreReport::avatars`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub source: Source,
     pub version: Version,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -893,6 +906,10 @@ pub struct StoreReport {
     /// it with `~`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// The kept pictures of the items' GitHub owners ([`ItemReport::owner`]),
+    /// as data addresses.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub avatars: BTreeMap<String, String>,
 }
 
 /// Why a whole pass did not run (`StoreReport::refused`).
@@ -2601,6 +2618,10 @@ fn report(
         diffs: store.diffs.clone(),
         mcp_previews: mcp::previews(ctx, store),
         home: Some(ctx.home().display().to_string()),
+        avatars: avatar::reported(
+            store_dir(ctx.home(), false).ok().as_deref(),
+            store.items.iter().filter_map(StoreItem::owner),
+        ),
         checked_at_unix_ms: store.checked_at_unix_ms,
         follows: store
             .items
@@ -2663,6 +2684,7 @@ fn item_report(
         id: item.id.clone(),
         kind: item.kind,
         name: item.name.clone(),
+        owner: item.owner().map(str::to_owned),
         source: item.source.clone(),
         version: item.version(),
         update: item.update(),

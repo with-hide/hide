@@ -154,10 +154,22 @@ pub(crate) fn fetch(
         match change {
             StoreChange::Inspect { source } => {
                 let preview = inspect(target, &staging, source);
+                // The owner's picture comes with the source it was read with.
+                if let (SourceSpec::Git { url }, Ok(_)) = (source, &preview)
+                    && let Ok(address) = parse(url)
+                    && let Some(owner) = super::avatar::owner(&address.url)
+                {
+                    super::avatar::ensure(dir, owner);
+                }
                 fetched.previews.push((source.clone(), preview));
             }
             StoreChange::CheckUpdates => {
                 fetched.latest = Some(check(target, record));
+                let owners: std::collections::BTreeSet<&str> =
+                    record.items.iter().filter_map(StoreItem::owner).collect();
+                for owner in owners {
+                    super::avatar::ensure(dir, owner);
+                }
             }
             StoreChange::PreviewUpdate { item } => {
                 let diff = match record.item(item) {
