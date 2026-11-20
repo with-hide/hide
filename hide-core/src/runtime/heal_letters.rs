@@ -1,6 +1,7 @@
 //! What a heal says after a cut (PRD letters-missions-simplify D-06, D-18,
 //! D-19, B16 to B19): the one line a resumed agent gets to go on, and what
-//! its parent or Conductor hears of the heal.
+//! the agent that answers for it, its parent or else its mission's Conductor
+//! (`Runtime::answerer`), hears of the heal.
 //!
 //! An engine switch, a reboot, a lost holder and a device's reboot or link
 //! return all end in the one heal: the engine resumes every agent whose
@@ -12,14 +13,17 @@
 //! the pane, whether
 //! it was at work when its engine went (what the core holds of the pane's
 //! last turn, `HookFacts`, which covers a device's panes as much as this
-//! machine's), and its parent. Nothing waits for the resumed agent's own
-//! report, which can come first, late or never.
+//! machine's), and who answers for it. Nothing waits for the resumed agent's
+//! own report, which can come first, late or never.
 //!
-//! Only a registration that was at work and is a mission's participant or
-//! another agent's child is owed the line; an agent at rest is only
-//! reopened, and the operator's own agents are never typed into. The line is
-//! the same whatever cut the work, in the operator's language. Each parent
-//! hears once per heal what became of its children, in its one entry
+//! Only a registration that was at work and that someone answers for (a
+//! child, or a worker or checker of an open mission, the agent that took the
+//! pane of one over included) or that conducts an open mission is owed the
+//! line; an agent at rest is only reopened, and the operator's own agents
+//! are never typed into. The line is the same whatever cut the work, in the
+//! operator's language. Each agent that answers for others (their parent,
+//! else their Conductor; "parent" below) hears once per heal what became of
+//! them, in its one entry
 //! (`Body::Children`), once each has an outcome: it came back
 //! (`Lost::Back`: it reported after its resume, or its engine is done with
 //! it and its registration stands) or its engine could not resume it
@@ -341,6 +345,7 @@ impl Runtime {
                 && in_pane(record)
                 && held.cut.as_ref().is_none_or(|cut| cut.id == record.id)
         });
+        let answerer = found.and_then(|record| self.answerer(record));
         let Some(record) = found else {
             // The agent it was cut for ended or left the pane before its
             // line could be owed: its parent hears it could not be told.
@@ -364,7 +369,7 @@ impl Runtime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let cut = facts.cut_pending(&saved);
-        let told = cut && self.participant_or_child(record);
+        let told = cut && self.owed_go_on(record);
         let key = format!("go-on:{}", record.id);
         if told && self.heal_letters.owed.contains_key(&key) {
             crate::diagnostic!(json!({
@@ -373,7 +378,7 @@ impl Runtime {
             }));
             held.cut = Some(Cut {
                 id: record.id.clone(),
-                parent: record.parent.clone(),
+                parent: answerer,
                 name: agent_name(record),
             });
             return false;
@@ -384,7 +389,7 @@ impl Runtime {
             "component": "heal", "kind": "heal.began",
             "pane_id": typed, "agent_id": record.id, "cut": cut,
         }));
-        if let Some(parent) = &record.parent {
+        if let Some(parent) = &answerer {
             self.heal_letters
                 .resumed
                 .entry(parent.clone())
@@ -412,7 +417,7 @@ impl Runtime {
                 letter: format!("{key}:{since}"),
                 to: record.id.clone(),
                 body: Body::GoOn {
-                    parent: record.parent.clone(),
+                    parent: answerer,
                     name: agent_name(record),
                 },
             };
@@ -463,9 +468,9 @@ impl Runtime {
     }
 
     /// The registrations the engine could not resume: each leaves its
-    /// parent's count and its line to go on, and its parent is told by name,
-    /// once, unless it is a mission's worker, whose Conductor hears it as
-    /// `worker_ended`.
+    /// parent's count and its line to go on, and the agent that answers for
+    /// it is told by name, once, unless it is a mission's worker, whose
+    /// Conductor hears it as `worker_ended`.
     pub(in crate::runtime) fn heal_not_woken(&mut self, ended: &[String]) {
         let Ok(ledger) = self.delivery_ledger.clone() else {
             return;
@@ -474,9 +479,10 @@ impl Runtime {
             let Some(record) = ledger.agents.iter().find(|record| &record.id == id) else {
                 continue;
             };
+            let answerer = self.answerer(record);
             let letters = &mut self.heal_letters;
             letters.owed.remove(&format!("go-on:{id}"));
-            let Some(parent) = &record.parent else {
+            let Some(parent) = &answerer else {
                 continue;
             };
             let worker = self.missions.book.missions.iter().any(|mission| {
@@ -726,7 +732,7 @@ impl Runtime {
             .iter()
             .filter(|(_, owed)| {
                 self.registration(&owed.to).is_none_or(|record| {
-                    matches!(owed.body, Body::GoOn { .. }) && !self.participant_or_child(record)
+                    matches!(owed.body, Body::GoOn { .. }) && !self.owed_go_on(record)
                 })
             })
             .map(|(key, _)| key.clone())
@@ -809,11 +815,13 @@ impl Runtime {
         )
     }
 
-    /// Whether the agent `record` registers is another agent's child or the
-    /// Conductor of an open mission (a worker or checker is the Conductor's
-    /// child): the ones a heal tells to go on (D-19).
-    fn participant_or_child(&self, record: &AgentRecord) -> bool {
-        record.parent.is_some()
+    /// Whether a heal tells the agent `record` registers to go on (D-19):
+    /// someone answers for it (`Runtime::answerer`: its parent, else the
+    /// Conductor of an open mission it works or checks in, which an agent
+    /// that took such a pane over without a parent still has), or it conducts
+    /// an open mission.
+    fn owed_go_on(&self, record: &AgentRecord) -> bool {
+        self.answerer(record).is_some()
             || self.missions.book.missions.iter().any(|mission| {
                 mission.status.open()
                     && (mission.conductor.agent_id.as_deref() == Some(record.id.as_str())

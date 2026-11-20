@@ -69,6 +69,10 @@ pub(crate) struct Writer {
     // They move when the operator reads a pane or a connection starts, so a
     // change replans like a moved registration does.
     observed_marks: Option<u64>,
+    // The open missions' participants with their Conductors at the last
+    // plan (`Runtime::mission_conductors`): a worker bound or taken over
+    // moves its row under its Conductor, so a change replans.
+    observed_conductors: Option<u64>,
     stopping: Arc<AtomicBool>,
     pending_retry: bool,
     observed_names: Option<(usize, u64)>,
@@ -184,6 +188,7 @@ impl Writer {
             completed,
             observed_registrations: None,
             observed_marks: None,
+            observed_conductors: None,
             stopping,
             pending_retry: false,
             observed_names: None,
@@ -212,8 +217,9 @@ impl Writer {
     }
 
     /// Plans and queues the token writes this server's panes still need:
-    /// each registration's lineage keys and, from `marks` (the engine pane id to
-    /// mark), the read axis's server mark (`wire::SERVER_MARK_TOKEN`); and
+    /// each registration's lineage keys, toward the one that answers for it
+    /// ([`answering`], with `wanted.conductors`), and, from `wanted.marks`,
+    /// the read axis's server mark (`wire::SERVER_MARK_TOKEN`); and
     /// settles each wait for an agent's session that `agents` answers, with
     /// `pane_exists` saying which panes the server still has.
     pub(crate) fn observe(
@@ -221,10 +227,11 @@ impl Writer {
         ledger: &Arc<Ledger>,
         agents: &[ProjectedAgent],
         pane_exists: &dyn Fn(&str) -> bool,
-        marks: &BTreeMap<String, String>,
+        wanted: &Wanted,
         changed: bool,
         snapshot_started_at: Instant,
     ) {
+        let (marks, conductors) = (&wanted.marks, &wanted.conductors);
         // A queued batch already owns the only pending slot. Remember that
         // current inputs need observing, but build no plan until it is taken.
         if self.queued.load(Ordering::Acquire) {
@@ -260,6 +267,7 @@ impl Writer {
             && self.acknowledged.is_empty()
             && self.observed_registrations == Some(placements(ledger))
             && self.observed_marks == Some(wanted_marks(marks))
+            && self.observed_conductors == Some(wanted_marks(conductors))
             && self.observed_waits == Some(waits_version)
         {
             return;
@@ -267,6 +275,7 @@ impl Writer {
         self.pending_retry = false;
         self.observed_registrations = Some(placements(ledger));
         self.observed_marks = Some(wanted_marks(marks));
+        self.observed_conductors = Some(wanted_marks(conductors));
         self.observed_waits = Some(waits_version);
         let (steps, deferred) = super::identity_wait::plan(
             ledger,
@@ -294,7 +303,7 @@ impl Writer {
         {
             self.plans += 1;
         }
-        let patches = plan(ledger, &self.device, agents, marks);
+        let patches = plan(ledger, &self.device, agents, marks, conductors);
         let current = patches.iter().map(signature).collect::<HashSet<_>>();
         self.in_flight
             .retain(|signature, _| current.contains(signature));
@@ -376,6 +385,16 @@ impl Drop for Writer {
         }
     }
 }
+/// What the runtime wants on this server's panes beside the ledger, read in
+/// the one lock that reads the ledger (`session_sync::coordinator`).
+#[derive(Default)]
+pub(crate) struct Wanted {
+    /// The engine pane id to the read axis's mark it should carry.
+    pub(crate) marks: BTreeMap<String, String>,
+    /// The open missions' participants by their Conductors' registrations
+    /// (`Runtime::mission_conductors`), for [`answering`].
+    pub(crate) conductors: BTreeMap<String, String>,
+}
 /// How many registrations the ledger holds and where each one's pane is.
 fn placements(ledger: &Ledger) -> (usize, u64) {
     use std::hash::{Hash, Hasher};
@@ -398,7 +417,8 @@ fn waits_on(ledger: &Ledger, device: &str) -> u64 {
     }
     hasher.finish()
 }
-/// Which panes should carry which mark.
+/// Which panes should carry which mark, or which participants answer to
+/// which Conductor.
 fn wanted_marks(marks: &BTreeMap<String, String>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -415,6 +435,21 @@ fn signature(patch: &Patch) -> String {
 pub(super) fn related<'a>(record: &AgentRecord, ledger: &'a Ledger) -> Option<&'a AgentRecord> {
     let id = record.parent.as_ref().or_else(|| fork_source(record))?;
     ledger.agents.iter().find(|candidate| &candidate.id == id)
+}
+/// The registration that answers for `record`, the one its row is a child
+/// of (PRD letters-missions-simplify D-24, as `Runtime::answerer` reads
+/// it): its parent, else the Conductor `conductors` names for it as a
+/// worker or checker of an open mission. An agent that took a pane over has
+/// no parent of its own (`succeed`), so this keeps a mission worker's row
+/// under its Conductor across a new conversation in its pane.
+fn answering<'a>(
+    record: &'a AgentRecord,
+    conductors: &'a BTreeMap<String, String>,
+) -> Option<&'a String> {
+    record
+        .parent
+        .as_ref()
+        .or_else(|| conductors.get(&record.id))
 }
 /// The source a parentless fork was forked from.
 fn fork_source(record: &AgentRecord) -> Option<&String> {
@@ -480,8 +515,9 @@ fn plan(
     device: &str,
     agents: &[ProjectedAgent],
     marks: &BTreeMap<String, String>,
+    conductors: &BTreeMap<String, String>,
 ) -> Vec<Patch> {
-    let mut patches = lineage_patches(ledger, device, agents);
+    let mut patches = lineage_patches(ledger, device, agents, conductors);
     // A mark rides in its pane's lineage patch when there is one, so one
     // report carries both.
     for agent in agents {
@@ -518,7 +554,12 @@ fn plan(
     patches.truncate(super::AGENT_LIMIT);
     patches
 }
-fn lineage_patches(ledger: &Ledger, device: &str, agents: &[ProjectedAgent]) -> Vec<Patch> {
+fn lineage_patches(
+    ledger: &Ledger,
+    device: &str,
+    agents: &[ProjectedAgent],
+    conductors: &BTreeMap<String, String>,
+) -> Vec<Patch> {
     if ledger.agents.is_empty() {
         return Vec::new();
     }
@@ -550,7 +591,7 @@ fn lineage_patches(ledger: &Ledger, device: &str, agents: &[ProjectedAgent]) -> 
         };
         if !registrations
             .iter()
-            .any(|record| record.parent.is_some() || fork_source(record).is_some())
+            .any(|record| answering(record, conductors).is_some() || fork_source(record).is_some())
         {
             continue;
         };
@@ -565,9 +606,7 @@ fn lineage_patches(ledger: &Ledger, device: &str, agents: &[ProjectedAgent]) -> 
         else {
             continue;
         };
-        let related = record
-            .parent
-            .as_ref()
+        let related = answering(record, conductors)
             .or_else(|| fork_source(record))
             .and_then(|id| parents.get(id.as_str()).copied());
         let tokens = desired(record, related, Some(current_session));
@@ -718,11 +757,60 @@ mod tests {
             agents: vec![source, fork],
             ..Default::default()
         };
-        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &[woken]);
+        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &[woken], &BTreeMap::new());
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].pane, "w3:p1");
         assert_eq!(patches[0].tokens["fork_pane"], "w1:p1");
         assert!(!patches[0].tokens.contains_key("parent_pane"));
+    }
+    /// PRD letters-missions-simplify D-24: the agent that took a mission
+    /// worker's pane over has no parent (`succeed`), and its row stays its
+    /// Conductor's child, from the open missions' participants the book
+    /// hands over; outside every open mission it is no one's child.
+    #[test]
+    fn a_parentless_mission_worker_is_its_conductors_child_on_its_row() {
+        let conductor = record("agent-1", "w1:p1", "conductor", None);
+        let mut former = record("agent-2", "w2:p1", "former", Some(&conductor.id));
+        former.ended = true;
+        former.successor = Some("agent-3".into());
+        let successor = record("agent-3", "w2:p1", "next", None);
+        let row = agent(&successor, BTreeMap::new());
+        let ledger = Ledger {
+            next_id: 4,
+            agents: vec![conductor, former, successor],
+            ..Default::default()
+        };
+        let conductors = BTreeMap::from([("agent-3".to_owned(), "agent-1".to_owned())]);
+        let patches = lineage_patches(
+            &ledger,
+            crate::node::TEST_NODE,
+            std::slice::from_ref(&row),
+            &conductors,
+        );
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].pane, "w2:p1");
+        assert_eq!(patches[0].tokens["parent_pane"], "w1:p1");
+        assert_eq!(
+            patches[0].tokens["parent_session"],
+            ledger.agents[0].actor.session.clone().unwrap()
+        );
+        // Its mission done, the row is the operator's root: the tokens clear.
+        let carried = agent(
+            &ledger.agents[2],
+            patches[0]
+                .tokens
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        );
+        let patches = lineage_patches(
+            &ledger,
+            crate::node::TEST_NODE,
+            &[carried],
+            &BTreeMap::new(),
+        );
+        assert_eq!(patches.len(), 1);
+        assert!(patches[0].tokens.values().all(Value::is_null));
     }
     #[test]
     fn an_ended_registration_keeps_lineage_and_same_server_omits_machine() {
@@ -779,19 +867,22 @@ mod tests {
             agent(&first, first_tokens.clone()),
             agent(&second, second_tokens.clone()),
         ];
-        assert!(lineage_patches(&ledger, crate::node::TEST_NODE, &observed).is_empty());
+        assert!(
+            lineage_patches(&ledger, crate::node::TEST_NODE, &observed, &BTreeMap::new())
+                .is_empty()
+        );
         let mut changed = observed.clone();
         changed[1].tokens.remove("parent_session");
-        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &changed);
+        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &changed, &BTreeMap::new());
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].pane, second.pane);
         changed[0].lineage_session = None;
         assert_eq!(
-            lineage_patches(&ledger, crate::node::TEST_NODE, &changed).len(),
+            lineage_patches(&ledger, crate::node::TEST_NODE, &changed, &BTreeMap::new()).len(),
             1
         );
         changed[0].lineage_session = crate::engine::tokens::session_digest("replacement");
-        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &changed);
+        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &changed, &BTreeMap::new());
         assert_eq!(patches.len(), 2);
         assert!(
             patches
@@ -829,7 +920,13 @@ mod tests {
             agent(&parent, BTreeMap::new()),
             agent(&child, BTreeMap::new()),
         ];
-        let patches = plan(&ledger, crate::node::TEST_NODE, &observed, &marks);
+        let patches = plan(
+            &ledger,
+            crate::node::TEST_NODE,
+            &observed,
+            &marks,
+            &BTreeMap::new(),
+        );
         assert_eq!(patches.len(), 2);
         let tokens = |pane: &str| {
             &patches
@@ -859,7 +956,16 @@ mod tests {
             agent(&parent, BTreeMap::from([mark("server-1")])),
             agent(&child, written),
         ];
-        assert!(plan(&ledger, crate::node::TEST_NODE, &carried, &marks).is_empty());
+        assert!(
+            plan(
+                &ledger,
+                crate::node::TEST_NODE,
+                &carried,
+                &marks,
+                &BTreeMap::new()
+            )
+            .is_empty()
+        );
     }
     struct TestBatches {
         receiver: mpsc::Receiver<Batch>,
@@ -905,6 +1011,7 @@ mod tests {
                 plans: 0,
                 worker: None,
                 device: crate::node::TEST_NODE.into(),
+                observed_conductors: None,
                 in_flight: HashMap::new(),
                 acknowledged: HashMap::new(),
                 generation: 0,
@@ -942,7 +1049,14 @@ mod tests {
         for reconnect in [false, true] {
             let (mut writer, batches, done, ledger, missing) = writer_fixture();
             let before = Instant::now();
-            writer.observe(&ledger, &missing, &|_| true, &BTreeMap::new(), true, before);
+            writer.observe(
+                &ledger,
+                &missing,
+                &|_| true,
+                &Wanted::default(),
+                true,
+                before,
+            );
             let first = batches.try_recv().unwrap();
             let finished = before + Duration::from_millis(1);
             done.try_send(completion(&first, true, finished)).unwrap();
@@ -952,7 +1066,7 @@ mod tests {
                 &ledger,
                 &missing,
                 &|_| true,
-                &BTreeMap::new(),
+                &Wanted::default(),
                 false,
                 before,
             );
@@ -965,7 +1079,7 @@ mod tests {
                 &ledger,
                 &missing,
                 &|_| true,
-                &BTreeMap::new(),
+                &Wanted::default(),
                 reconnect,
                 finished,
             );
@@ -979,7 +1093,7 @@ mod tests {
                 &ledger,
                 &matched,
                 &|_| true,
-                &BTreeMap::new(),
+                &Wanted::default(),
                 true,
                 finished,
             );
@@ -989,7 +1103,7 @@ mod tests {
                 &ledger,
                 &matched,
                 &|_| true,
-                &BTreeMap::new(),
+                &Wanted::default(),
                 false,
                 finished,
             );
@@ -1005,7 +1119,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             true,
             observed,
         );
@@ -1016,7 +1130,7 @@ mod tests {
             &ledger,
             &matched,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             true,
             observed,
         );
@@ -1024,7 +1138,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             true,
             observed,
         );
@@ -1034,7 +1148,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             observed,
         );
@@ -1050,7 +1164,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             observed,
         );
@@ -1078,7 +1192,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             true,
             observed,
         );
@@ -1089,7 +1203,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             observed,
         );
@@ -1100,7 +1214,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             observed,
         );
@@ -1133,7 +1247,7 @@ mod tests {
                 &ledger,
                 &[],
                 &|_| false,
-                &BTreeMap::new(),
+                &Wanted::default(),
                 changed,
                 Instant::now(),
             )
@@ -1175,14 +1289,14 @@ mod tests {
         }
         let now = Instant::now();
         for count in [32, 32, 6] {
-            writer.observe(&ledger, &agents, &|_| true, &BTreeMap::new(), false, now);
+            writer.observe(&ledger, &agents, &|_| true, &Wanted::default(), false, now);
             let plans = writer.plans;
             for _ in 0..100 {
                 writer.observe(
                     &Arc::new((*ledger).clone()),
                     &agents,
                     &|_| true,
-                    &BTreeMap::new(),
+                    &Wanted::default(),
                     false,
                     now,
                 );
@@ -1197,7 +1311,7 @@ mod tests {
             &Arc::new((*ledger).clone()),
             &agents,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             now,
         );
@@ -1206,7 +1320,7 @@ mod tests {
             "an unrelated publication cannot retry names"
         );
         writer.reconnected();
-        writer.observe(&ledger, &agents, &|_| true, &BTreeMap::new(), false, now);
+        writer.observe(&ledger, &agents, &|_| true, &Wanted::default(), false, now);
         assert_eq!(batches.try_recv().unwrap().names.len(), 32);
     }
     #[test]
@@ -1217,7 +1331,7 @@ mod tests {
             &ledger,
             &missing,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             true,
             observed,
         );
@@ -1229,7 +1343,7 @@ mod tests {
             &ledger,
             &matched,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             true,
             observed,
         );
@@ -1237,7 +1351,7 @@ mod tests {
             &ledger,
             &matched,
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             observed,
         );
@@ -1255,7 +1369,7 @@ mod tests {
             &Arc::new(moved),
             &[woken],
             &|_| true,
-            &BTreeMap::new(),
+            &Wanted::default(),
             false,
             observed,
         );
@@ -1284,7 +1398,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
         observations.push(agent(&child, BTreeMap::new()));
-        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &observations);
+        let patches = lineage_patches(
+            &ledger,
+            crate::node::TEST_NODE,
+            &observations,
+            &BTreeMap::new(),
+        );
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].pane, child.pane);
         assert_eq!(
@@ -1315,7 +1434,12 @@ mod tests {
             ..Default::default()
         };
         let observations = vec![observed; super::super::AGENT_LIMIT + 1];
-        let patches = lineage_patches(&ledger, crate::node::TEST_NODE, &observations);
+        let patches = lineage_patches(
+            &ledger,
+            crate::node::TEST_NODE,
+            &observations,
+            &BTreeMap::new(),
+        );
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].pane, child.pane);
     }
@@ -1368,6 +1492,7 @@ mod tests {
                 &fixture.ledger,
                 crate::node::TEST_NODE,
                 &[fixture.native.clone()],
+                &BTreeMap::new(),
             );
             assert_eq!(patches.len(), 1);
             assert_eq!(patches[0].pane, fixture.native.pane_id);
@@ -1379,7 +1504,8 @@ mod tests {
                 lineage_patches(
                     &fixture.ledger,
                     crate::node::TEST_NODE,
-                    &[fixture.native.clone()]
+                    &[fixture.native.clone()],
+                    &BTreeMap::new(),
                 )
                 .is_empty()
             );
@@ -1391,8 +1517,13 @@ mod tests {
                 .unwrap()
                 .ended = true;
             assert!(
-                lineage_patches(&fixture.ledger, crate::node::TEST_NODE, &[fixture.native])
-                    .is_empty()
+                lineage_patches(
+                    &fixture.ledger,
+                    crate::node::TEST_NODE,
+                    &[fixture.native],
+                    &BTreeMap::new()
+                )
+                .is_empty()
             );
         }
     }
@@ -1419,12 +1550,19 @@ mod tests {
             &fixture.ledger,
             crate::node::TEST_NODE,
             &[fixture.native.clone()],
+            &BTreeMap::new(),
         );
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].tokens, fixture.expected);
         fixture.native.tokens = fixture.expected;
         assert!(
-            lineage_patches(&fixture.ledger, crate::node::TEST_NODE, &[fixture.native]).is_empty()
+            lineage_patches(
+                &fixture.ledger,
+                crate::node::TEST_NODE,
+                &[fixture.native],
+                &BTreeMap::new()
+            )
+            .is_empty()
         );
     }
 
@@ -1442,6 +1580,7 @@ mod tests {
             &fixture.ledger,
             crate::node::TEST_NODE,
             &[fixture.native.clone()],
+            &BTreeMap::new(),
         );
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].pane, fixture.native.pane_id);
@@ -1450,7 +1589,13 @@ mod tests {
         assert!(!patches[0].tokens.contains_key("unrelated"));
         fixture.native.lineage_session = None;
         assert!(
-            lineage_patches(&fixture.ledger, crate::node::TEST_NODE, &[fixture.native]).is_empty()
+            lineage_patches(
+                &fixture.ledger,
+                crate::node::TEST_NODE,
+                &[fixture.native],
+                &BTreeMap::new()
+            )
+            .is_empty()
         );
     }
 
@@ -1478,6 +1623,7 @@ mod tests {
             &fixture.ledger,
             crate::node::TEST_NODE,
             &[fixture.native.clone(), untouched],
+            &BTreeMap::new(),
         );
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].pane, fixture.native.pane_id);

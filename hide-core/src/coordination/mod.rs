@@ -1901,10 +1901,14 @@ pub(crate) fn apply_with(
                 .iter()
                 .find(|record| &record.id == id)
                 .ok_or("agent_unavailable")?;
+            // The one that answers for it: its parent, else its mission's
+            // Conductor (`Runtime::answerer`), since an agent that took a
+            // pane over has no parent of its own (`succeed`).
             let parent = record
                 .parent
-                .as_ref()
-                .and_then(|id| resolve_actor(ledger, id));
+                .clone()
+                .or_else(|| holds.mission_conductor_for(id))
+                .and_then(|id| resolve_actor(ledger, &id));
             // An external tool at Act does what the operator does (PRD
             // hide-external-control D-27): it may end any agent, which
             // its connection's standing was checked for before this ran.
@@ -4609,6 +4613,47 @@ mod tests {
                 .unwrap()
                 .ended
         );
+    }
+    /// PRD letters-missions-simplify D-24: an agent with no parent, as the
+    /// one that took a mission worker's pane over is (`succeed`), is ended
+    /// by the Conductor the mission book says answers for it, and by no
+    /// one else.
+    #[test]
+    fn a_parentless_worker_is_ended_by_the_conductor_that_answers_for_it() {
+        struct Book(String);
+        impl Holds for Book {
+            fn held(&self) -> Result<&Held, String> {
+                Err("unused".into())
+            }
+            fn mission_conductor_for(&self, _agent: &str) -> Option<String> {
+                Some(self.0.clone())
+            }
+        }
+        let mut ledger = Ledger::default();
+        let conductor = record("conductor", "native-conductor", None);
+        let actor = conductor.actor.clone();
+        let conductor_id = register(&mut ledger, conductor, &actor);
+        let worker = record("worker", "native-worker", None);
+        let worker_actor = worker.actor.clone();
+        let worker_id = register(&mut ledger, worker, &worker_actor);
+        let end = Mutation::End {
+            id: worker_id.clone(),
+            actor: None,
+        };
+        let before = ledger.clone();
+        assert_eq!(
+            apply(&mut ledger, &actor, &end, 2).unwrap_err(),
+            "parent_authority_required",
+            "no book: no one answers for it"
+        );
+        assert_eq!(ledger, before);
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert_eq!(
+            apply_with(&mut ledger, &stranger, &end, 2, &Book(conductor_id.clone())).unwrap_err(),
+            "parent_authority_required"
+        );
+        apply_with(&mut ledger, &actor, &end, 3, &Book(conductor_id)).unwrap();
+        assert!(resolve_actor(&ledger, &worker_id).is_none());
     }
     #[test]
     fn changed_intent_payload_or_invalid_persisted_session_is_refused() {

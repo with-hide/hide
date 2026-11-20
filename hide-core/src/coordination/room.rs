@@ -139,11 +139,21 @@ fn finished(spawn: &SpawnRecord, ended: &HashMap<&str, bool>) -> bool {
 /// ledger has to make room, or a value a caller already has.
 pub(crate) trait Holds {
     fn held(&self) -> Result<&Held, String>;
+
+    /// The registration of the Conductor of the open mission in which
+    /// registration `agent` is a node's worker or checker, from the mission
+    /// book (`Runtime::mission_conductor_for`): who answers for an agent
+    /// with no parent. None where no book is at hand.
+    fn mission_conductor_for(&self, agent: &str) -> Option<String>;
 }
 
 impl Holds for Held {
     fn held(&self) -> Result<&Held, String> {
         Ok(self)
+    }
+
+    fn mission_conductor_for(&self, _agent: &str) -> Option<String> {
+        None
     }
 }
 

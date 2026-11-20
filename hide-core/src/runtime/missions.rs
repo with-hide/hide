@@ -355,7 +355,8 @@ pub struct NodeView {
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
 /// its worker works, its worker rests and the node waits on someone
-/// (`waiting_on`, said beside it), its worker stopped with no one to wait
+/// (`waiting_on`, said beside it), Hide put its worker to sleep (PRD
+/// letters-missions-simplify B23: a sleep, not a wait), its worker stopped with no one to wait
 /// on (`mission_health::stopped_worker`), since when and why, or no worker
 /// stands for it (`mission_health::worker_gone`), since when a warning
 /// judgment first saw it, absent before one did.
@@ -366,6 +367,7 @@ pub enum NodeWork {
     Waiting {
         on: WaitingOn,
     },
+    Asleep,
     Stopped {
         cause: Option<crate::missions::StopCause>,
         since_unix_ms: u64,
@@ -378,7 +380,7 @@ pub enum NodeWork {
 
 /// What `view`, a node of a running mission, is doing now: from its
 /// worker's registration (none or ended is no worker, since `gone_since`;
-/// asleep rests) and, for a running one, its agent row's activity
+/// asleep sleeps) and, for a running one, its agent row's activity
 /// (`working` works, `stopped` rests, or stands stopped when `stopped` says
 /// so); a row Hide cannot see, or whose activity it does not know, says
 /// nothing rather than a guess.
@@ -406,7 +408,7 @@ fn node_work(
     match worker? {
         // Answered above.
         WorkerLife::Ended => None,
-        WorkerLife::Asleep => waiting(),
+        WorkerLife::Asleep => Some(NodeWork::Asleep),
         WorkerLife::Running => match row_activity? {
             "working" => Some(NodeWork::Working),
             "stopped" => match stopped {
@@ -3483,6 +3485,48 @@ impl Runtime {
                 .find(|record| record.actor.same_identity(&conductor.actor))
                 .map(|record| record.id.clone())
         })
+    }
+
+    /// Who answers for registration `record`, by registration id (PRD
+    /// letters-missions-simplify D-24): its parent, else the Conductor of an
+    /// open mission in which it is a node's worker or checker; none for an
+    /// agent no one answers for, such as the operator's own. An agent that
+    /// took a pane over takes its predecessor's roles but not its parent
+    /// (`coordination::succeed`), so this, never `record.parent` alone, is
+    /// who hears of its heal and its reports, and who may put it to sleep,
+    /// archive or end it.
+    pub(crate) fn answerer(&self, record: &crate::coordination::AgentRecord) -> Option<String> {
+        record
+            .parent
+            .clone()
+            .or_else(|| self.mission_conductor_for(&record.id))
+    }
+
+    /// The registration of the Conductor of the open mission in which
+    /// registration `agent` is a node's worker or checker
+    /// (`MissionBook::conductor_for`), never `agent` itself.
+    pub(crate) fn mission_conductor_for(&self, agent: &str) -> Option<String> {
+        self.registration_of(self.missions.book.conductor_for(agent)?)
+            .filter(|conductor| conductor != agent)
+    }
+
+    /// The registration of each open mission's Conductor by the
+    /// registrations that work or check in it (`MissionBook::participants`):
+    /// what the lineage writer reads, off the lock, to give a participant
+    /// with no parent its Conductor as the one its row answers to
+    /// (`coordination::lineage::answering`).
+    pub(crate) fn mission_conductors(&self) -> std::collections::BTreeMap<String, String> {
+        let mut conductors = std::collections::BTreeMap::new();
+        for (agent, conductor) in self.missions.book.participants() {
+            // The first mission that binds it, as `conductor_for` reads it.
+            if conductors.contains_key(agent) {
+                continue;
+            }
+            if let Some(conductor) = self.registration_of(conductor).filter(|id| id != agent) {
+                conductors.insert(agent.to_owned(), conductor);
+            }
+        }
+        conductors
     }
 
     /// The live registration `actor` holds, as `conductor_of` names it.

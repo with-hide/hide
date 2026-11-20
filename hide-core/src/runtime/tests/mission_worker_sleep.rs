@@ -1457,6 +1457,68 @@ fn hide_agent_sleep_takes_only_the_agent_or_its_parent() {
     assert_eq!(phase(&runtime, WORKER), None);
 }
 
+/// D-20, PRD letters-missions-simplify D-24: a worker with no parent, as the
+/// agent that took a worker's pane over is (`coordination::succeed`), is
+/// put to sleep by the Conductor of the open mission it works in, who
+/// answers for it; outside such a mission no one but itself may.
+#[test]
+fn hide_agent_sleep_takes_a_parentless_worker_from_its_conductor() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[1].parent = None;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "parent_authority_required"
+    );
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap()["state"],
+        "ending"
+    );
+}
+
+/// PRD letters-missions-simplify D-24: `hide request send parent` from a
+/// worker with no parent names the Conductor of the open mission it works
+/// in, so the agent that took a worker's pane over reports where the one
+/// before it did; with no such mission no one answers for it.
+#[test]
+fn a_parentless_workers_parent_is_its_conductor() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[1].parent = None;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let send = |runtime: &mut Runtime| {
+        let context = runtime
+            .workspace_control_query(crate::node::TEST_NODE, WORKER, Query::Info)
+            .unwrap()
+            .context;
+        runtime
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                WORKER,
+                &context,
+                None,
+                crate::delivery::Command::Send {
+                    target: "parent".into(),
+                    intent: "done".into(),
+                    body: "done".into(),
+                    kind: "report".into(),
+                    now: false,
+                    force: false,
+                },
+            )
+            .map(|_| ())
+    };
+    assert_eq!(send(&mut runtime).unwrap_err(), "no_parent");
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    // Its Conductor is found: the send goes on to the store, which this
+    // fixture does not run.
+    assert_eq!(send(&mut runtime), Err("delivery_unavailable".into()));
+}
+
 /// PRD hide-plan-delegate B6: a `request` that would wake a sleeping plan
 /// child while its main's plans already have three children awake is
 /// refused before the store keeps it; with a place free, or as a `report`
@@ -1788,10 +1850,12 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
 
 /// A mission's node carries its worker's life from the same decision as
 /// `hide agent show`: running, asleep once Hide puts it to sleep with nothing
-/// else moving, and running again once it wakes.
+/// else moving, and running again once it wakes. Asleep, the node's work is
+/// a sleep, not a wait on its worker (PRD letters-missions-simplify B23).
 #[test]
 fn a_mission_node_reads_its_workers_sleep() {
     use crate::delivery::answer::Runtime as Life;
+    use crate::runtime::missions::NodeWork;
     let mut runtime = mission_runtime();
     let life = |runtime: &mut Runtime| {
         runtime.refresh_missions();
@@ -1805,6 +1869,10 @@ fn a_mission_node_reads_its_workers_sleep() {
         .records
         .insert(WORKER.into(), record(WORKER));
     assert_eq!(life(&mut runtime), Some(Life::Asleep));
+    assert_eq!(
+        runtime.snapshot.missions.items[0].nodes[0].work,
+        Some(NodeWork::Asleep)
+    );
     runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
     assert_eq!(life(&mut runtime), Some(Life::Running));
 }

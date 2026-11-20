@@ -441,6 +441,74 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
     );
 }
 
+/// B2, B17, B18: an agent that took a mission worker's or checker's pane
+/// over has no parent (`coordination::succeed`), and its Conductor answers
+/// for it all the same (`Runtime::answerer`): the worker at work is told to
+/// go on and is counted back in the Conductor's one cell, and a checker its
+/// engine could not bring back is named there, as a child would be.
+#[test]
+fn a_mission_participant_with_no_parent_is_healed_as_its_conductors() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    started_with(
+        &mut runtime,
+        root.path(),
+        &[("w1:p1", "s-18", true), ("w1:p7", "s-7", true)],
+    );
+    let conductor = actor(&node, "w1:p3", "s-3");
+    let worker = actor(&node, "w1:p1", "s-18");
+    let checker = actor(&node, "w1:p7", "s-7");
+    let mut former = record("agent-1", &actor(&node, "w1:p1", "s-1"), Some("agent-3"));
+    former.ended = true;
+    former.successor = Some("agent-18".into());
+    registered(
+        &mut runtime,
+        vec![
+            record("agent-3", &conductor, None),
+            former,
+            record("agent-18", &worker, None),
+            record("agent-7", &checker, None),
+        ],
+    );
+    let mut mission = mission_with_worker("agent-18");
+    mission.conductor.actor = conductor.clone();
+    mission.conductor.agent_id = Some("agent-3".into());
+    mission.nodes[0].criteria[0].checkers.push(
+        serde_json::from_value(
+            serde_json::json!({"worker": {"agent": "codex"}, "agent_id": "agent-7"}),
+        )
+        .unwrap(),
+    );
+    runtime.missions.book.missions.push(mission);
+
+    let healing: Vec<String> = ["w1:p1", "w1:p7"].map(str::to_owned).to_vec();
+    heal(&mut runtime, &node, &healing, 1_000);
+    assert_eq!(
+        runtime.heal_letters_owed(),
+        ["go-on:agent-18:1000", "go-on:agent-7:1000"]
+    );
+    runtime.heal_not_woken(&["agent-7".to_owned()]);
+    for actor in [&conductor, &worker] {
+        observe(&mut runtime, actor);
+    }
+    runtime.hook_after_heal(&node, "w1:p1", true);
+    assert_eq!(
+        admit(&mut runtime),
+        [
+            (
+                "w1:p3".to_owned(),
+                "Resumed: 1 · agent w1:p1\nCould not wake agent w1:p7".to_owned()
+            ),
+            (
+                "w1:p1".to_owned(),
+                "Carry on with the work that was cut off.".to_owned()
+            ),
+        ]
+    );
+    assert!(runtime.heal_letters_owed().is_empty());
+}
+
 /// B17, B18: the resumed agent's reports can reach the core before its
 /// session pass does: whoever comes first takes the engine's resume and
 /// settles it in the same step, so the reports, the second of which says no

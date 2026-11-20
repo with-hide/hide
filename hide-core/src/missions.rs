@@ -2660,6 +2660,31 @@ impl MissionBook {
             })
     }
 
+    /// The Conductor of the open mission in which registration `agent`
+    /// holds a role, as a node's worker or a checker of one of its lines:
+    /// who answers for that agent when no parent does
+    /// (`Runtime::answerer`, PRD letters-missions-simplify D-24).
+    pub(crate) fn conductor_for(&self, agent: &str) -> Option<&Conductor> {
+        self.participants()
+            .find(|(bound, _)| *bound == agent)
+            .map(|(_, conductor)| conductor)
+    }
+
+    /// Every registration that holds a role in an open mission, as a node's
+    /// worker or a checker of one of its lines, with that mission's
+    /// Conductor.
+    pub(crate) fn participants(&self) -> impl Iterator<Item = (&str, &Conductor)> {
+        self.missions
+            .iter()
+            .filter(|mission| mission.status.open())
+            .flat_map(|mission| {
+                mission.nodes.iter().flat_map(move |node| {
+                    node.bound_agents()
+                        .map(move |agent| (agent, &mission.conductor))
+                })
+            })
+    }
+
     /// The mission `actor` conducts and still runs, if any.
     pub(crate) fn conducted_open(&self, actor: &Actor) -> Option<&Mission> {
         self.missions

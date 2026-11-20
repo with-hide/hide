@@ -1700,18 +1700,17 @@ impl Runtime {
             .or_else(|| registered.map(|record| record.actor.clone()))
             .ok_or("sender_unknown")?;
         // `parent` is read here, from the registration whether or not it
-        // ended: a sender whose pane closed has no live one to ask.
+        // ended: a sender whose pane closed has no live one to ask. It names
+        // the one that answers for the sender (`Runtime::answerer`).
         if target == crate::coordination::PARENT {
-            *target = ledger
+            let sender = ledger
                 .agents
                 .iter()
                 .rev()
                 .filter(|record| record.actor.same_identity(&actor))
                 .min_by_key(|record| record.ended)
-                .ok_or("participant_unavailable")?
-                .parent
-                .clone()
-                .ok_or("no_parent")?;
+                .ok_or("participant_unavailable")?;
+            *target = self.answerer(sender).ok_or("no_parent")?;
         }
         // No pane's context holds this authority: it was proven when the
         // letter was written.
@@ -1937,18 +1936,18 @@ impl Runtime {
         }
         // A spawn of Desk's past its places waits in Desk's queue (B21).
         let queued = self.desk_spawn_admission(&actor, &command)?;
-        // `parent` names the sender's own parent, which a child is never told
-        // by id, so its report reaches whoever answers for it; it is read
-        // before the retry check, so a retry compares the same recipient. A
-        // sender Hide cannot find registered is told why, as `here` is.
+        // `parent` names whoever answers for the sender (`Runtime::answerer`:
+        // its own parent, else the Conductor of the open mission it works or
+        // checks in), which a child is never told by id, so its report
+        // reaches it; it is read before the retry check, so a retry compares
+        // the same recipient. A sender Hide cannot find registered is told
+        // why, as `here` is.
         if let Command::Send { target, .. } = &mut command
             && target == crate::coordination::PARENT
         {
             let ledger = self.delivery_state()?;
-            *target = crate::coordination::here(&ledger, &actor, unix_milliseconds())?
-                .parent
-                .clone()
-                .ok_or("no_parent")?;
+            let sender = crate::coordination::here(&ledger, &actor, unix_milliseconds())?;
+            *target = self.answerer(sender).ok_or("no_parent")?;
         }
         // A send under an intent its sender already used is a retry of the
         // same letter, answered with it: the store is handed that letter's

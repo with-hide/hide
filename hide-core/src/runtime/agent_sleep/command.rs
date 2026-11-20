@@ -17,8 +17,9 @@ impl Runtime {
     /// that acts on another agent's pane (`hide agent sleep`, `hide agent
     /// archive`): the registration's actor, or why not.
     ///
-    /// A pane's command may act on the agent itself or on its child, as `hide
-    /// agent end` does. Desk (`desk_may_act`) has no pane: it acts as Hide's
+    /// A pane's command may act on the agent itself or on an agent it answers
+    /// for (its child, or a worker or checker of the open mission it
+    /// conducts; `Runtime::answerer`), as `hide agent end` does. Desk (`desk_may_act`) has no pane: it acts as Hide's
     /// own `hide:desk` while it runs, on any live registration, because the
     /// operator approves each such command on its card before Desk runs it.
     pub(in crate::runtime) fn registered_agent_for(
@@ -74,12 +75,12 @@ impl Runtime {
             .iter()
             .find(|record| record.id == id)
             .ok_or("agent_unavailable")?;
-        // The same authority as `hide agent end`: the agent itself or its
-        // parent (D-20).
-        let parent = record
-            .parent
-            .as_deref()
-            .and_then(|parent| crate::coordination::resolve_actor(&ledger, parent));
+        // The same authority as `hide agent end`: the agent itself or the
+        // one that answers for it, its parent or else its mission's
+        // Conductor (D-20; PRD letters-missions-simplify D-24).
+        let parent = self
+            .answerer(record)
+            .and_then(|parent| crate::coordination::resolve_actor(&ledger, &parent));
         if !desk
             && !record.actor.same_identity(&me)
             && !parent.is_some_and(|parent| parent.same_identity(&me))

@@ -625,3 +625,100 @@ fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
         );
     }
 }
+
+/// PRD letters-missions-simplify D-24, B9: the agent that took a mission
+/// worker's pane over has no parent (`coordination::succeed`), and the book
+/// names the mission's Conductor as the one that answers for it
+/// (`Runtime::mission_conductors`), which the lineage writer turns into its
+/// row's parent (`coordination::lineage`,
+/// `a_parentless_mission_worker_is_its_conductors_child_on_its_row`): its
+/// block is the Conductor's child cell, and nothing of it reaches the
+/// operator's turn within the grace.
+#[test]
+fn a_successor_workers_block_is_its_conductors_child_cell() {
+    let mut runtime = runtime();
+    let actor = |pane: &str, session: &str| crate::delivery::Actor {
+        pane_id: pane.into(),
+        name: pane.into(),
+        kind: "claude".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: Some(session.into()),
+    };
+    let record = |id: &str, actor: crate::delivery::Actor, parent: Option<&str>| {
+        crate::coordination::AgentRecord {
+            id: id.into(),
+            name: Some(id.into()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: actor.session.clone().unwrap_or_default(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent: parent.map(Into::into),
+            origin: None,
+            project: None,
+            actor,
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        }
+    };
+    let conductor = actor("w1:p1", "s-1");
+    let mut former = record("agent-2", actor("w1:p2", "s-2"), Some("agent-1"));
+    former.ended = true;
+    former.successor = Some("agent-3".into());
+    runtime.delivery_ledger = Ok(std::sync::Arc::new(crate::delivery::ledger::Ledger {
+        version: 1,
+        next_id: 4,
+        agents: vec![
+            record("agent-1", conductor.clone(), None),
+            former,
+            record("agent-3", actor("w1:p2", "s-3"), None),
+        ],
+        ..Default::default()
+    }));
+    let mut mission: crate::missions::Mission = serde_json::from_value(json!({
+        "id": "mission-1", "title": "Fix", "project": "/fixture",
+        "device_id": crate::node::TEST_NODE,
+        "conductor": {"actor": conductor, "agent_id": "agent-1"},
+        "status": "running", "scope": "pr", "cap": 4,
+        "created_at_unix_ms": 1, "updated_at_unix_ms": 1,
+        "nodes": [{"key": "a", "title": "A", "kind": "change", "status": "working", "agent_id": "agent-3"}]
+    }))
+    .unwrap();
+    runtime.missions.book.missions.push(mission.clone());
+    assert_eq!(
+        runtime.mission_conductors(),
+        std::collections::BTreeMap::from([("agent-3".to_owned(), "agent-1".to_owned())])
+    );
+
+    // The row as the lineage writer leaves it: the Conductor's child.
+    ingest_lineage(
+        &mut runtime,
+        &[
+            ("w1:p1", None, "working", ""),
+            ("w1:p2", Some("w1:p1"), "blocked", ""),
+        ],
+    );
+    let worker = agent_row(&runtime, "w1:p2");
+    assert!(worker.blocked_since_unix_ms.is_some());
+    assert!(!worker.state.needs_you, "not the operator's turn");
+    assert!(agent_row(&runtime, "w1:p1").raised.is_empty());
+    let parent_session = agent_row(&runtime, "w1:p1").lineage_session.clone();
+    let observed: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"conductor","pane_id":"w1:p1","agent":"claude","agent_status":"working","state_change_seq":1,"lineage_session":parent_session},
+        {"id":"worker","pane_id":"w1:p2","agent":"claude","agent_status":"blocked","state_change_seq":1},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+    let ((), records) = crate::diagnostics::capture(|| runtime.drive_blocked_notes());
+    let noted = of_kind(&records, "child_blocked.noted");
+    assert_eq!(noted.len(), 1, "{records:?}");
+    assert_eq!(noted[0]["parent_pane_id"], "w1:p1");
+
+    // Its mission done, no one answers for it.
+    mission.status = crate::missions::MissionStatus::Done;
+    runtime.missions.book.missions[0] = mission;
+    assert!(runtime.mission_conductors().is_empty());
+}

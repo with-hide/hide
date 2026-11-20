@@ -601,7 +601,7 @@ impl Spawner {
             &ledger,
             &agents,
             &|_| true,
-            &std::collections::BTreeMap::new(),
+            &crate::coordination::lineage::Wanted::default(),
             true,
             std::time::Instant::now(),
         );

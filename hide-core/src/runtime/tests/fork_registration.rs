@@ -12,7 +12,6 @@ use crate::delivery::{ledger, worker::Worker};
 use crate::handle::ChangeNotifier;
 use crate::runtime::delivery::tests::fixture;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const FORK_PANE: &str = "w1:p9";
@@ -139,7 +138,7 @@ impl Forking {
             &ledger,
             &agents,
             &|pane| pane != FORK_PANE || pane_exists,
-            &BTreeMap::new(),
+            &crate::coordination::lineage::Wanted::default(),
             true,
             std::time::Instant::now(),
         );
