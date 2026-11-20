@@ -1,9 +1,11 @@
-import { useMemo } from "react";
+import { EllipsisIcon } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useAgentLogosShown } from "../agentLogoMode";
 import type { Actions } from "../actions";
 import { deviceScope, type ToolCell } from "../agentScope";
 import { frontDeviceId } from "../devices";
 import { machineName } from "../screenMachine";
+import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "../i18n/client";
 import { MissionTakeOver } from "../MissionTakeOver";
 import { cn } from "../lib/utils";
@@ -12,6 +14,7 @@ import { catalogWorkspaces, type SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { AskLine } from "./agent-tree";
 import { DeviceChip } from "./device-chip";
+import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./entry-menu";
 import { Elapsed } from "./elapsed";
 import { KindIcon } from "./kind-mark";
 import { Button } from "./ui/button";
@@ -142,7 +145,10 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
   const place = placed ? project : null;
   const device = useMissionDevice(ask);
   const name = [ask.mission.title, device, t("mission.attention"), missionAskWhat(ask, t), place].filter(Boolean).join(", ");
+  const menu = missionRowMenu(ask, actions, t);
+  const more = t("taskLens.more", { name: ask.mission.title });
   return (
+    <EntryContextMenu asChild label={more} title={ask.mission.title} items={menu.items} onSelect={menu.select} data-mission-ask-context={ask.mission.id}>
     <li data-mission-ask={ask.mission.id} data-mission-ask-node={ask.kind === "net" ? undefined : ask.node.key} data-mission-ask-net={ask.kind === "net" || undefined} className={cn("group/row relative flex items-start gap-xs rounded-sm py-xs pr-xs text-body hover:bg-accent")} style={{ paddingLeft: inset }}>
       <Hint label={name} reveals>
         <Button
@@ -164,7 +170,7 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
         head={<>
           <span aria-hidden="true" className="pointer-events-none min-w-0 flex-1 truncate text-foreground">{ask.mission.title}</span>
           {device ? <DeviceChip label={device} className="pointer-events-none max-w-2/5" /> : null}
-          <Elapsed since={ask.since_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-mission-ask-elapsed="true" />
+          <MissionRowTime ask={ask} label={more} menu={menu} />
           <FoldLane />
         </>}
       >
@@ -177,5 +183,48 @@ export function SidebarMissionRow({ ask, inset, actions, place: placed = true, .
         <MissionAskChoices ask={ask} actions={actions} className="relative z-10 mt-xs" />
       </SessionRowBody>
     </li>
+    </EntryContextMenu>
+  );
+}
+
+type MissionRowMenuId = "look" | "terminal" | "put_away";
+type MissionRowMenu = { items: () => MenuEntry<MissionRowMenuId>[]; select: (id: MissionRowMenuId) => void };
+
+/**
+ * The row's ⋯ and right-click menu, as an agent row in 내 차례 has one
+ * (operator decision 2026-11-20): 확인하기, 터미널로 이동 while a Conductor
+ * holds the mission, and 치우기, which takes the row out of 내 차례 until
+ * something newer asks the operator (`mission_put_away`).
+ */
+function missionRowMenu(ask: MissionAsk, actions: Actions, t: TFunction<"translation">): MissionRowMenu {
+  const present = ask.mission.conductor.present;
+  const items = (): MenuEntry<MissionRowMenuId>[] => [
+    { id: "look", icon: "overview", label: t("missionScreen.pill.attention"), unavailable: null },
+    ...(present ? [{ id: "terminal" as const, icon: "terminal" as const, label: t("mission.toTerminal"), unavailable: null }] : []),
+    { id: "put_away", icon: "put_away", label: t("taskLens.menu.putAway"), unavailable: null, separated: true },
+  ];
+  const select = (id: MissionRowMenuId) => {
+    if (id === "look") return actions.openMission(ask.mission.id);
+    if (id === "terminal") return actions.openAgent(ask.mission.conductor.pane_id);
+    return actions.putAwayMission(ask.mission.id);
+  };
+  return { items, select };
+}
+
+/** How long the mission has waited, and in its place under the pointer or focus, or while its menu is open, the row's `⋯`. */
+function MissionRowTime({ ask, label, menu }: { ask: MissionAsk; label: string; menu: MissionRowMenu }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative z-10 flex shrink-0 items-center">
+      <Elapsed since={ask.since_unix_ms} aria-hidden="true" className={cn("pointer-events-none shrink-0 font-mono text-caption text-muted-foreground", open ? "hidden" : "group-hover/row:hidden group-focus-within/row:hidden hoverless:hidden")} data-mission-ask-elapsed="true" />
+      <span className={cn("items-center", open ? "flex" : "hidden group-hover/row:flex group-focus-within/row:flex hoverless:flex")}>
+        <EntryDropdown label={label} title={ask.mission.title} items={menu.items} onSelect={menu.select} onOpenChange={setOpen} data-mission-ask-menu={ask.mission.id}
+          trigger={
+            <Button variant="row-action" size="icon-xs" aria-label={label} data-mission-ask-more={ask.mission.id}>
+              <EllipsisIcon />
+            </Button>
+          } />
+      </span>
+    </span>
   );
 }

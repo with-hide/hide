@@ -145,6 +145,11 @@ pub struct Scope {
     /// device rail and the sidebar's Needs You read one number.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mission_asks: Vec<String>,
+    /// The automations that stopped for a person to fix, each its own
+    /// Needs You line on its machine's scope (PRD automations D-12, B23),
+    /// oldest first, counted as a mission's own ask is.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub automation_asks: Vec<String>,
     pub owners: BTreeMap<String, String>,
     pub badge_total: usize,
     pub rows: Vec<RowRef>,
@@ -800,6 +805,8 @@ pub(crate) struct Cache {
     /// mission views last marked them; laid on the device scopes and the
     /// overall one at every apply, never into the cached output.
     mission_asks: BTreeMap<String, Vec<String>>,
+    /// Each device's automations that are their own Needs You line.
+    automation_asks: BTreeMap<String, Vec<String>>,
     /// The tools connected at Act, by connection id and name, in the access
     /// list's order: each has a cell (PRD hide-external-control D-47).
     tools: Vec<(String, String)>,
@@ -1406,6 +1413,16 @@ impl Cache {
         true
     }
 
+    /// Takes each device's automations that are their own Needs You line,
+    /// laid as `note_mission_asks` lays missions; true when they moved.
+    pub(crate) fn note_automation_asks(&mut self, asks: BTreeMap<String, Vec<String>>) -> bool {
+        if self.automation_asks == asks {
+            return false;
+        }
+        self.automation_asks = asks;
+        true
+    }
+
     /// Takes the tools that have a cell and each one's missions that are
     /// their own ask, laid at the next refresh; true when either moved, so
     /// the caller refreshes.
@@ -1427,6 +1444,9 @@ impl Cache {
         for asks in self.mission_asks.values() {
             with_mission_asks(&mut overall, asks);
         }
+        for asks in self.automation_asks.values() {
+            with_automation_asks(&mut overall, asks);
+        }
         let mut changed = snapshot.navigator.agent_scope != overall;
         snapshot.navigator.agent_scope = overall;
         for device in &mut snapshot.navigator.devices {
@@ -1438,6 +1458,9 @@ impl Cache {
                 .unwrap_or_default();
             if let Some(asks) = self.mission_asks.get(&device.id) {
                 with_mission_asks(&mut next, asks);
+            }
+            if let Some(asks) = self.automation_asks.get(&device.id) {
+                with_automation_asks(&mut next, asks);
             }
             changed |= device.agent_scope != next;
             device.agent_scope = next;
@@ -1499,6 +1522,14 @@ fn with_mission_asks(scope: &mut Scope, asks: &[String]) {
     scope.overview_needs_you += asks.len();
     scope.groups.needs_you += asks.len();
     scope.mission_asks.extend(asks.iter().cloned());
+}
+
+/// Counts a device's automations that stopped for a person with its
+/// agents that are Needs You, as a mission's own ask is counted.
+fn with_automation_asks(scope: &mut Scope, asks: &[String]) {
+    scope.overview_needs_you += asks.len();
+    scope.groups.needs_you += asks.len();
+    scope.automation_asks.extend(asks.iter().cloned());
 }
 
 /// A physical source occurrence. Pane identity alone cannot distinguish

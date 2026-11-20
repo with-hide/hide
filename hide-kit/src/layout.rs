@@ -344,6 +344,29 @@ pub fn access_store(state_dir: &Path) -> PathBuf {
     state_dir.join(ACCESS_STORE)
 }
 
+/// The automations this core runs and each one's run records (PRD
+/// automations D-21). It moves with the core.
+pub const AUTOMATIONS_STORE: &str = "automations.json";
+
+pub fn automations_store(state_dir: &Path) -> PathBuf {
+    state_dir.join(AUTOMATIONS_STORE)
+}
+
+/// Where an automation with no folder of its own works and leaves its
+/// results, one folder per automation (PRD automations D-08): `~/hide/automations`,
+/// in the account's home so the operator finds the results. The core
+/// registers each such folder for its runs and no list shows it; the old
+/// Home's retirement leaves this folder where it is (D-09).
+pub fn automations_home(home: &Path) -> PathBuf {
+    home.join(OLD_HOME_FOLDER).join(AUTOMATIONS_FOLDER)
+}
+
+/// The folder an earlier Hide kept as Home on each device (`~/hide`), whose
+/// retirement `hide_host::home` owns.
+pub const OLD_HOME_FOLDER: &str = "hide";
+/// The automations' folder inside it.
+pub const AUTOMATIONS_FOLDER: &str = "automations";
+
 /// Where an external tool keeps its keys, one owner-only file per
 /// connection name, under the tool's own home (D-18): the operator's home
 /// when the tool runs as the operator with it, another when it has its own.

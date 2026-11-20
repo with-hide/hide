@@ -545,6 +545,7 @@ HELP_SOURCES = (
     "hided/src/access_cli.rs",
     "hided/src/mission_cli.rs",
     "hided/src/plan_cli.rs",
+    "hided/src/automation_cli.rs",
     "hided/src/pane_cli.rs",
     "hided/src/session_cli.rs",
 )

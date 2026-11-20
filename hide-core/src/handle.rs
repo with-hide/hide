@@ -539,6 +539,9 @@ impl Core {
             let desk_restored = desk.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
+            let (automations, automations_restored, zone) = crate::runtime::automations::restore(
+                hide_kit::layout::automations_store(directory),
+            );
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
@@ -549,6 +552,7 @@ impl Core {
             }
             guard.install_desk_store(desk, desk_restored);
             guard.install_access_store(access, access_restored);
+            guard.install_automations_store(automations, automations_restored, zone);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -779,6 +783,27 @@ impl Core {
             notify_change(self);
         }
         answer
+    }
+
+    /// One call on the automations (PRD automations B10): the CLI's
+    /// `hide automation`, a form's preview, or a phone's run and pause.
+    /// One change under one short lock; the book is saved by its own thread
+    /// and the screens are told when the section moved.
+    pub fn automation(&self, call: crate::automations::Call) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "automation.call") {
+            return Err("automations_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime).automation_call(call);
+        if changed {
+            notify_change(self);
+        }
+        answer
+    }
+
+    /// Whether any automation is on, which hided reads every second for its
+    /// idle exit (PRD automations D-19) without taking the runtime lock.
+    pub fn automations_on(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        lock_recover(&self.runtime).automations_on()
     }
 
     /// Runs a Conductor's `hide mission` command (PRD

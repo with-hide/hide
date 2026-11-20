@@ -994,6 +994,78 @@ test("the phone's mission page ends each step in the desktop's line to the missi
   }
 });
 
+test("the phone's automations tab lists, runs, pauses and turns on again, keeps its list while the computer is away, and fills it again", async ({ browser, page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale();
+  tailscale.install();
+  tailscale.ready();
+  let daemon: Daemon | null = null;
+  const contexts: BrowserContext[] = [];
+  try {
+    daemon = await startHided(fixture, "mobile-automations", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    const live = daemon;
+    await openMobileSettings(page, live);
+    await page.locator('[data-mobile-switch="true"]').click();
+    const phoneContextA = await phoneContext(browser);
+    contexts.push(phoneContextA);
+    const phone = await phoneContextA.newPage();
+    await phone.goto(await shownPairingUrl(page, live));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone's pairing reaches connected
+
+    // B35: none yet, one line, and no button makes one.
+    await phone.locator('[data-phone-tab="automations"]').tap();
+    await expect(phone.locator('[data-phone-automations-state="empty"]')).toHaveText("No automations yetYou can create one by asking an agent");
+    await screenshot(phone, "mobile-phone-automations-empty");
+
+    // An automation made on the computer, as an agent's `hide automation add` makes it, reaches the phone's list.
+    await withControl(live, async (control) => {
+      control.send("automation_add", { name: "Sort new issues", task: "Sort the new issues by urgency.", schedule: { kind: "weekdays", time: "09:00" }, agent: { kind: "claude" } });
+    });
+    const row = phone.locator("[data-phone-automation]");
+    await expect(row).toHaveCount(1);
+    await expect(row.locator("[data-phone-automation-next]")).toContainText("Weekdays 09:00 · ");
+    const presses = row.locator("[data-phone-automation-press]");
+    await expect(presses).toHaveCount(2);
+
+    // B34: [멈춤] and [다시 켜기] reach the core and come back on the row.
+    await row.locator('[data-phone-automation-press="pause"]').tap();
+    await expect(row.locator("[data-phone-automation-paused]")).toHaveText("⏸ Paused");
+    await expect(row).toHaveAttribute("data-phone-automation-state", "paused");
+    await row.locator('[data-phone-automation-press="resume"]').tap();
+    await expect(row).toHaveAttribute("data-phone-automation-state", /on|running/);
+    await expect(row.locator('[data-phone-automation-press="pause"]')).toBeVisible();
+
+    // B34, B19: [지금 실행] from the page starts a run marked manual.
+    await row.locator('[data-slot="row-overlay-button"]').tap();
+    await expect(phone.locator("[data-phone-automation-page]")).toBeVisible();
+    await expect(phone.locator('[data-phone-automation-records-state="empty"]')).toBeVisible();
+    await phone.locator('[data-phone-automation-page] [data-phone-automation-press="run"]').tap();
+    await expect(phone.locator('[data-phone-automation-record="run"] [data-phone-automation-tag="manual"]')).toHaveCount(1, { timeout: 20_000 }); // wait-ok: the core's run reaches the phone's frame
+    await expect(phone.locator('[data-phone-automation-notice]')).toHaveCount(0);
+    await screenshot(phone, "mobile-phone-automation-page");
+    await phone.locator('[data-phone-back="automations"]').tap();
+
+    // B35: the computer goes away; the list stays dimmed under the other tabs' line with its buttons off, and fills again on reconnect.
+    daemon = await live.restart(async () => {
+      await expect(phone.locator('[data-phone-unreachable="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone notices the stopped hided by its lost socket
+      await expect(phone.locator('[data-phone-automations="true"] [aria-busy="true"] [data-phone-automation]')).toHaveCount(1);
+      for (const button of await phone.locator("[data-phone-automation-press]").all()) await expect(button).toBeDisabled();
+      await screenshot(phone, "mobile-phone-automations-unreachable");
+    });
+    // The tab carries no header of its own; the line leaving is the phone connected again.
+    await expect(phone.locator('[data-phone-unreachable="true"]')).toHaveCount(0, { timeout: 30_000 }); // wait-ok: the phone reconnects to the restarted hided
+    await expect(phone.locator("[data-phone-automation]")).toHaveCount(1);
+    await expect(phone.locator('[data-phone-automations="true"] [aria-busy="true"]')).toHaveCount(0);
+  } finally {
+    for (const context of contexts) await context.close();
+    daemon?.stop();
+    fixture.stop();
+    tailscale.remove();
+  }
+});
+
 test("the phone's PR tab lists a GitHub project's pull requests, refuses a merge whose head moved, then merges once on the head it read again", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture({ agents: false });

@@ -139,6 +139,31 @@ impl Runtime {
         })
     }
 
+    /// A read of the whole last answer of the turn at `offset` in `pane_id`,
+    /// to run on a worker: the answer an automation's run passes on to its
+    /// next run (PRD automations D-10).
+    pub(super) fn whole_answer_reader(
+        &mut self,
+        pane_id: String,
+        offset: u64,
+    ) -> Result<impl FnOnce() -> Result<String, String> + Send + 'static, &'static str> {
+        let asked = self.asked_answer(&TurnAnswerReadPayload { pane_id, offset })?;
+        let client = self
+            .links_work
+            .client
+            .clone()
+            .ok_or("turn_answer_record_unavailable")?;
+        let (_, node) = self
+            .linked_node(&asked.session.device_id)
+            .map_err(|_| "turn_answer_device_unavailable")?;
+        Ok(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                read_answer(&client, node, &asked)
+            }))
+            .unwrap_or_else(|_| Err("turn_answer_reader_stopped".into()))
+        })
+    }
+
     fn start_turn_answer_read(&mut self, generation: u64, asked: Asked) {
         let pane_id = asked.pane_id.clone();
         let Some(client) = self.links_work.client.clone() else {

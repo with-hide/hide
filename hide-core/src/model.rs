@@ -193,6 +193,12 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub access: Option<Arc<AccessSnapshot>>,
+    /// Automations and their runs (PRD automations D-02, D-20). Its own
+    /// section, absent until the core restored its book, so a run's change
+    /// never resends anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -2601,6 +2607,12 @@ pub struct WorkspaceSnapshot {
     /// (D-07), so an unregistered workspace is never pinned.
     #[serde(default)]
     pub pinned: bool,
+    /// The core keeps this project off every list (the sidebar, the phone,
+    /// the project picker): an automation's own folder, registered only so
+    /// its runs can start there (PRD automations D-08, B30). Absent while
+    /// false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     pub checkouts: Vec<CheckoutSnapshot>,
     /// Checkout rows grouped after the active rows in this project. The full
     /// rows stay in `checkouts`, which remains the authority for focus,
@@ -8602,6 +8614,7 @@ impl Snapshot {
             desk_jobs: None,
             desk_mentions: None,
             access: None,
+            automations: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -8662,6 +8675,7 @@ pub struct SnapshotDeltaPayload {
     pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     pub access: Option<Arc<AccessSnapshot>>,
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -8724,6 +8738,8 @@ pub struct SnapshotDeltaWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<&'a AccessSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub automations: Option<&'a crate::automations::AutomationsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_panel: Option<&'a crate::links::LinkPanelSnapshot>,
@@ -8784,6 +8800,7 @@ impl<'a> SnapshotDeltaWire<'a> {
             desk_jobs: payload.desk_jobs.as_deref(),
             desk_mentions: payload.desk_mentions.as_deref(),
             access: payload.access.as_deref(),
+            automations: payload.automations.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
@@ -11698,6 +11715,90 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "session_thread_view_kind", &views);
         checked.insert("session_thread_view_kind");
+
+        use crate::automations::{MissedReason, PauseReason, RunState, Trigger, Weekday};
+        let triggers = [Trigger::Scheduled, Trigger::Manual, Trigger::Missed];
+        for variant in triggers {
+            match variant {
+                Trigger::Scheduled | Trigger::Manual | Trigger::Missed => {}
+            }
+        }
+        assert_wire(&contract, "automation_trigger", &triggers);
+        checked.insert("automation_trigger");
+
+        let states = [
+            RunState::Starting,
+            RunState::Running,
+            RunState::Succeeded,
+            RunState::Failed,
+            RunState::Stopped,
+        ];
+        for variant in states {
+            match variant {
+                RunState::Starting
+                | RunState::Running
+                | RunState::Succeeded
+                | RunState::Failed
+                | RunState::Stopped => {}
+            }
+        }
+        assert_wire(&contract, "automation_run_state", &states);
+        checked.insert("automation_run_state");
+
+        let pauses = [
+            PauseReason::Operator,
+            PauseReason::LoginExpired,
+            PauseReason::FolderMissing,
+            PauseReason::AgentMissing,
+            PauseReason::FolderDetached,
+            PauseReason::MachineChanged,
+            PauseReason::FolderInRepository,
+        ];
+        for variant in pauses {
+            match variant {
+                PauseReason::Operator
+                | PauseReason::LoginExpired
+                | PauseReason::FolderMissing
+                | PauseReason::AgentMissing
+                | PauseReason::FolderDetached
+                | PauseReason::MachineChanged
+                | PauseReason::FolderInRepository => {}
+            }
+        }
+        assert_wire(&contract, "automation_pause_reason", &pauses);
+        checked.insert("automation_pause_reason");
+
+        let missed = [MissedReason::CoreOff, MissedReason::Asleep];
+        for variant in missed {
+            match variant {
+                MissedReason::CoreOff | MissedReason::Asleep => {}
+            }
+        }
+        assert_wire(&contract, "automation_missed_reason", &missed);
+        checked.insert("automation_missed_reason");
+
+        let days = [
+            Weekday::Sun,
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+        ];
+        for variant in days {
+            match variant {
+                Weekday::Sun
+                | Weekday::Mon
+                | Weekday::Tue
+                | Weekday::Wed
+                | Weekday::Thu
+                | Weekday::Fri
+                | Weekday::Sat => {}
+            }
+        }
+        assert_wire(&contract, "automation_weekday", &days);
+        checked.insert("automation_weekday");
 
         {
             use crate::peer_machines::{PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate};

@@ -1159,14 +1159,35 @@ impl Runtime {
 
     /// The panes of the tabs on one machine's screen; empty while another
     /// device is in front, because none of this machine's tabs is then.
-    fn agent_sleep_on_screen(&self, device: Option<&str>) -> HashSet<String> {
+    /// A project no list shows (an automation's own folder) is drawn by no
+    /// Workspace, though the keys typed into a run's terminal leave the
+    /// focus there: only the automation screen draws its panes, and says
+    /// which (`viewed_panes`, B17).
+    pub(super) fn agent_sleep_on_screen(&self, device: Option<&str>) -> HashSet<String> {
         let tabs = match device {
             None if self.device_in_front(self.node.as_str()) => self.shown_agent_tabs(),
             None => Vec::new(),
             Some(device) => self.shown_node_tabs(device),
         };
+        let unlisted: HashSet<&str> = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .filter(|workspace| workspace.unlisted)
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .filter_map(|tab| tab.id.as_deref())
+            .collect();
+        let viewed = device
+            .is_none()
+            .then(|| self.viewed_panes().iter().cloned())
+            .into_iter()
+            .flatten();
         tabs.iter()
+            .filter(|tab_id| !unlisted.contains(tab_id.as_str()))
             .flat_map(|tab_id| self.agent_sleep_tab_panes(tab_id))
+            .chain(viewed)
             .collect()
     }
 
