@@ -44,6 +44,17 @@ describe("site/public/app/releases.json", () => {
     }
   });
 
+  it("names the app's lists and buttons in each language's own words, never in Korean outside Korean", () => {
+    const hangul = /[\uac00-\ud7a3]/;
+    for (const row of feed.versions) {
+      const lines = [
+        ...row.highlights.flatMap((highlight) => Object.entries(highlight.text).flatMap(([language, words]) => [[language, words!.title], [language, words!.line]] as const)),
+        ...row.changes.flatMap((change) => Object.entries(change.text).map(([language, line]) => [language, line!] as const)),
+      ];
+      for (const [language, line] of lines) if (language !== "ko") expect(line, `${row.version} ${language}`).not.toMatch(hangul);
+    }
+  });
+
   it("uses no em or en dash", () => {
     expect(fs.readFileSync(FILE, "utf8")).not.toMatch(/[–—]/);
   });

@@ -11,7 +11,7 @@
           "text": {
             "en": {
               "title": "An agent's subagents now sit under it",
-              "line": "The pane head shows one children chip, and its list, the 태스크 and 프로젝트 lists and the phone each name every subagent with its kind, task and time."
+              "line": "The pane head shows one children chip, and its list, the Tasks and Projects lists and the phone each name every subagent with its kind, task and time."
             },
             "ko": {
               "title": "에이전트의 서브에이전트가 그 아래에 놓여요",
@@ -41,7 +41,7 @@
         {
           "kind": "change",
           "text": {
-            "en": "A connected tool's tile opens the tool's Overview in the center, and its cell has the same 프로젝트 / 태스크 / PR lists, view switch and project chip as yours, each cut to the tool's own work.",
+            "en": "A connected tool's tile opens the tool's Overview in the center, and its cell has the same Projects / Tasks / PRs lists, view switch and project chip as yours, each cut to the tool's own work.",
             "ko": "연결된 도구의 타일이 가운데에 도구의 개요를 열고, 그 셀이 내 것과 같은 프로젝트 / 태스크 / PR 목록, 보기 전환, 프로젝트 칩을 도구 자신의 일로만 좁혀서 보여줘요.",
             "zh-CN": "已连接工具的图块会在中央打开该工具的概览，它的单元格有与你相同的项目 / 任务 / PR 列表、视图切换和项目标签，且都只包含该工具自己的工作。",
             "ja": "接続したツールのタイルが中央にそのツールの概要を開き、そのセルに自分のものと同じプロジェクト / タスク / PR の一覧、ビューの切り替え、プロジェクトチップが、ツール自身の作業だけに絞って出ます。"
@@ -50,9 +50,9 @@
         {
           "kind": "change",
           "text": {
-            "en": "A View the tool's agent opens marks that agent's row in the tool's cell instead of landing in your 내 차례.",
+            "en": "A View the tool's agent opens marks that agent's row in the tool's cell instead of landing in your Needs You.",
             "ko": "도구의 에이전트가 연 보기는 내 차례에 오지 않고 도구 셀의 그 에이전트 행에 표시돼요.",
-            "zh-CN": "该工具的智能体打开的“查看”会标记在工具单元格中该智能体的行上，而不是进入你的“轮到我”。",
+            "zh-CN": "该工具的智能体打开的“查看”会标记在工具单元格中该智能体的行上，而不是进入你的“轮到你”。",
             "ja": "ツールのエージェントが開いたビューは、自分の「自分の番」には入らず、ツールのセルのそのエージェントの行に印が付きます。"
           }
         },
@@ -77,16 +77,16 @@
         {
           "kind": "change",
           "text": {
-            "en": "A pane's N views list shows the View its agent opened last at the top, and a View tab you have not looked at yet leads with the 볼 것 eye.",
+            "en": "A pane's N views list shows the View its agent opened last at the top, and a View tab you have not looked at yet leads with the To look at eye.",
             "ko": "패널의 'N개 보기' 목록이 에이전트가 가장 나중에 연 보기를 맨 위에 두고, 아직 보지 않은 보기 탭은 볼 것 눈 표시가 앞에 붙어요.",
-            "zh-CN": "窗格的“N 个查看”列表把其智能体最近打开的“查看”放在最上面，尚未看过的“查看”标签页前面会带“볼 것”（待查看）眼睛图标。",
-            "ja": "ペインの「N 件のビュー」一覧は、エージェントが最後に開いたビューを先頭に置き、まだ見ていないビューのタブには「볼 것」（見るもの）の目のマークが付きます。"
+            "zh-CN": "窗格的“N 个查看”列表把其智能体最近打开的“查看”放在最上面，尚未看过的“查看”标签页前面会带“待查看”眼睛图标。",
+            "ja": "ペインの「N 件のビュー」一覧は、エージェントが最後に開いたビューを先頭に置き、まだ見ていないビューのタブには「確認待ち」の目のマークが付きます。"
           }
         },
         {
           "kind": "change",
           "text": {
-            "en": "The 프로젝트 and 태스크 lists draw one tree: a line leaves the middle of a mark and bends into the middle of the next, a checkout's agents hang from its icon, and tabs no longer draw lines that look like a child's.",
+            "en": "The Projects and Tasks lists draw one tree: a line leaves the middle of a mark and bends into the middle of the next, a checkout's agents hang from its icon, and tabs no longer draw lines that look like a child's.",
             "ko": "프로젝트와 태스크 목록이 하나의 트리로 그려져요. 선이 표시 한가운데에서 나와 다음 표시 한가운데로 꺾여 들어가고, 체크아웃의 에이전트가 그 아이콘에 매달리며, 탭은 자식처럼 보이는 선을 그리지 않아요.",
             "zh-CN": "项目和任务列表绘制成同一棵树：线从一个标记的中央引出，折进下一个标记的中央，检出的智能体挂在它的图标下，标签页不再画出像子项的线。",
             "ja": "プロジェクトとタスクの一覧が 1 本のツリーで描かれます。線はマークの中央から出て次のマークの中央へ折れ、チェックアウトのエージェントはそのアイコンから下がり、タブは子のように見える線を引かなくなりました。"
@@ -122,16 +122,16 @@
         {
           "kind": "fix",
           "text": {
-            "en": "In a tool's cell, the cell in front now follows what the center shows on every path (Ctrl+Tab, Cmd+K, a 내 차례 row, a notification), and an empty cell keeps its usage row at the foot.",
+            "en": "In a tool's cell, the cell in front now follows what the center shows on every path (Ctrl+Tab, Cmd+K, a Needs You row, a notification), and an empty cell keeps its usage row at the foot.",
             "ko": "도구 셀에서 앞에 있는 셀이 어떤 경로(Ctrl+Tab, ⌘K, 내 차례 행, 알림)로도 가운데가 보여주는 것을 따라가고, 빈 셀도 맨 아래에 사용량 행을 유지해요.",
-            "zh-CN": "在工具单元格中，位于前台的单元格现在无论通过哪种途径（Ctrl+Tab、⌘K、“轮到我”行、通知）都会跟随中央显示的内容，空单元格底部也保留用量行。",
+            "zh-CN": "在工具单元格中，位于前台的单元格现在无论通过哪种途径（Ctrl+Tab、⌘K、“轮到你”行、通知）都会跟随中央显示的内容，空单元格底部也保留用量行。",
             "ja": "ツールのセルで、手前のセルはどの経路（Ctrl+Tab、⌘K、「自分の番」の行、通知）でも中央の表示に従い、空のセルも一番下に使用量の行を保ちます。"
           }
         },
         {
           "kind": "fix",
           "text": {
-            "en": "In a narrow sidebar, a 태스크 row keeps its title on the first line and moves its PR mark and mission chip to the end of the second.",
+            "en": "In a narrow sidebar, a row in Tasks keeps its title on the first line and moves its PR mark and mission chip to the end of the second.",
             "ko": "좁은 사이드바에서 태스크 행이 제목을 첫 줄에 두고 PR 표시와 미션 칩을 둘째 줄 끝으로 옮겨요.",
             "zh-CN": "在窄侧栏中，任务行把标题保留在第一行，并把 PR 标记和任务组标签移到第二行末尾。",
             "ja": "幅の狭いサイドバーで、タスクの行はタイトルを 1 行目に残し、PR のマークとミッションチップを 2 行目の末尾へ移します。"
@@ -197,9 +197,9 @@
         {
           "kind": "change",
           "text": {
-            "en": "A tool at Act gets its own tile on the device rail, so its agents and missions stay out of your lists and only a sign-in, a permission or a View it opens reaches your 내 차례.",
+            "en": "A tool at Act gets its own tile on the device rail, so its agents and missions stay out of your lists and only a sign-in, a permission or a View it opens reaches your Needs You.",
             "ko": "'실행' 단계의 도구는 기기 레일에 자기 타일을 가져서, 그 에이전트와 미션이 내 목록에 섞이지 않고 로그인, 권한, 연 보기만 내 차례에 와요.",
-            "zh-CN": "处于“可操作”级别的工具会在设备栏获得自己的图块，它的智能体和任务组不会混进你的列表，只有登录、授权或它打开的“查看”才会进入你的“轮到我”。",
+            "zh-CN": "处于“可操作”级别的工具会在设备栏获得自己的图块，它的智能体和任务组不会混进你的列表，只有登录、授权或它打开的“查看”才会进入你的“轮到你”。",
             "ja": "「操作」レベルのツールはデバイスレールに専用のタイルを持ち、そのエージェントやミッションは自分の一覧に混ざらず、サインイン、権限、開いたビューだけが「自分の番」に届きます。"
           }
         },
@@ -218,7 +218,7 @@
             "en": "The working ring now turns while an agent works, slowly, and a mission node no one is moving looks stopped: a grey card, a pause mark and a stopped line with the reason.",
             "ko": "에이전트가 일하는 동안 작업 링이 천천히 돌고, 아무도 움직이지 않는 미션 노드는 회색 카드, 일시정지 표시, 이유가 적힌 '멈춤' 줄로 멈춘 것처럼 보여요.",
             "zh-CN": "智能体工作时，工作圆环会缓慢转动；没人推进的任务节点会显得已停止：灰色卡片、暂停标记，以及写明原因的“停止”行。",
-            "ja": "エージェントが作業している間、作業リングがゆっくり回り、誰も動かしていないミッションノードは止まって見えます。灰色のカード、一時停止のマーク、理由つきの「멈춤」の行です。"
+            "ja": "エージェントが作業している間、作業リングがゆっくり回り、誰も動かしていないミッションノードは止まって見えます。灰色のカード、一時停止のマーク、理由つきの「停止」の行です。"
           }
         },
         {
@@ -251,19 +251,19 @@
         {
           "kind": "change",
           "text": {
-            "en": "The 태스크 list's 내 차례 lists the newest ask first, each row shows how long its ask has waited, and that wait survives an app restart.",
+            "en": "The Needs You group in Tasks lists the newest ask first, each row shows how long its ask has waited, and that wait survives an app restart.",
             "ko": "태스크 목록의 내 차례가 가장 새 요청부터 보여주고, 행마다 요청이 얼마나 기다렸는지 나오며, 그 시간은 앱을 다시 시작해도 이어져요.",
-            "zh-CN": "任务列表的“轮到我”按最新请求优先排列，每行显示该请求已等待多久，这个等待时间在应用重启后仍会保留。",
+            "zh-CN": "任务列表的“轮到你”按最新请求优先排列，每行显示该请求已等待多久，这个等待时间在应用重启后仍会保留。",
             "ja": "タスク一覧の「自分の番」は新しい依頼を先に並べ、各行に依頼が待った時間が出て、その時間はアプリを再起動しても続きます。"
           }
         },
         {
           "kind": "change",
           "text": {
-            "en": "A step only you can take that a mission worker declares (a sign-in, terms, a permission) also stands in the mission's 내 차례 with 다 했어요, and the mission list puts that mission in its 내 차례.",
+            "en": "A step only you can take that a mission worker declares (a sign-in, terms, a permission) also stands in the mission's Needs You with Done, and the mission list puts that mission in its Needs You.",
             "ko": "미션 작업자가 알린, 당신만 할 수 있는 단계(로그인, 약관, 권한)가 '다 했어요'와 함께 미션의 내 차례에도 서고, 미션 목록도 그 미션을 내 차례에 넣어요.",
-            "zh-CN": "任务工作者声明的、只有你能完成的步骤（登录、条款、授权）也会带着“다 했어요”（我做完了）出现在该任务组的“轮到我”中，任务组列表会把该任务组放进“轮到我”。",
-            "ja": "ミッションのワーカーが宣言した、あなたにしかできない手順（サインイン、規約、権限）が、「다 했어요」（できました）つきでミッションの「自分の番」にも立ち、ミッション一覧もそのミッションを「自分の番」に入れます。"
+            "zh-CN": "任务工作者声明的、只有你能完成的步骤（登录、条款、授权）也会带着“完成”出现在该任务组的“轮到你”中，任务组列表会把该任务组放进“轮到你”。",
+            "ja": "ミッションのワーカーが宣言した、あなたにしかできない手順（サインイン、規約、権限）が、「完了」つきでミッションの「自分の番」にも立ち、ミッション一覧もそのミッションを「自分の番」に入れます。"
           }
         },
         {
@@ -287,10 +287,10 @@
         {
           "kind": "change",
           "text": {
-            "en": "An agent is told its own open questions when it takes a turn and can fold one it has settled, with a reason you can read under 정리됨 and reopen.",
+            "en": "An agent is told its own open questions when it takes a turn and can fold one it has settled, with a reason you can read under Settled and reopen.",
             "ko": "에이전트는 턴을 시작할 때 자기의 열린 질문을 전달받고, 정리한 질문은 접을 수 있어요. 이유는 정리됨 아래에서 읽고 다시 열 수 있어요.",
-            "zh-CN": "智能体在每个回合开始时会被告知自己未决的问题，并可以折叠已解决的问题；理由可在“정리됨”（已整理）下查看并重新打开。",
-            "ja": "エージェントはターンの始めに自分の未解決の質問を知らされ、解決した質問を折りたためます。理由は「정리됨」の下で読め、再び開けます。"
+            "zh-CN": "智能体在每个回合开始时会被告知自己未决的问题，并可以折叠已解决的问题；理由可在“已整理”下查看并重新打开。",
+            "ja": "エージェントはターンの始めに自分の未解決の質問を知らされ、解決した質問を折りたためます。理由は「整理済み」の下で読め、再び開けます。"
           }
         },
         {
@@ -341,10 +341,10 @@
         {
           "kind": "fix",
           "text": {
-            "en": "On the mission screen, 터미널로 이동 either opens the terminal or says why it could not.",
+            "en": "On the mission screen, Go to terminal either opens the terminal or says why it could not.",
             "ko": "미션 화면의 '터미널로 이동'이 터미널을 열거나, 열지 못한 이유를 알려줘요.",
-            "zh-CN": "在任务组界面，“터미널로 이동”（转到终端）要么打开终端，要么说明无法打开的原因。",
-            "ja": "ミッション画面の「터미널로 이동」（ターミナルへ移動）は、ターミナルを開くか、開けなかった理由を伝えます。"
+            "zh-CN": "在任务组界面，“前往终端”要么打开终端，要么说明无法打开的原因。",
+            "ja": "ミッション画面の「ターミナルへ」は、ターミナルを開くか、開けなかった理由を伝えます。"
           }
         },
         {
@@ -507,7 +507,7 @@
           "text": {
             "en": "A mission can leave one node's merge to you; the node appears in Your turn with its merge action once its pull request is green and approved.",
             "ko": "미션이 한 노드의 머지를 당신에게 맡길 수 있고, PR이 초록이고 승인되면 그 노드가 머지 버튼과 함께 내 차례에 나와요.",
-            "zh-CN": "任务组可以把某个节点的合并留给你：其 PR 通过检查并获批后，该节点会带着合并操作出现在“轮到我”中。",
+            "zh-CN": "任务组可以把某个节点的合并留给你：其 PR 通过检查并获批后，该节点会带着合并操作出现在“轮到你”中。",
             "ja": "ミッションは 1 つのノードのマージをあなたに任せられます。PR が緑で承認されると、そのノードがマージ操作つきで「自分の番」に出ます。"
           }
         },
@@ -577,10 +577,10 @@
         {
           "kind": "change",
           "text": {
-            "en": "Questions Hide AI reads as settled move under 정리됨 with a one-line reason and Reopen; a step only you can take is never folded.",
+            "en": "Questions Hide AI reads as settled move under Settled with a one-line reason and Reopen; a step only you can take is never folded.",
             "ko": "Hide AI가 정리됐다고 읽은 질문은 한 줄 이유와 '다시 열기'와 함께 정리됨 아래로 옮겨지고, 당신만 할 수 있는 단계는 절대 접히지 않아요.",
-            "zh-CN": "Hide AI 判断为已解决的问题会连同一行理由和“重新打开”移到“정리됨”（已整理）之下，只有你能做的步骤绝不会被折叠。",
-            "ja": "Hide AI が解決済みと読んだ質問は、1 行の理由と「再び開く」つきで「정리됨」の下に移り、あなたにしかできない手順は決して折りたたまれません。"
+            "zh-CN": "Hide AI 判断为已解决的问题会连同一行理由和“重新打开”移到“已整理”之下，只有你能做的步骤绝不会被折叠。",
+            "ja": "Hide AI が解決済みと読んだ質問は、1 行の理由と「再び開く」つきで「整理済み」の下に移り、あなたにしかできない手順は決して折りたたまれません。"
           }
         },
         {
@@ -658,10 +658,10 @@
         {
           "kind": "fix",
           "text": {
-            "en": "A decision you marked but did not send is shown as not sent, with 답하기 as the main button, on the desktop and the phone.",
+            "en": "A decision you marked but did not send is shown as not sent, with Answer as the main button, on the desktop and the phone.",
             "ko": "표시만 하고 보내지 않은 결정이 데스크톱과 휴대폰에서 '보내지 않음'으로 보이고 주 버튼이 '답하기'가 돼요.",
-            "zh-CN": "你选好但没有发送的决策，在桌面端和手机上都会显示为“未发送”，主按钮为“답하기”（回答）。",
-            "ja": "選んだけれど送っていない判断が、デスクトップとスマホで「未送信」と表示され、メインのボタンは「답하기」（答える）になります。"
+            "zh-CN": "你选好但没有发送的决策，在桌面端和手机上都会显示为“未发送”，主按钮为“去回答”。",
+            "ja": "選んだけれど送っていない判断が、デスクトップとスマホで「未送信」と表示され、メインのボタンは「答える」になります。"
           }
         },
         {
@@ -795,7 +795,7 @@
               "line": "에이전트가 자식의 편지로 다시 일하러 갔어도, 답하거나 닫을 때까지 턴 카드에도 남아요."
             },
             "zh-CN": {
-              "title": "智能体的提问会一直留在“轮到我”中，直到你回答",
+              "title": "智能体的提问会一直留在“轮到你”中，直到你回答",
               "line": "即使智能体因子智能体的信件回去工作了，这个提问也会保留在回合卡片上，直到你回答或忽略。"
             },
             "ja": {
@@ -1113,9 +1113,9 @@
         {
           "kind": "change",
           "text": {
-            "en": "내 차례 and 읽을 것 in the Tasks list scroll with the rest and leave only their heads stacked.",
+            "en": "Needs You and Unread in the Tasks list scroll with the rest and leave only their heads stacked.",
             "ko": "태스크 목록의 내 차례와 읽을 것이 나머지와 함께 스크롤되고 머리글만 쌓여요.",
-            "zh-CN": "任务列表中的“轮到我”和“待读”随其余内容一起滚动，只把标题栏叠放在顶部。",
+            "zh-CN": "任务列表中的“轮到你”和“待读”随其余内容一起滚动，只把标题栏叠放在顶部。",
             "ja": "タスク一覧の「自分の番」と「読むもの」は他と一緒にスクロールし、見出しだけが積み重なります。"
           }
         },
@@ -1328,7 +1328,7 @@
             },
             "zh-CN": {
               "title": "任务组有了专属界面",
-              "line": "侧栏新增“任务组”一行，点开后按轮到我、运行中、等待合并、已完成四组列出当前设备上的所有任务组。"
+              "line": "侧栏新增“任务组”一行，点开后按轮到你、运行中、等待合并、已完成四组列出当前设备上的所有任务组。"
             },
             "ja": {
               "title": "ミッション専用の画面ができました",
@@ -1350,7 +1350,7 @@
             },
             "zh-CN": {
               "title": "智能体可以告诉你它需要人来处理",
-              "line": "登录、解锁或授权会连同去处理的位置一起出现在“轮到我”中，侧栏的“轮到我”现在也包含所有已连接设备上的等待项。"
+              "line": "登录、解锁或授权会连同去处理的位置一起出现在“轮到你”中，侧栏的“轮到你”现在也包含所有已连接设备上的等待项。"
             },
             "ja": {
               "title": "エージェントが人の手が必要だと知らせます",
@@ -1374,7 +1374,7 @@
           "text": {
             "en": "hide agent ask-human auth|permission <place> lets an agent hand you a step only a person can take, shown in Needs You with a key mark.",
             "ko": "hide agent ask-human auth|permission <place>로 에이전트가 사람만 할 수 있는 단계를 넘기면, 열쇠 표시와 함께 내 차례에 나와요.",
-            "zh-CN": "hide agent ask-human auth|permission <place> 让智能体把只有人能做的步骤交给你，会带钥匙标记显示在“轮到我”中。",
+            "zh-CN": "hide agent ask-human auth|permission <place> 让智能体把只有人能做的步骤交给你，会带钥匙标记显示在“轮到你”中。",
             "ja": "hide agent ask-human auth|permission <place> で、人にしかできない手順をエージェントが渡すと、鍵のマークつきで「自分の番」に出ます。"
           }
         },
@@ -1392,7 +1392,7 @@
           "text": {
             "en": "A View an agent opens for you now sends a desktop and phone notification, like other Needs You items.",
             "ko": "에이전트가 보라고 연 보기도 다른 내 차례 항목처럼 데스크톱과 휴대폰에 알림이 가요.",
-            "zh-CN": "智能体为你打开的“查看”现在也会像其他“轮到我”项一样，向桌面端和手机发送通知。",
+            "zh-CN": "智能体为你打开的“查看”现在也会像其他“轮到你”项一样，向桌面端和手机发送通知。",
             "ja": "エージェントが見るために開いたビューも、ほかの「自分の番」と同じようにデスクトップとスマホに通知されます。"
           }
         },
@@ -1428,7 +1428,7 @@
           "text": {
             "en": "The mission list's your-turn pill no longer shows an exclamation mark; it says what you do (reply, merge, read the letter, look at the blocked part, check, combine).",
             "ko": "미션 목록의 내 차례 알약이 !가 아니라 할 일(답하기, 머지, 편지 읽기, 막힌 곳 보기, 확인, 합치기)을 말해요.",
-            "zh-CN": "任务组列表中“轮到我”的标签不再显示 !，而是写明你要做什么（回答、合并、读信、查看受阻处、检查、合并分支）。",
+            "zh-CN": "任务组列表中“轮到你”的标签不再显示 !，而是写明你要做什么（回答、合并、读信、查看受阻处、检查、合并分支）。",
             "ja": "ミッション一覧の「自分の番」ピルが ! ではなく、すること（答える、マージ、手紙を読む、止まった所を見る、確認、まとめる）を表示します。"
           }
         },
@@ -1437,7 +1437,7 @@
           "text": {
             "en": "A mission that waits on you with no Conductor now appears in the task list's Needs You, and your-turn items are ordered by how long they wait.",
             "ko": "Conductor가 없는 채 당신을 기다리는 미션이 태스크 목록의 내 차례에 나오고, 내 차례 항목은 기다린 시간 순으로 정렬돼요.",
-            "zh-CN": "没有 Conductor 却在等你的任务组现在会出现在任务列表的“轮到我”中，轮到你的项目按等待时间排序。",
+            "zh-CN": "没有 Conductor 却在等你的任务组现在会出现在任务列表的“轮到你”中，轮到你的项目按等待时间排序。",
             "ja": "Conductor がいないまま自分を待っているミッションがタスク一覧の「自分の番」に出て、自分の番の項目は待ち時間の順に並びます。"
           }
         },
@@ -1692,9 +1692,9 @@
         {
           "kind": "change",
           "text": {
-            "en": "A stalled mission shows on its map, its node cards and 내 차례: letters waiting for the Conductor, a node waiting on something, a node with no worker.",
+            "en": "A stalled mission shows on its map, its node cards and Needs You: letters waiting for the Conductor, a node waiting on something, a node with no worker.",
             "ko": "멈춘 미션이 지도, 노드 카드, 내 차례에 보여요. Conductor를 기다리는 편지, 무언가를 기다리는 노드, 작업자가 없는 노드가 표시돼요.",
-            "zh-CN": "停滞的任务组会显示在地图、节点卡片和“轮到我”中：等待 Conductor 的信件、在等待某事的节点、没有工作者的节点。",
+            "zh-CN": "停滞的任务组会显示在地图、节点卡片和“轮到你”中：等待 Conductor 的信件、在等待某事的节点、没有工作者的节点。",
             "ja": "止まったミッションが、マップ、ノードカード、「自分の番」に表示されます。Conductor を待つ手紙、何かを待つノード、ワーカーのいないノードが出ます。"
           }
         },
@@ -2447,9 +2447,9 @@
         {
           "kind": "fix",
           "text": {
-            "en": "내 차례 rows are quieter: no ask verb, no read tag, and a mission icon.",
+            "en": "Needs You rows are quieter: no ask verb, no read tag, and a mission icon.",
             "ko": "내 차례 행이 더 조용해졌어요. 요청 동사와 읽음 태그가 없어지고 미션 아이콘이 붙어요.",
-            "zh-CN": "“轮到我”行更安静了：去掉了请求动词和已读标签，并加上任务组图标。",
+            "zh-CN": "“轮到你”行更安静了：去掉了请求动词和已读标签，并加上任务组图标。",
             "ja": "「自分の番」の行が静かになりました。依頼の動詞と既読タグがなくなり、ミッションのアイコンが付きます。"
           }
         },
