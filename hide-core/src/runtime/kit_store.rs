@@ -45,6 +45,22 @@ const REQUEST_ID_LIMIT: usize = 128;
 /// still waits (engineering rule 15).
 pub(crate) const ANSWER_LIMIT: usize = 32;
 
+/// Drops the oldest finished answers until one more fits under
+/// [`ANSWER_LIMIT`]; false when only waiting ones are left and it still does
+/// not fit.
+fn drop_finished_answers(answers: &mut Vec<StoreAnswer>) -> bool {
+    while answers.len() >= ANSWER_LIMIT {
+        let Some(oldest) = answers
+            .iter()
+            .position(|kept| kept.state != AnswerState::Pending)
+        else {
+            return false;
+        };
+        answers.remove(oldest);
+    }
+    true
+}
+
 /// The store work a machine's kit worker runs on one call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StoreJob {
@@ -185,20 +201,14 @@ impl Runtime {
             .any(|answer| answer.request_id == request_id)
     }
 
-    /// Adds an answer to the list: past [`ANSWER_LIMIT`] the oldest finished
-    /// one goes; false when every one still waits, so nothing can go.
+    /// Adds a waiting answer to the list: at [`ANSWER_LIMIT`] the oldest
+    /// finished ones go first; false when every one kept still waits, so
+    /// nothing can go (engineering rule 15).
     fn push_store_answer(&mut self, answer: StoreAnswer) -> bool {
-        let answers = &mut self.snapshot.status.store_answers;
-        while answers.len() >= ANSWER_LIMIT {
-            let Some(oldest) = answers
-                .iter()
-                .position(|kept| kept.state != AnswerState::Pending)
-            else {
-                return false;
-            };
-            answers.remove(oldest);
+        if !drop_finished_answers(&mut self.snapshot.status.store_answers) {
+            return false;
         }
-        answers.push(answer);
+        self.snapshot.status.store_answers.push(answer);
         true
     }
 
@@ -379,11 +389,12 @@ impl Runtime {
         match self.store_answer_mut(&request_id) {
             Some(kept) => *kept = answer,
             None => {
-                // A full list of waiting answers still says this one ended.
+                // The refusal makes room the way a waiting answer does, and
+                // never takes a waiting one down: with every kept answer still
+                // waiting, it stands one past the limit, and as a finished
+                // answer it is the first to go when the next one comes.
                 let answers = &mut self.snapshot.status.store_answers;
-                if answers.len() >= ANSWER_LIMIT {
-                    answers.remove(0);
-                }
+                drop_finished_answers(answers);
                 answers.push(answer);
             }
         }

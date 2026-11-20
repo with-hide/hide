@@ -77,9 +77,11 @@ pub(super) struct StoreAskAnswerPayload {
 /// What a command does once its store work answers.
 #[derive(PartialEq)]
 enum Plan {
-    /// One request whose outcome is the answer.
+    /// One request whose outcome is the answer; `changes` is what it asks,
+    /// so only the same command joins it.
     Plain {
         item: Option<String>,
+        changes: Vec<StoreChange>,
     },
     /// Read the source, then ask for `names` (every new skill when empty).
     Install {
@@ -227,11 +229,17 @@ impl Runtime {
                         }
                     },
                 };
+                let changes = vec![StoreChange::Set {
+                    item: item.clone(),
+                    column,
+                    on,
+                }];
                 (
                     Plan::Plain {
-                        item: Some(item.clone()),
+                        item: Some(item),
+                        changes: changes.clone(),
                     },
-                    vec![StoreChange::Set { item, column, on }],
+                    changes,
                 )
             }
             StoreCommand::Remove { kind, name, .. } => {
@@ -239,11 +247,13 @@ impl Runtime {
                     Ok(item) => item.id.clone(),
                     Err(code) => return Ok(ready(Err(code))),
                 };
+                let changes = vec![StoreChange::Delete { item: item.clone() }];
                 (
                     Plan::Plain {
-                        item: Some(item.clone()),
+                        item: Some(item),
+                        changes: changes.clone(),
                     },
-                    vec![StoreChange::Delete { item }],
+                    changes,
                 )
             }
             StoreCommand::Add { source, names, .. } => (
@@ -298,7 +308,9 @@ impl Runtime {
         // The same command again from the same pane, as an agent whose tool
         // gave up on the first one runs it, waits on the run already
         // standing instead of raising a second confirm (engineering rule
-        // 11); the first waiter is told, so it takes nothing down.
+        // 11); the first waiter is told, so it takes nothing down. Another
+        // command (on after off, another agent, a remove) is a new decision
+        // and runs on its own, since the plan carries what it changes.
         if let Some((run_id, run)) =
             self.store_runs.runs.iter_mut().find(|(_, run)| {
                 run.device_id == machine && run.pane_id == pane_id && run.plan == plan
@@ -437,7 +449,7 @@ impl Runtime {
             (Stage::Reading { ended, .. }, None) => *ended = true,
             (Stage::Applying { .. }, None) => {
                 let item = match &run.plan {
-                    Plan::Plain { item } => item.clone(),
+                    Plan::Plain { item, .. } => item.clone(),
                     Plan::Install { .. } => None,
                     Plan::Update { item } | Plan::SetMcp { item, .. } => Some(item.clone()),
                     Plan::AddMcp { server } => Some(StoreItem::id_of(ItemKind::Mcp, &server.name)),

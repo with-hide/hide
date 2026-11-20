@@ -24,7 +24,10 @@ fn switch_off_agy() -> StoreChange {
 /// One GitHub skill on a tagged commit with a newer tag out, on in Claude's
 /// folders, waiting for the shared folder's agents and just switched off
 /// for agy.
-fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -> StoreReport {
+pub(super) fn store_report(
+    outcomes: Vec<ChangeOutcome>,
+    checked_at_unix_ms: Option<u64>,
+) -> StoreReport {
     let column = |id: &str, agents: &[&str]| Column {
         id: id.to_owned(),
         agents: agents.iter().map(|agent| (*agent).to_owned()).collect(),

@@ -11,8 +11,8 @@ use crate::coordination::human_turn::HumanKind;
 use crate::runtime::store_cli::StoreAskWhat;
 use crate::store_command::{DECLINED, StoreCommand, UNANSWERED};
 use hide_kit::store::{
-    ChangeOutcome, FoundSkill, Preview, SourceSpec, StoreChange, StoreRefusal, StoreRefusalCause,
-    StoreReport,
+    ChangeOutcome, FoundSkill, ItemKind, Preview, SourceSpec, StoreChange, StoreRefusal,
+    StoreRefusalCause, StoreReport,
 };
 use hide_node_link::protocol::KitAction;
 
@@ -287,4 +287,132 @@ fn the_same_add_run_again_from_the_same_pane_waits_on_the_confirm_already_standi
         serde_json::json!({"id": ask, "confirm": false}),
     );
     assert_eq!(again.run(), Err(DECLINED.to_owned()));
+}
+
+#[test]
+fn a_request_refused_while_every_kept_answer_waits_takes_none_of_them_down() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    helper.answer_store(Ok(answered(vec![done(StoreChange::CheckUpdates)])));
+    let shared = with_consent(Some(helper));
+    let limit = crate::runtime::kit_store::ANSWER_LIMIT;
+    {
+        // Every request is queued before the device's worker can take one.
+        let mut runtime = shared.lock().unwrap();
+        for request in 0..limit {
+            runtime.request_store_change(
+                DEVICE,
+                format!("r{request}"),
+                vec![StoreChange::CheckUpdates],
+            );
+        }
+        runtime.request_store_change(DEVICE, "over".to_owned(), vec![StoreChange::CheckUpdates]);
+        let answers = runtime.snapshot().status.store_answers.clone();
+        assert_eq!(
+            answers
+                .iter()
+                .filter(|answer| answer.state == AnswerState::Pending)
+                .count(),
+            limit,
+            "no waiting answer was taken down"
+        );
+        assert_eq!(
+            answers
+                .iter()
+                .find(|answer| answer.request_id == "over")
+                .map(|answer| answer.state),
+            Some(AnswerState::Refused),
+            "the new request still hears that it was refused"
+        );
+    }
+    settle(&shared);
+    for request in 0..limit {
+        let answer = answer_of(&shared, &format!("r{request}")).expect("still kept");
+        assert_ne!(answer.state, AnswerState::Pending, "r{request} ended");
+    }
+}
+
+/// The machine's store read once, holding the skill `style`.
+fn read_with_style(helper: &Arc<KitDevice>) -> SharedRuntime {
+    helper.answer_store(Ok(serde_json::to_value(super::kit_store::store_report(
+        Vec::new(),
+        None,
+    ))
+    .unwrap()));
+    let shared = with_consent(Some(helper.clone()));
+    dispatch(
+        &shared,
+        "kit_store",
+        serde_json::json!({"device_id": DEVICE, "request_id": "read", "changes": [{"op": "check_updates"}]}),
+    );
+    settle(&shared);
+    shared
+}
+
+#[test]
+fn another_command_on_the_same_item_from_the_same_pane_runs_as_its_own_request() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = read_with_style(&helper);
+    let set = |on| StoreCommand::Set {
+        kind: ItemKind::Skill,
+        name: "style".to_owned(),
+        agent: None,
+        on,
+        machine: Some(DEVICE.to_owned()),
+    };
+    let remove = StoreCommand::Remove {
+        kind: ItemKind::Skill,
+        name: "style".to_owned(),
+        machine: Some(DEVICE.to_owned()),
+    };
+    let (off, on, gone, again) = {
+        let mut runtime = shared.lock().unwrap();
+        let mut prepare = |command| {
+            runtime
+                .prepare_store_command(DEVICE, PANE, command)
+                .expect("planned")
+        };
+        // Off, then on and a remove of the same item, then the same off again.
+        (
+            prepare(set(false)),
+            prepare(set(true)),
+            prepare(remove),
+            prepare(set(false)),
+        )
+    };
+    settle(&shared);
+
+    let asked = store_calls(&helper)
+        .into_iter()
+        .flat_map(|call| match call {
+            KitAction::Store { changes } => changes,
+            _ => Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let item = "skill:style".to_owned();
+    for change in [
+        StoreChange::Set {
+            item: item.clone(),
+            column: None,
+            on: false,
+        },
+        StoreChange::Set {
+            item: item.clone(),
+            column: None,
+            on: true,
+        },
+        StoreChange::Delete { item: item.clone() },
+    ] {
+        assert!(
+            asked.contains(&change),
+            "{change:?} reached the device: {asked:?}"
+        );
+    }
+    let waited = |result: Result<serde_json::Value, String>| !matches!(result, Err(reason) if reason.starts_with(UNANSWERED));
+    assert!(
+        !waited(off.run()),
+        "the same off again took over the first one's wait"
+    );
+    assert!(waited(on.run()), "on was answered for itself");
+    assert!(waited(gone.run()), "remove was answered for itself");
+    assert!(waited(again.run()));
 }
