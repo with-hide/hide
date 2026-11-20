@@ -190,7 +190,7 @@ pub(crate) fn fetch(
             }
             StoreChange::PreviewUpdate { item } => {
                 let diff = match record.item(item) {
-                    Some(found) => preview_update(target, dir, &staging, found),
+                    Some(found) => preview_update(target, &staging, found),
                     None => Err(StoreRefusal::new(
                         StoreRefusalCause::NotFound,
                         format!("no item {item}"),
@@ -712,7 +712,6 @@ fn check(target: &KitTarget, record: &StoreRecord) -> Result<Vec<(String, Latest
 /// would change (B23).
 fn preview_update(
     target: &KitTarget,
-    dir: &Path,
     staging: &Path,
     item: &StoreItem,
 ) -> Result<UpdateDiff, StoreRefusal> {
