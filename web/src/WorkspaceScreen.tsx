@@ -249,7 +249,9 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
       {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.agents > 0 ? pairPaneWidth(frame.agents) : 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (
         <div
-          className={cn("absolute flex min-h-0 min-w-0 flex-col border-l border-border bg-card", frame.mode !== "pair" && "shadow-overlay", placed)}
+          // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its
+          // outer edge, so the divider is where the landing math puts it; elsewhere the frame draws the line itself.
+          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode !== "overlay" && "border-l border-border", frame.mode !== "pair" && "shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}

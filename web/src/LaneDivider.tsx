@@ -63,10 +63,14 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     event.preventDefault();
     cancelDrag.current?.();
     keyIntent.current = null;
-    const left = origin.getBoundingClientRect().left;
     const target = event.currentTarget;
     target.setPointerCapture(event.pointerId);
-    const at = (next: PointerEvent) => next.clientX - left - sizes.divider / 2;
+    // The divider moves by what the pointer moved since it grabbed it, wherever on the divider it grabbed: a position
+    // read from the pointer's absolute x is off by the lane's own border, which the edge divider sits inside, so a
+    // press with no move would land a pixel narrower.
+    const from = position(frame);
+    const start = event.clientX;
+    const at = (next: PointerEvent) => from + next.clientX - start;
     // The guide shows where the divider would land, clamped like the landing.
     const move = (next: PointerEvent) => setGuide(position(landed(frame, landingAt(at(next), frame))));
     // The drag marks the root, so a page the guide crosses gives way to its still.
@@ -110,7 +114,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
       aria-valuemax={value + Math.max(0, spare)}
       tabIndex={0}
       data-lane-divider={kind}
-      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? "absolute inset-y-0" : kind === "lane" ? "relative border-l border-border bg-card" : "relative border-l border-border bg-background"}`}
+      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? "absolute inset-y-0 border-r border-border" : kind === "lane" ? "relative border-l border-border bg-card" : "relative border-l border-border bg-background"}`}
       style={edge ? { left: -sizes.divider } : undefined}
       onPointerDown={drag}
       onBlur={() => { keyIntent.current = null; }}
