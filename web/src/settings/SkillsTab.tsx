@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
-import { ChevronRightIcon, EllipsisIcon, InfoIcon, PlusIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChevronRightIcon, InfoIcon, PlusIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { Actions } from "../actions";
 import { useMinuteClock } from "../components/elapsed";
 import { Disclosure, Group, Note, Row } from "../components/settings-rows";
@@ -10,7 +10,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { Toast } from "../components/ui/toast";
-import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -33,9 +32,6 @@ import {
   itemsOf,
   keyNames,
   openableSource,
-  rowSummary,
-  saveStoreView,
-  savedStoreView,
   serverLine,
   shownAgents,
   shownColumns,
@@ -43,9 +39,7 @@ import {
   trashFor,
   updatable,
   versionText,
-  type RowSummary,
   type ShownColumn,
-  type StoreView,
 } from "./skillsMcp";
 import { useAgentsDemand } from "./useAgentsDemand";
 import { useStoreRequest } from "./useStoreRequest";
@@ -69,11 +63,11 @@ type Page = {
 };
 
 /**
- * Settings › 스킬·MCP (PRD skill-mcp-manager; decisions of 2026-11-19, mockup
- * scenes 1-3 to 6): one machine's skills and MCP servers at a time. The list
- * is the default and a row unfolds in place; 목록 | 표 turns to the table,
- * remembered for this viewer. Everything shown is the machine's last store
- * report; every press is one store request the core runs on that machine.
+ * Settings › 스킬·MCP (PRD skill-mcp-manager; decisions of 2026-11-19 and the
+ * layout of 2026-11-20, mockup card C): one machine's skills and MCP servers
+ * at a time, one table per kind whose rows unfold in place. Everything shown
+ * is the machine's last store report; every press is one store request the
+ * core runs on that machine.
  */
 export function SkillsTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -83,25 +77,18 @@ export function SkillsTab({ actions }: { actions: Actions }) {
   const asks = useShellStore((s) => s.rest?.status?.store_asks);
   const askRequested = useUiStore((s) => s.storeAskRequested);
   const [selected, setSelected] = useState<string | null>(null);
-  const [view, setView] = useState<StoreView>(savedStoreView);
   useAgentsDemand(actions, true);
   const machines = agentMachines(windowFirst(devices), remote);
   // 확인하기 on an agent's ask opens the machine it asks about.
   const askDevice = asks?.find((ask) => ask.id === askRequested)?.device_id ?? null;
   const machine = machines.find((row) => row.device.id === (askDevice ?? selected ?? own)) ?? machines[0];
   if (!machine) return <Note>{t("store.reading")}</Note>;
-  const choose = (next: StoreView) => {
-    setView(next);
-    saveStoreView(next);
-  };
   return (
     <MachineStore
       key={machine.device.id}
       machine={machine}
       machines={machines}
       own={own}
-      view={view}
-      onView={choose}
       onMachine={(id) => {
         setSelected(id);
         useUiStore.getState().clearStoreAsk();
@@ -112,7 +99,7 @@ export function SkillsTab({ actions }: { actions: Actions }) {
   );
 }
 
-function MachineStore({ machine, machines, own, view, onView, onMachine, devices, actions }: { machine: AgentMachine; machines: AgentMachine[]; own: string; view: StoreView; onView: (view: StoreView) => void; onMachine: (id: string) => void; devices: Device[] | undefined; actions: Actions }) {
+function MachineStore({ machine, machines, own, onMachine, devices, actions }: { machine: AgentMachine; machines: AgentMachine[]; own: string; onMachine: (id: string) => void; devices: Device[] | undefined; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { device } = machine;
   const name = machineName(devices, device.id, t);
@@ -155,12 +142,8 @@ function MachineStore({ machine, machines, own, view, onView, onMachine, devices
   const newer = report ? updatable(report) : [];
   const ask = asks.find((row) => row.id === askRequested) ?? null;
   return (
-    <div className="@container/store" data-store-machine={device.id} data-store-view={view}>
+    <div className="@container/store" data-store-machine={device.id}>
       <div className="mb-lg flex flex-wrap items-center gap-sm" data-store-head="true">
-        <ToggleGroup type="single" value={view} onValueChange={(next) => next && onView(next as StoreView)} aria-label={t("store.view.label")} data-store-view-switch="true">
-          <ToggleGroupItem value="list" data-store-view-choice="list">{t("store.view.list")}</ToggleGroupItem>
-          <ToggleGroupItem value="table" data-store-view-choice="table">{t("store.view.table")}</ToggleGroupItem>
-        </ToggleGroup>
         {newer.length > 0 && !readOnly ? (
           <UpdatesChip
             count={newer.length}
@@ -223,11 +206,10 @@ function MachineStore({ machine, machines, own, view, onView, onMachine, devices
       {report && !empty ? (
         // A machine that is away shows its last list, dimmed and with no controls (scene 6).
         <div className={cn(away && "opacity-(--opacity-disabled)")} inert={readOnly || undefined} data-store-lists={readOnly ? "read-only" : "live"}>
-          <Kind kind="skill" items={skills} shown={shown} view={view} page={page} />
-          <Kind kind="mcp" items={mcps} shown={shown} view={view} page={page} />
+          <Kind kind="skill" items={skills} shown={shown} page={page} />
+          <Kind kind="mcp" items={mcps} shown={shown} page={page} />
           {report.unmanaged.length > 0 ? <Unmanaged rows={report.unmanaged} report={report} shown={shown} page={page} /> : null}
           {report.trash.length > 0 ? <Trash report={report} page={page} /> : null}
-          {view === "table" ? <Legend /> : null}
         </div>
       ) : null}
       {removed && removal.refusal ? <Note tone="error" data-store-delete-refused={removed.id}>{refusalText(removal.refusal, t)}</Note> : null}
@@ -354,43 +336,37 @@ function CopyFromHere({ device, own, actions }: { device: Device; own: string; a
   );
 }
 
-/** One kind's section: its title and count, then the rows or the table. */
-function Kind({ kind, items, shown, view, page }: { kind: StoreItemKind; items: StoreItem[]; shown: ReadonlySet<string>; view: StoreView; page: Page }) {
+/**
+ * One kind's table (layout C, decided 2026-11-20): a skill row has a cell per
+ * skill folder (Claude, 공용, agy), an MCP row one per agent; cells show the
+ * state only, the row's one switch turns the item on or off everywhere, and
+ * a press on the row unfolds what can be done below it.
+ */
+function Kind({ kind, items, shown, page }: { kind: StoreItemKind; items: StoreItem[]; shown: ReadonlySet<string>; page: Page }) {
   const { t } = useInterfaceTranslation();
   const columns = shownColumns(page.report, kind, shown);
   if (items.length === 0) return null;
   const title = t(kind === "skill" ? "store.section.skill" : "store.section.mcp");
-  if (view === "table") {
-    return (
-      <section className="mb-lg" data-store-section={kind}>
-        <SectionTitle title={title} count={items.length} />
-        <div className="overflow-x-auto rounded-md border border-border bg-card">
-          <table className="w-full border-collapse text-body" data-store-table={kind}>
-            <thead>
-              <tr className="text-caption text-muted-foreground">
-                <th className="px-md py-xs text-left font-normal"><span className="sr-only">{title}</span></th>
-                <th className="px-xs py-xs text-center font-normal">{t("store.column.all")}</th>
-                {columns.map((column) => (
-                  <th key={column.id} className="px-xs py-xs text-center font-normal whitespace-nowrap" data-store-column={column.id}>
-                    <ColumnHead column={column} />
-                  </th>
-                ))}
-                <th className="w-(--size-control) px-xs py-xs"><span className="sr-only">⋯</span></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border border-t border-border">
-              {items.map((item) => <TableRow key={item.id} item={item} columns={columns} page={page} />)}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    );
-  }
   return (
     <section className="mb-lg" data-store-section={kind}>
       <SectionTitle title={title} count={items.length} />
-      <div className="divide-y divide-border rounded-md border border-border bg-card">
-        {items.map((item) => <ListRow key={item.id} item={item} columns={columns} page={page} />)}
+      <div className="overflow-x-auto rounded-md border border-border bg-card">
+        <table className="w-full border-collapse text-body" data-store-table={kind}>
+          <thead>
+            <tr className="text-caption text-muted-foreground">
+              <th className="px-md py-xs text-left font-normal"><span className="sr-only">{title}</span></th>
+              {columns.map((column) => (
+                <th key={column.id} className="px-xs py-xs text-center font-normal whitespace-nowrap" data-store-column={column.id}>
+                  <ColumnHead column={column} columns={columns} />
+                </th>
+              ))}
+              <th className="px-md py-xs text-center font-normal whitespace-nowrap">{t("store.column.on")}</th>
+            </tr>
+          </thead>
+          <tbody className="border-t border-border">
+            {items.map((item) => <ItemRow key={item.id} item={item} columns={columns} page={page} />)}
+          </tbody>
+        </table>
       </div>
     </section>
   );
@@ -406,21 +382,29 @@ function SectionTitle({ title, count, caption }: { title: string; count?: number
   );
 }
 
-/** A column's name; the shared folder names the agents that read it in its hint. */
-function ColumnHead({ column }: { column: ShownColumn }) {
+/**
+ * A column's head: the agent's name, or for the shared skill folder 공용 with
+ * the installed agents that read it, and a hint that says so and which of
+ * them read another column's folder as well (Grok and omp read Claude's).
+ */
+function ColumnHead({ column, columns }: { column: ShownColumn; columns: readonly ShownColumn[] }) {
   const { t } = useInterfaceTranslation();
   const name = columnName(column, t("store.column.shared"));
   if (!column.shared) return <>{name}</>;
-  const readers = column.readers.map(agentShortName).join(" · ");
+  const readers = column.readers.map(agentShortName);
+  const also = columns
+    .filter((other) => other.id !== column.id)
+    .map((other) => ({ other, agents: other.readers.filter((agent) => agent !== other.agent && column.readers.includes(agent)) }))
+    .filter(({ agents }) => agents.length > 0);
+  const hint = readers.length > 0 ? [t("store.column.sharedHint", { agents: readers.join(" · ") }), ...also.map(({ other, agents }) => t("store.column.sharedAlso", { agents: agents.map(agentShortName).join(" · "), column: columnName(other, name) }))].join(" ") : t("store.column.sharedNone");
   return (
-    <span className="inline-flex items-center gap-xxs">
-      {name}
-      <Hint label={readers ? t("store.column.sharedHint", { agents: readers }) : t("store.column.sharedNone")}>
-        <button type="button" className="inline-flex text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-store-shared-hint={column.id}>
-          <InfoIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-        </button>
-      </Hint>
-    </span>
+    <Hint label={hint}>
+      <span className="inline-flex items-center gap-xxs text-subtle-foreground" tabIndex={0} data-store-shared-hint={column.id}>
+        {name}
+        {readers.length > 0 ? <span className="text-muted-foreground">· {readers.join(" ")}</span> : null}
+        <InfoIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
+      </span>
+    </Hint>
   );
 }
 
@@ -442,67 +426,84 @@ function Version({ item }: { item: StoreItem }) {
   );
 }
 
-/** What a row says at its end: every agent has it, none does, or only where it differs. */
-function Summary({ summary }: { summary: RowSummary }) {
-  const { t } = useInterfaceTranslation();
-  if (summary.kind === "all") return <span className="text-muted-foreground">{t("store.summary.all")}</span>;
-  if (summary.kind === "off") return <span className="text-muted-foreground">{t("store.summary.off")}</span>;
-  return (
-    <span className="flex min-w-0 flex-wrap justify-end gap-xs">
-      {summary.parts.map((part) => {
-        const column = columnName(part.column, t("store.column.shared"));
-        return (
-          <Badge key={part.column.id} variant="outline" className={cn(part.state === "failed" && "border-destructive text-destructive", part.state === "hand_written" && "border-warning text-warning")} data-store-summary-part={`${part.column.id}:${part.state}`}>
-            {t(part.state === "failed" ? "store.summary.cellFailed" : part.state === "hand_written" ? "store.summary.cellHandWritten" : "store.summary.cellOff", { column })}
-          </Badge>
-        );
-      })}
-    </span>
-  );
-}
-
-/** A row of the list: name, version, summary, its 전체 switch and the chevron; a press unfolds it in place (scene 1-3). */
-function ListRow({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
+/** A row: its name and version, one state cell per column and its one switch; a press anywhere but the switch unfolds it. */
+function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   const request = useStoreRequest(page.device.id, page.actions);
-  const summary = rowSummary(item, columns);
   const all = allSwitch(item, columns);
   return (
-    <div data-store-row={item.id} data-store-summary={summary.kind} data-store-open={open ? "true" : "false"}>
-      <div className="flex items-center gap-md px-md py-sm">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={t("store.expand", { name: item.name })}
-          onClick={() => setOpen((now) => !now)}
-          className="flex min-w-0 flex-1 items-center gap-sm rounded-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          data-store-row-toggle={item.id}
-        >
-          <span className="min-w-0 truncate text-subhead font-medium text-foreground">{item.name}</span>
-          <Version item={item} />
-          {item.folder_missing ? <Badge variant="outline" className="border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
-          <span className="ml-auto min-w-0 text-right text-body">
-            <Summary summary={summary} />
+    <>
+      <tr className={cn("cursor-pointer border-t border-border first:border-t-0 hover:bg-accent/40", open && "bg-accent/40")} onClick={() => setOpen((now) => !now)} data-store-row={item.id} data-store-open={open ? "true" : "false"}>
+        <td className="px-md py-sm">
+          <span className="flex min-w-0 items-center gap-sm">
+            <button type="button" aria-expanded={open} aria-label={t("store.expand", { name: item.name })} className="inline-flex shrink-0 rounded-xs text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-store-row-toggle={item.id}>
+              <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
+            </button>
+            <span className="truncate text-subhead font-medium text-foreground">{item.name}</span>
+            <Version item={item} />
+            {item.folder_missing ? <Badge variant="outline" className="border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
           </span>
-        </button>
-        <Switch checked={all.checked} disabled={request.pending} aria-busy={request.pending} onCheckedChange={() => request.send([all.change])} aria-label={t("store.switch.all", { name: item.name })} data-store-all={item.id} />
-        <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-      </div>
-      {request.refusal ? <div className="px-md pb-sm"><Note tone="error">{refusalText(request.refusal, t)}</Note></div> : null}
-      {open ? <RowDetail item={item} columns={columns} page={page} /> : null}
-    </div>
+        </td>
+        {columns.map((column) => (
+          <td key={column.id} className="px-xs py-sm text-center">
+            <CellMark item={item} column={column} cell={cellOf(item, column)} page={page} />
+          </td>
+        ))}
+        <td className="px-md py-sm text-center" onClick={(event) => event.stopPropagation()}>
+          <Switch checked={all.checked} disabled={request.pending} aria-busy={request.pending} onCheckedChange={() => request.send([all.change])} aria-label={t("store.switch.all", { name: item.name })} data-store-all={item.id} />
+        </td>
+      </tr>
+      {request.refusal ? (
+        <tr>
+          <td colSpan={columns.length + 2} className="px-md pb-sm"><Note tone="error">{refusalText(request.refusal, t)}</Note></td>
+        </tr>
+      ) : null}
+      {open ? (
+        <tr>
+          <td colSpan={columns.length + 2} className="border-t border-border bg-muted/30 p-none">
+            <RowDetail item={item} columns={columns} page={page} />
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 
-/** The unfolded row: what the item is, where it comes from, each agent's switch and what can be done to it. */
+/** A cell's state, which it only shows (decision 2026-11-20): ● on, ○ off, — not supported, ! failed, 이미 있음 for a copy Hide did not write. */
+function CellMark({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
+  const { t } = useInterfaceTranslation();
+  const name = columnName(column, t("store.column.shared"));
+  const data = { "data-store-cell": `${item.id}:${column.id}`, "data-store-cell-state": cell.state };
+  const fresh = page.newSession.has(`${item.id}\u0000${column.id}`);
+  switch (cell.state) {
+    case "unsupported":
+      return <span className="text-muted-foreground" title={t("store.cell.unsupported", { agent: name })} {...data}>—</span>;
+    case "failed":
+      return <span className="font-semibold text-destructive" title={`${t("store.cell.failed")}${cell.reason ? ` · ${cell.reason}` : ""}`} {...data}>!</span>;
+    case "hand_written":
+      return <span className="text-caption whitespace-nowrap text-warning" {...data}>{t("store.cell.handWritten")}</span>;
+    default: {
+      const on = cellOn(cell.state);
+      const title = cell.state === "agent_off" ? t("store.cell.agentOff") : cell.state === "waiting" ? t("store.cell.waiting") : fresh ? t("store.cell.newSession") : t(on ? "store.cell.on" : "store.cell.off");
+      return (
+        <span className={cn("inline-flex size-(--size-control-sm) items-center justify-center", cell.state === "agent_off" && "opacity-(--opacity-disabled)")} title={title} {...data} data-store-new-session={fresh ? "true" : undefined}>
+          <span aria-hidden="true" className={cn("size-(--size-status-mark) rounded-full", on ? "bg-primary" : "border border-muted-foreground")} />
+          <span className="sr-only">{title}</span>
+        </span>
+      );
+    }
+  }
+}
+
+/** The unfolded row: where the item comes from, its files or keys, each cell that needs a press, and what can be done to it. */
 function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
   const files = item.files ?? [];
   const executables = files.filter((file) => file.executable).length;
-  const failed = columns.map((column) => ({ column, cell: cellOf(item, column) })).filter(({ cell }) => cell.state === "failed");
+  const fixes = columns.map((column) => ({ column, cell: cellOf(item, column) })).filter(({ cell }) => cell.state === "failed" || cell.state === "hand_written");
   return (
-    <div className="flex flex-col gap-sm border-t border-border px-md py-sm" data-store-detail={item.id}>
+    <div className="flex flex-col gap-sm px-md py-sm" data-store-detail={item.id}>
       {item.description ? <p className="break-words text-body text-subtle-foreground">{item.description}</p> : null}
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xs text-body">
         {item.server ? (
@@ -542,71 +543,35 @@ function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownCol
           </>
         )}
       </dl>
-      <div className="flex flex-wrap gap-x-lg gap-y-sm" data-store-agents={item.id}>
-        {columns.map((column) => <ColumnSwitch key={column.id} item={item} column={column} page={page} />)}
-      </div>
-      {failed.map(({ column, cell }) => (
-        <Note key={column.id} tone="error" data-store-failed={`${item.id}:${column.id}`}>
-          {columnName(column, t("store.column.shared"))}: {cell.reason ?? t("store.cell.failed")}
-        </Note>
-      ))}
+      {fixes.map(({ column, cell }) => <CellFix key={column.id} item={item} column={column} cell={cell} page={page} />)}
       <RowActions item={item} page={page} />
     </div>
   );
 }
 
-/** One agent's switch in an unfolded row, or what stands in its place: a failure to retry, a copy to take over, no support. */
-function ColumnSwitch({ item, column, page }: { item: StoreItem; column: ShownColumn; page: Page }) {
+/** A cell that needs a press: a failure with its reason and [다시 시도], or a copy Hide did not write with [가져오기]. */
+function CellFix({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
   const { t } = useInterfaceTranslation();
   const request = useStoreRequest(page.device.id, page.actions);
-  const cell = cellOf(item, column);
   const name = columnName(column, t("store.column.shared"));
-  const label = column.shared ? <ColumnHead column={column} /> : name;
-  const fresh = page.newSession.has(`${item.id}\u0000${column.id}`);
-  const wrap = (control: ReactNode, extra?: ReactNode) => (
-    <span className="inline-flex items-center gap-xs text-body text-subtle-foreground" data-store-cell={`${item.id}:${column.id}`} data-store-cell-state={cell.state}>
-      {control}
-      {label}
-      {extra}
-      {fresh ? <span className="text-caption text-muted-foreground" data-store-new-session="true">{t("store.cell.newSession")}</span> : null}
+  const failed = cell.state === "failed";
+  return (
+    <div className={cn("flex flex-wrap items-center gap-sm text-body", failed ? "text-destructive" : "text-warning")} data-store-fix={`${item.id}:${column.id}`}>
+      <span className="min-w-0 flex-1 break-words">
+        {name}: {failed ? (cell.reason ?? t("store.cell.failed")) : t("store.cell.handWritten")}
+      </span>
       {request.refusal ? <span className="text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
-    </span>
-  );
-  switch (cell.state) {
-    case "unsupported":
-      return wrap(<span className="w-(--size-control) text-center text-muted-foreground" title={t("store.cell.unsupported", { agent: name })}>—</span>);
-    case "failed":
-      return wrap(
-        <span className="w-(--size-control) text-center font-semibold text-destructive" title={cell.reason ?? undefined}>!</span>,
+      {failed ? (
         <Button variant="secondary" size="sm" disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} data-store-retry={`${item.id}:${column.id}`}>
           {t("store.retry")}
-        </Button>,
-      );
-    case "hand_written":
-      return wrap(
-        <span className="w-(--size-control) text-center text-warning">≠</span>,
-        <>
-          <span className="text-caption text-warning">{t("store.cell.handWritten")}</span>
-          <Button variant="secondary" size="sm" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
-            {t("store.cell.takeOver")}
-          </Button>
-        </>,
-      );
-    case "agent_off":
-      return wrap(<Switch checked={false} disabled aria-label={t("store.switch.column", { name: item.name, column: name })} title={t("store.cell.agentOff")} />);
-    default:
-      return wrap(
-        <Switch
-          checked={cellOn(cell.state)}
-          disabled={request.pending}
-          aria-busy={request.pending}
-          onCheckedChange={(on) => request.send([{ op: "set", item: item.id, column: column.id, on }])}
-          aria-label={t("store.switch.column", { name: item.name, column: name })}
-          title={cell.state === "waiting" ? t("store.cell.waiting") : undefined}
-          data-store-switch={`${item.id}:${column.id}`}
-        />,
-      );
-  }
+        </Button>
+      ) : (
+        <Button variant="secondary" size="sm" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
+          {t("store.cell.takeOver")}
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** What can be done to an item: its update first when there is one, its files and source, and Delete at the end. */
@@ -635,120 +600,6 @@ function RowActions({ item, page }: { item: StoreItem; page: Page }) {
       <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={page.removing === item.id} onClick={() => page.remove(item)} data-store-delete={item.id}>
         {t("store.action.delete")}
       </Button>
-    </div>
-  );
-}
-
-/** A row of the table (scene 1-2 A): a row every agent has, or none, merges its cells into one dim line until hovered. */
-function TableRow({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
-  const { t } = useInterfaceTranslation();
-  const request = useStoreRequest(page.device.id, page.actions);
-  const summary = rowSummary(item, columns);
-  const all = allSwitch(item, columns);
-  const merged = summary.kind !== "differs";
-  const source = openableSource(item, page.local);
-  return (
-    <tr className="group/row" data-store-row={item.id} data-store-summary={summary.kind}>
-      <td className="px-md py-sm">
-        <span className="flex min-w-0 items-center gap-sm">
-          <span className="truncate text-subhead font-medium text-foreground">{item.name}</span>
-          <Version item={item} />
-        </span>
-        {request.refusal ? <Note tone="error">{refusalText(request.refusal, t)}</Note> : null}
-      </td>
-      <td className="px-xs py-sm text-center">
-        <Switch checked={all.checked} disabled={request.pending} onCheckedChange={() => request.send([all.change])} aria-label={t("store.switch.all", { name: item.name })} data-store-all={item.id} />
-      </td>
-      {merged ? (
-        <td colSpan={columns.length} className="px-xs py-sm text-center text-muted-foreground group-focus-within/row:hidden group-hover/row:hidden" data-store-merged={item.id}>
-          {t(summary.kind === "all" ? "store.summary.all" : "store.summary.off")}
-        </td>
-      ) : null}
-      {columns.map((column) => (
-        <td key={column.id} className={cn("px-xs py-sm text-center", merged && "hidden group-focus-within/row:table-cell group-hover/row:table-cell")}>
-          <CellMark item={item} column={column} cell={cellOf(item, column)} page={page} />
-        </td>
-      ))}
-      <td className="px-xs py-sm text-center">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="row-action" size="icon-sm" aria-label={t("store.more", { name: item.name })} data-store-more={item.id}>
-              <EllipsisIcon aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {item.update ? (
-              <DropdownMenuItem onSelect={() => page.openUpdate([item])} data-store-menu-update={item.id}>
-                {t("store.action.update")}
-                <UpdateDot className="ml-auto" />
-              </DropdownMenuItem>
-            ) : null}
-            {(item.files ?? []).length > 0 ? <DropdownMenuItem onSelect={() => page.openFiles(item)}>{t("store.action.files")}</DropdownMenuItem> : null}
-            {item.server && keyNames(item.server).length > 0 ? <DropdownMenuItem onSelect={() => page.openKeys(item)}>{t("store.detail.editKeys")}</DropdownMenuItem> : null}
-            {source ? (
-              <DropdownMenuItem onSelect={() => (source.kind === "url" ? page.actions.openLink(source.url, true) : page.actions.revealExternal(source.path))}>
-                {t(source.kind === "url" ? "store.action.openSource" : "store.action.openFolder")}
-              </DropdownMenuItem>
-            ) : null}
-            <DropdownMenuItem className="text-destructive" onSelect={() => page.remove(item)} data-store-menu-delete={item.id}>
-              {t("store.action.delete")}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </td>
-    </tr>
-  );
-}
-
-/** A table cell: ● on, ○ off, — not supported, ! failed (press to retry), ≠ a copy Hide did not write (press to take over). */
-function CellMark({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
-  const { t } = useInterfaceTranslation();
-  const request = useStoreRequest(page.device.id, page.actions);
-  const name = columnName(column, t("store.column.shared"));
-  const data = { "data-store-cell": `${item.id}:${column.id}`, "data-store-cell-state": cell.state };
-  if (cell.state === "unsupported") return <span className="text-muted-foreground" title={t("store.cell.unsupported", { agent: name })} {...data}>—</span>;
-  const base = "inline-flex size-(--size-control-sm) items-center justify-center rounded-xs outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none";
-  if (cell.state === "failed") {
-    return (
-      <button type="button" className={cn(base, "font-semibold text-destructive")} title={`${t("store.legend.failed")}${cell.reason ? ` · ${cell.reason}` : ""}`} disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} {...data}>
-        !
-      </button>
-    );
-  }
-  if (cell.state === "hand_written") {
-    return (
-      <button type="button" className={cn(base, "text-warning")} title={`${t("store.cell.handWritten")} · ${t("store.cell.takeOver")}`} disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} {...data}>
-        ≠
-      </button>
-    );
-  }
-  const on = cellOn(cell.state);
-  const fresh = page.newSession.has(`${item.id}\u0000${column.id}`);
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={t("store.switch.column", { name: item.name, column: name })}
-      title={cell.state === "agent_off" ? t("store.cell.agentOff") : cell.state === "waiting" ? t("store.cell.waiting") : fresh ? t("store.cell.newSession") : undefined}
-      disabled={cell.state === "agent_off" || request.pending}
-      onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: !on }])}
-      className={cn(base, cell.state === "agent_off" && "opacity-(--opacity-disabled)")}
-      {...data}
-    >
-      <span aria-hidden="true" className={cn("size-(--size-status-mark) rounded-full", on ? "bg-primary" : "border border-muted-foreground")} />
-    </button>
-  );
-}
-
-function Legend() {
-  const { t } = useInterfaceTranslation();
-  return (
-    <div className="flex flex-wrap gap-md text-caption text-muted-foreground" data-store-legend="true">
-      <span className="inline-flex items-center gap-xs"><span className="size-(--size-status-mark) rounded-full bg-primary" />{t("store.legend.on")}</span>
-      <span className="inline-flex items-center gap-xs"><span className="size-(--size-status-mark) rounded-full border border-muted-foreground" />{t("store.legend.off")}</span>
-      <span>— {t("store.legend.unsupported")}</span>
-      <span><span className="font-semibold text-destructive">!</span> {t("store.legend.failed")}</span>
     </div>
   );
 }

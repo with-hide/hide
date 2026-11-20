@@ -1,33 +1,11 @@
 // What Settings › 스킬·MCP shows of one machine's store (PRD skill-mcp-manager,
-// decisions of 2026-11-19): which columns stand, what each row's summary
-// says, what its 전체 switch sends and how a version reads. Every value is
+// decisions of 2026-11-19 and the layout of 2026-11-20): which columns stand,
+// what a row's one switch sends and how a version reads. Every value is
 // the store report's; nothing here decides what an agent supports.
 
 import { agentAdapter } from "../agentAdapters";
 import type { KitAgent, McpServer, StoreAnswer, StoreCell, StoreCellState, StoreChange, StoreColumn, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreSource, StoreVersion } from "../snapshot";
 import { agentInstalled } from "./agentRows";
-
-/** The two ways the page lays its rows out: rows that unfold (the default) and the table (scene 1-2 A). */
-export type StoreView = "list" | "table";
-
-const VIEW_KEY = "hide.settings.store-view";
-
-/** The view this viewer chose last; a store that cannot be read is the list. */
-export function savedStoreView(): StoreView {
-  try {
-    return globalThis.localStorage?.getItem(VIEW_KEY) === "table" ? "table" : "list";
-  } catch {
-    return "list";
-  }
-}
-
-export function saveStoreView(view: StoreView): void {
-  try {
-    globalThis.localStorage?.setItem(VIEW_KEY, view);
-  } catch {
-    // A viewer whose storage is refused keeps the choice for this page only.
-  }
-}
 
 /**
  * The agents the page shows on a machine: installed there and switched on in

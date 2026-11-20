@@ -1,6 +1,7 @@
 // Settings › 스킬·MCP on an isolated machine whose store the real kit keeps
-// (PRD skill-mcp-manager; decisions of 2026-11-19): the list a row unfolds
-// in, the table its switch turns to, the cell states and the update dot.
+// (PRD skill-mcp-manager; decisions of 2026-11-19, layout C of 2026-11-20):
+// one table per kind whose cells show state only, a row's one switch, the row
+// that unfolds below itself, the update dot, delete and undo, other machines.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +14,7 @@ import { chooseTheme, screenshot } from "./wire";
 test.skip(process.platform === "win32", "the fixture's sources are POSIX git repositories over file://");
 test.describe.configure({ timeout: 240_000 });
 
-test("the list shows each row's summary and unfolds in place, and the table merges the rows every agent has", async ({ page }) => {
+test("each kind is one table whose cells show state, a row unfolds below itself, and a partial row's switch turns it on everywhere", async ({ page }) => {
   const fixture = await startStore("store-views");
   try {
     await seedStore(fixture);
@@ -21,56 +22,50 @@ test("the list shows each row's summary and unfolds in place, and the table merg
     await page.goto(`${fixture.daemon.origin}/#token=${fixture.daemon.token}`);
     await chooseTheme(page, "dark");
     const machine = await openStore(page, fixture.daemon);
-    await expect(machine).toHaveAttribute("data-store-view", "list");
 
-    // A row every shown agent has says so; one off everywhere says Off; one that differs names only where.
-    await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveAttribute("data-store-summary", "all");
-    await expect(machine.locator('[data-store-row="skill:pdf-tools"]')).toHaveAttribute("data-store-summary", "off");
-    await expect(machine.locator('[data-store-summary-part="antigravity:off"]')).toHaveText("Antigravity off");
-    // A Grok file Hide cannot read fails Grok's cell of every server, not the others'.
-    await expect(machine.locator('[data-store-row="mcp:github"] [data-store-summary-part="grok:failed"]')).toHaveText("Grok failed");
-    await expect(machine.locator('[data-store-row="mcp:github"] [data-store-summary-part]')).toHaveCount(1);
+    // Skills have a cell per folder, 공용 naming the installed agents that read it; MCP one per agent.
+    await expect(machine.locator('[data-store-table="skill"] [data-store-column]')).toHaveCount(3);
+    await expect(machine.locator('[data-store-shared-hint="agents"]')).toContainText("Codex");
+    await expect(machine.locator('[data-store-table="mcp"] [data-store-column]')).toHaveCount(7);
+    // Hide's own skills never stand in the table (B35).
+    await expect(machine.locator('[data-store-row="skill:hide"]')).toHaveCount(0);
+    await expect(machine.locator('[data-store-cell="skill:archify:agents"]')).toHaveAttribute("data-store-cell-state", "on");
+    await expect(machine.locator('[data-store-cell="skill:aside-browser:antigravity"]')).toHaveAttribute("data-store-cell-state", "off");
+    await expect(machine.locator('[data-store-cell="skill:pdf-tools:claude"]')).toHaveAttribute("data-store-cell-state", "off");
+    // A Grok file Hide cannot read fails Grok's cell of every server; linear over SSE is not Codex's.
+    await expect(machine.locator('[data-store-cell="mcp:github:grok"]')).toHaveAttribute("data-store-cell-state", "failed");
+    await expect(machine.locator('[data-store-cell="mcp:github:codex"]')).toHaveAttribute("data-store-cell-state", "on");
+    await expect(machine.locator('[data-store-cell="mcp:linear:codex"]')).toHaveAttribute("data-store-cell-state", "unsupported");
     await expect(machine.locator('[data-store-version="skill:archify"]')).toHaveText("v0.4.1");
     await expect(machine.locator('[data-store-update-dot="skill:pdf-tools"]')).toBeVisible();
     await expect(machine.locator("[data-store-updates]")).toHaveText(/1 update/);
     await expect(machine.locator('[data-store-unmanaged="skill:ast-grep"]')).toBeVisible();
 
-    // A row unfolds in place: its source and files, the per-folder switches, a failure with Retry, a hidden key.
-    await machine.locator('[data-store-row-toggle="skill:aside-browser"]').click();
+    // A press on the row unfolds it below: source and files, a failure with Retry, a hidden key.
+    await machine.locator('[data-store-row="skill:aside-browser"] td').first().click();
     const detail = machine.locator('[data-store-detail="skill:aside-browser"]');
     await expect(detail).toContainText("follows the folder");
     await expect(detail).toContainText("▲ 1 executable");
-    await expect(detail.locator('[data-store-switch="skill:aside-browser:antigravity"]')).toHaveAttribute("aria-checked", "false");
-    await expect(detail.locator('[data-store-switch="skill:aside-browser:claude"]')).toHaveAttribute("aria-checked", "true");
     await machine.locator('[data-store-row-toggle="mcp:github"]').click();
     const github = machine.locator('[data-store-detail="mcp:github"]');
     await expect(github.locator('[data-store-retry="mcp:github:grok"]')).toBeVisible();
     await expect(github.locator('[data-store-keys="mcp:github"]')).toContainText("GITHUB_TOKEN ••••••");
     await expect(page.locator("body")).not.toContainText("e2e-fixture-value");
-    await screenshot(page, "store-list-dark");
-
-    // The table: rows every agent has, or none, read as one dim line; a partial row shows its cells.
-    await machine.locator('[data-store-view-choice="table"]').click();
-    await expect(machine).toHaveAttribute("data-store-view", "table");
-    await expect(machine.locator('[data-store-merged="skill:archify"]')).toHaveText("All agents");
-    await expect(machine.locator('[data-store-merged="skill:pdf-tools"]')).toHaveText("Off");
-    await expect(machine.locator('[data-store-cell="mcp:linear:codex"]')).toHaveAttribute("data-store-cell-state", "unsupported");
-    await expect(machine.locator('[data-store-cell="mcp:github:grok"]')).toHaveAttribute("data-store-cell-state", "failed");
     await screenshot(page, "store-table-dark");
-    // The choice is this viewer's, kept across a reload.
-    await page.reload();
-    await page.locator("[data-open-settings]").click();
-    await page.locator('[data-settings-tab="skills"]').click();
-    await expect(page.locator(`[data-store-machine="${fixture.daemon.node}"]`)).toHaveAttribute("data-store-view", "table");
 
     await page.keyboard.press("Escape");
     await chooseTheme(page, "light");
     const light = await openStore(page, fixture.daemon);
-    await screenshot(page, "store-table-light");
-    await light.locator('[data-store-view-choice="list"]').click();
     await light.locator('[data-store-row-toggle="skill:aside-browser"]').click();
     await light.locator('[data-store-row-toggle="mcp:github"]').click();
-    await screenshot(page, "store-list-light");
+    await screenshot(page, "store-table-light");
+
+    // A row on somewhere but not everywhere: its switch turns it on everywhere (D-40).
+    const partial = light.locator('[data-store-all="skill:aside-browser"]');
+    await expect(partial).toHaveAttribute("aria-checked", "true");
+    await partial.click();
+    await expect(light.locator('[data-store-cell="skill:aside-browser:antigravity"]')).toHaveAttribute("data-store-cell-state", "on", { timeout: 60_000 });
+    await expect(light.locator('[data-store-detail="skill:aside-browser"]')).toBeVisible();
   } finally {
     stopStore(fixture);
   }
