@@ -171,7 +171,7 @@ impl Runtime {
             unsent: "child_blocked.note_unsent",
             now: true,
         };
-        self.blocked_children.sending = self.send_hide_notes(kind, notes, |runtime| {
+        self.blocked_children.sending = self.send_hide_notes(kind, notes, |runtime, _| {
             runtime.blocked_children.sending = false;
         });
     }

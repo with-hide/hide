@@ -966,14 +966,16 @@ impl Core {
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
             match engine.hook_session(&pane, &report.runtime, session, lineage) {
-                Ok(false) => {}
-                // An agent resumed after its turn was cut off is owed one
-                // letter (PRD engine-bundle-4-herdr-removal D-22).
-                Ok(true) => lock_recover(&self.runtime).owe_transition_letter(
-                    caller,
-                    session,
-                    crate::links::now_ms(),
-                ),
+                // One the engine did not heal was never cut (PRD
+                // letters-missions-simplify D-19, B17).
+                Ok(healed) => {
+                    // A resume the engine said is taken and settled first,
+                    // in the same step, so this report never meets one
+                    // taken and not settled.
+                    let mut runtime = lock_recover(&self.runtime);
+                    runtime.take_heal(device, engine.as_ref(), crate::links::now_ms());
+                    runtime.hook_after_heal(device, caller, healed);
+                }
                 Err(error) => crate::diagnostic!(serde_json::json!({
                     "component": "agent_hooks", "kind": "hook_session.refused",
                     "pane": caller, "device": device, "agent": report.runtime,

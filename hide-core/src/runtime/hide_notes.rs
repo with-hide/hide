@@ -36,13 +36,15 @@ impl Runtime {
     /// Sends `notes` from Hide's `kind.role`, one after another, on a thread
     /// of their own, and answers whether that thread started. `ended` runs
     /// under the runtime lock when the thread ends, a panicking send
-    /// included, so the caller never thinks a thread still sends. A runtime
-    /// without a worker (a test) sends nothing.
+    /// included, so the caller never thinks a thread still sends; it is
+    /// handed the `letter` of each note the ledger admitted, so a caller that
+    /// keeps what it owes until then sends the rest again. A runtime without
+    /// a worker (a test) sends nothing.
     pub(in crate::runtime) fn send_hide_notes(
         &mut self,
         kind: NoteKind,
         notes: Vec<Note>,
-        ended: fn(&mut Runtime),
+        ended: fn(&mut Runtime, &[String]),
     ) -> bool {
         let Some(context) = self.worker_context.clone() else {
             return false;
@@ -61,17 +63,21 @@ impl Runtime {
         let spawned = std::thread::Builder::new()
             .name(kind.thread.to_owned())
             .spawn(move || {
-                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>, fn(&mut Runtime));
+                struct Ending(
+                    std::sync::Weak<std::sync::Mutex<Runtime>>,
+                    fn(&mut Runtime, &[String]),
+                    Vec<String>,
+                );
                 impl Drop for Ending {
                     fn drop(&mut self) {
                         if let Some(runtime) = self.0.upgrade() {
                             let mut guard =
                                 runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                            (self.1)(&mut guard);
+                            (self.1)(&mut guard, &self.2);
                         }
                     }
                 }
-                let _ending = Ending(runtime, ended);
+                let mut ending = Ending(runtime, ended, Vec::new());
                 for note in notes {
                     let prepared = crate::delivery::worker::Prepared::new(
                         client.clone(),
@@ -95,11 +101,12 @@ impl Runtime {
                             force: false,
                         },
                     );
-                    if let Err(code) = prepared.run(NOTE_CALL) {
-                        crate::diagnostic!(json!({
+                    match prepared.run(NOTE_CALL) {
+                        Ok(_) => ending.2.push(note.letter),
+                        Err(code) => crate::diagnostic!(json!({
                             "component": kind.component, "kind": kind.unsent,
                             "letter_id": note.letter, "code": code,
-                        }));
+                        })),
                     }
                 }
             });

@@ -665,7 +665,7 @@ impl Runtime {
         if notes.is_empty() {
             return;
         }
-        self.letter_wakes.noting = self.send_hide_notes(WAKE_FAILED_NOTE, notes, |runtime| {
+        self.letter_wakes.noting = self.send_hide_notes(WAKE_FAILED_NOTE, notes, |runtime, _| {
             runtime.letter_wakes.noting = false;
             runtime.letter_wakes.dirty = true;
         });

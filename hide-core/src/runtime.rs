@@ -54,6 +54,7 @@ mod github_poll;
 mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
+mod heal_letters;
 mod herdr_import;
 mod hide_notes;
 mod home_retire;
@@ -123,7 +124,6 @@ pub(crate) mod suggestions;
 mod tab_focus;
 mod terminal;
 mod terminal_input;
-mod transition_letters;
 mod tree_close;
 mod tree_reopen;
 pub(crate) mod turn_answer;
@@ -1182,7 +1182,9 @@ pub(crate) fn hide_notice(actor: &crate::delivery::Actor) -> bool {
             unreadable_letters::DELIVERY_ROLE,
             agent_sleep::letters::WAKE_ROLE,
             blocked_children::BLOCKED_ROLE,
-            transition_letters::TRANSITION_ROLE,
+            // The role an earlier build told agents of an engine switch
+            // under, which the heal's line replaced (`heal_letters`).
+            "transition",
             crate::delivery::typed::INPUT_ROLE,
             missions::CONDUCTOR_ROLE,
         ]
@@ -1974,9 +1976,9 @@ pub struct Runtime {
     letter_wakes: agent_sleep::letters::LetterWakes,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
-    /// The letters owed to agents whose turn a move or a machine restart cut
-    /// off (`transition_letters.rs`); session-only.
-    transition_letters: transition_letters::TransitionLetters,
+    /// The lines owed to agents a heal resumed after their work was cut
+    /// (`heal_letters.rs`); session-only.
+    heal_letters: heal_letters::HealLetters,
     /// Each delegated child's block, and the note its parent is owed
     /// (`blocked_children.rs`); session-only.
     blocked_children: blocked_children::BlockedChildren,
@@ -2752,7 +2754,7 @@ impl Runtime {
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
             unreadable_letters: Default::default(),
-            transition_letters: Default::default(),
+            heal_letters: Default::default(),
             blocked_children: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),
