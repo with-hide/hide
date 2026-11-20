@@ -2460,6 +2460,8 @@ export type StoreItem = {
   id: string;
   kind: StoreItemKind;
   name: string;
+  /** The GitHub account a git source belongs to, whose kept picture is in `StoreReport.avatars`. */
+  owner?: string | null;
   source: StoreSource;
   version: StoreVersion;
   update?: StoreVersion | null;
@@ -2540,6 +2542,8 @@ export type StoreReport = {
   refusal?: StorePassRefusal | null;
   /** The machine's home folder, which the screen spells as `~`. */
   home?: string | null;
+  /** The kept pictures of the items' GitHub owners, as data addresses: the screen never loads one from the web. */
+  avatars?: Record<string, string>;
 };
 
 /** Why a change was refused (`store_refusal_cause`). */

@@ -53,7 +53,7 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     await machine.locator('[data-store-row-toggle="mcp:github"]').click();
     const github = machine.locator('[data-store-detail="mcp:github"]');
     // A failure is one line: the agent, a few words and its file under ~, with Retry; the kit's sentence stays in the log.
-    await expect(github.locator('[data-store-fix="mcp:github:grok"]')).toContainText("Grok · The config file is not valid, so Hide left it as it was~/.grok/config.toml");
+    await expect(github.locator('[data-store-fix="mcp:github:grok"]')).toContainText("Grok: The config file is not valid, so Hide left it as it was~/.grok/config.toml");
     await expect(github.locator('[data-store-retry="mcp:github:grok"]')).toBeVisible();
     await expect(github).not.toContainText("unexpected shape");
     await expect(github.locator('[data-store-keys="mcp:github"]')).toContainText("GITHUB_TOKEN ••••••");

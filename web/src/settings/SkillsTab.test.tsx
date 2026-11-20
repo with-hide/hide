@@ -57,3 +57,22 @@ it("draws a held item as a row of the kind's table that unfolds below itself", a
     await unmount();
   }
 });
+
+it("draws a GitHub skill's tile from the picture the store keeps, never from the web, and the GitHub mark without one", async () => {
+  const github = { id: "skill:archify", kind: "skill", name: "archify", owner: "acme", source: { kind: "git", url: "https://github.com/acme/kit.git", path: "archify" }, version: { kind: "tag", value: "v1" }, on: true, cells: [{ column: "claude", state: "on" }] };
+  const picture = "data:image/png;base64,iVBORw0KGgo=";
+  const kept = await render({ ...report([github] as StoreReport["items"]), avatars: { acme: picture } });
+  try {
+    expect(kept.container.querySelector('[data-store-avatar="acme"]')?.getAttribute("src")).toBe(picture);
+    expect([...kept.container.querySelectorAll("img")].some((img) => /^https?:/.test(img.getAttribute("src") ?? ""))).toBe(false);
+  } finally {
+    await kept.unmount();
+  }
+  const bare = await render(report([github] as StoreReport["items"]));
+  try {
+    expect(bare.container.querySelector("[data-store-avatar]")).toBeNull();
+    expect(bare.container.querySelector('[data-store-tile="github"]')).not.toBeNull();
+  } finally {
+    await bare.unmount();
+  }
+});

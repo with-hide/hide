@@ -1,10 +1,12 @@
 import type { TFunction } from "i18next";
-import { ChevronDownIcon, ChevronRightIcon, InfoIcon, PlusIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, FolderIcon, GitBranchIcon, GlobeIcon, HandIcon, PackageIcon, PlusIcon } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AgentMark } from "../AgentMark";
 import type { Actions } from "../actions";
 import { useMinuteClock } from "../components/elapsed";
 import { Note } from "../components/settings-rows";
 import { StatusMark } from "../components/status-mark";
+import { RowOverlayButton } from "../components/ui/row-button";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
@@ -40,6 +42,7 @@ import {
   shownAgents,
   shownColumns,
   sourceLine,
+  sourceText,
   trashFor,
   updatable,
   versionText,
@@ -148,10 +151,10 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
   const empty = report !== null && skills.length + mcps.length + report.unmanaged.length === 0;
   const newer = report ? updatable(report) : [];
   const ask = asks.find((row) => row.id === askRequested) ?? null;
-  // The page's own controls sit at the right of the first section's title (layout C, decision 2026-11-20); with no section, on a line of their own.
-  const first: StoreItemKind | null = report && !empty ? (skills.length > 0 ? "skill" : mcps.length > 0 ? "mcp" : null) : null;
+  // The head (approved visual, 2026-11-20): one line under the page title, with 업데이트 n and the primary Add at its right.
   const head = (
-    <span className="flex flex-wrap items-center justify-end gap-sm" data-store-head="true">
+    <div className="mb-xl flex flex-wrap items-center gap-sm" data-store-head="true">
+      <p className="min-w-0 flex-1 text-body text-muted-foreground">{t("store.subtitle", { device: name })}</p>
       {newer.length > 0 && !readOnly ? (
         <UpdatesChip
           count={newer.length}
@@ -179,16 +182,16 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
       ) : null}
       {device.id !== own && !readOnly && !empty ? <CopyFromHere device={device} own={own} actions={actions} /> : null}
       {empty ? null : (
-        <Button variant="secondary" size="sm" disabled={readOnly} onClick={() => setAdding(true)} data-store-add="true">
+        <Button size="sm" disabled={readOnly} onClick={() => setAdding(true)} data-store-add="true">
           <PlusIcon aria-hidden="true" />
           {t("store.add")}
         </Button>
       )}
-    </span>
+    </div>
   );
   return (
     <div className="@container/store" data-store-machine={device.id}>
-      {first ? null : <div className="mb-lg flex justify-end">{head}</div>}
+      {head}
       {asks.length > 0 ? (
         <div className="mb-lg flex flex-col gap-xs" data-store-asks="true">
           {asks.map((row) => (
@@ -220,8 +223,9 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
       ) : null}
       {report && !empty ? (
         <div data-store-lists={readOnly ? "read-only" : "live"}>
-          <Kind kind="skill" items={skills} shown={shown} page={page} action={first === "skill" ? head : undefined} />
-          <Kind kind="mcp" items={mcps} shown={shown} page={page} action={first === "mcp" ? head : undefined} />
+          <Kind kind="skill" items={skills} shown={shown} page={page} />
+          <Kind kind="mcp" items={mcps} shown={shown} page={page} />
+          {skills.length + mcps.length > 0 ? <Legend /> : null}
           {report.unmanaged.length > 0 ? <Unmanaged rows={report.unmanaged} report={report} shown={shown} page={page} /> : null}
           {report.trash.length > 0 ? <Trash report={report} page={page} /> : null}
         </div>
@@ -291,16 +295,17 @@ function MachineState({ machine, name, report, actions }: { machine: AgentMachin
 }
 
 /** The first read of a machine: three quiet rows where its list will stand. */
+/** The first read of a machine: three quiet rows where its list will stand. */
 function Loading() {
   const { t } = useInterfaceTranslation();
   return (
     <section className="mb-xl" data-store-loading="true">
-      <SectionHead title={t("store.section.skill")} caption={t("store.reading")} />
+      <div className="pb-sm"><SectionLabel title={t("store.section.skill")} caption={t("store.reading")} /></div>
       {[0, 1, 2].map((row) => (
         <div key={row} className="flex items-center gap-md border-t border-border py-sm" aria-hidden="true">
+          <span className="size-(--size-control-lg) animate-pulse rounded-md bg-muted" />
           <span className="h-(--size-badge-height) w-1/4 animate-pulse rounded-xs bg-muted" />
           <span className="flex-1" />
-          <span className="h-(--size-badge-height) w-1/6 animate-pulse rounded-xs bg-muted" />
           <span className="h-(--size-checkbox) w-(--size-control) animate-pulse rounded-xl bg-muted" />
         </div>
       ))}
@@ -308,7 +313,6 @@ function Loading() {
   );
 }
 
-/** 업데이트 n: when the check found newer versions; the hint says when it last looked. */
 function UpdatesChip({ count, checkedAt, onOpen }: { count: number; checkedAt: number | null; onOpen: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const now = useMinuteClock();
@@ -316,7 +320,7 @@ function UpdatesChip({ count, checkedAt, onOpen }: { count: number; checkedAt: n
   const when = checkedAt ? t("store.updates.checked", { when: lastSeen(checkedAt, now, false, t, requireInterfaceLanguage(i18n.language)) }) : t("store.updates.never");
   return (
     <Hint label={`${words} · ${when}`}>
-      <Button variant="ghost" size="sm" onClick={onOpen} data-store-updates={count}>
+      <Button variant="secondary" size="sm" onClick={onOpen} data-store-updates={count}>
         <UpdateDot />
         {words}
       </Button>
@@ -355,51 +359,50 @@ function CopyFromHere({ device, own, actions }: { device: Device; own: string; a
 }
 
 /** A section's title and count, with the page's controls at its right when it is the first. */
-function SectionHead({ title, count, caption, action }: { title: string; count?: number; caption?: string; action?: ReactNode }) {
+
+/** A section's small title and count, at the head of its table's first column. */
+function SectionLabel({ title, count, caption }: { title: string; count?: number; caption?: string }) {
   return (
-    <div className="mb-xs flex min-h-(--size-control) items-center gap-sm">
-      <h3 className="shrink-0 text-body font-semibold text-subtle-foreground">{title}</h3>
-      {count !== undefined ? <span className="text-caption text-muted-foreground">{count}</span> : null}
-      {caption ? <span className="min-w-0 truncate text-caption text-muted-foreground">{caption}</span> : null}
-      <span className="flex-1" />
-      {action}
-    </div>
+    <span className="flex min-w-0 items-baseline gap-sm text-micro font-semibold uppercase tracking-wider text-muted-foreground">
+      <span className="shrink-0">{title}</span>
+      {count !== undefined ? <span className="font-medium">{count}</span> : null}
+      {caption ? <span className="min-w-0 truncate font-normal normal-case tracking-normal">{caption}</span> : null}
+    </span>
   );
 }
 
 /**
- * One kind's table (layout C, decided 2026-11-20): a skill row has a cell per
- * skill folder (Claude, 공용, agy), an MCP row one per agent; cells show the
- * state only, the row's one switch turns the item on or off everywhere, and
- * a press on the row unfolds what can be done below it. Every cell column
- * and the switch column have one width, so the marks stand on one line and
- * both tables end at the same edge; only the name column takes the rest.
+ * One kind's table (the approved visual of 2026-11-20): the section's title
+ * heads the name column and each agent's logo heads its cell column; a skill
+ * row has a cell per skill folder (Claude, 공용, agy), an MCP row one per
+ * agent. Cells show the state only, the row's one switch turns the item on
+ * or off everywhere, and a press on the row unfolds it below. The switch
+ * column has one width in both tables, so they end at the same edge.
  */
-function Kind({ kind, items, shown, page, action }: { kind: StoreItemKind; items: StoreItem[]; shown: ReadonlySet<string>; page: Page; action?: ReactNode }) {
+function Kind({ kind, items, shown, page }: { kind: StoreItemKind; items: StoreItem[]; shown: ReadonlySet<string>; page: Page }) {
   const { t } = useInterfaceTranslation();
   const columns = shownColumns(page.report, kind, shown);
   if (items.length === 0) return null;
   const title = t(kind === "skill" ? "store.section.skill" : "store.section.mcp");
   return (
     <section className="mb-xl" data-store-section={kind}>
-      <SectionHead title={title} count={items.length} action={action} />
       {/* A machine that is away shows its last list, dimmed and with no controls (scene 6). */}
       <div className={cn("overflow-x-auto", page.away && "opacity-(--opacity-disabled)")} inert={page.readOnly || undefined}>
         <table className="w-full min-w-(--size-settings-control-w) table-fixed border-collapse text-body" data-store-table={kind}>
           <colgroup>
             <col />
-            {columns.map((column) => <col key={column.id} className="w-(--size-store-column)" />)}
-            <col className="w-(--spacing-xxxl)" />
+            {columns.map((column) => <col key={column.id} className={column.shared ? "w-(--size-store-shared-column)" : "w-(--size-store-column)"} />)}
+            <col className="w-(--size-store-switch-column)" />
           </colgroup>
           <thead>
-            <tr className="text-micro text-muted-foreground">
-              <th className="py-xs text-left font-normal"><span className="sr-only">{title}</span></th>
+            <tr>
+              <th className="pb-sm text-left align-bottom font-normal"><SectionLabel title={title} count={items.length} /></th>
               {columns.map((column) => (
-                <th key={column.id} className="truncate py-xs text-center font-normal" data-store-column={column.id}>
+                <th key={column.id} className="pb-sm text-center align-bottom font-normal" data-store-column={column.id}>
                   <ColumnHead column={column} columns={columns} />
                 </th>
               ))}
-              <th className="py-xs font-normal"><span className="sr-only">{t("store.column.on")}</span></th>
+              <th className="pb-sm font-normal"><span className="sr-only">{t("store.column.on")}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -412,14 +415,24 @@ function Kind({ kind, items, shown, page, action }: { kind: StoreItemKind; items
 }
 
 /**
- * A column's head: the agent's name, or 공용 for the shared skill folder with
- * a hint that names the installed agents that read it and which of them read
+ * A column's head: its agent's logo, named in its hint; the shared skill
+ * folder's is the logos of the installed agents that read it, overlapped,
+ * with 공용 under them, and a hint that names them and which of them read
  * another column's folder as well (Grok and omp read Claude's).
  */
 function ColumnHead({ column, columns }: { column: ShownColumn; columns: readonly ShownColumn[] }) {
   const { t } = useInterfaceTranslation();
   const name = columnName(column, t("store.column.shared"));
-  if (!column.shared) return <>{name}</>;
+  if (!column.shared) {
+    return (
+      <Hint label={name}>
+        <span className="inline-flex align-bottom outline-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={0} data-store-agent-head={column.agent ?? column.id}>
+          <AgentMark kind={column.agent} />
+          <span className="sr-only">{name}</span>
+        </span>
+      </Hint>
+    );
+  }
   const readers = column.readers.map(agentShortName);
   const also = columns
     .filter((other) => other.id !== column.id)
@@ -428,22 +441,58 @@ function ColumnHead({ column, columns }: { column: ShownColumn; columns: readonl
   const hint = [t("store.column.sharedHint", { agents: readers.join(" · ") }), ...also.map(({ other, agents }) => t("store.column.sharedAlso", { agents: agents.map(agentShortName).join(" · "), column: columnName(other, name) }))].join(" ");
   return (
     <Hint label={hint}>
-      <span className="inline-flex items-center gap-xxs" tabIndex={0} data-store-shared-hint={column.id}>
-        {name}
-        <InfoIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      <span className="inline-flex flex-col items-center gap-xxs outline-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={0} data-store-shared-hint={column.id}>
+        <span className="flex" aria-hidden="true">
+          {column.readers.map((agent, index) => (
+            <span key={agent} className={cn("inline-flex rounded-xs bg-dialog ring-2 ring-dialog", index > 0 && "-ml-xs")}>
+              <AgentMark kind={agent} />
+            </span>
+          ))}
+        </span>
+        <span className="text-micro text-muted-foreground">{name}</span>
       </span>
     </Hint>
   );
 }
 
-/** The short version, with the dot when a check found a newer one. */
+/** The GitHub mark (Primer Octicons `mark-github`, MIT), the tile of a GitHub skill whose owner's picture is not kept. */
+function GithubMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" className={className}>
+      <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
+}
+
+/**
+ * An item's icon tile: a GitHub skill's owner's picture as the store keeps
+ * it (never loaded from the web here), else the mark of where it comes from:
+ * GitHub, another git host, a folder, a package or a remote server.
+ */
+function ItemTile({ item, avatars }: { item: StoreItem; avatars: Record<string, string> | undefined }) {
+  const picture = item.owner ? avatars?.[item.owner] : undefined;
+  if (picture) return <img src={picture} alt="" className="size-(--size-control-lg) shrink-0 rounded-md border border-border object-cover" data-store-avatar={item.owner ?? ""} />;
+  const glyph = "size-(--size-icon)";
+  const mark = item.owner ? <GithubMark className={glyph} />
+    : item.server ? (item.server.reach.kind === "remote" ? <GlobeIcon className={glyph} /> : <PackageIcon className={glyph} />)
+    : item.source.kind === "git" ? <GitBranchIcon className={glyph} />
+    : item.source.kind === "folder" ? <FolderIcon className={glyph} />
+    : <FileIcon className={glyph} />;
+  return (
+    <span aria-hidden="true" className="flex size-(--size-control-lg) shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-subtle-foreground" data-store-tile={item.owner ? "github" : item.source.kind}>
+      {mark}
+    </span>
+  );
+}
+
+/** The short version as a small pill, with the dot after it when a check found a newer one. */
 function Version({ item }: { item: StoreItem }) {
   const { t } = useInterfaceTranslation();
   const text = versionText(item.version, t);
   if (!text && !item.update) return null;
   return (
-    <span className="inline-flex min-w-0 shrink-[3] items-center gap-xs font-mono text-caption text-muted-foreground" data-store-version={item.id}>
-      {text ? <span className="truncate">{text}</span> : null}
+    <span className="inline-flex min-w-0 shrink-[3] items-center gap-xs" data-store-version={item.id}>
+      {text ? <span className="truncate rounded-xs bg-secondary px-xs font-mono text-micro text-muted-foreground">{text}</span> : null}
       {item.update ? (
         <span className="inline-flex shrink-0" title={t("store.version.update")} data-store-update-dot={item.id}>
           <UpdateDot />
@@ -454,27 +503,54 @@ function Version({ item }: { item: StoreItem }) {
   );
 }
 
-/** A row: its name and version, one state cell per column and its one switch; a press anywhere but the switch unfolds it. */
+/** The muted line under a name: a skill's description and where it comes from, a server's command or address. */
+function itemLine(item: StoreItem, home: string | null | undefined): string {
+  if (item.server) {
+    const reach = item.server.reach;
+    return reach.kind === "remote" ? `${hostOf(reach.url)} · ${reach.transport.toUpperCase()}` : serverLine(item.server);
+  }
+  const source = item.source.kind === "folder" ? homePath(item.source.path, home) : item.source.kind === "git" ? sourceText(item.source).replace(/^github\.com\//, "") : sourceText(item.source);
+  return [item.description, source].filter(Boolean).join(" · ");
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+/** A row: its tile, name, version and line, one state cell per column and its one switch; a press anywhere but the switch unfolds it. */
 function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   const request = useStoreRequest(page.device.id, page.actions);
   const all = allSwitch(item, columns);
-  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
+  const toggle = () => setOpen((now) => !now);
   return (
     <>
-      <tr className="cursor-pointer border-t border-border hover:bg-accent/40" onClick={() => setOpen((now) => !now)} data-store-row={item.id} data-store-open={open ? "true" : "false"}>
-        <td className="py-sm pr-sm">
-          <span className="flex min-w-0 items-center">
-            <span className="flex w-(--size-icon-lg) shrink-0">
-              <Button variant="row-action" size="icon-xs" aria-expanded={open} aria-label={t("store.expand", { name: item.name })} data-store-row-toggle={item.id}>
-                <Chevron aria-hidden="true" />
-              </Button>
-            </span>
-            <span className="flex min-w-0 items-center gap-sm">
-              <span className="min-w-0 truncate text-subhead text-foreground">{item.name}</span>
-              <Version item={item} />
-              {item.folder_missing ? <Badge variant="outline" className="shrink-0 border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
+      <tr className="cursor-pointer border-t border-border hover:bg-accent" onClick={toggle} data-store-row={item.id} data-store-open={open ? "true" : "false"}>
+        <td className="relative py-sm pr-md">
+          <RowOverlayButton
+            hover={false}
+            aria-label={t("store.expand", { name: item.name })}
+            aria-expanded={open}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggle();
+            }}
+            data-store-row-toggle={item.id}
+          />
+          <span className="pointer-events-none relative flex min-w-0 items-center gap-md">
+            <ItemTile item={item} avatars={page.report.avatars ?? undefined} />
+            <span className="flex min-w-0 flex-col">
+              <span className="flex min-w-0 items-center gap-sm">
+                <span className="min-w-0 truncate text-subhead font-semibold text-foreground">{item.name}</span>
+                <Version item={item} />
+                {item.folder_missing ? <Badge variant="outline" className="shrink-0 border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
+              </span>
+              <span className="truncate text-caption text-muted-foreground" data-store-line={item.id}>{itemLine(item, page.report.home)}</span>
             </span>
           </span>
         </td>
@@ -489,7 +565,7 @@ function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColum
       </tr>
       {request.refusal ? (
         <tr>
-          <td colSpan={columns.length + 2} className="pb-sm pl-(--size-icon-lg)"><Note tone="error">{refusalText(request.refusal, t)}</Note></td>
+          <td colSpan={columns.length + 2} className="pb-sm pl-(--size-store-detail-inset)"><Note tone="error">{refusalText(request.refusal, t)}</Note></td>
         </tr>
       ) : null}
       {open ? (
@@ -503,47 +579,83 @@ function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColum
   );
 }
 
+/** The four marks a cell can show, drawn once for the cells and the legend. */
+function OnMark({ dim = false }: { dim?: boolean }) {
+  return (
+    <span aria-hidden="true" className={cn("inline-flex size-(--size-icon-lg) items-center justify-center rounded-full bg-primary/15 text-primary", dim && "opacity-(--opacity-dimmed)")}>
+      <CheckIcon className="size-(--size-icon-sm)" strokeWidth={3} />
+    </span>
+  );
+}
+
+function OffMark({ dim = false }: { dim?: boolean }) {
+  return <span aria-hidden="true" className={cn("inline-block size-(--size-agent-mark) rounded-full border border-muted-foreground opacity-(--opacity-read-status)", dim && "opacity-(--opacity-disabled)")} />;
+}
+
+function UnsupportedMark() {
+  return <span aria-hidden="true" className="text-muted-foreground opacity-(--opacity-dimmed)">—</span>;
+}
+
+function FailedMark() {
+  return <span aria-hidden="true" className="inline-flex size-(--size-icon-lg) items-center justify-center rounded-full bg-destructive/15 text-caption font-bold text-destructive">!</span>;
+}
+
+function TheirsMark() {
+  return (
+    <span aria-hidden="true" className="inline-flex size-(--size-icon-lg) items-center justify-center rounded-full bg-warning/15 text-warning">
+      <HandIcon className="size-(--size-icon-sm)" />
+    </span>
+  );
+}
+
 /**
- * A cell's state, which it only shows (decision 2026-11-20), in the marks the
- * product already draws, one size and centred: on is the filled dot, off the
- * faint hollow ring, failed the small red mark, — not supported and
- * 이미 있음 a copy Hide did not write.
+ * A cell's state, which it only shows (decision 2026-11-20): ✓ applied, ○
+ * off, — not supported (its hint says by whom), ! failed (the row unfolds
+ * with why and Retry), and the hand for a copy of the same name Hide did not
+ * write. A press on a cell is the row's.
  */
 function CellMark({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
   const { t } = useInterfaceTranslation();
   const name = columnName(column, t("store.column.shared"));
-  const data = { "data-store-cell": `${item.id}:${column.id}`, "data-store-cell-state": cell.state };
   const fresh = page.newSession.has(`${item.id}\u0000${column.id}`);
-  switch (cell.state) {
-    case "unsupported":
-      return <span className="text-muted-foreground" title={t("store.cell.unsupported", { agent: name })} {...data}>—</span>;
-    case "failed":
-      return <FailedMark label={t(failureKey(cell.failure, item.kind))} {...data} />;
-    case "hand_written":
-      return <span className="whitespace-nowrap text-micro text-warning" title={t("store.cell.handWritten")} {...data}>{t("store.cell.handWrittenShort")}</span>;
-    default: {
-      const on = cellOn(cell.state);
-      const title = cell.state === "agent_off" ? t("store.cell.agentOff") : cell.state === "waiting" ? t("store.cell.waiting") : fresh ? t("store.cell.newSession") : t(on ? "store.cell.on" : "store.cell.off");
-      return (
-        <span className={cn("inline-flex align-middle", cell.state === "agent_off" && "opacity-(--opacity-disabled)")} title={title} {...data} data-store-new-session={fresh ? "true" : undefined}>
-          <StatusMark mark={on ? "done" : "quiet"} />
-          <span className="sr-only">{title}</span>
-        </span>
-      );
+  const [mark, title] = (() => {
+    switch (cell.state) {
+      case "unsupported":
+        return [<UnsupportedMark key="mark" />, t("store.cell.unsupported", { agent: name })];
+      case "failed":
+        return [<FailedMark key="mark" />, `${name} · ${t(failureKey(cell.failure, item.kind))}`];
+      case "hand_written":
+        return [<TheirsMark key="mark" />, t("store.cell.handWritten")];
+      case "agent_off":
+        return [<OffMark key="mark" dim />, t("store.cell.agentOff")];
+      case "waiting":
+        return [<OnMark key="mark" dim />, t("store.cell.waiting")];
+      case "on":
+        return [<OnMark key="mark" />, fresh ? t("store.cell.newSession") : t("store.cell.on")];
+      case "off":
+        return [<OffMark key="mark" />, t("store.cell.off")];
     }
-  }
+  })();
+  return (
+    <span className="inline-flex align-middle" title={title} data-store-cell={`${item.id}:${column.id}`} data-store-cell-state={cell.state} data-store-new-session={fresh ? "true" : undefined}>
+      {mark}
+      <span className="sr-only">{title}</span>
+    </span>
+  );
 }
 
-/** The small red mark of a failed cell, in the status marks' size. */
-function FailedMark({ label, ...data }: { label: string } & Record<`data-${string}`, string>) {
+/** What the marks mean, once under the tables. */
+function Legend() {
+  const { t } = useInterfaceTranslation();
+  const entry = "inline-flex items-center gap-xs";
   return (
-    <span className="inline-flex size-(--size-agent-mark) items-center justify-center align-middle" title={label} {...data}>
-      <svg viewBox="0 0 12 12" aria-hidden="true" className="size-full">
-        <circle cx="6" cy="6" r="6" className="fill-destructive" />
-        <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-destructive-foreground" />
-      </svg>
-      <span className="sr-only">{label}</span>
-    </span>
+    <div className="-mt-md mb-xl flex flex-wrap items-center gap-x-lg gap-y-xs text-caption text-muted-foreground" data-store-legend="true">
+      <span className={entry}><OnMark />{t("store.legend.on")}</span>
+      <span className={entry}><OffMark />{t("store.legend.off")}</span>
+      <span className={entry}><UnsupportedMark />{t("store.legend.unsupported")}</span>
+      <span className={entry}><FailedMark />{t("store.legend.failed")}</span>
+      <span>{t("store.legend.logos")}</span>
+    </div>
   );
 }
 
@@ -560,88 +672,107 @@ function PathText({ path, home }: { path: string; home: string | null | undefine
   );
 }
 
-/** The unfolded row, indented under the name: where the item comes from, its files or keys, each cell that needs a press, and what can be done to it. */
+/**
+ * The unfolded row, a band one step below the dialog (so its quiet buttons
+ * keep their edge in both themes) indented under the name: a grid of one
+ * label column (출처, 파일, 상태; 명령, 키; 문제) and then the item's quiet
+ * actions.
+ */
 function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
   const files = item.files ?? [];
   const executables = files.filter((file) => file.executable).length;
-  const fixes = columns.map((column) => ({ column, cell: cellOf(item, column) })).filter(({ cell }) => cell.state === "failed" || cell.state === "hand_written");
-  const label = "text-muted-foreground";
-  const value = "flex min-w-0 items-center gap-sm text-subtle-foreground";
+  const cells = columns.map((column) => ({ column, cell: cellOf(item, column) }));
+  const fixes = cells.filter(({ cell }) => cell.state === "failed" || cell.state === "hand_written");
+  // A row on for some agents and off for others says so, and what its switch does (D-40).
+  const offFor = cells.filter(({ cell }) => cell.state === "off").map(({ column }) => columnName(column, t("store.column.shared")));
+  const partial = offFor.length > 0 && cells.some(({ cell }) => cellOn(cell.state));
+  const label = "self-start pt-xxs text-caption text-muted-foreground";
+  const value = "flex min-w-0 items-center gap-sm text-body text-subtle-foreground";
   return (
-    <div className="flex flex-col gap-sm pb-md pl-(--size-icon-lg) pt-xxs" data-store-detail={item.id}>
-      {item.description ? <p className="break-words text-body text-subtle-foreground">{item.description}</p> : null}
-      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-lg gap-y-xs text-body">
-        {item.server ? (
-          <>
-            <dt className={label}>{t(item.server.reach.kind === "local" ? "store.detail.command" : "store.detail.address")}</dt>
-            <dd className={cn(value, "font-mono")}><span className="truncate" title={serverLine(item.server)}>{serverLine(item.server)}</span></dd>
-            {keyNames(item.server).length > 0 ? (
-              <>
-                <dt className={label}>{t("store.detail.keys")}</dt>
-                <dd className={cn(value, "flex-wrap")} data-store-keys={item.id}>
-                  {keyNames(item.server).map((key) => (
-                    <span key={key} className="font-mono">{key} ••••••</span>
-                  ))}
-                  <Button variant="secondary" size="sm" disabled={page.readOnly} onClick={() => page.openKeys(item)} data-store-edit-keys={item.id}>
-                    {t("store.detail.editKeys")}
-                  </Button>
-                </dd>
-              </>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <dt className={label}>{t("store.detail.source")}</dt>
-            <dd className={value}>
-              {item.source.kind === "folder" ? <PathText path={item.source.path} home={page.report.home} /> : <span className="truncate font-mono" title={sourceLine(item)}>{sourceLine(item)}</span>}
-              {item.source.kind === "folder" ? <span className="shrink-0 text-muted-foreground">{item.folder_missing ? t("store.detail.lastCopy") : t("store.detail.follows")}</span> : null}
-            </dd>
-            {files.length > 0 ? (
-              <>
-                <dt className={label}>{t("store.detail.files")}</dt>
-                <dd className={value}>
-                  {t("store.detail.fileCount", { count: files.length })}
-                  {executables > 0 ? <span className="text-warning">{t("store.detail.executables", { count: executables })}</span> : null}
-                </dd>
-              </>
-            ) : null}
-          </>
-        )}
-      </dl>
-      {fixes.map(({ column, cell }) => <CellFix key={column.id} item={item} column={column} cell={cell} page={page} />)}
+    <div className="grid grid-cols-[var(--size-store-label)_minmax(0,1fr)] items-center gap-x-md gap-y-sm bg-card py-md pl-(--size-store-detail-inset) pr-md" data-store-detail={item.id}>
+      {item.server ? (
+        <>
+          <span className={label}>{t(item.server.reach.kind === "local" ? "store.detail.command" : "store.detail.address")}</span>
+          <span className={cn(value, "font-mono")}><span className="truncate" title={serverLine(item.server)}>{serverLine(item.server)}</span></span>
+          {keyNames(item.server).length > 0 ? (
+            <>
+              <span className={label}>{t("store.detail.keys")}</span>
+              <span className={cn(value, "flex-wrap")} data-store-keys={item.id}>
+                {keyNames(item.server).map((key) => (
+                  <span key={key} className="font-mono">{key} <span className="text-muted-foreground">••••••</span></span>
+                ))}
+                <Button variant="secondary" size="sm" disabled={page.readOnly} onClick={() => page.openKeys(item)} data-store-edit-keys={item.id}>
+                  {t("store.detail.editKeys")}
+                </Button>
+              </span>
+            </>
+          ) : null}
+        </>
+      ) : (
+        <>
+          <span className={label}>{t("store.detail.source")}</span>
+          <span className={value}>
+            {item.source.kind === "folder" ? <PathText path={item.source.path} home={page.report.home} /> : <span className="truncate font-mono" title={sourceLine(item)}>{sourceLine(item)}</span>}
+            {item.source.kind === "folder" ? <span className="shrink-0 text-muted-foreground">· {item.folder_missing ? t("store.detail.lastCopy") : t("store.detail.follows")}</span> : null}
+          </span>
+          {files.length > 0 ? (
+            <>
+              <span className={label}>{t("store.detail.files")}</span>
+              <span className={value}>
+                {t("store.detail.fileCount", { count: files.length })}
+                {executables > 0 ? <span className="text-warning">· {t("store.detail.executables", { count: executables })}</span> : null}
+              </span>
+            </>
+          ) : null}
+        </>
+      )}
+      {partial ? (
+        <>
+          <span className={label}>{t("store.detail.state")}</span>
+          <span className={cn(value, "text-muted-foreground")} data-store-partial={item.id}>{t("store.detail.partial", { agents: offFor.join(", ") })}</span>
+        </>
+      ) : null}
+      {fixes.map(({ column, cell }, index) => (
+        <CellFix key={column.id} first={index === 0} item={item} column={column} cell={cell} page={page} />
+      ))}
+      <span />
       <RowActions item={item} page={page} />
     </div>
   );
 }
 
 /**
- * A cell that needs a press, in one line: a failure in a few words with its
- * file and [다시 시도], or a copy Hide did not write with [가져오기]. The
- * kit's own sentence is the log's (design principle 13).
+ * A cell that needs a press, in one line of the 문제 rows: the agent's logo,
+ * its name and a few words for the kind of failure, the file, and
+ * [다시 시도]; or a copy Hide did not write with [가져오기]. The kit's own
+ * sentence is the log's (design principle 13).
  */
-function CellFix({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
+function CellFix({ first, item, column, cell, page }: { first: boolean; item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
   const { t } = useInterfaceTranslation();
   const request = useStoreRequest(page.device.id, page.actions);
   const name = columnName(column, t("store.column.shared"));
   const failed = cell.state === "failed";
   const words = failed ? t(failureKey(cell.failure, item.kind)) : t("store.cell.handWritten");
   return (
-    <div className="flex min-w-0 items-center gap-sm text-body" data-store-fix={`${item.id}:${column.id}`}>
-      <span className={cn("min-w-0 truncate", failed ? "text-destructive" : "text-warning")} title={`${name} · ${words}`}>{name} · {words}</span>
-      {cell.path ? <span className="flex min-w-0 shrink-[4] text-muted-foreground"><PathText path={cell.path} home={page.report.home} /></span> : null}
-      {request.refusal ? <span className="shrink-0 text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
-      <span className="flex-1" />
-      {failed ? (
-        <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} data-store-retry={`${item.id}:${column.id}`}>
-          {t("store.retry")}
-        </Button>
-      ) : (
-        <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
-          {t("store.cell.takeOver")}
-        </Button>
-      )}
-    </div>
+    <>
+      <span className="self-start pt-xxs text-caption text-muted-foreground">{first ? t("store.detail.problem") : null}</span>
+      <span className="flex min-w-0 items-center gap-sm text-body" data-store-fix={`${item.id}:${column.id}`}>
+        {column.agent ? <AgentMark kind={column.agent} /> : null}
+        <span className={cn("min-w-0 truncate", failed ? "text-destructive" : "text-warning")} title={t("store.failure.line", { agent: name, words })}>{t("store.failure.line", { agent: name, words })}</span>
+        {cell.path ? <span className="flex min-w-0 shrink-[4] text-muted-foreground"><PathText path={cell.path} home={page.report.home} /></span> : null}
+        {request.refusal ? <span className="shrink-0 text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
+        {failed ? (
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} data-store-retry={`${item.id}:${column.id}`}>
+            {t("store.retry")}
+          </Button>
+        ) : (
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
+            {t("store.cell.takeOver")}
+          </Button>
+        )}
+      </span>
+    </>
   );
 }
 
@@ -688,11 +819,13 @@ function RowActions({ item, page }: { item: StoreItem; page: Page }) {
 }
 
 /** 에이전트에만 있음 (B19): what agents hold that Hide did not write, each with Apply to all. */
+
+/** 에이전트에만 있음 (B19): what agents hold that Hide did not write, in the tables' row style, each with Apply to all. */
 function Unmanaged({ rows, report, shown, page }: { rows: StoreUnmanaged[]; report: StoreReport; shown: ReadonlySet<string>; page: Page }) {
   const { t } = useInterfaceTranslation();
   return (
     <section className="mb-xl" data-store-section="unmanaged">
-      <SectionHead title={t("store.section.unmanaged")} count={rows.length} caption={t("store.section.unmanagedCaption")} />
+      <div className="pb-sm"><SectionLabel title={t("store.section.unmanaged")} count={rows.length} caption={t("store.section.unmanagedCaption")} /></div>
       <div className={cn(page.away && "opacity-(--opacity-disabled)")} inert={page.readOnly || undefined}>
         {rows.map((row) => <UnmanagedRow key={`${row.kind}:${row.name}`} row={row} report={report} shown={shown} page={page} />)}
       </div>
@@ -710,10 +843,14 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
   };
   const kind = t(row.kind === "skill" ? "store.section.skill" : "store.section.mcp");
   const agents = [...new Set(row.copies.flatMap((copy) => copy.agents))];
+  const Glyph = row.kind === "skill" ? FolderIcon : PackageIcon;
   return (
-    <div className="flex flex-wrap items-center gap-x-md gap-y-xs border-t border-border py-sm pl-(--size-icon-lg)" data-store-unmanaged={`${row.kind}:${row.name}`}>
-      <span className="flex min-w-0 flex-1 items-baseline gap-sm">
-        <span className="truncate text-subhead text-foreground">{row.name}</span>
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs border-t border-border py-sm" data-store-unmanaged={`${row.kind}:${row.name}`}>
+      <span aria-hidden="true" className="flex size-(--size-control-lg) shrink-0 items-center justify-center rounded-md border border-border bg-secondary text-subtle-foreground">
+        <Glyph className="size-(--size-icon)" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-subhead font-semibold text-foreground">{row.name}</span>
         <span className="truncate text-caption text-muted-foreground">
           {kind} · {where(agents)}
           {row.same ? null : <span className="text-warning"> · {t("store.unmanaged.differs")}</span>}
@@ -744,7 +881,6 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
   );
 }
 
-/** 지운 항목 n개 (B18): the undo list, folded, newest first, each to restore or remove for good. */
 function Trash({ report, page }: { report: StoreReport; page: Page }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -789,6 +925,7 @@ function TrashRow({ entry, page }: { entry: StoreReport["trash"][number]; page: 
     </div>
   );
 }
+
 
 /** The notice a delete leaves on the page, with Undo while it stands (scene 5). */
 function UndoToast({ item, report, page, onDone }: { item: StoreItem; report: StoreReport; page: Page; onDone: () => void }) {
