@@ -163,7 +163,6 @@ impl Runtime {
         if !registration.origin.switches() {
             return Err("switch_unsupported");
         }
-        let ssh_alias = registration.origin.ssh_alias();
         // The operator's press on the device's row started the switch, so
         // its login asks there, as the device's own connection attempts do
         // (D-45). A device that never had an attempt has no row state to
@@ -181,15 +180,10 @@ impl Runtime {
                     withdrawn: Arc::default(),
                 }) as Arc<dyn hide_node_link::device::SignIn>
             });
-        let via = match (ssh_alias, registration.origin.wsl_distro()) {
-            (Some(alias), _) => SwitchVia::Ssh {
-                alias: alias.to_owned(),
-                sign_in,
-            },
-            (None, Some(distro)) => SwitchVia::Wsl {
-                distro: distro.to_owned(),
-            },
-            (None, None) => return Err("switch_unsupported"),
+        let via = match registration.origin.dialed_by() {
+            Some(crate::model::DialedBy::Ssh(alias)) => SwitchVia::Ssh { alias, sign_in },
+            Some(crate::model::DialedBy::Wsl(distro)) => SwitchVia::Wsl { distro },
+            None => return Err("switch_unsupported"),
         };
         Ok(DeviceSwitchSource {
             device_id: device_id.to_owned(),

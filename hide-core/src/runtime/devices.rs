@@ -709,6 +709,20 @@ impl Runtime {
                     .map(|switch| (device.id.clone(), switch))
             })
             .collect::<HashMap<_, _>>();
+        // The devices added for their switch, by what each is dialed by.
+        let fresh = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .filter(|registration| {
+                registration
+                    .origin
+                    .dialed_by()
+                    .is_some_and(|by| self.device_fresh_adds.contains(&by))
+            })
+            .map(|registration| registration.id.clone())
+            .collect::<HashSet<_>>();
         let statuses = &self.snapshot.status.remote;
         let tests = &self.remote_device_tests;
         let mut changed = false;
@@ -748,12 +762,7 @@ impl Runtime {
             let switch = switches.get(&device.id).cloned();
             let needs = self.device_needs.get(&device.id).cloned();
             let not_carried = self.device_not_carried.get(&device.id).copied();
-            let switch_first = device
-                .ssh_alias
-                .clone()
-                .map(crate::model::DialedBy::Ssh)
-                .or_else(|| device.wsl_distro.clone().map(crate::model::DialedBy::Wsl))
-                .is_some_and(|by| self.device_fresh_adds.contains(&by));
+            let switch_first = fresh.contains(&device.id);
             if device.state != state
                 || device.message != message
                 || device.problem != problem
