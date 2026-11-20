@@ -242,33 +242,32 @@ export function laneFrame(input: LaneInput): LaneFrame {
   const view = viewWant(input);
   const tool = toolWant(input);
   const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false };
-  if (input.pair && view && !input.expanded) {
-    // Pair view draws the desk whatever the lane's own state (D-46): only
-    // its own ways out end it, and the lane comes back as it was.
-    const mode: LaneMode = "pair";
-    if (body <= 0) return { ...none, mode, agents: 0 };
-    // The pane left of the divider at the mode's ratio, the desk taking the
-    // rest (B17, D-47); a tool opened meanwhile stands beside the desk at its
-    // width (B15).
-    const pane = pairPaneWidth(body, input.pairRatio ?? null, sizes);
-    const width = body - pane - sizes.divider;
-    const column = (want: Want, at: number): LaneColumn => ({ field: want.field, width: at, min: want.min });
-    if (!tool) return { mode, agents: body, width, view: column(view, width), tool: null, stacked: false, pane };
-    const toolWidth = Math.min(tool.want, Math.max(0, width - sizes.divider - view.min));
-    return { mode, agents: body, width, view: column(view, width - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, pane };
-  }
-  if (!input.open || (!view && !tool)) return none;
-  const mode: LaneMode = input.expanded ? "expanded" : "overlay";
+  // Pair view draws the desk whatever the lane's own state (D-46): only its
+  // own ways out end it, and the lane comes back as it was. The paired pane
+  // keeps its width at the mode's ratio in every mode, so expanding the lane
+  // over it and back resizes no terminal (B29, D-47).
+  const pairing = input.pair === true && view !== null;
+  if ((!input.open && !pairing) || (!view && !tool)) return none;
+  const mode: LaneMode = input.expanded ? "expanded" : pairing ? "pair" : "overlay";
   if (body <= 0) return { ...none, mode, agents: 0 };
   const column = (want: Want, width: number): LaneColumn => ({ field: want.field, width, min: want.min });
+  const pane = pairing ? { pane: pairPaneWidth(body, input.pairRatio ?? null, sizes) } : {};
+  if (mode === "pair" && view && pane.pane !== undefined) {
+    // The desk takes what the pane and the divider leave (B17, D-47); a tool
+    // opened meanwhile stands beside the desk at its width (B15).
+    const width = Math.max(0, body - pane.pane - sizes.divider);
+    if (!tool) return { mode, agents: body, width, view: column(view, width), tool: null, stacked: false, ...pane };
+    const toolWidth = Math.min(tool.want, Math.max(0, width - sizes.divider - view.min));
+    return { mode, agents: body, width, view: column(view, width - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
+  }
   if (mode === "expanded") {
     // The tool column keeps its width and the viewing column takes the rest (B15).
     if (view && tool) {
       const toolWidth = Math.min(tool.want, Math.max(0, body - sizes.divider - view.min));
-      return { mode, agents: body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false };
+      return { mode, agents: body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
     }
     const one = (view ?? tool)!;
-    return { mode, agents: body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false };
+    return { mode, agents: body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, ...pane };
   }
   if (view && tool) {
     const fit = fitColumns(view, tool, body, sizes.divider);
@@ -444,8 +443,11 @@ const PAIR_RATIO_MAX = 900;
  * not, so expanding resizes no terminal (B15, B29).
  */
 export function pairPaneWidth(body: number, ratio: number | null, sizes: Pick<LaneSizes, "agentMin" | "viewMin" | "divider">): number {
-  const share = Math.floor((body * (ratio ?? PAIR_RATIO_HALF)) / 1000);
-  return clamp(share, Math.min(sizes.agentMin, body), Math.max(0, body - sizes.divider - sizes.viewMin));
+  const room = Math.max(0, body - sizes.divider);
+  const share = Math.floor((room * (ratio ?? PAIR_RATIO_HALF)) / 1000);
+  // A body too narrow for both minimums splits at the ratio alone.
+  if (sizes.agentMin + sizes.viewMin > room) return share;
+  return clamp(share, sizes.agentMin, room - sizes.viewMin);
 }
 
 /**
@@ -455,7 +457,8 @@ export function pairPaneWidth(body: number, ratio: number | null, sizes: Pick<La
  */
 export function pairLanding(input: { x: number; body: number; sizes: Pick<LaneSizes, "agentMin" | "viewMin" | "divider"> }): number {
   const { x, body, sizes } = input;
-  if (body <= 0) return PAIR_RATIO_HALF;
-  const pane = clamp(x, Math.min(sizes.agentMin, body), Math.max(0, body - sizes.divider - sizes.viewMin));
-  return clamp(Math.round((pane * 1000) / body), PAIR_RATIO_MIN, PAIR_RATIO_MAX);
+  const room = body - sizes.divider;
+  if (room <= 0) return PAIR_RATIO_HALF;
+  const pane = sizes.agentMin + sizes.viewMin > room ? clamp(x, 0, room) : clamp(x, sizes.agentMin, room - sizes.viewMin);
+  return clamp(Math.round((pane * 1000) / room), PAIR_RATIO_MIN, PAIR_RATIO_MAX);
 }

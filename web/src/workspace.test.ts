@@ -246,18 +246,27 @@ describe("the rail's tool scopes (PRD work-tab-pr-lens D-37)", () => {
 
 describe("pair view's split (PRD lane-desk-pair-view D-46, D-47)", () => {
   it("starts half and half, draws the desk whatever the lane's own state, and follows the mode's ratio", () => {
-    expect(frame({ open: false, view: "documents", pair: true, body: 1208 })).toMatchObject({ mode: "pair", agents: 1208, pane: 604, width: 1208 - 604 - 8 });
-    expect(frame({ view: "documents", pair: true, pairRatio: 600, body: 1200 })).toMatchObject({ mode: "pair", pane: 720, width: 1200 - 720 - 8 });
+    expect(frame({ open: false, view: "documents", pair: true, body: 1208 })).toMatchObject({ mode: "pair", agents: 1208, pane: 600, width: 1208 - 600 - 8 });
+    expect(frame({ view: "documents", pair: true, pairRatio: 600, body: 1208 })).toMatchObject({ mode: "pair", pane: 720, width: 1208 - 720 - 8 });
   });
 
-  it("keeps each side above its minimum however far the ratio says", () => {
-    expect(frame({ view: "documents", pair: true, pairRatio: 900, body: 1200 }).pane).toBe(1200 - 8 - 360);
-    expect(frame({ view: "documents", pair: true, pairRatio: 100, body: 1200 }).pane).toBe(480);
+  it("expands over the paired pane, closed lane or not, keeping the pane's width so no terminal resizes (B29)", () => {
+    for (const open of [false, true]) {
+      expect(frame({ open, view: "documents", pair: true, pairRatio: 600, expanded: true, body: 1208 })).toMatchObject({ mode: "expanded", width: 1208, pane: 720 });
+    }
+  });
+
+  it("keeps each side above its minimum, and splits a body too narrow for both at the ratio alone", () => {
+    expect(frame({ view: "documents", pair: true, pairRatio: 900, body: 1208 }).pane).toBe(1200 - 360);
+    expect(frame({ view: "documents", pair: true, pairRatio: 100, body: 1208 }).pane).toBe(480);
+    expect(frame({ view: "documents", pair: true, body: 708 })).toMatchObject({ pane: 350, width: 350 });
+    expect(frame({ view: "documents", pair: true, body: 4 })).toMatchObject({ pane: 0, width: 0 });
   });
 
   it("lands a drag as the pane's share in thousandths, inside each side's minimum", () => {
-    expect(pairLanding({ x: 720, body: 1200, sizes })).toBe(600);
-    expect(pairLanding({ x: 10, body: 1200, sizes })).toBe(400);
-    expect(pairLanding({ x: 1190, body: 1200, sizes })).toBe(693);
+    expect(pairLanding({ x: 720, body: 1208, sizes })).toBe(600);
+    expect(pairLanding({ x: 10, body: 1208, sizes })).toBe(400);
+    expect(pairLanding({ x: 1190, body: 1208, sizes })).toBe(700);
+    expect(pairLanding({ x: 200, body: 708, sizes })).toBe(286);
   });
 });
