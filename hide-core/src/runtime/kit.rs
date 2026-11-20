@@ -614,8 +614,16 @@ impl Runtime {
                 kept
             }
         };
+        let moved = profiles.state == crate::model::ProfilesState::Listed
+            && state
+                .profiles
+                .as_ref()
+                .is_none_or(|before| before.version != profiles.version);
         state.profiles = Some(profiles);
         let listed = self.set_kit_state(device_id, state);
+        if moved {
+            self.store_profiles_moved(device_id);
+        }
         // A pane's reported account is matched against the list it has now.
         self.refresh_reported_accounts() || listed
     }

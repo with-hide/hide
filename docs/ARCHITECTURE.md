@@ -4958,6 +4958,7 @@ A skill switches per folder, not per agent, because an agent reads a folder and 
 A place is its folder's real path, links on the way followed as the agents follow them: with `~/.agents/skills` a link to `~/.claude/skills` the two columns are one place, which holds an item while either switch wants it, and a column switched off there reads `off` with the column that keeps it named.
 An MCP server switches per agent, one column for each, since each agent keeps its own settings file.
 A column's places are its default folder and the same folder in each profile account of its agents (`targets::accounts`, judged for links and ownership as the kit's profile pieces are), so a profile added later, or an agent switched on later, gets every item that is on with no input, and a profile that went has Hide's copies taken out of its folder.
+A newly listed profile version queues a store pass on that machine through the existing kit worker, even when no source folder changed; repeated readings of the same version queue nothing (B25).
 A folder an agent has not made yet is not made for it: the cell reads `waiting` and the item goes in once the agent makes it.
 
 The store's record names every entry Hide wrote, with a digest of its files (`StoreRecord.written`); an entry of the same name that the record does not name, or whose content changed since Hide wrote it, is the operator's.

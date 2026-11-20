@@ -520,6 +520,20 @@ impl Runtime {
         true
     }
 
+    /// A new profile list needs a pass even when no followed folder moved
+    /// (B25). The existing worker owns its writes and reports their failures.
+    pub(super) fn store_profiles_moved(&mut self, device_id: &str) {
+        if self.kit_view(device_id).unavailable.is_none()
+            && self
+                .kit_states
+                .get(device_id)
+                .and_then(|state| state.store.as_ref())
+                .is_some_and(|report| report.refused.is_none() && !report.items.is_empty())
+        {
+            self.queue_store(device_id, StoreJob::Pass(Vec::new()), false, None);
+        }
+    }
+
     /// Queues store work for a machine, its changes tagged with `request`.
     /// A device that is not connected is asked to connect only for the
     /// operator's own request; the follow and the daily check wait for a

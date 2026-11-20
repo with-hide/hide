@@ -107,6 +107,40 @@ fn store_calls(helper: &KitDevice) -> Vec<KitAction> {
 }
 
 #[test]
+fn a_new_profile_list_applies_existing_items_without_repeating_an_unchanged_read() {
+    use crate::runtime::kit::ProfilesRead;
+    use crate::runtime::kit_store::StoreJob;
+    let mut runtime = runtime();
+    super::agent_connection::kit_rows(&mut runtime, None);
+    let node = runtime.node.to_string();
+    runtime.ingest_store_answer(&node, Ok(Some(store_report(Vec::new(), None))));
+    let listed = |version| {
+        ProfilesRead::Listed(
+            serde_json::from_value(serde_json::json!({
+                "version": version,
+                "profiles": [{"id": "p-work", "kind": "claude-code", "name": "work", "version": 1}]
+            }))
+            .unwrap(),
+        )
+    };
+
+    runtime.ingest_profiles(&node, listed(1));
+    assert_eq!(
+        runtime.take_local_store_job(),
+        Some(StoreJob::Pass(Vec::new()))
+    );
+    runtime.ingest_profiles(&node, listed(1));
+    assert_eq!(runtime.take_local_store_job(), None);
+    runtime.ingest_profiles(&node, ProfilesRead::Unreadable("not readable".to_owned()));
+    assert_eq!(runtime.take_local_store_job(), None);
+    runtime.ingest_profiles(&node, listed(2));
+    assert_eq!(
+        runtime.take_local_store_job(),
+        Some(StoreJob::Pass(Vec::new()))
+    );
+}
+
+#[test]
 fn a_store_request_reaches_the_device_and_its_row_carries_items_cells_version_and_update() {
     let helper = KitDevice::answering(Ok(report(&[])));
     let outcome = ChangeOutcome {
