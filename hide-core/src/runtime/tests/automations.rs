@@ -203,7 +203,7 @@ fn a_time_at_the_usage_limit_is_skipped_and_a_manual_run_still_starts() {
 /// B21, D-17: a run with a profile is judged on the profile's account: its
 /// own reading at 100% skips the time, and a profile in the agent's default
 /// account, which has no reading of its own, is judged on that account,
-/// whose sign-in that ended stops the automation.
+/// whose signed-out read alone stops nothing: its run starts.
 #[test]
 fn a_profiles_run_is_judged_on_the_account_the_profile_runs_in() {
     let state = tempfile::tempdir().unwrap();
@@ -245,11 +245,8 @@ fn a_profiles_run_is_judged_on_the_account_the_profile_runs_in() {
         json!({"kind": "usage_limit", "agent": "claude"})
     );
     let shown = show(&mut runtime, &shared);
-    assert_eq!(shown["paused"]["reason"], "login_expired");
-    assert_eq!(
-        run_row(&shown["records"][0]),
-        (json!("failed"), json!(1), json!("automation_login_expired"))
-    );
+    assert!(shown.get("paused").is_none(), "{shown}");
+    assert_eq!(run_row(&shown["records"][0]).0, json!("starting"));
 }
 
 /// B22: a run whose folder never gets its registration is tried again in
@@ -290,11 +287,11 @@ fn a_run_whose_folder_never_registers_is_tried_three_times_then_fails_with_the_a
     assert_eq!(shown["next_run_at_unix_ms"], due);
 }
 
-/// B23, D-12: a sign-in that ended stops the automation at its time, with
-/// the run recorded failed and why, and the automation's own line in Needs
-/// You; turning it on again takes the line away and brings its time back.
+/// B23: an account read signed out stops nothing by itself, since the read
+/// guesses from what `/usage` printed: the scheduled time and [만들고 지금
+/// 실행] both start their run.
 #[test]
-fn a_sign_in_that_ended_stops_the_automation_with_its_own_needs_you_line() {
+fn a_signed_out_read_alone_starts_the_run() {
     let state = tempfile::tempdir().unwrap();
     let mut runtime = automations_runtime(&state);
     let (id, due) = add(&mut runtime, "Issues");
@@ -303,47 +300,53 @@ fn a_sign_in_that_ended_stops_the_automation_with_its_own_needs_you_line() {
 
     assert!(runtime.tick_automations(due));
     let shown = show(&mut runtime, &id);
-    assert_eq!(shown["paused"]["reason"], "login_expired");
-    assert_eq!(shown["next_run_at_unix_ms"], Value::Null);
-    assert_eq!(
-        run_row(&shown["records"][0]),
-        (json!("failed"), json!(1), json!("automation_login_expired"))
-    );
-    assert_eq!(needs_you(&mut runtime), (vec![id.clone()], before + 1));
-
-    // Turned on again now, before the time it missed: that time comes.
-    let resumed = call(&mut runtime, json!({"call": "resume", "id": id})).unwrap();
-    assert_eq!(resumed["next_run_at_unix_ms"], due);
+    assert!(shown.get("paused").is_none(), "{shown}");
+    assert_eq!(run_row(&shown["records"][0]).0, json!("starting"));
     assert_eq!(needs_you(&mut runtime), (Vec::new(), before));
-}
 
-/// B8, B23: made with [만들고 지금 실행] while the agent's sign-in ended,
-/// the first run is judged as [지금 실행] is: it stops the automation with
-/// its line, and the answer says why.
-#[test]
-fn a_run_made_with_its_automation_is_judged_before_it_starts() {
-    let state = tempfile::tempdir().unwrap();
-    let mut runtime = automations_runtime(&state);
-    runtime.ingest_usage(vec![usage("claude", None, 0)]);
     let added = call(
         &mut runtime,
         json!({
-            "call": "add", "name": "Issues", "task": "Sort the new issues",
+            "call": "add", "name": "Notes", "task": "Write the notes",
             "schedule": {"kind": "daily", "time": later()}, "agent": {"kind": "claude"},
             "run_now": true,
         }),
     )
     .unwrap();
+    assert_eq!((&added["run"], added.get("paused")), (&json!(1), None));
+}
+
+/// B23, D-12: an attempt the agent itself fails while its account reads
+/// signed out is the sign-in that ended: the automation stops with no retry,
+/// the run recorded failed and why, and its own line in Needs You; turning
+/// it on again takes the line away.
+#[test]
+fn an_agent_failing_while_signed_out_stops_the_automation_with_its_own_needs_you_line() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    let before = needs_you(&mut harness.runtime.lock().unwrap()).1;
+    harness
+        .runtime
+        .lock()
+        .unwrap()
+        .ingest_usage(vec![usage("claude", None, 0)]);
+    harness.tick(1);
+    let pane = pane_of(&intent(&id, 1, 1));
+    harness.show(&pane, working);
+    harness.tick(1);
+    harness.end(&pane);
+    harness.tick(1);
+
     assert_eq!(
-        (
-            &added["run"],
-            &added["paused"],
-            &added["next_run_at_unix_ms"]
-        ),
-        (&json!(1), &json!("automation_login_expired"), &Value::Null)
+        harness.run(&id),
+        (json!("failed"), json!(1), json!("automation_login_expired"))
     );
-    let id = added["id"].as_str().unwrap().to_owned();
+    let mut runtime = harness.runtime.lock().unwrap();
     assert_eq!(show(&mut runtime, &id)["paused"]["reason"], "login_expired");
+    assert_eq!(needs_you(&mut runtime), (vec![id.clone()], before + 1));
+    call(&mut runtime, json!({"call": "resume", "id": id})).unwrap();
+    assert_eq!(needs_you(&mut runtime), (Vec::new(), before));
 }
 
 /// B5: the form names the own folder an automation of its name would work

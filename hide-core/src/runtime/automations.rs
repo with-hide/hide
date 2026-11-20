@@ -297,6 +297,13 @@ enum Gate {
 enum Failure {
     /// Tried again in the same run (D-17).
     Transient(String),
+    /// The agent itself failed the attempt: it exited, never showed, was
+    /// refused, or stopped with no answer. With its account read signed out
+    /// this is the sign-in that ended (B23), which stops the automation;
+    /// otherwise it is tried again as a transient one. A signed-out read
+    /// alone stops nothing, since the read guesses from what `/usage`
+    /// printed and the agent running is the fact.
+    Agent(String),
     /// Stops the automation for a person to fix (D-12).
     Person(PauseReason),
 }
@@ -644,24 +651,21 @@ impl Runtime {
 
     /// Whether a run of `agent` may start now, judged on the account it
     /// runs in: its profile's, or the agent's default account for no profile
-    /// or a profile in that account. A sign-in that ended or an agent that is
-    /// gone stops the automation (D-17); an account read at 100% before its
-    /// reset skips a scheduled run (D-16). An account whose usage cannot be
-    /// read runs.
+    /// or a profile in that account. An agent that is gone stops the
+    /// automation (D-17); an account read at 100% before its reset skips a
+    /// scheduled run (D-16). An account read signed out, or whose usage
+    /// cannot be read, runs: a sign-in that ended stops the automation once
+    /// the agent itself fails the attempt (`Failure::Agent`).
     fn run_gate(&self, agent: &AgentChoice, now: u64, scheduled: bool) -> Gate {
         use crate::usage::model::{Cause, Cell};
         let usage = &self.snapshot.usage;
         let profile = agent.profile.as_deref();
-        match usage.account_limits(&agent.kind, profile) {
-            Some(Cell::Unavailable {
-                cause: Cause::SignedOut,
-                ..
-            }) => return Gate::Pause(PauseReason::LoginExpired),
-            Some(Cell::Unavailable {
-                cause: Cause::NotInstalled,
-                ..
-            }) => return Gate::Pause(PauseReason::AgentMissing),
-            _ => {}
+        if let Some(Cell::Unavailable {
+            cause: Cause::NotInstalled,
+            ..
+        }) = usage.account_limits(&agent.kind, profile)
+        {
+            return Gate::Pause(PauseReason::AgentMissing);
         }
         if scheduled
             && usage
@@ -673,6 +677,21 @@ impl Runtime {
             });
         }
         Gate::Go
+    }
+
+    /// Whether `agent`'s account, as `run_gate` reads it, was last read
+    /// signed out.
+    fn signed_out(&self, agent: &AgentChoice) -> bool {
+        use crate::usage::model::{Cause, Cell};
+        matches!(
+            self.snapshot
+                .usage
+                .account_limits(&agent.kind, agent.profile.as_deref()),
+            Some(Cell::Unavailable {
+                cause: Cause::SignedOut,
+                ..
+            })
+        )
     }
 
     /// A failure a person fixes: the run ends failed, its terminal closes,
@@ -1391,6 +1410,13 @@ impl Runtime {
                 return true;
             }
             Failure::Transient(reason) => reason,
+            Failure::Agent(reason) => {
+                if self.signed_out(&self.run_agent(key)) {
+                    self.pause_for_person(key, PauseReason::LoginExpired, now);
+                    return true;
+                }
+                reason
+            }
         };
         let Some(failed) = self.run_of(key).map(|run| run.attempt) else {
             return false;
@@ -1436,7 +1462,7 @@ impl Runtime {
         let row = match self.run_row(&agent_id) {
             RowLook::Unknown => return false,
             RowLook::Gone => {
-                return self.attempt_failed(key, Failure::Transient("agent_exited".into()), now);
+                return self.attempt_failed(key, Failure::Agent("agent_exited".into()), now);
             }
             RowLook::Missing => {
                 // A row shown before may be missing for an engine restart;
@@ -1457,7 +1483,7 @@ impl Runtime {
                     } else {
                         "agent_not_ready"
                     };
-                    return self.attempt_failed(key, Failure::Transient(reason.into()), now);
+                    return self.attempt_failed(key, Failure::Agent(reason.into()), now);
                 }
                 return false;
             }
@@ -1482,10 +1508,6 @@ impl Runtime {
             None => {}
         }
         if let Some(refused) = row.refused.as_ref() {
-            // A sign-in that ended reads as the account signed out.
-            if let Gate::Pause(reason) = self.run_gate(&self.run_agent(key), now, false) {
-                return self.attempt_failed(key, Failure::Person(reason), now);
-            }
             return match refused.refusal.kind {
                 // The account's limit: trying again before it resets would
                 // be refused the same (D-16).
@@ -1500,7 +1522,7 @@ impl Runtime {
                 // The provider refused the turn: tried again in the same
                 // conversation (D-17).
                 hide_node_link::panes::RefusalKind::Error => {
-                    self.attempt_failed(key, Failure::Transient("provider_error".into()), now)
+                    self.attempt_failed(key, Failure::Agent("provider_error".into()), now)
                 }
             };
         }
@@ -1525,12 +1547,12 @@ impl Runtime {
             }
             return self.attempt_failed(
                 key,
-                Failure::Transient("stopped_without_answer".into()),
+                Failure::Agent("stopped_without_answer".into()),
                 now,
             );
         }
         if now.saturating_sub(since) > START_DEADLINE_MS {
-            return self.attempt_failed(key, Failure::Transient("agent_not_ready".into()), now);
+            return self.attempt_failed(key, Failure::Agent("agent_not_ready".into()), now);
         }
         changed
     }
