@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
-import { missionOpen, neighbours, nodePace } from "./missions";
+import { dependencyNodes, missionDependency, missionOpen, neighbours, nodePace } from "./missions";
 import { layerDependencies } from "./projectBoard";
 import type { Mission, MissionMapFlow, MissionNode, MissionNodeBrief } from "./snapshot";
 
@@ -27,11 +27,13 @@ export function MissionGraph<N extends GraphNode>({ mission, flow, selected, onS
     const shown = new Set(nodes.map((node) => node.key));
     const cards: GraphCard<N>[] = [...nodes.map((node) => ({ key: node.key, node })), { key: REPORT, node: null }];
     const byKey = new Map(cards.map((card) => [card.key, card]));
-    const depended = new Set(nodes.flatMap((node) => node.depends_on));
+    const depended = new Set(nodes.flatMap(dependencyNodes));
     const blockers = (card: GraphCard<N>): GraphCard<N>[] => {
       // Every node no other node waits on ends in the report.
       if (!card.node) return nodes.filter((node) => !depended.has(node.key)).map((node) => byKey.get(node.key)!);
-      return card.node.depends_on.filter((key) => shown.has(key)).map((key) => byKey.get(key)!);
+      return dependencyNodes(card.node)
+        .filter((key) => shown.has(key))
+        .map((key) => byKey.get(key)!);
     };
     return layerDependencies(cards, (card) => card.key, blockers);
   }, [nodes]);
@@ -43,11 +45,14 @@ export function MissionGraph<N extends GraphNode>({ mission, flow, selected, onS
     const from = byKey.get(edge.from);
     const to = byKey.get(edge.to);
     const dimmed = away(edge);
+    // An edge on a finish line of the node it leaves names that line (`c1`), the waiting node starting on it rather than on its merge.
+    const lines = to ? to.depends_on.map(missionDependency).flatMap((dependency) => (dependency.node === edge.from && dependency.line ? [dependency.line] : [])) : [];
+    const label = lines.length > 0 ? lines.join(" ") : undefined;
     // A stack is the one purple dashed edge: the pull request below is the one above's base (B27).
-    if (from && to && to.base_pr != null && from.prs.some((pr) => pr.number === to.base_pr)) return { tone: "text-mission-review", dashed: true, dimmed };
+    if (from && to && to.base_pr != null && from.prs.some((pr) => pr.number === to.base_pr)) return { tone: "text-mission-review", dashed: true, dimmed, label };
     // A line from a node at work is lit only while the mission is open and someone moves the node; a cancelled mission's work, and a stopped node's, stopped.
-    if (from && from.status === "working" && missionOpen(mission) && nodePace(mission, from) !== "stopped") return { tone: "text-mission-working", dimmed };
-    return { tone: "text-border", dimmed };
+    if (from && from.status === "working" && missionOpen(mission) && nodePace(mission, from) !== "stopped") return { tone: "text-mission-working", dimmed, label };
+    return { tone: "text-border", dimmed, label };
   };
   // A defect a later node found is a red dashed edge back to the node it opened, until its line passes (B21).
   const overlay: OverlayEdge[] = defects.map((edge) => ({ ...edge, look: { tone: "text-mission-failed", dashed: true, dimmed: away(edge) } }));

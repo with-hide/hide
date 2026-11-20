@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::ledger::Ledger;
+use super::ledger::{Ledger, encoded_len};
 use super::{Actor, FILE_LIMIT, INACTIVITY_MS, QUESTION_WINDOW_MS, SECOND_WARNING_MS, WATCH_LIMIT};
 
 /// The inactivity episode and external notification reservation survive the
@@ -518,12 +518,6 @@ fn asks_early(ledger: &Ledger, watch: &Watch, reading: &Reading) -> bool {
             && letter.sender.same_identity(&watch.target)
             && letter.recipient.same_identity(&watch.parent)
     })
-}
-
-fn encoded_len(value: &impl Serialize) -> Result<usize, String> {
-    serde_json::to_vec(value)
-        .map(|bytes| bytes.len())
-        .map_err(|_| "ledger_unavailable".into())
 }
 
 /// The size of the whole file `ledger` would be, within its limit.
