@@ -155,6 +155,12 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
+    /// The desks the published snapshot drew pair view on since the mode
+    /// last moved or ended, which fold when it leaves them (D-44); a desk
+    /// the mode passed drawing its tab's usual screen is never here (D-45).
+    /// Runtime only, and at most the desk drawn now and the one it came
+    /// from: every move folds and drops the others.
+    pub(super) pair_drawn: Vec<(WorkspaceKey, String)>,
 }
 
 /// What an event asks of a Workspace's lane once it has moved the screen
@@ -370,6 +376,7 @@ impl WorkspaceViewStore {
                 card_read_again: false,
                 pair_left: None,
                 pair_before: None,
+                pair_drawn: Vec::new(),
             },
             diagnostics,
         )
@@ -418,11 +425,14 @@ impl Runtime {
     }
 
     /// The operator closed a tab of the tray in front (PRD
-    /// lane-desk-pair-view B11, B26): when none is left the tray folds, and
-    /// the pair view on it ends; a tool column stays. The displays of a
-    /// document that just closed leave first.
+    /// lane-desk-pair-view B11, B26): a pair view left with nothing to draw
+    /// ends (D-46), and when no tab is left the tray folds; a tool column
+    /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
+        if self.end_pair_view_if_undrawn() {
+            return;
+        }
         let tab = self.front_tab(key);
         let Some(tray) = self
             .workspace_views
@@ -435,8 +445,7 @@ impl Runtime {
         if tray.layout.display_count() > 0 {
             return;
         }
-        let shown = std::mem::take(&mut tray.shown);
-        if !self.end_pair_view_of_emptied(key, &tab) && shown {
+        if std::mem::take(&mut tray.shown) {
             self.persist_workspace_views();
         }
     }
@@ -1456,6 +1465,19 @@ impl Runtime {
             self.snapshot.ui_state.right_panel_section = section;
         }
         self.snapshot.workspace_view = published;
+        let drawn = self.snapshot.workspace_view.as_ref().and_then(|view| {
+            let pair = view.tray.pair.as_ref()?;
+            Some((
+                (view.device_id.clone(), view.path.clone()),
+                pair.tab_id.clone(),
+            ))
+        });
+        if let Some(desk) = drawn
+            && let Some(store) = self.workspace_views.as_mut()
+            && !store.pair_drawn.contains(&desk)
+        {
+            store.pair_drawn.push(desk);
+        }
     }
 
     /// A View display's file that could not be read back after a restart,

@@ -679,14 +679,10 @@ impl Runtime {
         }
         store.generation += 1;
         self.persist_workspace_views();
-        // A desk left empty has nothing to pair with: its pair view ends,
-        // as the desk in front's does when its last tab closes (B26).
-        if let Place::Tray(left) = &from
-            && self
-                .view_layout_at(key, &from)
-                .is_none_or(|layout| layout.display_count() == 0)
-        {
-            self.end_pair_view_of_emptied(key, left);
+        // A pair view the move left with nothing to draw ends, as one does
+        // when its View closes (B26, D-46).
+        if matches!(from, Place::Tray(_)) {
+            self.end_pair_view_if_undrawn();
         }
         true
     }

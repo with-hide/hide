@@ -173,16 +173,8 @@ impl Runtime {
     fn show_pair(&mut self, left: PairLeft, content: Option<String>) {
         let key = left.key.clone();
         let place = Place::Tray(left.tab.clone());
+        self.fold_drawn_pair_desk(Some((&left.key, &left.tab)));
         if let Some(store) = self.workspace_views.as_mut() {
-            // The desk the mode leaves for another tab folds as the one it
-            // ends on does, so leaving opens no lane anywhere pair view went
-            // (D-44): a pin pressed on an open lane, or an agent's View that
-            // opened the lane meanwhile, leaves nothing over the agents there.
-            if let Some(old) = store.pair_left.take()
-                && !old.is_in(&left.key, &left.tab)
-            {
-                fold_pair_desk(&mut store.views, &old);
-            }
             store.pair_left = Some(left);
             store.generation += 1;
         }
@@ -226,19 +218,17 @@ impl Runtime {
     /// drew folds, and the lane closes when nothing else is in it, so the
     /// screen it leaves shows no View on the right (D-44).
     pub(super) fn end_pair_view(&mut self, cause: PairEnd) -> bool {
+        if !self.pair_mode_on() {
+            return false;
+        }
+        self.fold_drawn_pair_desk(None);
         let Some(store) = self.workspace_views.as_mut() else {
             return false;
         };
-        if !store.views.pair.on {
-            return false;
-        }
         store.views.pair.on = false;
         let left = store.pair_left.take();
         let before = store.pair_before.take();
         store.generation += 1;
-        if let Some(left) = &left {
-            fold_pair_desk(&mut store.views, left);
-        }
         crate::diagnostic!(serde_json::json!({
             "component": "pair_view", "kind": "pair_view.ended",
             "device": left.as_ref().map(|left| left.key.0.clone()),
@@ -260,18 +250,55 @@ impl Runtime {
         true
     }
 
-    /// Ends pair view when the screen drew it on `tab` of `key`, whose desk
-    /// just lost its last View (D-46). It asks the pair last published, not
-    /// `drawn_pair`, which reads the desk already emptied: a pane whose only
-    /// thing to show was that View, such as an agent's that ended and left
-    /// its shell, has nothing to show once it closed, yet the screen drew it.
-    /// On a desk pair view did not draw, such as beside a shell, the mode
-    /// stays on (D-45).
-    pub(super) fn end_pair_view_of_emptied(&mut self, key: &WorkspaceKey, tab: &str) -> bool {
-        if self
-            .published_pair()
-            .is_none_or(|(drawn, drawn_tab, _)| drawn != *key || drawn_tab != tab)
-        {
+    /// Folds every desk the screen drew pair view on (`pair_drawn`) but the
+    /// one the mode stays on (`staying`), and closes a lane left with no
+    /// column, so leaving a desk, for another tab or Workspace or out of the
+    /// mode, leaves no View over the agents there (D-44). A tab the mode
+    /// passed drawing its usual screen (a shell, an agent with no View)
+    /// keeps the lane and desk the operator left there (D-45).
+    fn fold_drawn_pair_desk(&mut self, staying: Option<(&WorkspaceKey, &str)>) {
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let stays = |(key, tab): &(WorkspaceKey, String)| {
+            staying.is_some_and(|(at, at_tab)| at == key && at_tab == tab)
+        };
+        let (kept, left): (Vec<_>, Vec<_>) = std::mem::take(&mut store.pair_drawn)
+            .into_iter()
+            .partition(|desk| stays(desk));
+        store.pair_drawn = kept;
+        for (key, tab) in left {
+            let Some(view) = store.views.get_mut(&key.0, &key.1) else {
+                continue;
+            };
+            if let Some(tray) = view.tray_mut(&tab) {
+                tray.shown = false;
+            }
+            if !view.has_column(Some(&tab)) {
+                view.open = false;
+            }
+        }
+    }
+
+    /// Ends pair view when a View leaving a desk (closed, or moved away)
+    /// leaves the pair the screen drew with nothing to draw (D-46, read by
+    /// the pane): the pane on the left has nothing left to show, or its desk
+    /// is empty, even with the operator's own tabs still on it. It compares
+    /// the pair last published with `drawn_pair` now, so a pane whose only
+    /// thing to show was the View that left still ends the mode it drew; a
+    /// mode that drew nothing (beside a shell) stays on (D-45). The mode
+    /// moving itself is not a View leaving, so a pair whose left pane is no
+    /// longer the drawn tab's is left alone.
+    pub(super) fn end_pair_view_if_undrawn(&mut self) -> bool {
+        let Some((key, tab, _)) = self.published_pair() else {
+            return false;
+        };
+        let moved = self
+            .workspace_views
+            .as_ref()
+            .and_then(|store| store.pair_left.as_ref())
+            .is_some_and(|left| !left.is_in(&key, &tab));
+        if moved || self.drawn_pair(&key, &tab).is_some() {
             return false;
         }
         self.end_pair_view(PairEnd::Emptied)
@@ -564,20 +591,5 @@ impl Runtime {
         }
         let content = self.pair_content(&left.key, &left.pane, &self.live_sessions());
         self.show_pair(left, content);
-    }
-}
-
-/// Folds the desk pair view drew on `left`'s tab and closes its lane when
-/// no column is left in it, so the screen there shows no View on the right
-/// (D-44).
-fn fold_pair_desk(views: &mut crate::workspace_views::WorkspaceViews, left: &PairLeft) {
-    let Some(view) = views.get_mut(&left.key.0, &left.key.1) else {
-        return;
-    };
-    if let Some(tray) = view.tray_mut(&left.tab) {
-        tray.shown = false;
-    }
-    if !view.has_column(Some(&left.tab)) {
-        view.open = false;
     }
 }

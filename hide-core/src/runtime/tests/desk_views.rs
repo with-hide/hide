@@ -2002,38 +2002,83 @@ fn pair_view_beside_a_pane_with_no_session_ends_when_its_last_view_closes() {
     assert!(!mode_on(&runtime), "no hidden mode is left on");
 }
 
-/// D-44 across Workspaces: the desk pair view drew in another Workspace,
-/// its lane opened there (a pin pressed on an open lane, an agent's View
-/// calling it), folds when the mode moves on, so going back shows nothing
-/// over the agents.
-#[test]
-fn pair_view_folds_the_desk_of_a_workspace_it_moves_away_from() {
-    let (mut runtime, _checkout, directory) = setup("pair-leaves-workspace");
-    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
-    let elsewhere = ("studio".to_owned(), "/srv/remote".to_owned());
-    let tab = "studio:t1".to_owned();
-    let store = runtime.workspace_views.as_mut().unwrap();
-    store
-        .views
-        .entry(&elsewhere.0, &elsewhere.1)
-        .show_tray(&tab);
-    store.views.pair.on = true;
-    store.pair_left = Some(super::pair_view::PairLeft {
-        key: elsewhere.clone(),
-        tab: tab.clone(),
-        pane: "studio:p1".to_owned(),
-    });
-    pair_event(&mut runtime, Some("w-order:t1:p"));
-    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+/// The lane as the store holds it: whether it is open, and whether `tab`'s
+/// desk is shown.
+fn lane_of(runtime: &Runtime, directory: &Path, tab: &str) -> (bool, bool) {
     let view = runtime
         .workspace_views
         .as_ref()
         .unwrap()
         .views
-        .get(&elsewhere.0, &elsewhere.1)
+        .get(crate::node::TEST_NODE, &directory.to_string_lossy())
         .unwrap();
-    assert!(!view.open, "the lane there closes");
-    assert!(!view.tray(&tab).unwrap().shown, "its desk folds");
+    (view.open, view.tray(tab).is_some_and(|tray| tray.shown))
+}
+
+/// D-44: the desk pair view drew folds when the mode moves on to another
+/// tab, a lane the operator had open there included, and leaving folds the
+/// last one and closes the lane, so no View is left over the agents.
+#[test]
+fn pair_view_folds_each_desk_it_drew_as_it_moves_on() {
+    let (mut runtime, checkout, directory) = setup("pair-folds-drawn");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
+    open(&mut runtime, &checkout, &directory, "c.md");
+    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (true, true));
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], "w-order:t2:p")));
+    assert!(
+        !lane_of(&runtime, &directory, TABS[0]).1,
+        "the desk left folds"
+    );
+    pair_event(&mut runtime, None);
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (false, false));
+}
+
+/// D-45: a tab the mode passes while it draws that tab's usual screen (an
+/// agent with no View) keeps the lane and desk the operator opened there,
+/// through a tab switch and the mode's end.
+#[test]
+fn a_lane_opened_where_pair_view_draws_nothing_stays_as_the_operator_left_it() {
+    let (mut runtime, checkout, directory) = setup("pair-undrawn-lane");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    assert!(mode_on(&runtime));
+    assert_eq!(drawn_pair(&runtime), None, "t2's agent opened nothing");
+    open(&mut runtime, &checkout, &directory, "b.md");
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (true, true));
+    focus_tab(&mut runtime, &checkout, &directory, TABS[2]);
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (true, true));
+    pair_event(&mut runtime, None);
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (true, true));
+}
+
+/// D-46 by the pane: the left agent closing its last View ends the mode
+/// even with the operator's own file still on the desk, and leaving closes
+/// the lane (D-44).
+#[test]
+fn pair_view_ends_when_the_left_agent_closes_its_last_view_beside_an_operators_file() {
+    let (mut runtime, checkout, directory) = setup("pair-ends-by-pane");
+    open(&mut runtime, &checkout, &directory, "c.md");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    let a = display_id(&runtime, &directory, "a.md");
+    control(
+        &mut runtime,
+        "w-order:t1:p",
+        Action::Close {
+            view_id: a,
+            expected_browser_area: None,
+        },
+        "pair-ends-by-pane",
+    );
+    runtime.sync_workspace_view();
+    assert!(!mode_on(&runtime));
+    assert_eq!(desk(&runtime, &directory, TABS[0]), vec!["c.md".to_owned()]);
+    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (false, false));
 }
 
 /// Inventory X02: a pane in no Agent tab has no desk to pair with, and the

@@ -873,14 +873,10 @@ impl Runtime {
                     .map_err(layout_refusal)?;
                 }
                 // An agent's close leaves the desk shown as it was (PRD
-                // right-lane B12, lane-desk-pair-view B33); a pair view with
-                // nothing left on its right side ends.
-                if let Some(Place::Tray(tab)) = at
-                    && self
-                        .view_layout_at(key, &Place::Tray(tab.clone()))
-                        .is_some_and(|layout| layout.display_count() == 0)
-                {
-                    self.end_pair_view_of_emptied(key, &tab);
+                // right-lane B12, lane-desk-pair-view B33); a pair view left
+                // with nothing to draw ends (D-46).
+                if matches!(at, Some(Place::Tray(_))) {
+                    self.end_pair_view_if_undrawn();
                 }
                 (view_id.clone(), true, area)
             }
