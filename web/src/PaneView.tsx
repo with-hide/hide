@@ -163,6 +163,7 @@ export const PaneView = memo(function PaneView({
   paneCount,
   zoomed,
   local = true,
+  keysStayOnDesk = false,
   offline = false,
 }: {
   pane: PaneRow;
@@ -184,6 +185,8 @@ export const PaneView = memo(function PaneView({
   zoomed: boolean;
   /** False for a pane on a selected SSH device. */
   local?: boolean;
+  /** Pair view's left pane taken while pair view was on screen: a desk the keys are on keeps them (D-09). */
+  keysStayOnDesk?: boolean;
   /** True while that device's connection is down. */
   offline?: boolean;
 }) {
@@ -315,10 +318,10 @@ export const PaneView = memo(function PaneView({
     if (document.activeElement?.closest("[data-palette]")) return;
     // A desk tab the operator chose in pair view takes its agent's pane to the left and makes it the tab's keyboard
     // pane, so pane commands reach the pane on screen; the keys stay on the desk where the operator pressed. An entry
-    // hands the keyboard to the pane first (`actions.pinPairView`, `pairViewKey`).
-    if (keyboardCommandOwner().kind === "view" && pairOffer(workspaceViewOf(useShellStore.getState().rest), paneId) === "on") return;
+    // mounts the pair layer anew, so it is never this case and the pane takes the keys.
+    if (keysStayOnDesk && keyboardCommandOwner().kind === "view") return;
     focusTerminal(paneId);
-  }, [paneId, focused, snapshotIncludesLastClick]);
+  }, [paneId, focused, snapshotIncludesLastClick, keysStayOnDesk]);
 
   // ⌘V of an image is the shell's; text paste stays xterm's own. The listener
   // runs in the capture phase, before xterm's textarea sees the event.

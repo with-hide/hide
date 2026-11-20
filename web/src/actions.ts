@@ -94,7 +94,7 @@ import { focusedPaneOf, useShellStore } from "./store";
 import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
-import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy, noteKeyboardOwner } from "./viewFocus";
+import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
 import { zoomViewer } from "./viewers/viewerZoom";
 import { submitDrop, type CapturedDrop } from "./explorerDrop";
@@ -3191,8 +3191,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (drawnPair(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
       const paneId = useShellStore.getState().focusedPaneId;
       if (!paneId || pairOffer(view, paneId) !== "off") return diagnostic(`pair_view: nothing to show beside ${paneId ?? "no pane"}`);
-      // An entry gives the left pane the keys, wherever they were (`PaneView`).
-      noteKeyboardOwner({ kind: "none" });
       dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
     },
 
@@ -3206,7 +3204,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const owner = view?.layout ? locateDisplay(view.layout.root, displayId)?.display.owner_pane : null;
       const paneId = owner ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("pair_view: the pin has no pane to show beside the desk");
-      noteKeyboardOwner({ kind: "none" });
       dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId, display_id: displayId } });
     },
 
