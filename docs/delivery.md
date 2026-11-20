@@ -1370,10 +1370,11 @@ A refusal there (its ledger's cap, an intent conflict, a recipient that is gone)
 A start asked of another core is that machine's operator's work (D-59): the agent runs and registers there, the asker's identity there is its origin, and this core keeps only who asked and where (`ledger::CoreStart`, at most 256), which is what lets that machine's result report in.
 When a pairing ends, the store's upkeep ends that machine's identities here and forgets the starts asked of it (`coordination::end_gone_cores`), as it does for a gone tool.
 
-A Conductor started with no parent reports to the agent that started it: when its mission closes, by its own `hide mission close` or by Hide once every node is done, the core sends that origin the mission's report as a `report` letter, the Conductor's own, on the same machine as on another (`hide-core/src/runtime/mission_report.rs`).
+A Conductor another machine's agent started with no parent reports to that agent: when its mission closes, by its own `hide mission close` or by Hide once every node is done, the core sends that origin the mission's report as a `report` letter, the Conductor's own (`hide-core/src/runtime/mission_report.rs`).
+An origin on the Conductor's own machine is sent none: an agent that starts an independent Conductor there hands the work to the operator.
 The letter is prepared at the next tick as a send from the Conductor's pane, so every rule of a letter applies to it; one that cannot be sent (no Conductor in its pane, an origin that is gone) is recorded as `mission.report_unsent` and the mission keeps its report.
 The same close asked again is the same letter, and a close with another end or report (a mission that waited for its merges turning done) is a new one.
-A Conductor under a parent, a fork, and one a tool or Hide started send none.
+A Conductor under a parent, a fork, and one an agent of its own machine, a tool or Hide started send none.
 A question for a person (내 차례) reaches people only: no agent of another machine answers it.
 
 `hide-core/src/runtime/tests/core_letters.rs` runs two cores against each other for each of these, and `hided/src/peer_core.rs` the stream between two endpoints.

@@ -1,13 +1,14 @@
 //! The result report a closed mission owes the agent that asked for it
 //! (PRD device-connect-iroh D-72, B65).
 //!
-//! A Conductor started with no parent names the agent that started it as
-//! its origin. When its mission closes, by its own `hide mission close` or
-//! by Hide once every node is done, the origin is sent the mission's
-//! report as a `report` letter, on this machine as on another: an origin
-//! on another machine's core is the identity that core's agent stands as
-//! here, so the letter waits in this ledger and goes over the connection
-//! between the two cores once.
+//! A Conductor another machine's agent started here with no parent names
+//! that agent as its origin: the identity that core's agent stands as
+//! here. When its mission closes, by its own `hide mission close` or by
+//! Hide once every node is done, the origin is sent the mission's report
+//! as a `report` letter, which waits in this ledger and goes over the
+//! connection between the two cores once. An origin on this machine is
+//! sent none: the agent that started an independent Conductor here handed
+//! the work to the operator, who sees the mission close.
 //!
 //! The letter is the Conductor's own, prepared as a `hide request send`
 //! from its pane and sent by the rules every letter of that Conductor is
@@ -31,10 +32,10 @@ const SEND_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 const CUT: &str = "\n\n(The report is cut here to fit one letter.)";
 
 /// Who the Conductor `conductor` reports to, as a letter names it: the
-/// agent that started it with no parent, by its registration here, or by
-/// its address on its own core. `None` for a Conductor nobody handed the
-/// work to (typed by the operator, delegated under a parent, a fork), and
-/// for one Hide or an external tool started, which hear no letter.
+/// agent of another machine's core that started it with no parent, by its
+/// address on its own core. `None` for every other Conductor: one typed by
+/// the operator, delegated under a parent, a fork, and one an agent of this
+/// machine, Hide or an external tool started.
 pub(in crate::runtime) fn origin_target(ledger: &Ledger, conductor: &Actor) -> Option<String> {
     let record = registration(ledger, conductor)?;
     if record.forked {
@@ -43,11 +44,10 @@ pub(in crate::runtime) fn origin_target(ledger: &Ledger, conductor: &Actor) -> O
     }
     let origin = record.origin.as_deref()?;
     let origin = ledger.agents.iter().find(|agent| agent.id == origin)?;
-    match origin.actor.core_address() {
-        Some(address) => Some(address.to_string()),
-        None if origin.actor.code_owned() => None,
-        None => Some(origin.id.clone()),
-    }
+    origin
+        .actor
+        .core_address()
+        .map(|address| address.to_string())
 }
 
 /// The Conductor's newest registration, a live one first.
@@ -253,12 +253,11 @@ mod tests {
         }
     }
 
-    /// D-72: the origin is named as a letter reaches it, on this machine by
-    /// its registration and on another by its address there; a Conductor
-    /// nobody handed the work to, a fork, and one a tool or Hide started
-    /// report to no one.
+    /// D-72: the origin on another machine is named by its address there;
+    /// a Conductor nobody handed the work to, one an agent of this machine
+    /// started, a fork, and one a tool or Hide started report to no one.
     #[test]
-    fn a_conductor_reports_to_the_agent_that_started_it_on_this_machine_or_another() {
+    fn a_conductor_reports_to_the_agent_of_another_machine_that_started_it() {
         let lead = agent("w1:p2");
         let there = Actor::core(
             CoreAddress::new("macbook", CoreItem::Agent, "agent-7"),
@@ -282,14 +281,18 @@ mod tests {
             ledger.agents[3].forked = forked;
             origin_target(&ledger, &lead)
         };
-        assert_eq!(started_by("agent-1", false).as_deref(), Some("agent-1"));
+        assert_eq!(
+            started_by("agent-1", false),
+            None,
+            "an agent of this machine handed the work to the operator"
+        );
         assert_eq!(
             started_by("agent-2", false).as_deref(),
             Some("core:macbook:agent:agent-7")
         );
         assert_eq!(started_by("agent-3", false), None, "a tool hears no letter");
         assert_eq!(
-            started_by("agent-1", true),
+            started_by("agent-2", true),
             None,
             "a fork was asked nothing"
         );

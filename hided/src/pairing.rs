@@ -224,9 +224,16 @@ pub enum Caller {
     OtherScreen,
 }
 
+/// The refusal of every ask in a build that does not offer connections
+/// between two Hides (`env::Env::device_connect` off).
+pub const DEVICE_CONNECT_OFF: &str = "device_connect_unavailable";
+
 /// What a caller does about a refusal `code`.
 pub fn next_action(code: &str) -> &'static str {
     match code {
+        DEVICE_CONNECT_OFF => {
+            "This build does not offer connections between two Hides yet: add a machine by its SSH alias"
+        }
         "device_from_pane" => {
             "Ask the operator to run it in a terminal outside Hide's panes, or to use Settings > Devices"
         }
@@ -721,8 +728,13 @@ impl Pairing {
     }
 
     /// Answers one ask. The answer is `{"ok": true, ...}` or a refusal with
-    /// its code and what to do about it.
+    /// its code and what to do about it. A build that does not offer
+    /// connections between two Hides refuses every ask and does nothing
+    /// (`env::Env::device_connect`).
     pub async fn ask(self: &Arc<Self>, ask: Ask, caller: Caller) -> Value {
+        if !self.host.device_connect() {
+            return refused(DEVICE_CONNECT_OFF);
+        }
         match caller {
             Caller::Operator => {}
             Caller::Pane if !ask.operators() => {}

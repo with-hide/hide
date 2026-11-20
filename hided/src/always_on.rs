@@ -10,7 +10,10 @@
 //! start, and the pairing after every change to the machines this one is
 //! paired with ([`Follower`]); a paired core also never ends for idle
 //! ([`paired`], `server::watch_idle`). Paired means a finished pairing,
-//! never one still waiting (`peer_host::pairing_confirmed`).
+//! never one still waiting (`peer_host::pairing_confirmed`), and never in a
+//! build that does not offer connections between two Hides
+//! (`env::Env::device_connect` off), which keeps no item for them and takes
+//! out one a development build left.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,9 +24,10 @@ use serde::Serialize;
 use serde_json::json;
 
 /// Whether the folder has finished a pairing, the one answer the item
-/// follows (`peer_host::pairing_confirmed`).
-pub fn paired(state_dir: &Path) -> Result<bool, String> {
-    crate::peer_host::pairing_confirmed(state_dir)
+/// follows (`peer_host::pairing_confirmed`); never while `device_connect`
+/// is off.
+pub fn paired(state_dir: &Path, device_connect: bool) -> Result<bool, String> {
+    crate::peer_host::pairing_confirmed(state_dir, device_connect)
         .map_err(|error| format!("the peer records: {error}"))
 }
 
@@ -65,6 +69,9 @@ pub struct Warning {
 pub struct Asker<'a> {
     pub program: &'a Path,
     pub under_item: bool,
+    /// Whether its build offers connections between two Hides
+    /// (`env::Env::device_connect`).
+    pub device_connect: bool,
 }
 
 /// Puts the login item in when the folder is paired and it is not there,
@@ -79,7 +86,7 @@ pub fn reconcile(
     if crate::core_move::handover::read(state_dir)?.is_some() {
         return Ok(Outcome::Moved);
     }
-    let paired = paired(state_dir)?;
+    let paired = paired(state_dir, asker.device_connect)?;
     if let Err(error) = agents.supported() {
         return Ok(if paired {
             Outcome::Unsupported {
@@ -165,14 +172,17 @@ pub struct Follower {
     state_dir: PathBuf,
     /// Whether the login item started this core ([`Asker::under_item`]).
     under_item: bool,
+    /// [`Asker::device_connect`].
+    device_connect: bool,
 }
 
 impl Follower {
-    pub fn new(home: PathBuf, state_dir: PathBuf, under_item: bool) -> Self {
+    pub fn new(home: PathBuf, state_dir: PathBuf, under_item: bool, device_connect: bool) -> Self {
         Self {
             home,
             state_dir,
             under_item,
+            device_connect,
         }
     }
 
@@ -184,6 +194,7 @@ impl Follower {
             home,
             state_dir,
             under_item,
+            device_connect,
         } = self.clone();
         let spawned = std::thread::Builder::new()
             .name("always-on".to_owned())
@@ -197,6 +208,7 @@ impl Follower {
                         let asker = Asker {
                             program: &program,
                             under_item,
+                            device_connect,
                         };
                         reconcile(&agents_for(&home), &home, &state_dir, &asker, |root| {
                             install_this_build(asker.program, root)

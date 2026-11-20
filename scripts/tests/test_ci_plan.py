@@ -733,7 +733,7 @@ class NamedPaths(unittest.TestCase):
         source = (ROOT / "hided/src/cli.rs").read_text()
         body = source[source.index("fn help_text()"):]
         body = body[:body.index("\n}\n")]
-        joined = {f"hided/src/{name}.rs" for name in re.findall(r"crate::(\w+)::USAGE", body)}
+        joined = {f"hided/src/{name}.rs" for name in re.findall(r"crate::(\w+)::(?:USAGE\b|usage_here\(\))", body)}
         self.assertEqual(joined | {"hided/src/cli.rs"}, set(ci.HELP_SOURCES))
 
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
