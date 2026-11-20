@@ -2,10 +2,12 @@
 // (PRD skill-mcp-manager; decisions of 2026-11-19): the list a row unfolds
 // in, the table its switch turns to, the cell states and the update dot.
 
+import fs from "node:fs";
+import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { withControl } from "./daemon-actions";
 import { writeSshHost } from "./hided-fixture";
-import { everyAgentOn, install, moveUpstream, openStore, seedStore, startStore, stopStore } from "./skills-mcp-fixture";
+import { everyAgentOn, install, moveUpstream, openStore, seedStore, startStore, stopStore, store, storeWhen, type StoreFixture } from "./skills-mcp-fixture";
 import { chooseTheme, screenshot } from "./wire";
 
 test.skip(process.platform === "win32", "the fixture's sources are POSIX git repositories over file://");
@@ -198,3 +200,42 @@ test("another machine is picked at the head, and one that is not connected says 
     stopStore(fixture);
   }
 });
+
+test("a store whose keys' secret is lost says so with the start-over, and the start-over by hand brings Hide's servers back to take in", async ({ page }) => {
+  const fixture = await startStore("store-secret");
+  try {
+    await everyAgentOn(fixture.daemon);
+    await store(fixture.daemon, [{ op: "add_mcp", server: { name: "linear", reach: { kind: "remote", transport: "http", url: "https://mcp.linear.app/mcp", headers: ["Authorization"] } }, keys: { Authorization: "Bearer e2e-fixture-value" } }]);
+    const dir = path.join(fixture.home, ".hide", "store");
+    fs.rmSync(path.join(dir, "keys.secret"));
+    await check(fixture);
+    await storeWhen(fixture.daemon, (report) => report.refusal === "keys_secret_gone", "the pass refused for the lost secret");
+
+    // The section says why nothing changes, links the start-over, and offers no change.
+    const machine = await openStore(page, fixture.daemon);
+    const note = machine.locator('[data-store-refusal="keys_secret_gone"]');
+    await expect(note).toContainText("can no longer be read");
+    await expect(note.locator("[data-store-keys-help]")).toContainText("How to start over");
+    await expect(machine.locator("[data-store-add]")).toBeDisabled();
+    await screenshot(page, "store-keys-gone");
+
+    // docs/agent-hooks.md's start-over: the folder moved aside, the next pass lists Hide's server as one to take in.
+    fs.renameSync(dir, path.join(fixture.home, ".hide", "store-lost-secret"));
+    await check(fixture);
+    await expect(note).toHaveCount(0, { timeout: 60_000 });
+    await expect(machine.locator('[data-store-unmanaged="mcp:linear"]')).toBeVisible({ timeout: 60_000 });
+    await machine.locator('[data-store-adopt="mcp:linear"]').click();
+    await expect(machine.locator('[data-store-row="mcp:linear"]')).toBeVisible({ timeout: 60_000 });
+  } finally {
+    stopStore(fixture);
+  }
+});
+
+/** One store pass, as a check for updates starts it, whatever it answers. */
+async function check(fixture: StoreFixture) {
+  const id = `e2e-check-${Date.now().toString(36)}`;
+  await withControl(fixture.daemon, async (control) => {
+    control.send("kit_store", { device_id: fixture.daemon.node, request_id: id, changes: [{ op: "check_updates" }] });
+    await control.until((rest) => (rest.status as { store_answers?: { request_id: string; state: string }[] } | undefined)?.store_answers?.find((row) => row.request_id === id && row.state !== "pending"), "a pass", 90_000);
+  });
+}

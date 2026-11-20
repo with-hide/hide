@@ -29,6 +29,7 @@ type Report = {
   mcp_previews?: { id: string; at_unix_ms: number }[];
   trash: { id: string; name: string }[];
   unmanaged: { name: string }[];
+  refusal?: string | null;
 };
 
 export type StoreFixture = { engine: AgentFixture; daemon: Daemon; home: string; root: string; repos: { archify: string; pdf: string; pdfWork: string }; folder: string };

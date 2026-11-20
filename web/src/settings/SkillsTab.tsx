@@ -256,6 +256,9 @@ function askTitle(ask: StoreAsk, t: TFunction<"translation">): string {
   }
 }
 
+/** docs/agent-hooks.md, When the MCP keys' secret is lost: the operator's start-over by hand. */
+const KEYS_LOST_URL = "https://github.com/with-hide/hide/blob/main/docs/agent-hooks.md#when-the-mcp-keys-secret-is-lost";
+
 /** Why the machine's list cannot change now, in one line, with the one press that helps (scene 6, decisions: keys.secret). */
 function MachineState({ machine, name, report, actions }: { machine: AgentMachine; name: string; report: StoreReport | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -276,7 +279,14 @@ function MachineState({ machine, name, report, actions }: { machine: AgentMachin
   if (machine.blocked === "unavailable") {
     return <Note data-store-unavailable={device.id}>{device.kit?.unavailable ? kitUnavailableText(device.kit.unavailable, t) : t("store.unavailable", { device: name })}</Note>;
   }
-  if (report?.refusal === "keys_secret_gone") return <Note tone="error" data-store-refusal="keys_secret_gone">{t("store.keysGone", { device: name })}</Note>;
+  if (report?.refusal === "keys_secret_gone") {
+    return (
+      <Note tone="error" data-store-refusal="keys_secret_gone">
+        {t("store.keysGone", { device: name })}{" "}
+        <Button variant="link" size="sm" className="h-auto p-none" data-store-keys-help onClick={() => actions.openLink(KEYS_LOST_URL, true)}>{t("store.keysGoneHelp")}</Button>
+      </Note>
+    );
+  }
   if (report?.refusal === "unreadable") return <Note tone="error" data-store-refusal="unreadable">{t("store.unreadable", { device: name })}</Note>;
   return null;
 }

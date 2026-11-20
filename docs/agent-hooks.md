@@ -660,6 +660,19 @@ A value prints as `••••` wherever a key is formatted, and a failure of t
 A key that starts with `!` is refused for every agent: Pi and omp run such a value as a shell command in place of the value, and `${NAME}` in a value is expanded by them too.
 The key stays in the agent's file as plain text, as it would if the operator had put it there by hand (PRD skill-mcp-manager Non-goals).
 
+### When the MCP keys' secret is lost
+
+A store whose record holds a key fingerprint, and whose `keys.secret` is gone or can no longer be read, refuses every pass, so no agent's file changes; Settings › Skills and MCP says so on that machine's section (`keys_secret_gone`), with a link here, and every switch there is read only.
+Hide never makes a new secret on its own, since a new one would read every server it wrote with keys as the operator's and Hide would never take them out; bringing the store back is the operator's step, by hand.
+
+1. Move the store's folder aside, keeping it: `mv ~/.hide/store ~/.hide/store-lost-secret` (on Windows `%USERPROFILE%\.hide\store`).
+   Each item's `keys.json` under it still holds the keys typed for it, owner-only, and its `store.json` names, for each agent's file, the servers and skills Hide wrote there.
+2. The next pass, within a few seconds, starts an empty store, and every server and skill Hide had written is now an entry the operator has: Settings lists each under the agents that have it, to take in (B22).
+   Taking a server in keeps its keys as the agent's file has them.
+   A skill taken in is a copy with no updates, so a skill that came from a repository is better removed from the agents' folders and added again from that repository, which follows its updates again.
+3. Take Hide's servers out of the agents' files by hand instead, when they should go: each agent's file is in the table under [MCP servers](#mcp-servers), and an entry is one server's name in it.
+4. Delete `~/.hide/store-lost-secret` once nothing in it is needed.
+
 ## Project guardrails
 
 The pre-tool hook also refuses what a project's protections name, the four switches of Project Settings > Working style ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#project-settings), PRD agent-guardrails).
