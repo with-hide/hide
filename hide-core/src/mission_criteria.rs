@@ -924,9 +924,8 @@ pub(crate) fn plan_lines(
             .iter()
             .enumerate()
             .map(|(at, worker)| {
-                before
-                    .and_then(|line| line.checkers.get(at))
-                    .filter(|checker| checker.worker == *worker)
+                let slot = before.and_then(|line| line.checkers.get(at));
+                slot.filter(|checker| checker.worker == *worker)
                     .cloned()
                     .unwrap_or_else(|| Checker {
                         worker: worker.clone(),
@@ -936,7 +935,8 @@ pub(crate) fn plan_lines(
                         summary: None,
                         at_unix_ms: None,
                         commit: None,
-                        rounds: 0,
+                        // Another worker in the slot counts on from its rounds, as a fresh checker does (`bind`).
+                        rounds: slot.map_or(0, |checker| checker.rounds),
                         pane_id: None,
                         machine: None,
                     })
@@ -1580,6 +1580,49 @@ mod tests {
             (again[1].state, again[1].rounds, again[1].checkers[0].rounds),
             (CriterionState::Fail, 2, 2)
         );
+    }
+
+    /// A replan that hands a review slot to another worker carries the
+    /// slot's rounds to it, as a fresh checker in an ended one's slot does,
+    /// so the next head the new worker answers is the line's next round and
+    /// the limit comes when it should (mission-82 review O6).
+    #[test]
+    fn a_replan_that_hands_a_slot_to_another_worker_counts_on_from_its_rounds() {
+        let input = |agent: &str| CheckInput {
+            kind: CheckKind::Review,
+            rule: Rule::All,
+            by: vec![worker(agent)],
+        };
+        let mut lines = plan_lines(&[], &["works".into()], &[input("codex")], false, true);
+        lines[1] = bound(lines[1].clone());
+        for head in ["a1b2c3d4e5f6", "b2c3d4e5f6a1"] {
+            lines[1]
+                .record_checker(
+                    0,
+                    false,
+                    Answer {
+                        commit: Some(head.into()),
+                        ..Answer::default()
+                    },
+                    1,
+                )
+                .unwrap();
+        }
+        let mut again = plan_lines(&lines, &["works".into()], &[input("claude")], false, true);
+        assert_eq!((again[1].rounds, again[1].checkers[0].rounds), (2, 2));
+        again[1] = bound(again[1].clone());
+        again[1]
+            .record_checker(
+                0,
+                false,
+                Answer {
+                    commit: Some("c3d4e5f6a1b2".into()),
+                    ..Answer::default()
+                },
+                2,
+            )
+            .unwrap();
+        assert_eq!((again[1].state, again[1].rounds), (CriterionState::Fail, 3));
     }
 
     /// A line saved before the rounds, the count of failures in a row it

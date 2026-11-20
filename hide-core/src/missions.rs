@@ -1647,8 +1647,9 @@ impl MissionNode {
     }
 
     /// The node's review rounds line (`Criterion::rounds`): the review or
-    /// verification line past `limit` (`Criterion::past_limit`), the one
-    /// with more rounds first, else the one with the most rounds; none
+    /// verification line past `limit` (`Criterion::past_limit`), a failed
+    /// one first and then the one with more rounds, else the one with the
+    /// most rounds; none
     /// before any checker answered. The one rule the limit's warning, its
     /// letter and the screens that count rounds read.
     pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
@@ -1659,7 +1660,12 @@ impl MissionNode {
         };
         lines()
             .filter(|line| line.past_limit(limit))
-            .max_by_key(|line| line.rounds)
+            .max_by_key(|line| {
+                (
+                    line.state == crate::mission_criteria::CriterionState::Fail,
+                    line.rounds,
+                )
+            })
             .or_else(|| lines().max_by_key(|line| line.rounds))
     }
 }

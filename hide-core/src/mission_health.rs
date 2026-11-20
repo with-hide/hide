@@ -1684,6 +1684,10 @@ mod tests {
         set(&mut m, 2, 4, Fail);
         let named = |m: &Mission| m.nodes[0].review_line(4).map(|line| line.key.clone());
         assert_eq!(named(&m).as_deref(), Some("verify"));
+        // Both past it: the failed one, even with fewer rounds (n1).
+        set(&mut m, 1, 5, crate::mission_criteria::CriterionState::Open);
+        assert_eq!(named(&m).as_deref(), Some("verify"));
+        set(&mut m, 1, 5, Pass);
         set(&mut m, 2, 3, Fail);
         assert_eq!(named(&m).as_deref(), Some("review"));
         set(&mut m, 1, 0, Pass);
