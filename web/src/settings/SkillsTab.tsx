@@ -227,9 +227,10 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
           <Kind kind="mcp" items={mcps} shown={shown} page={page} />
           {skills.length + mcps.length > 0 ? <Legend /> : null}
           {report.unmanaged.length > 0 ? <Unmanaged rows={report.unmanaged} report={report} shown={shown} page={page} /> : null}
-          {report.trash.length > 0 ? <Trash report={report} page={page} /> : null}
         </div>
       ) : null}
+      {/* The undo list stands apart from the lists: deleting the last item leaves it (B18). */}
+      {report && report.trash.length > 0 ? <Trash report={report} page={page} /> : null}
       {removed && removal.refusal ? <Note tone="error" data-store-delete-refused={removed.id}>{refusalText(removal.refusal, t)}</Note> : null}
       {removed && removal.done && !undone && report ? <UndoToast key={removal.sent} item={removed} report={report} page={page} onDone={() => setUndone(true)} /> : null}
       {adding && report ? <AddDialog device={device} name={name} report={report} shown={shown} local={device.id === own} actions={actions} onClose={() => setAdding(false)} /> : null}

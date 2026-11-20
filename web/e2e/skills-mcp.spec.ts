@@ -275,3 +275,23 @@ test("with only Claude and Codex installed, the shared skill folder is Codex's c
     stopStore(fixture);
   }
 });
+
+test("deleting the last item leaves the empty page with its undo list, which brings the item back", async ({ page }) => {
+  const fixture = await startStore("store-last", { agents: ["claude-code"] });
+  try {
+    await everyAgentOn(fixture.daemon, ["claude-code"]);
+    await install(fixture.daemon, { kind: "git", url: fixture.repos.archify }, ["archify"]);
+    const machine = await openStore(page, fixture.daemon);
+    await machine.locator('[data-store-row-toggle="skill:archify"]').click();
+    await deleteRow(machine, "skill:archify");
+
+    // Nothing is left to list, and the undo list still stands (B18).
+    await expect(machine.locator("[data-store-empty]")).toBeVisible({ timeout: 60_000 });
+    await machine.locator("[data-store-trash-toggle]").click();
+    await machine.locator('[data-store-trash-entry] [data-store-restore]').first().click();
+    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator("[data-store-empty]")).toHaveCount(0);
+  } finally {
+    stopStore(fixture);
+  }
+});
