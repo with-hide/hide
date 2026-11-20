@@ -6473,4 +6473,283 @@ mod tests {
         assert!(rebind(&mut ledger, &rebinds).is_empty());
         assert_eq!(ledger, ended);
     }
+
+    /// The registrations of a parent `p1` and its child, an agent `x` beside
+    /// them, and the parent's watch on the child, for a succession.
+    fn succession_fixture() -> (Ledger, AgentRecord, AgentRecord, Actor) {
+        let mut ledger = Ledger::default();
+        let parent = record("p1", "first-conversation", None);
+        let parent_id = register(&mut ledger, parent.clone(), &parent.actor);
+        let child = record("c1", "child-conversation", Some(parent_id.clone()));
+        register(&mut ledger, child.clone(), &parent.actor);
+        let other = record("x1", "other-conversation", None);
+        register(&mut ledger, other.clone(), &other.actor);
+        watch::start(&mut ledger, &parent.actor, &child.actor, 2).unwrap();
+        let find = |actor: &Actor| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.actor.same_identity(actor))
+                .unwrap()
+                .clone()
+        };
+        let (parent, child) = (find(&parent.actor), find(&child.actor));
+        (ledger, parent, child, other.actor)
+    }
+
+    fn letter_of<'a>(ledger: &'a Ledger, id: &str) -> &'a crate::delivery::ledger::Letter {
+        ledger.letters.iter().find(|letter| letter.id == id).unwrap()
+    }
+
+    /// B1, B2: a new conversation in a pane takes the registration there
+    /// over: the old one ends naming its successor, and the next agent
+    /// takes its pending letters (rung afresh), the answers its letters
+    /// wait for, its children with their spawn receipts and its watches,
+    /// and answers to its parent. A request it had already taken in stops
+    /// waiting for its answer. Run again it changes nothing.
+    #[test]
+    fn a_new_conversation_in_a_pane_takes_over_its_registration() {
+        let (mut ledger, parent, child, other) = succession_fixture();
+        let send = |ledger: &mut Ledger, from: &Actor, to: &Actor, intent: &str| {
+            crate::delivery::mailbox::send(ledger, from, to, intent, "body", "request", None, 3)
+                .unwrap()
+                .id
+        };
+        let waiting = send(&mut ledger, &other, &parent.actor, "waiting");
+        let asked = send(&mut ledger, &parent.actor, &other, "asked");
+        let taken = send(&mut ledger, &other, &parent.actor, "taken");
+        {
+            let letter = ledger.letters.iter_mut().find(|l| l.id == waiting).unwrap();
+            letter.bell_attempts = Some(3);
+            letter.bell_ended = Some(3);
+            letter.bell_sent = true;
+            let taken = ledger.letters.iter_mut().find(|l| l.id == taken).unwrap();
+            taken.state = crate::delivery::ledger::State::Delivered;
+            taken.hook_confirmed = Some(true);
+        }
+        assert_eq!(letter_of(&ledger, &waiting).to.as_ref(), Some(&parent.id));
+        let next = record("p1", "second-conversation", None);
+        let successions = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            Succession {
+                successor: next.clone(),
+            },
+        )]);
+        let succeeded = succeed(&mut ledger, &successions, 5, &Held::default());
+        assert_eq!(succeeded.len(), 1);
+        let heir = succeeded[0].1.clone();
+        assert_eq!(succeeded[0].0, parent.id);
+        let former = ledger.agents.iter().find(|r| r.id == parent.id).unwrap();
+        assert!(former.ended);
+        assert_eq!(former.successor.as_ref(), Some(&heir));
+        let successor = ledger.agents.iter().find(|r| r.id == heir).unwrap();
+        assert!(!successor.ended && successor.actor.same_identity(&next.actor));
+        assert_eq!(successor.name, next.name, "the next agent takes its name");
+        // Its pending letter is the next agent's, rung as a new letter is.
+        let handed = letter_of(&ledger, &waiting);
+        assert_eq!(handed.to.as_ref(), Some(&heir));
+        assert!(handed.recipient.same_identity(&next.actor));
+        assert_eq!(
+            (handed.state, handed.attempts(), handed.bell_sent),
+            (crate::delivery::ledger::State::Pending, 0, false)
+        );
+        // The answer its open request waits for comes to the next agent.
+        let open = letter_of(&ledger, &asked);
+        assert_eq!(open.from.as_ref(), Some(&heir));
+        assert!(open.sender.same_identity(&next.actor) && open.waiting_answer);
+        // A request the old conversation took in waits no more.
+        assert!(!letter_of(&ledger, &taken).waiting_answer);
+        let child = ledger.agents.iter().find(|r| r.id == child.id).unwrap();
+        assert_eq!(child.parent.as_ref(), Some(&heir));
+        assert!(ledger.watches[0].parent.same_identity(&next.actor));
+        ledger.validate().unwrap();
+        let settled = ledger.clone();
+        assert!(succeed(&mut ledger, &successions, 6, &Held::default()).is_empty());
+        assert_eq!(ledger, settled);
+    }
+
+    /// Only another agent in the same pane of the same machine takes a
+    /// registration over: one in another pane, or the same conversation,
+    /// takes nothing.
+    #[test]
+    fn only_another_agent_in_the_same_pane_takes_a_registration_over() {
+        let (mut ledger, parent, ..) = succession_fixture();
+        let before = ledger.clone();
+        let mut elsewhere = record("p9", "second-conversation", None);
+        elsewhere.machine = "local".into();
+        for successor in [elsewhere, record("p1", "first-conversation", None)] {
+            let successions = std::collections::BTreeMap::from([(
+                parent.id.clone(),
+                Succession { successor },
+            )]);
+            assert!(succeed(&mut ledger, &successions, 5, &Held::default()).is_empty());
+            assert_eq!(ledger, before);
+        }
+    }
+
+    /// B2, B7: an agent that ends with no agent after it in its pane ends
+    /// the letters still waiting for it with no recipient, which its sender
+    /// gets back; one a hook already handed it ends delivered.
+    #[test]
+    fn a_registration_with_no_successor_ends_its_waiting_letters_with_no_recipient() {
+        let (mut ledger, parent, _, other) = succession_fixture();
+        let send = |ledger: &mut Ledger, intent: &str| {
+            crate::delivery::mailbox::send(
+                ledger,
+                &other,
+                &parent.actor,
+                intent,
+                "body",
+                "request",
+                None,
+                3,
+            )
+            .unwrap()
+            .id
+        };
+        let waiting = send(&mut ledger, "waiting");
+        let handed = send(&mut ledger, "handed");
+        ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == handed)
+            .unwrap()
+            .handed = true;
+        assert!(end_record(&mut ledger, &parent.id, 9));
+        use crate::delivery::ledger::State;
+        assert_eq!(letter_of(&ledger, &waiting).state, State::NoRecipient);
+        assert!(!letter_of(&ledger, &waiting).waiting_answer);
+        assert_eq!(letter_of(&ledger, &handed).state, State::Delivered);
+        let inbox = crate::delivery::mailbox::apply(
+            &mut ledger,
+            &other,
+            None,
+            &crate::delivery::Command::Inbox { bundle: true },
+            10,
+        )
+        .unwrap();
+        assert_eq!(inbox["returned"][0]["id"], waiting.as_str());
+        assert_eq!(inbox["returned"][0]["state"], "no_recipient");
+    }
+
+    /// An answer goes to the agent that runs in its asker's place now; an
+    /// asker with no agent after it gets it back as no recipient.
+    #[test]
+    fn a_reply_follows_its_askers_successor() {
+        let (mut ledger, parent, _, other) = succession_fixture();
+        let ask = |ledger: &mut Ledger, intent: &str| {
+            crate::delivery::mailbox::send(
+                ledger,
+                &parent.actor,
+                &other,
+                intent,
+                "body",
+                "request",
+                None,
+                3,
+            )
+            .unwrap()
+            .id
+        };
+        let reply = |ledger: &mut Ledger, id: &str| {
+            let letter = ledger.letters.iter_mut().find(|l| l.id == id).unwrap();
+            letter.state = crate::delivery::ledger::State::Delivered;
+            letter.hook_confirmed = Some(true);
+            crate::delivery::mailbox::apply(
+                ledger,
+                &other,
+                None,
+                &crate::delivery::Command::Reply {
+                    id: id.into(),
+                    intent: format!("answer-{id}"),
+                    body: "answer".into(),
+                    now: false,
+                },
+                4,
+            )
+            .unwrap()
+        };
+        let first = ask(&mut ledger, "first");
+        let next = record("p1", "second-conversation", None);
+        let successions = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            Succession {
+                successor: next.clone(),
+            },
+        )]);
+        let heir = succeed(&mut ledger, &successions, 5, &Held::default())[0]
+            .1
+            .clone();
+        let answered = reply(&mut ledger, &first);
+        assert_eq!(answered["to"], heir.as_str());
+        assert_eq!(answered["recipient"]["session"], json!(next.actor.session));
+        assert_eq!(answered["state"], "pending");
+        // The next agent ends with none after it: an answer to it comes back.
+        let second = ask(&mut ledger, "second");
+        let second_letter = ledger.letters.iter_mut().find(|l| l.id == second).unwrap();
+        second_letter.sender = next.actor.clone();
+        second_letter.from = Some(heir.clone());
+        assert!(end_record(&mut ledger, &heir, 6));
+        let returned = reply(&mut ledger, &second);
+        assert_eq!(returned["state"], "no_recipient");
+    }
+
+    /// B6: a letter whose bells were spent on its agent gets them again once
+    /// that agent runs anew in another pane.
+    #[test]
+    fn a_moved_registration_gets_its_spent_letters_bells_again() {
+        let (mut ledger, parent, _, other) = succession_fixture();
+        let id = crate::delivery::mailbox::send(
+            &mut ledger,
+            &other,
+            &parent.actor,
+            "spent",
+            "body",
+            "request",
+            None,
+            3,
+        )
+        .unwrap()
+        .id;
+        let letter = ledger.letters.iter_mut().find(|l| l.id == id).unwrap();
+        letter.bell_attempts = Some(3);
+        letter.bell_ended = Some(3);
+        let rebinds = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            woken(&parent.actor, "woken"),
+        )]);
+        assert_eq!(rebind(&mut ledger, &rebinds).len(), 1);
+        let letter = letter_of(&ledger, &id);
+        assert_eq!(letter.attempts(), 0);
+        assert_eq!(letter.recipient.pane_id, "woken");
+    }
+
+    /// B3: a letter between agents with no registration registers them
+    /// first, so it names the registrations it is between; a second letter
+    /// converges on the same records.
+    #[test]
+    fn a_letter_registers_its_unregistered_parties_once() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (record("a1", "a-session", None), record("b1", "b-session", None));
+        for (intent, body) in [("one", "first"), ("two", "second")] {
+            for party in [&a, &b] {
+                register_party(&mut ledger, party, &Held::default()).unwrap();
+            }
+            let letter = crate::delivery::mailbox::send(
+                &mut ledger,
+                &a.actor,
+                &b.actor,
+                intent,
+                body,
+                "request",
+                None,
+                1,
+            )
+            .unwrap();
+            assert_eq!(letter.from, registered_id(&ledger, &a.actor));
+            assert_eq!(letter.to, registered_id(&ledger, &b.actor));
+            assert!(letter.to.is_some());
+        }
+        assert_eq!(ledger.agents.len(), 2);
+    }
 }

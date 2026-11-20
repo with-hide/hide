@@ -824,6 +824,133 @@ mod tests {
         .id
     }
 
+    /// B25: a store version 1 wrote, its letters addressed to agents and its
+    /// rest row keeping the machines' clocks, is brought to this version in
+    /// one transaction at its first open: each letter names the
+    /// registrations it is between; a pending letter to an agent whose
+    /// registration lives keeps waiting for it, one to an agent with none
+    /// ends with no recipient, a pending notice Hide wrote ends expired, and
+    /// a letter Hide handed for work keeps waiting. A letter version 1 left
+    /// undelivered reads as expired. The next open finds this version.
+    #[test]
+    fn a_version_1_store_is_upgraded_once_with_its_letters_addressed() {
+        let (_root, state) = state();
+        let path = hide_kit::layout::delivery_store(&state);
+        let session = |name: &str| crate::engine::tokens::session_digest(name);
+        let agent = |id: &str, pane: &str, ended: bool| {
+            json!({
+                "id": id, "name": format!("{pane}-agent"), "machine": "node",
+                "host_scope": "/tmp/engine.sock", "native_machine": "node",
+                "session": format!("{pane}-native"), "instance": pane, "pane": pane,
+                "parent": null, "origin": null, "project": null,
+                "actor": {"pane_id": pane, "name": pane, "kind": "claude",
+                          "device_id": "node", "session": session(&format!("{pane}-native"))},
+                "ended": ended, "forked": false,
+            })
+        };
+        let mut ledger = Ledger::default();
+        ledger.agents = vec![
+            serde_json::from_value(agent("agent-1", "w1:p2", false)).unwrap(),
+            serde_json::from_value(agent("agent-2", "w1:p3", true)).unwrap(),
+        ];
+        ledger.next_id = 3;
+        let to = |pane: &str| {
+            let mut actor = actor(pane);
+            actor.session = session(&format!("{pane}-native"));
+            actor
+        };
+        let sent = |ledger: &mut Ledger, from: &Actor, to: &Actor, intent: &str| {
+            mailbox::send(ledger, from, to, intent, "body", "request", None, 5)
+                .unwrap()
+                .id
+        };
+        let agent_letter = sent(&mut ledger, &actor("w1:p1"), &to("w1:p2"), "live");
+        let to_ended = sent(&mut ledger, &actor("w1:p1"), &to("w1:p3"), "ended");
+        let notice = sent(&mut ledger, &Actor::hide("wake", "node"), &to("w1:p2"), "wake");
+        let unregistered = sent(&mut ledger, &actor("w1:p1"), &actor("w1:p4"), "none");
+        let left = sent(&mut ledger, &actor("w1:p1"), &to("w1:p2"), "left");
+        let work = sent(&mut ledger, &Actor::hide("desk", "node"), &to("w1:p2"), "work");
+        // The file as version 1 wrote it.
+        hide_platform::fs::private::create_new_file(&path).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(SCHEMA).unwrap();
+        Changes::all(&ledger).write(&transaction).unwrap();
+        let rows: Vec<(i64, String)> = transaction
+            .prepare("SELECT seq, body FROM letters")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for (seq, body) in rows {
+            let mut letter: Value = serde_json::from_str(&body).unwrap();
+            let object = letter.as_object_mut().unwrap();
+            object.remove("from");
+            object.remove("to");
+            if object["id"] == left.as_str() {
+                object.insert("state".into(), json!("undelivered"));
+                object.insert("waiting_answer".into(), json!(false));
+                object.insert("finished_at_unix_ms".into(), json!(6));
+            }
+            transaction
+                .execute(
+                    "UPDATE letters SET body = ?1 WHERE seq = ?2",
+                    params![letter.to_string(), seq],
+                )
+                .unwrap();
+        }
+        let rest: String = transaction
+            .query_row("SELECT body FROM ledger", [], |row| row.get(0))
+            .unwrap();
+        let mut rest: Value = serde_json::from_str(&rest).unwrap();
+        rest["node_clocks"] = json!({"mini": {"connected_ms": 60_000, "since": null}});
+        transaction
+            .execute("UPDATE ledger SET body = ?1", [rest.to_string()])
+            .unwrap();
+        transaction.pragma_update(None, "user_version", 1).unwrap();
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let ((_, read, opened), records) =
+            crate::diagnostics::capture(|| LedgerStore::open(&path).unwrap());
+        assert_eq!(opened, Opened::Upgraded);
+        use ledger::State;
+        let of = |id: &str| read.letters.iter().find(|letter| letter.id == id).unwrap();
+        let cases = [
+            (&agent_letter, State::Pending, Some("agent-1")),
+            (&to_ended, State::NoRecipient, Some("agent-2")),
+            (&notice, State::Expired, Some("agent-1")),
+            (&unregistered, State::NoRecipient, None),
+            (&left, State::Expired, Some("agent-1")),
+            (&work, State::Pending, Some("agent-1")),
+        ];
+        for (id, state, to) in cases {
+            assert_eq!((of(id).state, of(id).to.as_deref()), (state, to), "{id}");
+            assert_eq!(of(id).from, None, "{id}: no registration sent it");
+        }
+        for id in [&to_ended, &notice, &unregistered] {
+            assert!(!of(id).open() && of(id).finished_at_unix_ms.is_some(), "{id}");
+        }
+        assert!(records.iter().any(|record| record["kind"] == "ledger.upgraded"
+            && record["from_version"] == 1
+            && record["no_recipient"] == 2
+            && record["expired"] == 1));
+        let connection = Connection::open(&path).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let rest: String = connection
+            .query_row("SELECT body FROM ledger", [], |row| row.get(0))
+            .unwrap();
+        assert!(!rest.contains("node_clocks"), "{rest}");
+        drop(connection);
+        let (_, again, opened) = LedgerStore::open(&path).unwrap();
+        assert_eq!(opened, Opened::Existing);
+        assert_eq!(again, read);
+    }
+
     /// B24: the ledger each released build left is what the first start of
     /// this one reads, imported whole, and the file it was in stays as it
     /// was; a later start reads the store.
