@@ -220,7 +220,9 @@ pub fn run(env: &Env, command: StoreCommand) -> Result<(), String> {
         PASS_WAIT
     } + SLACK;
     if command.confirms() {
-        eprintln!("Waiting for the operator to answer the confirm in their 내 차례…");
+        eprintln!(
+            "Waiting for the operator to answer the confirm in their 내 차례… If your tool stops waiting first, run the same command again: it waits on the same confirm."
+        );
     }
     let answer = (|| {
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;

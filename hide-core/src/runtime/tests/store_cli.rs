@@ -9,7 +9,7 @@ use super::*;
 use crate::agent_profiles::AnswerState;
 use crate::coordination::human_turn::HumanKind;
 use crate::runtime::store_cli::StoreAskWhat;
-use crate::store_command::{DECLINED, StoreCommand};
+use crate::store_command::{DECLINED, StoreCommand, UNANSWERED};
 use hide_kit::store::{
     ChangeOutcome, FoundSkill, Preview, SourceSpec, StoreChange, StoreRefusal, StoreRefusalCause,
     StoreReport,
@@ -154,6 +154,22 @@ fn the_answers_kept_drop_the_oldest_finished_one_past_their_limit() {
     assert!(ids.contains(&format!("r{}", crate::runtime::kit_store::ANSWER_LIMIT)));
 }
 
+fn add(shared: &Mutex<Runtime>) -> crate::store_command::Prepared {
+    shared
+        .lock()
+        .unwrap()
+        .prepare_store_command(
+            DEVICE,
+            PANE,
+            StoreCommand::Add {
+                source: source(),
+                names: Vec::new(),
+                machine: Some(DEVICE.to_owned()),
+            },
+        )
+        .expect("planned")
+}
+
 /// The machine's store read once, then an agent in `PANE` running
 /// `hide skill add <URL>`: its source is read and the confirm stands.
 fn asked(helper: &Arc<KitDevice>) -> (SharedRuntime, crate::store_command::Prepared, String) {
@@ -168,19 +184,7 @@ fn asked(helper: &Arc<KitDevice>) -> (SharedRuntime, crate::store_command::Prepa
     helper.answer_store(Ok(answered(vec![done(StoreChange::Inspect {
         source: source(),
     })])));
-    let prepared = shared
-        .lock()
-        .unwrap()
-        .prepare_store_command(
-            DEVICE,
-            PANE,
-            StoreCommand::Add {
-                source: source(),
-                names: Vec::new(),
-                machine: Some(DEVICE.to_owned()),
-            },
-        )
-        .expect("planned");
+    let prepared = add(&shared);
     settle(&shared);
     let asks = shared.lock().unwrap().snapshot().status.store_asks.clone();
     assert_eq!(asks.len(), 1, "the confirm stands");
@@ -255,4 +259,32 @@ fn an_agents_add_installs_the_skills_the_operator_left_ticked_once_confirmed() {
         })
     );
     assert!(!shared.lock().unwrap().human_turns_laid.contains_key(PANE));
+}
+
+#[test]
+fn the_same_add_run_again_from_the_same_pane_waits_on_the_confirm_already_standing() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let (shared, first, ask) = asked(&helper);
+
+    // An agent's tool gave up on the first command and runs it again.
+    let again = add(&shared);
+    assert_eq!(
+        shared.lock().unwrap().snapshot().status.store_asks.len(),
+        1,
+        "no second confirm"
+    );
+    let replaced = first.run().expect_err("the first waiter is let go");
+    assert!(replaced.starts_with(UNANSWERED), "{replaced}");
+    assert_eq!(
+        shared.lock().unwrap().snapshot().status.store_asks[0].id,
+        ask,
+        "letting the first go took nothing down"
+    );
+
+    dispatch(
+        &shared,
+        "store_ask_answer",
+        serde_json::json!({"id": ask, "confirm": false}),
+    );
+    assert_eq!(again.run(), Err(DECLINED.to_owned()));
 }

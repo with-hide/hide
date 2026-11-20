@@ -25,7 +25,7 @@ use crate::coordination::human_turn::HumanKind;
 use crate::model::{DeclaredHumanTurn, StoreAnswer};
 use crate::store_command::{
     BUSY, CONFIRM_WAIT, DECLINED, INVALID, NOT_FOUND, PASS_WAIT, Prepared, REFUSED,
-    StoreCommand, UNAVAILABLE, Waiting,
+    StoreCommand, UNANSWERED, UNAVAILABLE, Waiting,
 };
 
 /// The most commands waiting at once; past it a command is refused, since
@@ -75,6 +75,7 @@ pub(super) struct StoreAskAnswerPayload {
 }
 
 /// What a command does once its store work answers.
+#[derive(PartialEq)]
 enum Plan {
     /// One request whose outcome is the answer.
     Plain { item: Option<String> },
@@ -282,6 +283,32 @@ impl Runtime {
                 )
             }
         };
+        let wait = match plan {
+            Plan::Plain { .. } => PASS_WAIT,
+            _ => CONFIRM_WAIT,
+        };
+        // The same command again from the same pane, as an agent whose tool
+        // gave up on the first one runs it, waits on the run already
+        // standing instead of raising a second confirm (engineering rule
+        // 11); the first waiter is told, so it takes nothing down.
+        if let Some((run_id, run)) = self.store_runs.runs.iter_mut().find(|(_, run)| {
+            run.device_id == machine && run.pane_id == pane_id && run.plan == plan
+        }) {
+            let (reply, receiver) = channel();
+            let _ = std::mem::replace(&mut run.reply, reply).send(Err(refused(
+                UNANSWERED,
+                "the same command ran again and waits on this one's confirm",
+            )));
+            return Ok(Prepared {
+                answer: Waiting::On {
+                    run: run_id.clone(),
+                    receiver,
+                    wait,
+                },
+                runtime: context.runtime,
+                notifier: context.notifier,
+            });
+        }
         if self.store_runs.runs.len() >= RUN_LIMIT {
             return Ok(ready(Err(refused(
                 BUSY,
@@ -291,10 +318,6 @@ impl Runtime {
         self.store_runs.seq += 1;
         let run_id = format!("cli-{}-{}", super::kit_store::kit_store_now_ms(), self.store_runs.seq);
         let (reply, receiver) = channel();
-        let wait = match plan {
-            Plan::Plain { .. } => PASS_WAIT,
-            _ => CONFIRM_WAIT,
-        };
         let stage = match &plan {
             Plan::Plain { .. } => Stage::Applying {
                 request: run_id.clone(),
