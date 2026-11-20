@@ -748,6 +748,7 @@ impl Runtime {
                 false,
             ));
         }
+        next.note_own_met(row.own_lines_met(), now);
         let mut events = Vec::new();
         // A check failing again on the commit its rerun was for sends the
         // node back to work (B13).
@@ -868,7 +869,9 @@ impl Runtime {
             at_unix_ms: now,
         };
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+        let was_met = target.nodes[index].own_lines_met();
         let changed = target.nodes[index].criteria[at].skip(reason.clone(), decision, by);
+        target.nodes[index].note_own_met(was_met, now);
         if !changed {
             return Ok((
                 json!({"mission": self.mission_view_for(&id, &caller)}),

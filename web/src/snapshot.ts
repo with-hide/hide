@@ -1717,8 +1717,14 @@ export type MissionNode = {
   attention: MissionAttention | null;
   /** What Hide itself did to the node last (D-07, D-15). */
   hide: MissionHideMark | null;
-  /** Its review's or verification's failures in a row (hide-private issue 552); absent from an older core. */
-  review_fails?: number;
+  /** Its review's or verification's rounds against the mission's limit (`ReviewRounds`): null before a checker answered, absent from an older core. */
+  review_rounds?: MissionReviewRounds | null;
+  /** When it could have started, the mission's start or its last dependency done (`ready_at`); null while it cannot, absent from an older core. */
+  ready_at_unix_ms?: number | null;
+  /** When it last went to work, its start or back from a finish (`MissionNode::worked_at_unix_ms`): its work counts from here (`nodeSpans`); null for a node of a book from before it, absent from an older core. */
+  worked_at_unix_ms?: number | null;
+  /** When the lines its worker answers first all stood met in this run of its work (`MissionNode::own_met_at_unix_ms`): its work ends and its review and CI begin here (`nodeSpans`); null before then and for a node of a book from before it. */
+  own_met_at_unix_ms?: number | null;
   /** When Hide last read a new head on one of its pull requests. */
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
@@ -1765,7 +1771,10 @@ export type MissionWaitingOn =
   | { kind: "below"; node: string }
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
-/** What a node's warning is about (`WarningKind`): its review or verification failing in a row, a long quiet with no push, or its worker stopped. */
+/** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
+export type MissionReviewRounds = { line: string; rounds: number; limit: number };
+
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, a long quiet with no push, or its worker stopped. */
 export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
