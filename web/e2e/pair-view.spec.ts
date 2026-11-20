@@ -322,12 +322,12 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     const resizesBefore = resizes.get(left!) ?? 0;
     await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
     await page.mouse.down();
-    for (const step of [1, 2, 3, 4]) await page.mouse.move(grip.x + grip.width / 2 - step * 60, grip.y + grip.height / 2);
+    for (const step of [1, 2, 3, 4]) await page.mouse.move(grip.x + grip.width / 2 + step * 30, grip.y + grip.height / 2);
     await expect(page.locator("[data-lane-guide]")).toBeVisible();
     expect(resizes.get(left!) ?? 0, "no resize while dragging").toBe(resizesBefore);
     await page.mouse.up();
     // The landing is a ratio in thousandths, so the width lands within a pixel or two of the pointer.
-    await expect.poll(async () => Math.abs((await pairPane.boundingBox())!.width - (start.width - 240))).toBeLessThanOrEqual(2);
+    await expect.poll(async () => Math.abs((await pairPane.boundingBox())!.width - (start.width + 120))).toBeLessThanOrEqual(2);
     await expect.poll(() => (resizes.get(left!) ?? 0) - resizesBefore).toBe(1);
     await quietFor(page, 500, "no second resize follows the landing");
     expect((resizes.get(left!) ?? 0) - resizesBefore).toBe(1);
