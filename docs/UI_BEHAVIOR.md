@@ -2834,7 +2834,7 @@ All pages use the four interface languages, existing settings rows, system contr
 Settings opens as one modal, from ⌘,, the sidebar's gear and the desktop menu's Settings…, about 880 wide (`--size-settings-sheet-w`) and as wide and tall as the window allows with the window inset (`--size-settings-sheet-window-inset`) clear on every side (PRD settings-left-nav B1, B13).
 Its left is a list of pages and its right the chosen page; the list keeps its width (`--size-settings-nav-w`) and its place while only the page scrolls, down to the smallest window, 720×480 (B12, B13).
 The title above the list names the computer whose settings these are, as the window names it: `이 Mac 설정` on that machine's own window, and the machine's name in its place on a window another machine shows of it (`settings.titleOf`, operator decision 2026-11-19).
-The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Hide AI, Mission, Mobile, External tools, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
+The list reads, top to bottom: the group name `App` with General, Notifications, Usage, Devices and Shortcuts, the group name the core's machine goes by (`This Mac`, as the sidebar calls it, and its name on a window of a machine whose core runs elsewhere, since Hide AI, Mobile and GitHub are the core's machine's) with Agents, Skills & MCP, Hide AI, Mission, Mobile, External tools, GitHub and Labs, and About followed by Privacy apart at the list's foot (B2).
 Its top inset uses `spacing-sm` and group labels use `spacing-xs` above and below, so the additional Usage page fits at 720×480 with the default Interface text without shrinking row targets.
 When Interface text makes the list overflow, its grouped pages scroll independently while About and Privacy stay pinned at the foot; every page remains reachable by pointer or keyboard, and scrolling either the list or the page does not move the other.
 Each page has its mark and its name, the names are the same in every language, and a group name is a label, never a page.
@@ -3155,6 +3155,29 @@ A device whose own record waits gets the saved choice once per run, by what is i
 A device that still waits after it was sent the choice is logged once (`first_run_choice.unanswered`) and not sent it again until it reconnects.
 Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code", `Hide AI가 쓰는 에이전트: Claude Code`), read from this machine's rows of `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
 An agent installed later appears in these rows off and is never turned on by a pass.
+
+### Skills & MCP
+
+Skills & MCP is a page of Settings' machine group, after Agents, and shows one machine's store of skills and MCP servers at a time (PRD skill-mcp-manager; layout C, operator decision 2026-11-20).
+Its head holds `n updates` while a check found newer versions, the machine picker when Hide knows more than one machine, `Copy from <machine>` on another machine's page, and Add.
+Each kind is one table under its title and count, with no other view.
+A skill row has one cell per skill folder: Claude, Shared and Antigravity; Shared's head names the installed agents that read that folder (Codex, Grok, OpenCode, Pi, omp), and its hint says so and that Grok and omp read the Claude folder as well.
+An MCP row has one cell per agent, since each agent keeps its own MCP file.
+Only agents installed and switched on in Settings › Agents have a cell.
+A cell shows its state and nothing else, and is no switch: ● on, ○ off, — not supported by that agent, ! failed, and `Already there` for a copy of the same name Hide did not write; a cell on that an agent session started before still runs without says `From new sessions` in its hint.
+Each row has one switch at its end, which turns the item on or off for every agent; a row on somewhere but not everywhere draws its switch on, and pressing it turns the item on everywhere (D-40).
+`hide skill off <name> --agent <agent>` can still leave a row partly on, which its cells show.
+Beside the name stands the short version: the tag, else the commit's first seven characters, `folder`, `remote` or `npm latest`, with a dot when a newer version was found (B36).
+A press anywhere on a row but its switch unfolds it below itself, and a second press folds it: a skill shows its description, its source (a folder source `follows the folder`, or `using the last copy` when the folder is gone) and its file count with `▲ n executable`; a server shows its command or address and its keys as `NAME ••••••` with Edit, which opens a dialog that takes new values and never shows the old ones.
+Under them stands each cell that needs a press: a failed cell with its reason and Retry, and an `Already there` cell with Take over, which makes that copy the item; then `Update` when a newer version was found, `Show files`, `Open folder` or `Open source`, and Delete.
+Delete takes the item out of every agent at once and leaves a notice with Undo, which brings it back whole; the undo list under the tables keeps the newest twenty, and bringing back a name the store holds again says it cannot come back while an item of that name is in the list.
+`Only in agents` lists what agents hold that Hide did not write, each with `Apply to all`, or a choice of whose copy when the copies differ.
+Add takes a GitHub address, a git URL or a folder, reads it, asks which skills when it holds several, and confirms the files (`▲` marks an executable one) and the agents each will reach before it installs; anything else is read as an MCP paste (a command, an address or a README's JSON), whose fields the operator checks and whose key values are typed into hidden fields on this screen only.
+An update opens with what changes: the files added and removed with their lines, the files that became executable and the commits' subjects, and takes nothing until confirmed; `n updates` walks every item a check found newer and checks again as it opens.
+An agent's `hide skill add`, `hide skill update`, `hide mcp add` or `hide mcp update` stands as that agent's person's turn, `Install confirm · <name>` ([status-model.md](status-model.md#a-persons-turn-an-agent-declares)), and 확인하기 opens this page on that machine with the same confirm, whose Install or Cancel the command waits for; the page also lists the confirms waiting on it at its head.
+Before the machine's first report the page shows three quiet rows, and a machine with nothing yet says `Nothing on <machine> yet` with Add (and `Copy from` on another machine).
+A machine that is not connected shows its last tables dimmed with no control and one line saying so; a store whose MCP keys' secret was lost says that nothing can change and links the start-over by hand ([agent-hooks.md](agent-hooks.md#when-the-mcp-keys-secret-is-lost)).
+Test owners: `web/e2e/skills-mcp.spec.ts`, `web/e2e/skills-mcp-cli.spec.ts`, `web/src/settings/SkillsTab.test.tsx` and `web/src/settings/skillsMcp.test.ts`.
 
 ### Mission
 

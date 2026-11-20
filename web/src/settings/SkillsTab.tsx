@@ -437,9 +437,9 @@ function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColum
       <tr className={cn("cursor-pointer border-t border-border first:border-t-0 hover:bg-accent/40", open && "bg-accent/40")} onClick={() => setOpen((now) => !now)} data-store-row={item.id} data-store-open={open ? "true" : "false"}>
         <td className="px-md py-sm">
           <span className="flex min-w-0 items-center gap-sm">
-            <button type="button" aria-expanded={open} aria-label={t("store.expand", { name: item.name })} className="inline-flex shrink-0 rounded-xs text-muted-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-store-row-toggle={item.id}>
-              <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
-            </button>
+            <Button variant="row-action" size="icon-sm" aria-expanded={open} aria-label={t("store.expand", { name: item.name })} className="shrink-0" data-store-row-toggle={item.id}>
+              <ChevronRightIcon aria-hidden="true" className={cn("transition-transform", open && "rotate-90")} />
+            </Button>
             <span className="truncate text-subhead font-medium text-foreground">{item.name}</span>
             <Version item={item} />
             {item.folder_missing ? <Badge variant="outline" className="border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}

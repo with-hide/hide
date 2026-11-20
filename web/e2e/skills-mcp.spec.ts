@@ -176,7 +176,7 @@ test("an update shows what changes before it is taken, a delete can be undone, a
   }
 });
 
-test("another machine is picked at the head, and one that is not connected says so with Reconnect and no controls", async ({ page }) => {
+test("another machine is picked at the head, and one that is not connected says so and offers no change", async ({ page }) => {
   const fixture = await startStore("store-devices", { ssh: true });
   try {
     writeSshHost(fixture.daemon, "studio");
