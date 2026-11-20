@@ -96,7 +96,6 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
   const readPreview = read.done ? (report.previews.find((row) => row.id === read.made) ?? null) : null;
   const readPaste = read.done ? (report.mcp_previews?.find((row) => row.id === read.made) ?? null) : null;
   const lost = read.done && !readPreview && !readPaste;
-  const unread = readPaste !== null && readPaste.servers.length === 0;
 
   // A read that answered: on to picking, or straight to the confirm for one skill, or to a pasted server's fields.
   useEffect(() => {
@@ -107,7 +106,7 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
       return;
     }
     const first = readPaste?.servers.find((server) => !server.taken) ?? readPaste?.servers[0] ?? null;
-    if (readPaste && first) setStage({ kind: "mcp", preview: readPaste.id, server: first.server, index: readPaste.servers.indexOf(first) });
+    if (readPaste) setStage({ kind: "mcp", preview: readPaste.id, server: first?.server ?? { name: "", reach: { kind: "local", command: "", args: [], env: [] } }, index: first ? readPaste.servers.indexOf(first) : null });
   }, [readPreview, readPaste, stage.kind]);
   useEffect(() => {
     if (apply.done) onClose();
@@ -200,7 +199,6 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
         {t("store.add.mcpHint")}
       </span>
       {read.refusal ? <Note tone="error" data-store-add-refused={read.refusal}>{refusalText(read.refusal, t)}</Note> : null}
-      {unread ? <Note tone="error">{t("store.mcp.nothing")}</Note> : null}
       {lost ? <Note tone="error" data-store-add-refused="not_found">{refusalText("not_found", t)}</Note> : null}
     </StoreDialog>
   );

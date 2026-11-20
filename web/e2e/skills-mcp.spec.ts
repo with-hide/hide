@@ -105,6 +105,21 @@ test("a skill is added from a git address and from a folder, picked and confirme
     const machine = await openStore(page, fixture.daemon);
     await expect(machine.locator(`[data-store-empty="${fixture.daemon.node}"]`)).toContainText(/Nothing on This (Mac|PC|computer) yet/);
 
+    // B8: an unreadable paste still lets the operator enter a server by hand.
+    await machine.locator("[data-store-empty-add]").click();
+    await page.locator("[data-store-add-input]").fill('{"mcpServers": invalid}');
+    await page.locator("[data-store-add-next]").click();
+    const manual = page.locator('[data-store-dialog="mcp"]');
+    await expect(manual.locator("[data-store-mcp-name]")).toHaveValue("", { timeout: 60_000 }); // wait-ok: the kit's paste read
+    await expect(manual.locator("[data-store-mcp-command]")).toHaveValue("");
+    await expect(manual.locator("[data-store-mcp-next]")).toBeDisabled();
+    await manual.locator("[data-store-mcp-name]").fill("manual");
+    await manual.locator("[data-store-mcp-command]").fill("npx");
+    await manual.locator("[data-store-mcp-next]").click();
+    const manualConfirm = page.locator('[data-store-dialog="mcp-confirm"]');
+    await expect(manualConfirm).toContainText("npx");
+    await manualConfirm.locator("[data-store-cancel]").click();
+
     // A source with several skills asks which; the ones left ticked are confirmed with their names, descriptions and agents.
     await machine.locator("[data-store-empty-add]").click();
     await page.locator("[data-store-add-input]").fill(fixture.repos.archify);
