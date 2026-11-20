@@ -75,6 +75,10 @@ pub(crate) struct NodeFacts {
     /// The node waits on the operator alone (`Runtime::operator_waits`):
     /// settling a stall reads the same answer raising it did.
     pub operator_waits: bool,
+    /// A heal is bringing the worker back after its work was cut
+    /// (`Runtime::healing`): neither its stop nor its quiet is its own, so
+    /// neither warns (PRD letters-missions-simplify B19).
+    pub healing: bool,
 }
 
 /// A worker whose row reads stopped with nothing of its own to wait on: no
@@ -660,6 +664,7 @@ pub(crate) fn stopped_worker<'a>(
         .is_some_and(|raise| raise.reason != AttentionReason::WarningStood);
     let stands = node_works(mission, node)
         && fact.worker == Some(WorkerLife::Running)
+        && !fact.healing
         && !stall_excused(mission, node, operator_waits)
         && !raised
         && owed_elsewhere(mission, node, pulls, operator_waits) == Some(false);
@@ -722,6 +727,7 @@ pub(crate) fn warn_acts(
         let fact = facts.get(at);
         let stopped =
             fact.and_then(|fact| stopped_worker(mission, node, fact, pulls, operator_waits));
+        let healing = fact.is_some_and(|fact| fact.healing);
         match standing(WarningKind::Stopped) {
             Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
                 node: at,
@@ -766,10 +772,13 @@ pub(crate) fn warn_acts(
         }
         let quiet = node.quiet_since();
         match standing(WarningKind::NoPush) {
+            // A warning not told yet is held while the worker is healed:
+            // the restart, not the worker, holds its push (B19).
             Some(warning)
                 if !works
                     || stopped.is_some()
-                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
+                    || quiet.is_some_and(|since| since > warning.from_unix_ms)
+                    || (healing && warning.told_unix_ms.is_none()) =>
             {
                 acts.push(WarnAct::Clear {
                     node: at,
@@ -778,6 +787,7 @@ pub(crate) fn warn_acts(
             }
             None if works
                 && stopped.is_none()
+                && !healing
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && quiet_waits(mission, node, pulls, operator_waits) == Some(false) =>
@@ -1831,6 +1841,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// PRD letters-missions-simplify B19: while a heal brings a node's
+    /// worker back, neither its stop nor its quiet warns; once it is back,
+    /// the same facts warn as before.
+    #[test]
+    fn a_worker_being_healed_raises_no_stopped_or_no_push_warning() {
+        let m = reviewed();
+        let pulls = listed(Vec::new());
+        let stopped = |healing| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            stopped: Some(WorkerStopped {
+                since_unix_ms: 0,
+                cause: None,
+            }),
+            healing,
+            ..Default::default()
+        };
+        let quiet = |healing| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            healing,
+            ..Default::default()
+        };
+        let late = 200 * MINUTE;
+        assert!(warn_acts(&m, Some(&pulls), &[stopped(true)], &[false], late).is_empty());
+        assert!(warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late).is_empty());
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[stopped(false)], &[false], late),
+            [WarnAct::Raise {
+                node: 0,
+                kind: WarningKind::Stopped,
+                from: 0,
+                cause: None,
+            }]
+        );
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[quiet(false)], &[false], late),
+            [WarnAct::Raise {
+                node: 0,
+                kind: WarningKind::NoPush,
+                from: 0,
+                cause: None,
+            }]
+        );
+        // A warning raised before the heal and not told yet is held; one
+        // already told stays as it was.
+        let mut m = reviewed();
+        let mut untold = warn(WarningKind::NoPush, 0);
+        untold.told_unix_ms = None;
+        m.nodes[0].warnings.push(untold);
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late),
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::NoPush,
+            }]
+        );
+        m.nodes[0].warnings[0].told_unix_ms = Some(1);
+        assert!(warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late).is_empty());
     }
 
     /// with-hide/hide-private#552: a change at work warns at ninety minutes

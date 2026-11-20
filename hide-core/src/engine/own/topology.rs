@@ -115,15 +115,10 @@ struct Tab {
 pub(super) enum Restored {
     /// The agent the save named, whose resume the restore has yet to type
     /// into the pane's new shell. Saved as the pane's agent, so a daemon that
-    /// ends before the line is typed leaves it to the next restore; never
-    /// projected, since nothing of it runs.
+    /// ends before the line is typed leaves it to the next restore; projected
+    /// only as a pane being healed (`ProjectionState::healing`), since nothing
+    /// of it runs.
     Resume(PaneAgent),
-    /// An agent that had finished its turn and is not started again: the
-    /// pane is a shell, and the core keeps the agent as a sleeping one that
-    /// a visit wakes (`ProjectionState::resting`). Saved as the pane's agent,
-    /// so a daemon that ends before the core's record is on disk, or the
-    /// next reboot, finds it again.
-    Resting(PaneAgent),
     /// An agent whose resume did not bring it back: none could be typed, or
     /// the one typed ended without the agent running. The pane is a shell,
     /// and the core ends the agent's registration
@@ -136,7 +131,7 @@ impl Restored {
     /// The agent the pane's save keeps for the next restore.
     fn saved(&self) -> Option<&PaneAgent> {
         match self {
-            Self::Resume(agent) | Self::Resting(agent) => Some(agent),
+            Self::Resume(agent) => Some(agent),
             Self::NotResumed(_) => None,
         }
     }
@@ -1128,7 +1123,7 @@ impl Topology {
             panes: Vec::new(),
             layouts: Vec::new(),
             agents: Vec::new(),
-            resting: Vec::new(),
+            healing: Vec::new(),
             not_resumed: Vec::new(),
             not_carried: self.not_carried.clone(),
             settles_at: self.next_start_change(now),
@@ -1200,19 +1195,8 @@ impl Topology {
                         ));
                     } else {
                         match &pane.restored {
-                            Some(Restored::Resting(agent)) if pane.agent.is_none() => {
-                                state.resting.push(ProjectedAgent {
-                                    agent_status: Some(Status::Idle.as_str().to_owned()),
-                                    ..projected_agent(
-                                        &workspace.id,
-                                        &tab.id,
-                                        &pane_id,
-                                        pane,
-                                        agent,
-                                        catalog,
-                                        now,
-                                    )
-                                });
+                            Some(Restored::Resume(_)) => {
+                                state.healing.push(pane_id.clone());
                             }
                             Some(Restored::NotResumed(left)) => {
                                 state.not_resumed.push(left.clone());
@@ -1860,12 +1844,6 @@ impl Topology {
                                 && agent.live.start_previous_name.as_deref() == Some(name)))
                 })
         })
-    }
-
-    /// Keeps `agent` as the one resting in `pane`, a shell with no agent;
-    /// answers whether the pane is there to keep it.
-    pub(super) fn rest(&mut self, pane: &str, agent: PaneAgent) -> bool {
-        self.restore_leaves(pane, Restored::Resting(agent))
     }
 
     /// The restore after a device's switch ended, having closed `panes`
@@ -2612,51 +2590,38 @@ mod tests {
         assert_eq!(topology.active_tab(&first.workspace).unwrap(), "h1:t2");
     }
 
-    /// A restore leaves an agent that rested resting in its pane. It is
-    /// saved as the pane's agent, so a daemon that ends before the core's
-    /// sleep record is on disk finds it again; a start whose input is
-    /// refused gives it back; an agent that shows in the pane ends it.
+    /// A pane whose agent a restore has yet to resume is named as one being
+    /// healed, and its agent is saved as the pane's, so a daemon that ends
+    /// before the resume is typed resumes it next time; an agent that shows
+    /// in the pane ends the heal.
     #[test]
-    fn a_resting_agent_is_saved_given_back_by_a_refused_start_and_gone_once_one_shows() {
+    fn a_pane_waiting_for_its_resume_is_named_healing_and_saved_with_its_agent() {
         let mut topology = Topology::default();
         let pane = workspace(&mut topology).pane;
         let catalog = Catalog::read(Vec::new());
-        let named = |topology: &Topology| {
-            topology
-                .state_at(&catalog, Instant::now())
-                .unwrap()
-                .resting
-                .into_iter()
-                .map(|agent| agent.agent_session.map(|session| session.value))
-                .collect::<Vec<_>>()
-        };
-        let resting = PaneAgent {
+        let healing =
+            |topology: &Topology| topology.state_at(&catalog, Instant::now()).unwrap().healing;
+        let cut = PaneAgent {
             kind: "claude".to_owned(),
             session: Some("s-2".to_owned()),
             ..PaneAgent::default()
         };
-        assert!(topology.rest(&pane, resting));
-        assert_eq!(named(&topology), vec![Some("s-2".to_owned())]);
+        topology.pane_mut(&pane).unwrap().restored = Some(Restored::Resume(cut));
+        assert_eq!(healing(&topology), vec![pane.clone()]);
         let saved = topology.to_saved();
         let saved_agent = saved.workspaces[0].tabs[0].panes[0].agent.as_ref().unwrap();
         assert_eq!(saved_agent.session.as_deref(), Some("s-2"));
 
-        let start = topology
-            .start_agent(&pane, PaneAgent::started("codex", None, None), None)
+        topology
+            .start_agent(
+                &pane,
+                PaneAgent::resumed("claude", None, Some("s-2".to_owned())),
+                None,
+            )
             .unwrap();
-        assert!(named(&topology).is_empty(), "the start is the pane's agent");
-        assert!(topology.finish_agent_start(&pane, start, true));
-        assert_eq!(
-            named(&topology),
-            vec![Some("s-2".to_owned())],
-            "a refused start gives it back"
-        );
-
-        topology.set_agent_session(&pane, "claude", "s-3").unwrap();
-        topology.pane_mut(&pane).unwrap().agent = None;
         assert!(
-            named(&topology).is_empty(),
-            "an agent showed in the pane, and it is not named again once that one ends"
+            healing(&topology).is_empty(),
+            "the resume is the pane's agent"
         );
     }
 

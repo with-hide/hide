@@ -822,7 +822,9 @@ impl Runtime {
         let ended = crate::coordination::not_resumed_registrations(
             ledger, device, host_scope, &left, &shown,
         );
+        let ids: Vec<String> = ended.iter().map(|(id, _)| id.clone()).collect();
         self.registrations_gone.extend(ended);
+        self.heal_not_woken(&ids);
     }
 
     /// The registration the live execution in `pane` holds, which a sleep
@@ -2316,11 +2318,7 @@ impl Runtime {
                 || *actor
                     == Actor::hide(super::unreadable_letters::DELIVERY_ROLE, self.node.as_str())
                 || *actor == Actor::hide(super::blocked_children::BLOCKED_ROLE, self.node.as_str())
-                || *actor
-                    == Actor::hide(
-                        super::transition_letters::TRANSITION_ROLE,
-                        self.node.as_str(),
-                    )
+                || *actor == Actor::hide(super::heal_letters::HEAL_ROLE, self.node.as_str())
                 || (*actor == Actor::hide(crate::delivery::HIDE_DESK_ROLE, self.node.as_str())
                     && self.desk_installed())
                 || *actor == Actor::operator(self.node.as_str()))

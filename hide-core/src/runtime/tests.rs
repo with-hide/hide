@@ -88,6 +88,7 @@ mod group_start_admission;
 mod group_tabs;
 mod group_tabs_remote;
 mod guardrails;
+mod heal;
 #[path = "tests/herdr_import.rs"]
 mod herdr_import;
 mod hide_ai_devices;
