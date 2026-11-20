@@ -38,6 +38,31 @@ pub fn raise_open_file_limit() -> io::Result<Option<OpenFileLimit>> {
     Ok(None)
 }
 
+/// Starts `command`'s program with the open-file limit this process started
+/// with, as a resident child starts: for a child that is no resident but
+/// starts the operator's programs itself, such as a guest's node, which
+/// raises its own limit and gives its holders back the one it started with.
+/// Nothing changes when this process raised nothing, or on Windows.
+pub fn keep_starting_open_file_limit(command: &mut std::process::Command) {
+    #[cfg(unix)]
+    if let Some(limit) = starting_limit() {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: after the fork the closure makes one system call,
+        // `setrlimit`, on a structure it owns; it allocates nothing and takes
+        // no lock.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    let _ = command;
+}
+
 /// The limit this process started with, when [`raise_open_file_limit`] has
 /// changed it, for a resident child to start with.
 #[cfg(unix)]

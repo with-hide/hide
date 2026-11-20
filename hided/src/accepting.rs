@@ -130,13 +130,16 @@ impl Drop for CloseOnDrop {
 
 /// Hands each connection `accept` takes to `accepted` until the listener is
 /// closed or nothing receives any more. A failed accept is recorded as
-/// `<component>`'s `kind`, with its message and the wait before the next try.
+/// `<component>`'s `kind`, with its message and the wait before the next try,
+/// which `pause` waits out: [`park_unless_closed`] for a listener, the
+/// test's own clock in a test.
 pub fn accept_until_closed<S>(
     mut accept: impl FnMut() -> io::Result<S>,
     accepted: &tokio::sync::mpsc::Sender<S>,
     closed: &AtomicBool,
     health: &ListenerHealth,
     (component, kind): (&'static str, &'static str),
+    mut pause: impl FnMut(Duration),
 ) {
     let mut wait = RETRY_FIRST;
     loop {
@@ -157,56 +160,71 @@ pub fn accept_until_closed<S>(
                     "message": error.to_string(),
                     "retry_ms": wait.as_millis() as u64,
                 }));
-                // A park the close ends early (`CloseOnDrop::wakes`); a
-                // spurious wake only shortens one wait.
-                let until = Instant::now() + wait;
-                while !closed.load(Ordering::SeqCst) {
-                    let left = until.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        break;
-                    }
-                    std::thread::park_timeout(left);
-                }
+                pause(wait);
                 wait = (wait * 2).min(RETRY_MAX);
             }
         }
     }
 }
 
+/// Waits `wait` on a park the listener's close ends early
+/// ([`CloseOnDrop::wakes`]); a spurious wake only shortens one wait.
+pub fn park_unless_closed(wait: Duration, closed: &AtomicBool) {
+    let until = Instant::now() + wait;
+    while !closed.load(Ordering::SeqCst) {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::park_timeout(left);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+    use std::sync::mpsc;
+
     use super::*;
 
     const HANG_LIMIT: Duration = Duration::from_secs(30);
 
-    /// An accept that runs out of descriptors is tried again, the listener
-    /// reads `failing` meanwhile, and the next connection is taken.
+    fn out_of_descriptors<S>() -> io::Result<S> {
+        Err(io::Error::other("Too many open files (os error 24)"))
+    }
+
+    /// Accepts that keep running out of descriptors are tried again after a
+    /// wait that doubles from 100 ms to 5 s (docs/ARCHITECTURE.md), the
+    /// listener reads `failing` meanwhile, the next connection is taken, and
+    /// a failure after it waits 100 ms again. The waits are the test's clock.
     #[tokio::test]
-    async fn an_accept_out_of_descriptors_is_tried_again_and_the_next_connection_is_taken() {
+    async fn accepts_out_of_descriptors_back_off_and_the_next_connection_is_taken() {
         let health = Arc::new(ListenerHealth::default());
         let closed = Arc::new(AtomicBool::new(false));
+        let waits = Arc::new(Mutex::new(Vec::new()));
         let (accepted, mut arrivals) = tokio::sync::mpsc::channel(1);
-        // The second accept waits until the test has read `failing`, and the
-        // third until the test closes the listener, as a closed listener's
-        // waiting accept returns.
-        let (release, released) = std::sync::mpsc::channel::<()>();
-        let (failed, failure_seen) = std::sync::mpsc::channel::<()>();
-        let (close, closing) = std::sync::mpsc::channel::<()>();
+        // The ninth accept waits until the test has read `failing`, and the
+        // twelfth until the test closes the listener, as a closed
+        // listener's waiting accept returns.
+        let (release, released) = mpsc::channel::<()>();
+        let (failed, failures_seen) = mpsc::channel::<()>();
+        let (close, closing) = mpsc::channel::<()>();
         let thread = {
-            let health = Arc::clone(&health);
-            let closed = Arc::clone(&closed);
+            let (health, closed, waits) =
+                (Arc::clone(&health), Arc::clone(&closed), Arc::clone(&waits));
             std::thread::spawn(move || {
                 let mut tries = 0;
                 accept_until_closed(
                     move || {
                         tries += 1;
                         match tries {
-                            1 => Err(io::Error::other("Too many open files (os error 24)")),
-                            2 => {
+                            1..=8 | 10 => out_of_descriptors(),
+                            9 => {
                                 failed.send(()).unwrap();
                                 released.recv_timeout(HANG_LIMIT).unwrap();
                                 Ok("the next connection")
                             }
+                            11 => Ok("the one after"),
                             _ => {
                                 closing.recv_timeout(HANG_LIMIT).unwrap();
                                 Err(io::Error::from(io::ErrorKind::ConnectionAborted))
@@ -217,20 +235,29 @@ mod tests {
                     &closed,
                     &health,
                     ("test", "test.accept_failed"),
+                    |wait| waits.lock().unwrap().push(wait.as_millis()),
                 );
             })
         };
-        tokio::task::spawn_blocking(move || failure_seen.recv_timeout(HANG_LIMIT))
+        tokio::task::spawn_blocking(move || failures_seen.recv_timeout(HANG_LIMIT))
             .await
             .unwrap()
             .expect("the accept was not tried again");
         assert_eq!(health.state(), ListenerState::Failing);
+        assert_eq!(
+            *waits.lock().unwrap(),
+            [100, 200, 400, 800, 1600, 3200, 5000, 5000]
+        );
         release.send(()).unwrap();
-        let taken = tokio::time::timeout(HANG_LIMIT, arrivals.recv())
-            .await
-            .expect("no connection was handed over");
-        assert_eq!(taken, Some("the next connection"));
+        for expected in ["the next connection", "the one after"] {
+            let taken = tokio::time::timeout(HANG_LIMIT, arrivals.recv())
+                .await
+                .expect("no connection was handed over");
+            assert_eq!(taken, Some(expected));
+        }
         assert_eq!(health.state(), ListenerState::Accepting);
+        // The failure between the two connections waited the first wait.
+        assert_eq!(waits.lock().unwrap().last(), Some(&100));
         // The listener's own close ends the thread.
         closed.store(true, Ordering::SeqCst);
         close.send(()).unwrap();
@@ -238,5 +265,43 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    /// The listener's close wakes an accept thread from its wait between
+    /// tries, here an hour long, and the thread ends.
+    #[test]
+    fn the_close_ends_an_accept_thread_parked_between_tries() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener =
+            hide_platform::ipc::LocalListener::bind(&directory.path().join("listener")).unwrap();
+        let mut closing = CloseOnDrop::new(listener.closer());
+        let closed = closing.closed();
+        let health = ListenerHealth::default();
+        let (accepted, _arrivals) = tokio::sync::mpsc::channel::<()>(1);
+        let (parking, parked) = mpsc::channel::<()>();
+        let (ended, end_seen) = mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            accept_until_closed(
+                out_of_descriptors,
+                &accepted,
+                &closed,
+                &health,
+                ("test", "test.accept_failed"),
+                |_| {
+                    let _ = parking.send(());
+                    park_unless_closed(Duration::from_secs(3600), &closed);
+                },
+            );
+            ended.send(()).unwrap();
+        });
+        closing.wakes(thread.thread().clone());
+        parked
+            .recv_timeout(HANG_LIMIT)
+            .expect("the accept never failed");
+        drop(closing);
+        end_seen
+            .recv_timeout(HANG_LIMIT)
+            .expect("the close did not end the thread's wait");
+        thread.join().unwrap();
     }
 }

@@ -260,10 +260,13 @@ fn starter() {
     };
     #[cfg(windows)]
     let _job = windows_job::enter(&setup);
-    let raised = if setup.contains("raise_open_files") {
-        // Started low, as launchd starts an app, so the raise moves it.
+    let raised = if setup.contains("raise_open_files") || setup.contains("raise_only") {
+        // Started low, as launchd starts an app, so the raise moves it; a
+        // guest's node starts with what its starter gave it.
         #[cfg(unix)]
-        set_soft_open_file_limit(STARTER_OPEN_FILES);
+        if setup.contains("raise_open_files") {
+            set_soft_open_file_limit(STARTER_OPEN_FILES);
+        }
         match hide_platform::process::raise_open_file_limit().unwrap() {
             Some(limit) => format!(
                 "raised_before={} raised_after={}",
@@ -274,6 +277,22 @@ fn starter() {
     } else {
         String::new()
     };
+    if setup.contains("through_guest") {
+        // As the core starts a guest's node: an ordinary child that raises
+        // its own limit and starts the residents, here one, and ends.
+        let mut guest = role_command("starter");
+        guest.env(SETUP, "raise_only exit");
+        hide_platform::process::keep_starting_open_file_limit(&mut guest);
+        let output = guest.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text
+            .lines()
+            .find_map(|line| line.find("STARTED ").map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("the guest answered nothing: {text}"));
+        println!("{line}");
+        live_out_role();
+        return;
+    }
     // An ordinary child beside the resident, started as any child is: it
     // stays in the starter's group (Unix) or job (Windows).
     let ordinary = setup.contains("ordinary").then(|| {
@@ -569,6 +588,26 @@ fn a_resident_child_starts_with_the_open_file_limit_its_starter_started_with() {
         assert_eq!(field(&line, "raised_before"), started_with, "{line}");
         let raised: libc::rlim_t = field(&line, "raised_after").parse().unwrap();
         assert!(raised > STARTER_OPEN_FILES, "{line}");
+        assert_eq!(field(&line, "open_files"), started_with, "{line}");
+    }
+    #[cfg(windows)]
+    assert_eq!(field(&line, "raised"), "none", "{line}");
+}
+
+/// A guest's node is no resident: the core starts it as an ordinary child,
+/// with the limit the core started with, and the node raises its own and
+/// starts its holders with that one. The chain core -> guest node -> holder.
+#[test]
+fn a_guest_node_and_its_holders_start_with_the_limit_the_core_started_with() {
+    let (_core, line) = run_starter("raise_open_files through_guest");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let _holder = Started::new(field(&line, "pid").parse().unwrap());
+    #[cfg(unix)]
+    {
+        let started_with = STARTER_OPEN_FILES.to_string();
+        // The guest's node started with the core's original limit ...
+        assert_eq!(field(&line, "raised_before"), started_with, "{line}");
+        // ... and so does its holder.
         assert_eq!(field(&line, "open_files"), started_with, "{line}");
     }
     #[cfg(windows)]

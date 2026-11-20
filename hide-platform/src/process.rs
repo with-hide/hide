@@ -38,7 +38,8 @@
 //!   child's whole tree when its deadline passes or the caller stops waiting.
 //! - [`raise_open_file_limit`] lifts this process's soft open-file limit to
 //!   the most the system takes, and a resident child starts with the limit
-//!   this process started with.
+//!   this process started with; [`keep_starting_open_file_limit`] starts any
+//!   other child with it too.
 //! - [`set_output_aside`] keeps this process's own output, when the system
 //!   appends it to a file, to that file and the one set aside before it.
 //! - A pid that names no process a caller may signal (0 and 1) is refused with
@@ -60,7 +61,7 @@ mod open_files;
 mod resident;
 mod session;
 
-pub use open_files::{OpenFileLimit, raise_open_file_limit};
+pub use open_files::{OpenFileLimit, keep_starting_open_file_limit, raise_open_file_limit};
 
 pub use resident::{
     JobLimits, LENT_KEY, Lent, MAX_LENT, Resident, ResidentCommand, Taken, own_job, start_resident,

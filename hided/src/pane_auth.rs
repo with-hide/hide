@@ -32,7 +32,7 @@ use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
 use serde_json::json;
 
-use crate::accepting::{CloseOnDrop, accept_until_closed};
+use crate::accepting::{CloseOnDrop, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::state_file::new_token;
 
@@ -1194,6 +1194,7 @@ pub async fn serve(
                     &closed,
                     &health,
                     ("pane_auth", "bootstrap.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
                 );
             })
     };

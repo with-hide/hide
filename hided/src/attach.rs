@@ -37,7 +37,7 @@ use hide_platform::ipc::LocalStream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::accepting::{CloseOnDrop, ListenerHealth, accept_until_closed};
+use crate::accepting::{CloseOnDrop, ListenerHealth, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::relay::RelayRequests;
 use crate::state_file::new_token;
@@ -401,6 +401,7 @@ pub async fn serve(
                     &closed,
                     &health,
                     ("node_link", "attach.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
                 );
             })
     };
