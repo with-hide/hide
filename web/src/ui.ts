@@ -18,6 +18,7 @@ import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
 import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
+import type { AutomationExample } from "./automationDraft";
 
 export type { ViewFocusRequest } from "./viewLayout";
 
@@ -77,7 +78,7 @@ export type PendingViewsClose = {
  * the external tool `tool` names, whose cell is then in front
  * (`frontTool`, PRD hide-external-control D-54, B40).
  */
-export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string };
+export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string } | { kind: "automations" };
 
 /**
  * The mission screen's page state (PRD mission-screen D-10): the device it
@@ -99,6 +100,31 @@ export type MissionPlace = {
 };
 
 export const MISSION_ENTRY: MissionPlace = { deviceId: null, selected: null, projectId: null, closedAll: false, scroll: 0 };
+
+/**
+ * Where the automation screen stands (PRD automations D-02): the table, an
+ * automation's detail with the run its terminal shows, or the form. Page
+ * navigation, never saved; the core hears only the run whose terminal shows
+ * (`automation_run_viewing`, B15) and that a detail was opened (`automation_seen`, B11).
+ */
+export type AutomationPlace = {
+  /** The automation the detail shows; null shows the table. */
+  selected: string | null;
+  /** The run whose terminal the detail shows (B16, B17); null shows the run list alone. */
+  run: number | null;
+  /** The form, new or editing the selected automation (B4, B26); null shows the table or the detail. */
+  form: "new" | "edit" | null;
+  /**
+   * The selected automation and run are what the core just answered a make
+   * with (B8): they wait for the section that holds them instead of reading
+   * as removed, since the answer and the snapshot reach the window in no fixed order.
+   */
+  arriving: boolean;
+  /** The starting point a new automation's form opens on, picked on the empty screen (B2, B4); null opens it blank. */
+  example: AutomationExample | null;
+};
+
+export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false, example: null };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };
@@ -324,6 +350,9 @@ type UiStore = {
   /** Where the mission screen stands (PRD mission-screen D-10). */
   missions: MissionPlace;
   setMissions: (patch: Partial<MissionPlace>) => void;
+  /** Where the automation screen stands (PRD automations D-02). */
+  automations: AutomationPlace;
+  setAutomations: (patch: Partial<AutomationPlace>) => void;
   /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
@@ -524,6 +553,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   hideAiTab: "suggestions",
   openSuggestion: null,
   missions: MISSION_ENTRY,
+  automations: AUTOMATION_ENTRY,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
   pageWiden: null,
@@ -601,6 +631,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
     set({ browserDevices: next });
   },
   setMissions: (patch) => set({ missions: { ...get().missions, ...patch } }),
+  // Any move but the one that names an answered automation ends its wait, and any but the one that picks an example drops it.
+  setAutomations: (patch) => set({ automations: { ...get().automations, arriving: false, example: null, ...patch } }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   taskTable: { filter: "all", task: null },
   showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),

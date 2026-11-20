@@ -17,7 +17,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes, useWorkerRow } from "./missionParts";
+import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeSpans, useNodeTimes, useWorkerRow } from "./missionParts";
 import {
   attentionWords,
   cardLine,
@@ -101,8 +101,10 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   const worker = useNodeRun(mission, node);
   const device = useMissionDeviceName(node.machine);
   const times = useNodeTimes(mission, node, events, end);
+  // Where its time went (mission-82): work, review and CI, and the wait before it, in place of the one total; a node the record cannot split keeps the total.
+  const spans = useNodeSpans(mission, node, end);
   const facts = [
-    ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
+    ...(spans ? [spans] : times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
     ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
     ...(node.reopened > 0 ? [t("mission.badge.reopened", { count: node.reopened })] : []),
   ];

@@ -45,7 +45,7 @@ KEEP_FILES = {
     "core-state.json", "workspace-views.json", "labels.json", "delivery-ledger.json", "missions.json",
     "local-issues.json", "composer-marks.json", "hook-facts.json", "node.json",
     "host-id", "github-snapshot.json", "global-instruction.md",
-    "links.sqlite3", "usage.sqlite3", "suggestions.sqlite3", "session-search.sqlite3", "project-memory.sqlite3",
+    "delivery.sqlite3", "links.sqlite3", "usage.sqlite3", "suggestions.sqlite3", "session-search.sqlite3", "project-memory.sqlite3",
     "factory.sqlite3", "factory.v1.sqlite3", "access.json",
 }
 # `missions` is the mission folder book (one file per mission, its index and

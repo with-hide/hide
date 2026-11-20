@@ -3,6 +3,14 @@
 
 use serde::{Deserialize, Serialize};
 
+/// An automation's own folder as its node made it (`Call::AutomationFolder`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AutomationFolder {
+    /// The folder with its links resolved, spelled with `/`: the path its
+    /// registration names.
+    pub path: String,
+}
+
 /// What a project creation did on the node.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectCreated {

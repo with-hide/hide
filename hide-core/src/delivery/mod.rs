@@ -8,6 +8,7 @@ mod human;
 pub(crate) mod ladder;
 pub mod ledger;
 pub mod mailbox;
+pub mod store;
 pub mod typed;
 pub mod watch;
 pub mod worker;
@@ -40,6 +41,10 @@ pub const OPEN_LIMIT: usize = 1_024;
 pub const LETTER_LIMIT: usize = 5_000;
 pub const WATCH_LIMIT: usize = 32;
 pub const BODY_LIMIT: usize = 16 * 1_024;
+/// The most bytes the ledger encodes to (`Ledger::size`): the limit its
+/// records are kept within by dropping the finished ones oldest first
+/// (`coordination::room::for_size`), which bounds the store's rows
+/// (`delivery::store`), and the size `delivery-ledger.json` was read up to.
 pub const FILE_LIMIT: usize = 16 * 1_024 * 1_024;
 pub const HOOK_LIMIT: usize = 8 * 1_024;
 /// The most letters one handover bundle confirms, shown and folded together

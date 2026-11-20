@@ -1054,6 +1054,7 @@ impl Runtime {
                     unmet,
                     stopped,
                     operator_waits: self.waits_on_operator(mission, node),
+                    healing: record.is_some_and(|record| self.healing(record)),
                 }
             })
             .collect();
@@ -1693,6 +1694,40 @@ impl Runtime {
         });
         crate::diagnostic!(json!({
             "component": "missions", "kind": "mission.handover_made", "mission": id,
+        }));
+        self.save_missions();
+        true
+    }
+
+    /// The operator's 치우기 on a mission's 내 차례 row (operator decision
+    /// 2026-11-20): the row leaves Needs You until something asks them that
+    /// was raised after now (`publish_mission_asks`). Only a mission that
+    /// asks the operator now can be put away; whether it changed.
+    pub(super) fn mission_put_away_event(&mut self, id: &str) -> bool {
+        let now = super::memory::now_ms();
+        let asks = self
+            .snapshot
+            .missions
+            .items
+            .iter()
+            .find(|mission| mission.id == id)
+            .and_then(super::missions::newest_ask_since);
+        let refused = |code: &str| {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.put_away_refused",
+                "mission": id, "code": code,
+            }));
+            false
+        };
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return refused("mission_unknown");
+        };
+        if asks.is_none() {
+            return refused("mission_asks_nothing");
+        }
+        mission.put_away_unix_ms = Some(now);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.put_away", "mission": id,
         }));
         self.save_missions();
         true

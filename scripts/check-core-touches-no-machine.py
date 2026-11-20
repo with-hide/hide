@@ -73,8 +73,14 @@ STORES = {
     ),
     "hide-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
     "hide-core/src/delivery/ledger.rs": (
-        20,
-        "the core's delivery ledger, written with the durable writer's own access type",
+        15,
+        "the core's delivery ledger: its state folder's durability at start, "
+        "and the old JSON file builds before the store kept it in, read once",
+    ),
+    "hide-core/src/delivery/store.rs": (
+        4,
+        "the core's delivery ledger store (letters, registrations, spawns), "
+        "made private, and the old JSON file beside it looked for to import",
     ),
     "hide-core/src/labels/store.rs": (3, "the core's agent label store"),
     "hide-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
@@ -103,10 +109,11 @@ STORES = {
         "and committed shelf eviction also deletes its owned history",
     ),
     "hide-core/src/latest_file.rs": (
-        6,
+        7,
         "the write and read of a core store that keeps only its latest value "
-        "(the saved GitHub answers and the panes held as a draft), "
-        "and the one copy a store keeps of the file a schema conversion read",
+        "(the saved GitHub answers, the panes held as a draft, the automations), "
+        "the one copy a store keeps of the file a schema conversion read, "
+        "and the file a store could not read set aside beside it",
     ),
     "hide-core/src/diagnostics.rs": (7, "the core's own log file"),
     "hide-core/src/engine/own/store.rs": (
@@ -136,19 +143,22 @@ STORES = {
         "core's state file (`hide_ai::settings`)",
     ),
     "hide-core/src/node_migration.rs": (
-        16,
+        18,
         "converts the core's own stores to node ids once, where they were "
         "written, before any link exists (PRD core-host-node D-10), including "
-        "listing the split mission folder's bodies and index for rewriting",
+        "listing the split mission folder's bodies and index for rewriting, "
+        "and looks for the delivery ledger's store and its old file, which "
+        "it imports first and never writes",
     ),
     "hide-core/src/node_migration/copy.rs": (
-        61,
+        62,
         "copies, places and sets aside the core's own stores for a move of "
         "the core (PRD core-host-node-move), run by the hided whose state "
         "folder holds them while no core runs on it; the retired "
         "session-search store moves read-only, kept for its retention "
-        "settings (PRD overview-device-tasks D-20), and a global instruction "
-        "kept through a link moves as the text the core reads through it",
+        "settings (PRD overview-device-tasks D-20), a global instruction "
+        "kept through a link moves as the text the core reads through it, "
+        "and the old delivery ledger file is checked only without its store",
     ),
     "hide-core/src/node_migration/devices.rs": (
         10,

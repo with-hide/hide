@@ -27,6 +27,13 @@
 //! keep (runtime, version, session and counts, not the turn) is saved on a
 //! thread of its own when it changes ([`LatestFile`]), so no write happens
 //! under either lock.
+//!
+//! The turn itself is not laid again after a restart, but whether it was
+//! running or waiting on the operator is kept (`SessionFact::busy`): a pane
+//! whose agent was busy when its engine went (this daemon's start, or the
+//! end of a device's link) was cut mid-turn, and the heal that resumes it
+//! reads that here ([`HookFacts::take_cut`]), for this machine's panes and a
+//! device's alike.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -62,6 +69,11 @@ struct SessionFact {
     subagents: Vec<HookSubagent>,
     #[serde(skip)]
     turn: Option<HookTurn>,
+    /// The turn was running or waiting on the operator when the session last
+    /// moved: kept across a restart, where `turn` is not, so the heal of a
+    /// pane cut under it knows the agent was at work ([`HookFacts::take_cut`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    busy: bool,
     /// The engine state the agent was in when `turn` was first laid on it:
     /// a turn end the session read finds under a later state ended this
     /// turn, which no hook event of the session may follow (Claude Code's
@@ -107,6 +119,23 @@ struct SessionFact {
 pub(crate) struct TurnRefused {
     pub refusal: hide_node_link::panes::HookRefusal,
     pub at_unix_ms: u64,
+}
+
+impl SessionFact {
+    /// Follows `busy` to the turn as it stands now, and answers whether it
+    /// moved.
+    fn settle_busy(&mut self) -> bool {
+        let busy = matches!(self.turn, Some(HookTurn::Working | HookTurn::Waiting))
+            || !self.waiting.is_empty();
+        std::mem::replace(&mut self.busy, busy) != busy
+    }
+}
+
+impl PaneFacts {
+    /// Whether the pane's agent was at work as its session last moved.
+    fn busy(&self) -> bool {
+        self.sessions.last().is_some_and(|fact| fact.busy)
+    }
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -189,6 +218,12 @@ pub(crate) struct Recorded {
 #[derive(Default)]
 pub(crate) struct HookFacts {
     panes: BTreeMap<String, PaneFacts>,
+    /// The panes whose agent was busy when its engine went: this core's start
+    /// read them from the file, and the end of a device's link from the
+    /// sessions it held. Taken by the heal that resumes the pane's agent, and
+    /// forgotten when the agent reports again without one (it was never cut)
+    /// or the pane closes. Memory only, at most [`PANE_LIMIT`].
+    cut: std::collections::BTreeSet<String>,
     /// High water mark, retained when the pane with the latest start closes.
     account_start: u64,
     file: Option<LatestFile<BTreeMap<String, PaneFacts>>>,
@@ -244,15 +279,24 @@ impl HookFacts {
             .map(|fact| fact.account_start)
             .max()
             .unwrap_or(0);
+        let panes: BTreeMap<String, PaneFacts> = panes
+            .into_iter()
+            .filter(|(_, facts)| {
+                !facts.sessions.is_empty() && facts.sessions.len() <= SESSIONS_PER_PANE
+            })
+            .take(PANE_LIMIT)
+            .collect();
+        // Every agent this core starts after was cut if it was at work: the
+        // holders that outlived the last daemon say otherwise by reporting.
+        let cut = panes
+            .iter()
+            .filter(|(_, facts)| facts.busy())
+            .map(|(pane, _)| pane.clone())
+            .collect();
         let facts = Self {
             account_start,
-            panes: panes
-                .into_iter()
-                .filter(|(_, facts)| {
-                    !facts.sessions.is_empty() && facts.sessions.len() <= SESSIONS_PER_PANE
-                })
-                .take(PANE_LIMIT)
-                .collect(),
+            panes,
+            cut,
             file: Some(LatestFile::new(
                 path,
                 "hide-hook-facts-save",
@@ -336,6 +380,7 @@ impl HookFacts {
                 counts: None,
                 subagents: Vec::new(),
                 turn: None,
+                busy: false,
                 turn_seq: None,
                 waiting: Vec::new(),
                 waiting_seq: None,
@@ -393,6 +438,7 @@ impl HookFacts {
             _ if fact.turn != Some(HookTurn::Done) => fact.refused = None,
             _ => {}
         }
+        fact.settle_busy();
         // A report made since the engine that laid the fact ended speaks for
         // the engine reading the pane now: the turn or approvals it restates
         // are laid again under that engine's state, so a session read of an
@@ -476,6 +522,9 @@ impl HookFacts {
                 continue;
             };
             end_by_session_read(fact, agent);
+            if fact.settle_busy() {
+                moved = true;
+            }
             agent.hook = if fact.waiting.is_empty() {
                 fact.turn
             } else {
@@ -523,6 +572,8 @@ impl HookFacts {
             !owns(pane)
                 || (listed.contains(pane) && (with_agent.contains(pane) || !facts.seen_agent))
         });
+        // A cut pane stays one while it is listed: its agent comes back in it.
+        self.cut.retain(|pane| !owns(pane) || listed.contains(pane));
         if moved || self.panes.len() != before {
             self.save();
         }
@@ -535,7 +586,12 @@ impl HookFacts {
     /// again, so any state that engine reads comes after them. Memory only,
     /// as the turns are.
     pub(crate) fn engine_ended(&mut self, owns: impl Fn(&str) -> bool) {
-        for (_, facts) in self.panes.iter_mut().filter(|(pane, _)| owns(pane)) {
+        for (pane, facts) in self.panes.iter_mut().filter(|(pane, _)| owns(pane)) {
+            // An agent at work when its engine went is cut, unless it
+            // reports again from the holder that kept it.
+            if facts.busy() && self.cut.len() < PANE_LIMIT {
+                self.cut.insert(pane.clone());
+            }
             for fact in &mut facts.sessions {
                 if fact.turn.is_some() {
                     fact.turn_seq = Some(Laid::BeforeThisEngine);
@@ -545,6 +601,24 @@ impl HookFacts {
                 }
             }
         }
+    }
+
+    /// Whether `pane`'s agent was cut mid-turn and no heal has settled it
+    /// yet.
+    pub(crate) fn cut_pending(&self, pane: &str) -> bool {
+        self.cut.contains(pane)
+    }
+
+    /// Whether `pane`'s agent was cut mid-turn, for the heal that resumed
+    /// it, spending the cut: the heal reads it once.
+    pub(crate) fn take_cut(&mut self, pane: &str) -> bool {
+        self.cut.remove(pane)
+    }
+
+    /// `pane`'s agent reported again with no heal behind it: the holder
+    /// kept it running, so nothing cut it.
+    pub(crate) fn forget_cut(&mut self, pane: &str) {
+        self.cut.remove(pane);
     }
 
     fn save(&self) {
@@ -670,6 +744,7 @@ fn seeded_facts(records: Vec<hide_agent_hooks::counters::SessionRecord>) -> Pane
             version: record.version,
             session: record.session,
             turn: None,
+            busy: matches!(record.turn, Some(HookTurn::Working | HookTurn::Waiting)),
             turn_seq: None,
             waiting: Vec::new(),
             waiting_seq: None,
@@ -700,6 +775,7 @@ fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
                     &left.subagents,
                     &left.account,
                     left.account_start,
+                    left.busy,
                 ) != (
                     &right.runtime,
                     right.version,
@@ -708,6 +784,7 @@ fn stored_part_moved(before: &PaneFacts, after: &PaneFacts) -> bool {
                     &right.subagents,
                     &right.account,
                     right.account_start,
+                    right.busy,
                 )
             })
 }
@@ -876,7 +953,9 @@ mod tests {
             panes: stored.panes,
             account_start: 1,
             file: None,
+            cut: Default::default(),
         };
+
         let reported: Vec<_> = restored
             .reported_accounts()
             .map(|r| (r.pane, r.session, r.variables.to_vec()))
@@ -904,7 +983,9 @@ mod tests {
             panes: older.panes,
             account_start: 0,
             file: None,
+            cut: Default::default(),
         };
+
         assert_eq!(older.reported_accounts().count(), 0);
     }
 
@@ -942,7 +1023,9 @@ mod tests {
             panes: stored.panes,
             account_start: 0,
             file: None,
+            cut: Default::default(),
         };
+
         assert_eq!(laid(&mut facts), std::slice::from_ref(&explore));
         facts
             .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Done)), 1)
@@ -1296,6 +1379,75 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&stored).unwrap(),
             serde_json::from_str::<serde_json::Value>(written).unwrap()
+        );
+    }
+
+    /// PRD letters-missions-simplify D-19: a pane whose agent was at work
+    /// when its daemon went is cut once the next core reads its file, and
+    /// one at rest is not; the turn itself is not laid again.
+    #[test]
+    fn a_pane_busy_when_its_daemon_went_is_cut_once_the_next_core_starts() {
+        let root = tempfile::tempdir().unwrap();
+        let mut facts = HookFacts::default();
+        facts
+            .record("w1:p1", &report(Some("s-1"), Some(HookTurn::Working)), 0)
+            .unwrap();
+        facts
+            .record("w1:p2", &report(Some("s-2"), Some(HookTurn::Done)), 0)
+            .unwrap();
+        let mut asking = report(Some("s-3"), Some(HookTurn::Done));
+        asking.waiting = Some(vec!["Bash".to_owned()]);
+        facts.record("w1:p3", &asking, 0).unwrap();
+        facts
+            .record("w1:p4", &report(Some("s-4"), Some(HookTurn::Working)), 0)
+            .unwrap();
+        let path = root.path().join("facts.json");
+        std::fs::write(&path, encode(&facts.panes).unwrap()).unwrap();
+
+        let mut next = HookFacts::restore(path, Vec::new);
+        assert!(!next.take_cut("w1:p2"), "at rest");
+        assert!(next.take_cut("w1:p3"), "waiting on the operator is at work");
+        next.forget_cut("w1:p4");
+        assert!(
+            !next.take_cut("w1:p4"),
+            "it reported with no heal behind it"
+        );
+        assert_eq!(laid_turn(&mut next, "s-1"), None, "no turn is laid again");
+        assert!(next.take_cut("w1:p1"));
+        assert!(!next.take_cut("w1:p1"), "taken once");
+    }
+
+    /// B20: a device's pane whose agent was at work when its link ended is
+    /// cut, and stays cut while the next engine lists the pane until its
+    /// agent shows; a pane that closed is cut no more.
+    #[test]
+    fn a_device_pane_busy_when_its_link_ended_is_cut_until_it_closes() {
+        let on_mini = |pane: &str| crate::address::scoped_pane_id("mini", pane);
+        let mut facts = HookFacts::default();
+        for (pane, turn) in [
+            (on_mini("w1:p1"), HookTurn::Working),
+            (on_mini("w1:p2"), HookTurn::Working),
+            (on_mini("w1:p3"), HookTurn::Idle),
+            ("w1:p1".to_owned(), HookTurn::Working),
+        ] {
+            facts
+                .record(&pane, &report(Some("s-1"), Some(turn)), 0)
+                .unwrap();
+        }
+        let owns = |pane: &str| crate::address::is_pane_of(pane, "mini");
+        facts.engine_ended(owns);
+        // The next link's engine lists the first pane, a shell yet.
+        let mut listed: SessionSnapshotPayload = serde_json::from_value(json!({
+            "agents": [], "panes": [{"pane_id": on_mini("w1:p1")}],
+        }))
+        .unwrap();
+        facts.lay(&mut listed, str::to_owned, owns);
+        assert!(facts.take_cut(&on_mini("w1:p1")));
+        assert!(!facts.take_cut(&on_mini("w1:p2")), "its pane closed");
+        assert!(!facts.take_cut(&on_mini("w1:p3")), "at rest");
+        assert!(
+            !facts.take_cut("w1:p1"),
+            "this machine's engine did not end"
         );
     }
 }

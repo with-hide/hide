@@ -1167,13 +1167,6 @@
                                 "permission"
                             ],
                             "type": "string"
-                        },
-                        {
-                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
-                            "enum": [
-                                "install"
-                            ],
-                            "type": "string"
                         }
                     ]
                 },
@@ -1612,13 +1605,6 @@
                                 "permission"
                             ],
                             "type": "string"
-                        },
-                        {
-                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
-                            "enum": [
-                                "install"
-                            ],
-                            "type": "string"
                         }
                     ]
                 },
@@ -1727,6 +1713,77 @@
                 "operator_notified"
             ],
             "title": "AskHumanAnswer",
+            "type": "object"
+        },
+        "automation": {
+            "properties": {
+                "automation": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "automation"
+            ],
+            "type": "object"
+        },
+        "automation_list": {
+            "properties": {
+                "items": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "items"
+            ],
+            "type": "object"
+        },
+        "automation_preview": {
+            "properties": {
+                "next_run_at": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "next_run_at_unix_ms": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "reads_as": {
+                    "type": "object"
+                },
+                "reads_as_text": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "zone": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            },
+            "required": [
+                "reads_as",
+                "next_run_at_unix_ms",
+                "next_run_at",
+                "zone"
+            ],
+            "type": "object"
+        },
+        "automation_removed": {
+            "properties": {
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "removed"
+            ],
             "type": "object"
         },
         "confirmed": {
@@ -3436,13 +3493,6 @@
                                 "permission"
                             ],
                             "type": "string"
-                        },
-                        {
-                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
-                            "enum": [
-                                "install"
-                            ],
-                            "type": "string"
                         }
                     ]
                 },
@@ -3731,329 +3781,6 @@
             "title": "Stopped",
             "type": "object"
         },
-        "store_changed": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "A change that ran (`add`, `update`, `on`, `off`, `remove`): the item it was about, null for an install of a source's skills, and each change's outcome, a refused one with its cause.",
-            "properties": {
-                "item": {
-                    "type": [
-                        "string",
-                        "null"
-                    ]
-                },
-                "machine": {
-                    "type": "string"
-                },
-                "outcomes": {
-                    "items": {
-                        "properties": {
-                            "change": {
-                                "description": "the change as it ran, a key's value emptied",
-                                "properties": {
-                                    "op": {
-                                        "type": "string"
-                                    }
-                                },
-                                "required": [
-                                    "op"
-                                ],
-                                "type": "object"
-                            },
-                            "refused": {
-                                "properties": {
-                                    "cause": {
-                                        "description": "one of store_refusal_cause in contracts/snapshot-wire-enums.json",
-                                        "type": "string"
-                                    },
-                                    "reason": {
-                                        "type": "string"
-                                    }
-                                },
-                                "required": [
-                                    "cause",
-                                    "reason"
-                                ],
-                                "type": "object"
-                            }
-                        },
-                        "required": [
-                            "change"
-                        ],
-                        "type": "object"
-                    },
-                    "type": "array"
-                }
-            },
-            "required": [
-                "machine",
-                "outcomes"
-            ],
-            "title": "StoreChanged",
-            "type": "object"
-        },
-        "store_item": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide skill show` / `hide mcp show`: the item as the machine's store reports it.",
-            "properties": {
-                "item": {
-                    "description": "the item as KitSnapshot.store reports it",
-                    "properties": {
-                        "cells": {
-                            "items": {
-                                "properties": {
-                                    "changed_at_unix_ms": {
-                                        "type": "integer"
-                                    },
-                                    "column": {
-                                        "type": "string"
-                                    },
-                                    "reason": {
-                                        "type": "string"
-                                    },
-                                    "state": {
-                                        "description": "one of store_cell_state in contracts/snapshot-wire-enums.json",
-                                        "type": "string"
-                                    }
-                                },
-                                "required": [
-                                    "column",
-                                    "state"
-                                ],
-                                "type": "object"
-                            },
-                            "type": "array"
-                        },
-                        "description": {
-                            "type": "string"
-                        },
-                        "files": {
-                            "items": {
-                                "type": "object"
-                            },
-                            "type": "array"
-                        },
-                        "folder_missing": {
-                            "type": "boolean"
-                        },
-                        "id": {
-                            "type": "string"
-                        },
-                        "kind": {
-                            "description": "one of store_item_kind in contracts/snapshot-wire-enums.json",
-                            "type": "string"
-                        },
-                        "name": {
-                            "type": "string"
-                        },
-                        "off_for": {
-                            "items": {
-                                "type": "string"
-                            },
-                            "type": "array"
-                        },
-                        "on": {
-                            "type": "boolean"
-                        },
-                        "server": {
-                            "description": "an MCP server: its name and reach, with the names of its keys and never a value",
-                            "type": "object"
-                        },
-                        "source": {
-                            "type": "object"
-                        },
-                        "update": {
-                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
-                            "properties": {
-                                "kind": {
-                                    "type": "string"
-                                },
-                                "value": {
-                                    "type": "string"
-                                }
-                            },
-                            "required": [
-                                "kind"
-                            ],
-                            "type": "object"
-                        },
-                        "version": {
-                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
-                            "properties": {
-                                "kind": {
-                                    "type": "string"
-                                },
-                                "value": {
-                                    "type": "string"
-                                }
-                            },
-                            "required": [
-                                "kind"
-                            ],
-                            "type": "object"
-                        }
-                    },
-                    "required": [
-                        "cells",
-                        "id",
-                        "kind",
-                        "name",
-                        "on",
-                        "source",
-                        "version"
-                    ],
-                    "type": "object"
-                },
-                "machine": {
-                    "type": "string"
-                }
-            },
-            "required": [
-                "item",
-                "machine"
-            ],
-            "title": "StoreShown",
-            "type": "object"
-        },
-        "store_list": {
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "definitions": {
-                "StoreLine": {
-                    "description": "One item as `list` answers it: no file list, the cells by column.",
-                    "properties": {
-                        "cells": {
-                            "items": {
-                                "$ref": "#/definitions/StoreLineCell"
-                            },
-                            "type": "array"
-                        },
-                        "id": {
-                            "type": "string"
-                        },
-                        "name": {
-                            "type": "string"
-                        },
-                        "on": {
-                            "type": "boolean"
-                        },
-                        "update": {
-                            "anyOf": [
-                                {
-                                    "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
-                                    "properties": {
-                                        "kind": {
-                                            "type": "string"
-                                        },
-                                        "value": {
-                                            "type": "string"
-                                        }
-                                    },
-                                    "required": [
-                                        "kind"
-                                    ],
-                                    "type": "object"
-                                },
-                                {
-                                    "type": "null"
-                                }
-                            ],
-                            "description": "The newer version a check found, null with none."
-                        },
-                        "version": {
-                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
-                            "properties": {
-                                "kind": {
-                                    "type": "string"
-                                },
-                                "value": {
-                                    "type": "string"
-                                }
-                            },
-                            "required": [
-                                "kind"
-                            ],
-                            "type": "object"
-                        }
-                    },
-                    "required": [
-                        "cells",
-                        "id",
-                        "name",
-                        "on",
-                        "update",
-                        "version"
-                    ],
-                    "type": "object"
-                },
-                "StoreLineCell": {
-                    "properties": {
-                        "column": {
-                            "type": "string"
-                        },
-                        "state": {
-                            "description": "one of store_cell_state in contracts/snapshot-wire-enums.json",
-                            "type": "string"
-                        }
-                    },
-                    "required": [
-                        "column",
-                        "state"
-                    ],
-                    "type": "object"
-                }
-            },
-            "description": "`hide skill list` / `hide mcp list`: the machine's items of one kind, each with its version and one cell per column.",
-            "properties": {
-                "columns": {
-                    "description": "The kind's columns, each with the agents its switch reaches.",
-                    "items": {
-                        "properties": {
-                            "agents": {
-                                "items": {
-                                    "type": "string"
-                                },
-                                "type": "array"
-                            },
-                            "also": {
-                                "items": {
-                                    "type": "string"
-                                },
-                                "type": "array"
-                            },
-                            "id": {
-                                "type": "string"
-                            }
-                        },
-                        "required": [
-                            "agents",
-                            "id"
-                        ],
-                        "type": "object"
-                    },
-                    "type": "array"
-                },
-                "items": {
-                    "items": {
-                        "$ref": "#/definitions/StoreLine"
-                    },
-                    "type": "array"
-                },
-                "kind": {
-                    "description": "one of store_item_kind in contracts/snapshot-wire-enums.json",
-                    "type": "string"
-                },
-                "machine": {
-                    "type": "string"
-                }
-            },
-            "required": [
-                "columns",
-                "items",
-                "kind",
-                "machine"
-            ],
-            "title": "StoreList",
-            "type": "object"
-        },
         "watch": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -4313,707 +4040,6 @@
         }
     },
     "commands": [
-        {
-            "answers": [
-                "store_list"
-            ],
-            "arguments": [],
-            "command": "skill list",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_item"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "skill show",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "source",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "skill add",
-            "options": [
-                {
-                    "name": "--name",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused",
-                "store_declined",
-                "store_unanswered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "skill update",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused",
-                "store_declined",
-                "store_unanswered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "skill on",
-            "options": [
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "skill off",
-            "options": [
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "skill remove",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_list"
-            ],
-            "arguments": [],
-            "command": "mcp list",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_item"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp show",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp add",
-            "options": [
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--url",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--sse",
-                    "required": false,
-                    "requires": [
-                        "--url"
-                    ],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--header",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [
-                        "--url"
-                    ],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--url",
-                        "--sse",
-                        "--header"
-                    ],
-                    "name": "--env",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused",
-                "store_declined",
-                "store_unanswered"
-            ],
-            "repeats_at_most": null,
-            "rest": "a local server's command and its arguments, which --url replaces"
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp update",
-            "options": [
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--url",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--sse",
-                    "required": false,
-                    "requires": [
-                        "--url"
-                    ],
-                    "value": null
-                },
-                {
-                    "conflicts": [
-                        "--env",
-                        "--"
-                    ],
-                    "name": "--header",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [
-                        "--url"
-                    ],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "conflicts": [
-                        "--url",
-                        "--sse",
-                        "--header"
-                    ],
-                    "name": "--env",
-                    "repeats_at_most": 64,
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused",
-                "store_declined",
-                "store_unanswered"
-            ],
-            "repeats_at_most": null,
-            "rest": "a local server's command and its arguments, which --url replaces"
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp on",
-            "options": [
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp off",
-            "options": [
-                {
-                    "name": "--agent",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "store_changed"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "text"
-                    }
-                }
-            ],
-            "command": "mcp remove",
-            "options": [
-                {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--json",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "store_not_found",
-                "store_invalid",
-                "store_busy",
-                "store_unavailable",
-                "store_refused"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
         {
             "answers": [
                 "agent_profiles"
@@ -5966,6 +4992,7 @@
             ],
             "refusals": [
                 "spawn_busy",
+                "workspace_closing",
                 "machine_unknown",
                 "machine_not_permitted",
                 "machine_unavailable",
@@ -8485,6 +7512,420 @@
         },
         {
             "answers": [
+                "automation"
+            ],
+            "arguments": [],
+            "command": "automation add",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [
+                        "--folder"
+                    ],
+                    "value": null
+                },
+                {
+                    "name": "--run-now",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_list"
+            ],
+            "arguments": [],
+            "command": "automation list",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation show",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation run",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation pause",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation resume",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation edit",
+            "needs_one_of": [
+                "--name",
+                "--task",
+                "--schedule",
+                "--kind",
+                "--folder",
+                "--own-folder",
+                "--worktree",
+                "--no-worktree"
+            ],
+            "options": [
+                {
+                    "name": "--name",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--own-folder"
+                    ],
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--folder"
+                    ],
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--no-worktree"
+                    ],
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--worktree"
+                    ],
+                    "name": "--no-worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation remove",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_preview"
+            ],
+            "arguments": [],
+            "command": "automation preview",
+            "options": [
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "plan"
             ],
             "arguments": [],
@@ -8662,7 +8103,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:9d9e2f131444d1f789d59bfbc0d9f19fe1b4e6396d72045245bdf7c4fd804ddc",
+    "digest": "sha256:8f49ae7b3a6cb71da71e7265ad3b8b1da6eedc091de40f85459aaadbdca14661",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -8670,6 +8111,11 @@
             "ok": "ok"
         },
         "agent": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
+        "automation": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"
@@ -8682,11 +8128,6 @@
         "inbox": {
             "answer": "result",
             "code": "reason",
-            "ok": "ok"
-        },
-        "mcp": {
-            "answer": "value",
-            "code": "error.code",
             "ok": "ok"
         },
         "mission": {
@@ -8712,11 +8153,6 @@
         "request": {
             "answer": "result",
             "code": "reason",
-            "ok": "ok"
-        },
-        "skill": {
-            "answer": "value",
-            "code": "error.code",
             "ok": "ok"
         },
         "watch": {

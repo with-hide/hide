@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `skill`, `mcp`, `workspace
-//! purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
+//! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `pane`,
+//! `access`, `skill`, `mcp`, `workspace purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -44,8 +44,19 @@ fn hidden(spec: &Spec) -> bool {
 
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane", "access",
-    "skill", "mcp",
+    "agent",
+    "ps",
+    "request",
+    "inbox",
+    "watch",
+    "mission",
+    "task",
+    "automation",
+    "device",
+    "pane",
+    "access",
+    "skill",
+    "mcp",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -232,6 +243,70 @@ const fn clearing(name: &'static str, conflicts: &'static [&'static str]) -> Opt
         requires: &[],
         conflicts,
         repeats: None,
+    }
+}
+
+/// An automation named by its id or its exact name.
+const AUTOMATION_ID: &[Arg] = &[Arg {
+    name: "automation",
+    value: Key,
+    required: true,
+    value_with: None,
+}];
+
+/// Why a schedule is refused: `schedule_unreadable` is the CLI's own, for
+/// words that are none of the forms; the rest are the core's check.
+const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
+    "schedule_unreadable",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
+    "schedule_cron_invalid",
+    "schedule_never",
+    "schedule_time_invalid",
+    "schedule_days_missing",
+    "schedule_hours_out_of_range",
+];
+
+/// Why an automation as written is refused (B7, B10).
+pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
+    "schedule_unreadable",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
+    "schedule_cron_invalid",
+    "schedule_never",
+    "schedule_time_invalid",
+    "schedule_days_missing",
+    "schedule_hours_out_of_range",
+    "automation_unknown",
+    "automation_name_missing",
+    "automation_name_invalid",
+    "automation_name_taken",
+    "automation_task_missing",
+    "automation_task_too_long",
+    "automation_agent_unknown",
+    "automation_folder_unknown",
+    "automation_folder_on_device",
+    "automation_worktree_needs_git",
+    "automation_home_unknown",
+    "automation_cap",
+    "automation_running",
+    "automation_changed_unread",
+];
+
+/// A command on one automation and nothing else.
+const fn automation_by_id(
+    words: &'static [&'static str],
+    answers: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments: AUTOMATION_ID,
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers,
+        refusals: &["automation_unknown"],
     }
 }
 
@@ -861,6 +936,7 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["agent"],
         refusals: &[
             "spawn_busy",
+            "workspace_closing",
             "machine_unknown",
             "machine_not_permitted",
             "machine_unavailable",
@@ -2058,6 +2134,136 @@ pub const COMMANDS: &[Spec] = &[
     spec(&["mission", "list"], &[], &[], &["mission_list"]),
     spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
     Spec {
+        words: &["automation", "add"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--name", Text),
+            required("--task", Body),
+            required("--schedule", Text),
+            required("--kind", Text),
+            Opt {
+                name: "--profile",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--model",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--effort",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            optional("--folder", Text),
+            Opt {
+                name: "--worktree",
+                value: None,
+                required: false,
+                requires: &["--folder"],
+                conflicts: &[],
+                repeats: None,
+            },
+            switch("--run-now"),
+        ],
+        rest: None,
+        answers: &["automation"],
+        refusals: AUTOMATION_DRAFT_REFUSALS,
+    },
+    spec(&["automation", "list"], &[], &[], &["automation_list"]),
+    automation_by_id(&["automation", "show"], &["automation"]),
+    Spec {
+        refusals: &[
+            "automation_unknown",
+            "automation_running",
+            "automation_changed_unread",
+        ],
+        ..automation_by_id(&["automation", "run"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "pause"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "resume"], &["automation"])
+    },
+    Spec {
+        words: &["automation", "edit"],
+        arguments: AUTOMATION_ID,
+        repeats: None,
+        needs_one_of: &[
+            "--name",
+            "--task",
+            "--schedule",
+            "--kind",
+            "--folder",
+            "--own-folder",
+            "--worktree",
+            "--no-worktree",
+        ],
+        options: &[
+            optional("--name", Text),
+            optional("--task", Body),
+            optional("--schedule", Text),
+            optional("--kind", Text),
+            Opt {
+                name: "--profile",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--model",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--effort",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            cleared("--folder", Text, &["--own-folder"]),
+            clearing("--own-folder", &["--folder"]),
+            clearing("--worktree", &["--no-worktree"]),
+            clearing("--no-worktree", &["--worktree"]),
+        ],
+        rest: None,
+        answers: &["automation"],
+        refusals: AUTOMATION_DRAFT_REFUSALS,
+    },
+    automation_by_id(&["automation", "remove"], &["automation_removed"]),
+    Spec {
+        words: &["automation", "preview"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--schedule", Text)],
+        rest: None,
+        answers: &["automation_preview"],
+        refusals: AUTOMATION_SCHEDULE_REFUSALS,
+    },
+    Spec {
         words: &["task", "set"],
         arguments: &[],
         repeats: None,
@@ -2320,6 +2526,7 @@ fn body() -> Value {
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
             "plan": {"ok": "ok", "answer": "result", "code": "reason"},
+            "automation": {"ok": "ok", "answer": "value", "code": "error.code"},
             "device": {"ok": "ok", "answer": "value", "code": "error.code"},
             "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
             "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
@@ -2407,6 +2614,27 @@ fn answers() -> Value {
     // The plan's own record and, for the caller's own plan, the summary its
     // hook keeps (`contracts/delivery-envelope.json`, `plan_context`).
     map.insert("plan".into(), shape(&["session", "plan"]));
+    // An automation as the core's `automations` section has it, worded for
+    // an agent: what its schedule reads as, its next time on the machine's
+    // wall clock and, stopped for a person, what to fix (`hide automation
+    // help`).
+    map.insert("automation".into(), shape(&["automation"]));
+    map.insert("automation_list".into(), shape(&["items"]));
+    map.insert("automation_removed".into(), shape(&["removed"]));
+    map.insert(
+        "automation_preview".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "reads_as": object,
+                "reads_as_text": {"type": ["string", "null"]},
+                "next_run_at_unix_ms": {"type": ["integer", "null"]},
+                "next_run_at": {"type": ["string", "null"]},
+                "zone": {"type": ["string", "null"]},
+            },
+            "required": ["reads_as", "next_run_at_unix_ms", "next_run_at", "zone"],
+        }),
+    );
     map.insert(
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
@@ -2615,6 +2843,7 @@ mod tests {
                 | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
                 | CommandKind::Plan(_)
+                | CommandKind::Automation(_)
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::AgentProfile(_)
                 | CommandKind::Ps(_)
@@ -2966,6 +3195,68 @@ mod tests {
             }
         }
         assert!(shown > 50, "the documents show {shown} mission flags");
+    }
+
+    /// The flags `hide automation`'s parser reads for each verb are the
+    /// ones the contract names for it, and every verb the contract names is
+    /// one the parser reads: a flag added to one and not the other is
+    /// refused before the parser sees it.
+    #[test]
+    fn each_automation_flag_the_parser_reads_is_one_the_contract_names() {
+        let automations: Vec<&Spec> = COMMANDS
+            .iter()
+            .filter(|spec| spec.words.first() == Some(&"automation"))
+            .collect();
+        for (verb, valued, switches) in crate::automation_cli::FLAGS {
+            let spec = automations
+                .iter()
+                .find(|spec| spec.words.get(1) == Some(verb))
+                .unwrap_or_else(|| panic!("hide automation {verb} has no spec"));
+            let read: std::collections::BTreeSet<(&str, bool)> = valued
+                .iter()
+                .map(|flag| (*flag, true))
+                .chain(switches.iter().map(|flag| (*flag, false)))
+                .collect();
+            let named: std::collections::BTreeSet<(&str, bool)> = spec
+                .options
+                .iter()
+                .map(|option| (option.name, option.value.is_some()))
+                .collect();
+            assert_eq!(read, named, "hide automation {verb}");
+        }
+        assert_eq!(automations.len(), crate::automation_cli::FLAGS.len());
+        // The usage and the guide show only flags the contract takes.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let help = std::fs::read_to_string(root.join("assets/automation/help.md")).unwrap();
+        for (name, text) in [
+            ("usage", crate::automation_cli::USAGE),
+            ("help", help.as_str()),
+        ] {
+            for line in text.lines() {
+                // Each command runs to the next one on its line.
+                for command in line.split("hide automation ").skip(1) {
+                    let command = command.split('`').next().unwrap_or_default();
+                    let Some(verb) = command.split_whitespace().next() else {
+                        continue;
+                    };
+                    if verb == "help" {
+                        continue;
+                    }
+                    let spec = automations
+                        .iter()
+                        .find(|spec| spec.words.get(1) == Some(&verb))
+                        .unwrap_or_else(|| panic!("{name} shows hide automation {verb}: {line}"));
+                    for word in command.split(|c: char| !(c.is_ascii_lowercase() || c == '-')) {
+                        if word.starts_with("--") && word.len() > 2 {
+                            assert!(
+                                spec.options.iter().any(|option| option.name == word),
+                                "{name} shows hide automation {verb} {word}: {line}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The commands the mission guide teaches pass the flag check and the

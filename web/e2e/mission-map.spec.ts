@@ -385,10 +385,10 @@ test("at the largest Interface text a working change's branch line stays inside 
       const node = find("marked");
       const now = Date.now();
       // Lines without a number with marks: 내 차례 alone on a long branch before its pull request and on a short direct one,
-      // three failed reviews in a row (⚠) alone on a short direct one, and both on a long direct one.
+      // a review failed at its third round, the limit (⚠), alone on a short direct one, and both on a long direct one.
       const turn = { reason: "conductor_failed", key: 1, since_unix_ms: now };
       const reviewFails = (one: { criteria: unknown[]; warnings?: unknown[] }) => {
-        one.criteria.push({ key: "review", kind: "review", text: "독립 검토", state: "fail", required: true, fails_in_a_row: 3 });
+        one.criteria.push({ key: "review", kind: "review", text: "독립 검토", state: "fail", required: true, rounds: 3 });
         one.warnings = [{ kind: "review_fails", from_unix_ms: now - 7_200_000, since_unix_ms: now, told_unix_ms: now }];
       };
       for (const key of ["draft", "tiny", "hotfix"]) find(key).attention = turn;

@@ -7,6 +7,7 @@ mod access;
 mod agent_exec;
 mod always_on_update;
 mod arguments;
+mod automations;
 mod browser_control;
 mod closed_stdout;
 mod connect_build;

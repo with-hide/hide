@@ -1892,6 +1892,7 @@ pub(super) enum Event {
     HerdrImport(HerdrImportPayload),
     Desk(super::desk::DeskEvent),
     Access(super::access::AccessEvent),
+    Automation(crate::automations::Call),
     FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
@@ -1922,6 +1923,7 @@ pub(super) enum Event {
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
     MissionHandover(MissionHandoverPayload),
+    MissionPutAway(MissionEndPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2311,6 +2313,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
+        "mission_put_away" => decode!(MissionEndPayload, MissionPutAway),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -2365,6 +2368,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "browser_state" => decode!(BrowserStatePayload, BrowserState),
         "external_open" => decode!(ExternalOpenPayload, ExternalOpen),
+        automation if super::automations::EVENT_KINDS.contains(&automation) => {
+            super::automations::decode_event(automation, payload)
+                .map(Event::Automation)
+                .ok_or_else(|| invalid_payload(&kind))
+        }
         access if super::access::AccessEvent::KINDS.contains(&access) => {
             super::access::AccessEvent::decode(access, payload)
                 .map(Event::Access)
@@ -4313,6 +4321,7 @@ impl Runtime {
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)
             }
+            Event::MissionPutAway(payload) => self.mission_put_away_event(&payload.mission),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),
@@ -4354,6 +4363,7 @@ impl Runtime {
             Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
             Event::Access(event) => self.access_event(event),
+            Event::Automation(call) => self.automation_event(call),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),

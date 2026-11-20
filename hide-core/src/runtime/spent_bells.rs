@@ -250,7 +250,7 @@ impl Runtime {
             unsent: "doorbell.spent_note_unsent",
             now: true,
         };
-        self.spent_bells.noting = self.send_hide_notes(kind, notes, |runtime| {
+        self.spent_bells.noting = self.send_hide_notes(kind, notes, |runtime, _| {
             runtime.spent_bells.noting = false;
         });
     }

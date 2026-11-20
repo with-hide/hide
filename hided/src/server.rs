@@ -152,6 +152,9 @@ pub struct AppState {
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
     pub pane_sizes: Arc<crate::pane_sizes::PaneSizes>,
+    /// What the pane bootstrap's and the node attach socket's accept threads
+    /// do, for `/health`.
+    pub listeners: Arc<crate::accepting::CoreListeners>,
     /// A `hide <path>` that brought a project in front asks this machine's
     /// windows to come forward too, showing it (`project_open`): each sends
     /// its screen a `window_call` frame with this payload.
@@ -529,6 +532,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "open_handlers_in_flight": state.opener.in_flight(),
         "idle_remaining_secs": idle_remaining_secs(&state),
         "instance": state.seat.instance(),
+        "listeners": state.listeners.report(),
     }))
 }
 
@@ -1309,6 +1313,9 @@ async fn screen_loop(
                                 }
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
                             }
+                            Ok(ClientAction::Automation(event)) => {
+                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -1421,6 +1428,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "workspace_closing" => {
+            "The folder's last terminal is still closing; wait a moment, then run the same command again with the same intent"
+        }
         "holder_cap" => {
             "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
         }
@@ -1704,6 +1714,9 @@ enum ScopedRequest {
     Mission(Box<hide_core::missions::MissionCommand>),
     /// `hide task`: the caller's session's own plan, the core's record.
     Plan(hide_core::plans::PlanCommand),
+    /// `hide automation`: the operator's automations, the core's book
+    /// (`automation_cli`).
+    Automation(Box<hide_core::automations::Call>),
     /// `hide session fold-ask`: one of the caller's session's open questions,
     /// folded with its reason in the link record.
     FoldAsk {
@@ -1764,6 +1777,7 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::Plan(..)
+                | Self::Automation(..)
                 | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
@@ -1797,6 +1811,10 @@ impl ScopedRequest {
                 | hide_core::store_command::StoreCommand::Show { .. } => Need::View,
                 _ => Need::Act,
             },
+            // Reading the automations is a view; a change starts agents
+            // later with no one present.
+            Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
+            Self::Automation(..) => Need::Act,
             Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
                 Need::Agent
             }
@@ -1922,6 +1940,8 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("automation") => crate::automation_cli::from_wire(&value["call"])
+                            .map(|call| ScopedRequest::Automation(Box::new(call))),
                         Some("fold_ask") => {
                             match (value["id"].as_str(), value["reason"].as_str()) {
                                 (Some(id), Some(reason))
@@ -2013,12 +2033,14 @@ async fn scoped_client_loop(
                         Some("access_list") => Some(ScopedRequest::AccessList),
                         _ => None,
                     };
-                    // A plan carries its whole node list, so a mission
-                    // command may use the frame's full size like a letter.
+                    // A plan carries its whole node list, and an automation
+                    // its task, so a mission, plan or automation command may
+                    // use the frame's full size like a letter.
                     if command.is_none()
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "automation"
                             && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
@@ -2191,6 +2213,10 @@ async fn scoped_client_loop(
                                             );
                                             (code, next)
                                         })?
+                                }
+                                ScopedRequest::Automation(call) => {
+                                    let from_device = cap.context.device_id != core.node().as_str();
+                                    crate::automation_cli::answer(&core, *call, from_device)?
                                 }
                                 ScopedRequest::FoldAsk { id, reason } => {
                                     core.fold_ask_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
@@ -2590,6 +2616,9 @@ enum ClientAction {
     /// (`importable_projects`), or where a clone or a new project would
     /// land on a device (`clone_target`, `project_target`).
     NodeAsk(Value),
+    /// A window's call on the automations that waits for the core's answer
+    /// (`automation_screen`).
+    Automation(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2654,6 +2683,7 @@ fn handle_client_text(
         Some("home_folder_list" | "importable_projects") => {
             return Ok(ClientAction::NodeAsk(event));
         }
+        Some(crate::automation_screen::KIND) => return Ok(ClientAction::Automation(event)),
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {
@@ -5359,6 +5389,7 @@ fn log_refusal(reason: CloseReason, extra: Option<usize>) {
 pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::JoinHandle<()> {
     let shutdown = state.shutdown.clone();
     let mobile = Arc::clone(&state.mobile);
+    let core = Arc::clone(&state.core);
     let idle_task = watch_idle(
         Idle {
             idle_secs: state.idle_secs,
@@ -5380,9 +5411,10 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             },
         },
         // Mobile on with a phone paired: the phone may come back at any
-        // time and push has to keep going (PRD D-10). The idle clock starts
-        // over when that ends.
-        move || mobile.keep_alive(),
+        // time and push has to keep going (PRD D-10), and an automation on
+        // has to run at its time (PRD automations D-19). The idle clock
+        // starts over when both end.
+        move || mobile.keep_alive() || core.automations_on(),
     );
     seat.mount(router(state));
     idle_task
@@ -5688,6 +5720,7 @@ mod tests {
         assert!(blank.ends_with("The shell was waited for 30 s"), "{blank}");
         for code in [
             "spawn_busy",
+            "workspace_closing",
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",

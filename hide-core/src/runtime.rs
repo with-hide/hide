@@ -13,6 +13,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_definitions;
 mod agent_profiles;
+pub(crate) mod automations;
 pub(crate) use agent_definitions::settle_and_hand_off;
 mod add_project;
 mod agent_groups;
@@ -53,6 +54,7 @@ mod github_poll;
 mod gone_worktrees;
 pub(crate) mod group_starts;
 mod guardrails;
+mod heal_letters;
 mod herdr_import;
 mod hide_notes;
 mod home_retire;
@@ -125,7 +127,6 @@ pub(crate) mod suggestions;
 mod tab_focus;
 mod terminal;
 mod terminal_input;
-mod transition_letters;
 mod tree_close;
 mod tree_reopen;
 pub(crate) mod turn_answer;
@@ -1504,6 +1505,7 @@ pub struct Runtime {
     desk: desk::Desk,
     /// External tools' connections (PRD hide-external-control).
     access: access::AccessRuntime,
+    automations: automations::AutomationsRuntime,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -1967,9 +1969,9 @@ pub struct Runtime {
     spent_bells: spent_bells::SpentBells,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
-    /// The letters owed to agents whose turn a move or a machine restart cut
-    /// off (`transition_letters.rs`); session-only.
-    transition_letters: transition_letters::TransitionLetters,
+    /// The lines owed to agents a heal resumed after their work was cut
+    /// (`heal_letters.rs`); session-only.
+    heal_letters: heal_letters::HealLetters,
     /// Each delegated child's block, and the note its parent is owed
     /// (`blocked_children.rs`); session-only.
     blocked_children: blocked_children::BlockedChildren,
@@ -2179,7 +2181,7 @@ impl Runtime {
     ) -> Self {
         let state_path = PathBuf::from(&options.app_state_path);
         let delivery_path =
-            hide_kit::layout::delivery_ledger(state_path.parent().unwrap_or(Path::new(".")));
+            hide_kit::layout::delivery_store(state_path.parent().unwrap_or(Path::new(".")));
         let delivery_ledger = crate::delivery::ledger::recover(&delivery_path)
             .map(Arc::new)
             .map_err(|error| {
@@ -2560,6 +2562,7 @@ impl Runtime {
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             access: access::AccessRuntime::default(),
+            automations: automations::AutomationsRuntime::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
@@ -2748,7 +2751,7 @@ impl Runtime {
             letter_wakes: Default::default(),
             spent_bells: Default::default(),
             unreadable_letters: Default::default(),
-            transition_letters: Default::default(),
+            heal_letters: Default::default(),
             blocked_children: Default::default(),
             pane_reopens: HashMap::new(),
             update_badges: HashMap::new(),

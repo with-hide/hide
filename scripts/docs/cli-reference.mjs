@@ -123,6 +123,7 @@ const SECTIONS = [
   ["Skills and MCP servers", ["skill", "mcp"]],
   ["Missions", ["mission"]],
   ["Tasks", ["task"]],
+  ["Automations", ["automation"]],
   ["Panes and workspaces", ["pane", "workspace"]],
   ["The operator's screen", ["file", "diff", "browser", "view"]],
   ["Devices", ["device"]],

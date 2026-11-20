@@ -166,7 +166,17 @@ pub fn holder_restart_lock(state_dir: &Path) -> PathBuf {
     state_dir.join("holder-restart.lock")
 }
 
-/// Durable local requests and watches; its owner is the core delivery worker.
+/// The delivery ledger: letters, watches, agent registrations and spawns;
+/// its owner is the core's delivery store (`hide_core::delivery::store`).
+pub fn delivery_store(state_dir: &Path) -> PathBuf {
+    state_dir.join(DELIVERY_STORE)
+}
+
+pub const DELIVERY_STORE: &str = "delivery.sqlite3";
+
+/// The delivery ledger as builds before [`delivery_store`] kept it. The first
+/// start of a build with the store imports it and no build writes it again,
+/// so an older build started on the folder finds it as it left it.
 pub fn delivery_ledger(state_dir: &Path) -> PathBuf {
     state_dir.join("delivery-ledger.json")
 }
@@ -346,6 +356,29 @@ pub const ACCESS_STORE: &str = "access.json";
 pub fn access_store(state_dir: &Path) -> PathBuf {
     state_dir.join(ACCESS_STORE)
 }
+
+/// The automations this core runs and each one's run records (PRD
+/// automations D-21). It moves with the core.
+pub const AUTOMATIONS_STORE: &str = "automations.json";
+
+pub fn automations_store(state_dir: &Path) -> PathBuf {
+    state_dir.join(AUTOMATIONS_STORE)
+}
+
+/// Where an automation with no folder of its own works and leaves its
+/// results, one folder per automation (PRD automations D-08): `~/hide/automations`,
+/// in the account's home so the operator finds the results. The core
+/// registers each such folder for its runs and no list shows it; the old
+/// Home's retirement leaves this folder where it is (D-09).
+pub fn automations_home(home: &Path) -> PathBuf {
+    home.join(OLD_HOME_FOLDER).join(AUTOMATIONS_FOLDER)
+}
+
+/// The folder an earlier Hide kept as Home on each device (`~/hide`), whose
+/// retirement `hide_host::home` owns.
+pub const OLD_HOME_FOLDER: &str = "hide";
+/// The automations' folder inside it.
+pub const AUTOMATIONS_FOLDER: &str = "automations";
 
 /// Where an external tool keeps its keys, one owner-only file per
 /// connection name, under the tool's own home (D-18): the operator's home

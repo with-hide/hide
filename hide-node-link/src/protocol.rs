@@ -427,13 +427,16 @@ use crate::error::HostError;
 /// 98: a hook's report lists the subagents its session runs, each one's kind,
 /// task and start (`panes::HookStatusReport::subagents`), which a core on 97
 /// refuses as a field it does not know, so a helper upgrades with its core.
-/// 99: the kit carries the store of skills and MCP items (PRD
+/// 99: a node makes an automation's own folder (`AutomationFolder`); a helper
+/// on 98 does not know the call, so it is refused at Hello and upgraded with
+/// its core.
+/// 100: the kit carries the store of skills and MCP items (PRD
 /// skill-mcp-manager): a kit report carries the store's, the `store` pass
 /// and the `follow_store` check answer the store's report alone, and
-/// `store_export` reads a store for a copy to a device; a helper on 98 knows
+/// `store_export` reads a store for a copy to a device; a helper on 99 knows
 /// none of these calls, so it is refused at Hello and upgraded with its
 /// core.
-pub const PROTOCOL_VERSION: u32 = 99;
+pub const PROTOCOL_VERSION: u32 = 100;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -935,6 +938,13 @@ pub enum Call {
     /// its own, relative to it, or `null`.
     IgnoredRepository {
         worktree: String,
+    },
+    /// Makes an automation's own folder, `~/hide/automations/<name>` under
+    /// this host's home with the folders above it, and answers its real path
+    /// (`project::AutomationFolder`); a folder already there is answered as
+    /// it is (PRD automations D-08).
+    AutomationFolder {
+        name: String,
     },
     /// Makes a project at `path` (`project::ProjectCreated`): its folder
     /// first when `new_folder`, at the literal path the shell checked, then
@@ -1499,6 +1509,7 @@ impl Call {
             | Self::WorktreesRegistered { .. }
             | Self::IgnoredRepository { .. }
             | Self::ProjectCreate { .. }
+            | Self::AutomationFolder { .. }
             | Self::PathFacts { .. }
             | Self::RealPaths { .. }
             | Self::Repository { .. }

@@ -9894,12 +9894,90 @@ fn a_node_waits_on_what_the_core_decides_from_its_lines_and_its_decision() {
     );
 }
 
-/// with-hide/hide-private#552 c2: the review failing twice in a row warns
-/// the Conductor with one letter and marks the node; nothing reaches the
-/// operator, a third failure sends nothing more, and the review passing
-/// takes the warning, and a letter not sent yet, away.
+/// mission-82 c2: a node records when its worker's lines first all stood
+/// met, the record that met the last of them, and keeps that time through
+/// a later record; its view says when it could have started, the
+/// mission's start for a node with no dependency and its dependency's
+/// finish for one with, so `hide mission show` and the map split its time.
+/// A node of a book from before the stamp reads with none.
 #[test]
-fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
+fn a_node_records_when_its_own_lines_first_all_stood_met_and_when_it_could_start() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let mut plan = criteria_plan();
+    plan["plan"]["nodes"][1]["depends_on"] = json!(["fix"]);
+    command(&mut runtime, "sender", plan).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
+    let started = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .started_at_unix_ms;
+    assert!(started.is_some());
+    assert_eq!(node_view(&runtime, "fix").ready_at_unix_ms, started);
+    assert_eq!(node_view(&runtime, "docs").ready_at_unix_ms, None);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    assert_eq!(
+        node_view(&runtime, "fix").own_met_at_unix_ms,
+        None,
+        "check is open"
+    );
+    let before = crate::runtime::unix_milliseconds();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let met = node_view(&runtime, "fix")
+        .own_met_at_unix_ms
+        .expect("stamped");
+    assert!(met >= before, "the record that met the last line");
+    // A later record of a line already met leaves the first time.
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "c1", json!({"evidence": "ran it again"})),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").own_met_at_unix_ms, Some(met));
+    let done = met + 60_000;
+    let fix = &mut runtime.missions.book.get_mut("mission-1").unwrap().nodes[0];
+    fix.status = crate::missions::NodeStatus::Done;
+    fix.finished_at_unix_ms = Some(done);
+    assert_eq!(node_view(&runtime, "docs").ready_at_unix_ms, Some(done));
+    // A node of a book from before the stamp reads with none.
+    let mut old =
+        serde_json::to_value(&runtime.missions.book.get("mission-1").unwrap().nodes[0]).unwrap();
+    old.as_object_mut().unwrap().remove("own_met_at_unix_ms");
+    let read: crate::missions::MissionNode = serde_json::from_value(old).unwrap();
+    assert_eq!(read.own_met_at_unix_ms, None);
+}
+
+/// mission-82 c1: Hide counts a node's review rounds as the heads its
+/// checker answered, and the round at the mission's limit (`normal`, 3)
+/// failing warns the Conductor with one letter that says the limit is
+/// reached and how to settle it, and marks the node; the rounds before it
+/// warn nothing, nothing reaches the operator, a round past the limit sends
+/// nothing more, and the review passing takes the warning, and a letter not
+/// sent yet, away.
+#[test]
+fn the_review_round_at_the_limit_failing_tells_the_conductor_once_how_to_settle_it() {
     use crate::missions::WarningKind;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -9919,29 +9997,60 @@ fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
     )
     .unwrap();
     let now = crate::runtime::unix_milliseconds();
-    let review = |runtime: &mut Runtime, pass: bool, round: u32| {
+    let review = |runtime: &mut Runtime, pass: bool, head: &str| {
         let mut record = record_of(
             "fix",
             "review",
-            json!({"evidence": format!("round {round}")}),
+            json!({"evidence": format!("on {head}"), "commit": head}),
         );
         record["pass"] = json!(pass);
         command(runtime, "reviewer", record).unwrap();
         runtime.drive_mission_health(now);
     };
-    review(&mut runtime, false, 1);
+    let rounds = |runtime: &Runtime| {
+        let shown = runtime.mission_view_of("mission-1").unwrap();
+        shown.nodes[0]
+            .review_rounds
+            .as_ref()
+            .map(|rounds| (rounds.line.clone(), rounds.rounds, rounds.limit))
+    };
+    assert_eq!(rounds(&runtime), None);
+    review(&mut runtime, false, "a1b2c3d4e5f6");
+    // A second answer on the same head is the same round.
+    review(&mut runtime, true, "a1b2c3d4e5f6");
+    review(&mut runtime, false, "a1b2c3d4e5f6");
+    assert_eq!(rounds(&runtime), Some(("review".into(), 1, 3)));
+    review(&mut runtime, false, "b2c3d4e5f6a1");
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
-    review(&mut runtime, false, 2);
+    review(&mut runtime, false, "c3d4e5f6a1b2");
+    assert_eq!(rounds(&runtime), Some(("review".into(), 3, 3)));
     let (kinds, letters) = warnings_of(&runtime);
     assert_eq!(kinds, [WarningKind::ReviewFails]);
     assert_eq!(letters.len(), 1, "{letters:?}");
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let wake = mission
+        .wakes
+        .iter()
+        .find(|wake| wake.event == crate::missions::WakeEvent::Warning)
+        .unwrap();
+    let body = super::super::missions::wake_body(mission, wake);
+    for words in [
+        "reached its review round limit",
+        "failed in round 3, with 3 rounds",
+        "`normal` strength",
+        "fix the serious findings in the node",
+        "follow-up issues",
+        "hide mission skip fix review --reason",
+        "without the operator",
+    ] {
+        assert!(body.contains(words), "{words:?} in {body}");
+    }
     let shown = runtime.mission_view_of("mission-1").unwrap();
-    assert_eq!(shown.nodes[0].review_fails, 2);
     assert_eq!(shown.nodes[0].warnings.len(), 1);
     // It is no attention: the operator is never asked by it.
     assert!(shown.nodes[0].attention.is_none());
     assert_eq!(shown.safety_net, None);
-    // The same plan applied again keeps the review line, so the count and
+    // The same plan applied again keeps the review line, so the rounds and
     // the warning stand, with no second letter.
     command(&mut runtime, "sender", criteria_plan()).unwrap();
     runtime.drive_mission_health(now);
@@ -9950,13 +10059,14 @@ fn a_review_failed_twice_in_a_row_warns_the_conductor_alone_until_it_passes() {
         (vec![WarningKind::ReviewFails], letters.clone()),
         "a replan keeps the warning"
     );
-    review(&mut runtime, false, 3);
+    review(&mut runtime, false, "d4e5f6a1b2c3");
+    assert_eq!(rounds(&runtime), Some(("review".into(), 4, 3)));
     assert_eq!(
         warnings_of(&runtime).1,
         letters,
         "the same warning, one letter"
     );
-    review(&mut runtime, true, 4);
+    review(&mut runtime, true, "d4e5f6a1b2c3");
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
 }
 
@@ -10125,8 +10235,9 @@ fn a_pass_on_a_new_head_replaces_the_failure_of_an_older_head() {
             .iter()
             .find(|line| line.key == "review")
             .unwrap()
-            .fails_in_a_row,
-        0
+            .rounds,
+        2,
+        "each head the reviewers answered is a round"
     );
 }
 
@@ -15477,6 +15588,58 @@ fn one_cause_on_five_nodes_shows_the_operator_one_card_at_most() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// The operator's 치우기 on a mission's 내 차례 row (operator decision
+/// 2026-11-20): the mission leaves its device's Needs You, stays out while
+/// the same raises stand, and comes back once a node is raised after it.
+#[test]
+fn a_put_away_mission_row_comes_back_only_for_a_newer_raise() {
+    use crate::missions::AttentionReason;
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    five_raised(
+        &mut runtime,
+        AttentionReason::WorkerEnded,
+        false,
+        now - MINUTE,
+    );
+    assert!(operator_turn(&mut runtime).mission_item);
+
+    assert!(runtime.mission_put_away_event("mission-1"));
+    let turn = operator_turn(&mut runtime);
+    assert_eq!(
+        (turn.mission_item, turn.safety_net),
+        (false, Some(5)),
+        "the map keeps its safety net"
+    );
+    // The same raises, read again, keep it away.
+    runtime.drive_mission_health(now);
+    assert!(!operator_turn(&mut runtime).mission_item);
+
+    // A node raised after the put-away asks the operator again.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "n1")
+        .unwrap()
+        .attention = None;
+    let later = crate::runtime::unix_milliseconds() + MINUTE;
+    let raised = crate::runtime::mission_health::raise(
+        mission,
+        "n1",
+        AttentionReason::PrClosed,
+        Some(8),
+        later,
+    );
+    assert!(!raised.is_empty());
+    runtime.save_missions();
+    assert!(operator_turn(&mut runtime).mission_item);
+
+    assert!(!runtime.mission_put_away_event("mission-unknown"));
+}
+
 /// The safety net is excused exactly where a stall is (`stall_excused`): a
 /// decision waiting on the operator, a delay, a node's hold, and a node whose
 /// gate waits on the operator's answer, which is the operator's own turn
@@ -16084,13 +16247,13 @@ fn an_open_mission_holds_its_conductor_worker_reviewer_and_verifier() {
 /// durable write must retain both its registration and spawn receipt.
 fn binding_during_a_full_ledger_save(register: bool) {
     use crate::coordination::{AGENT_LIMIT, Mutation, SPAWN_LIMIT};
-    use crate::delivery::{ledger, worker::Effect};
+    use crate::delivery::{store, worker::Effect};
     use std::sync::mpsc;
     use std::time::Duration;
 
     let fixture = conducting();
     drop(fixture._worker);
-    let path = fixture._root.path().join("full-ledger.json");
+    let path = fixture._root.path().join("delivery.sqlite3");
     let effect = {
         let mut runtime = fixture.runtime.lock().unwrap();
         with_worker_and_reviewer(&mut runtime);
@@ -16182,14 +16345,14 @@ fn binding_during_a_full_ledger_save(register: bool) {
         Arc::downgrade(&fixture.runtime),
         path.clone(),
         effect,
-        move |path, bytes| {
+        move |file, changes| {
             if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 saving.send(()).unwrap();
                 // Only a test failure can leave the store paused; keep its
                 // owner bounded on that path too.
                 resumed.recv_timeout(Duration::from_secs(5)).unwrap();
             }
-            ledger::write(path, bytes)
+            file.apply(changes)
         },
     );
     at_save.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -16206,7 +16369,7 @@ fn binding_during_a_full_ledger_save(register: bool) {
     let result = answer.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(bound.is_ok(), "{bound:?}");
     assert!(result.is_ok(), "{result:?}");
-    let saved = ledger::from_bytes(&std::fs::read(path).unwrap()).unwrap();
+    let saved = store::load(&path).unwrap();
     let child = saved
         .agents
         .iter()

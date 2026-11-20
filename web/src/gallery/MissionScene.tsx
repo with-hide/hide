@@ -44,7 +44,8 @@ import { withCoreWaits } from "./missionWaits";
 /** The Conductor's pane, as its agent row and the mission name it. */
 const CONDUCTOR_PANE = "w1:p1";
 /** A pane state reads the map state it draws small. */
-const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan", "pane-done": "done", "pane-cancelled": "cancelled" };
+// `pane-stopped` has a node stopped while another works, `pane-all-stopped` none moving (its chip's mark turns grey), `pane-merge-wait` merges left to the operator.
+const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan", "pane-done": "done", "pane-cancelled": "cancelled", "pane-stopped": "stopped", "pane-all-stopped": "all-stopped", "pane-merge-wait": "stack" };
 
 /** The report a finished mission's Conductor left, invented for the boards, in Markdown as a Conductor writes it. */
 const REPORT = "# 이슈 정리 보고: 네 개 끝, 화면 PR까지 머지\n\n## 남은 일\n- [ ] 알림 문구 다듬기는 다음 미션으로\n\n## 검증\n- 격리 앱에서 **6개 항목** 통과\n- 머지 순서는 API, 화면";
@@ -206,11 +207,11 @@ function rejectedReview(one: MissionNode): MissionNode {
 
 /**
  * The warned state (hide-private issue 552): the rejected search fix
- * failed its review twice in a row, and the reopen fix went ninety-five
+ * failed the review round at its strength's limit, and the reopen fix went ninety-five
  * minutes with no push; Hide told the Conductor about each.
  */
 function warned(one: MissionNode, now: number): MissionNode {
-  if (one.key === "fix-1490") return { ...one, review_fails: 2, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
+  if (one.key === "fix-1490") return { ...one, review_rounds: { line: "review", rounds: 3, limit: 3 }, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
   if (one.key === "fix-1487") return { ...one, pushed_at_unix_ms: now - 95 * MINUTE, warnings: [{ kind: "no_push", from_unix_ms: now - 95 * MINUTE, since_unix_ms: now - 5 * MINUTE, told_unix_ms: now - 5 * MINUTE }] };
   return one;
 }
@@ -422,6 +423,13 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   }
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
+  // `all-stopped`: the stopped state with its last working node stopped too, so no one moves the mission.
+  if (shown === "all-stopped") {
+    const fixture = missionFixture("stopped", now);
+    const nodes = fixture.mission.nodes;
+    nodes.splice(0, nodes.length, ...nodes.map((one) => (one.status === "working" && one.work?.state === "working" ? { ...one, work: { state: "stopped" as const, cause: null, since_unix_ms: now - 3 * MINUTE } } : one)));
+    return fixture;
+  }
   // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, unsettled 31 minutes behind the safety net; `hold`: its Conductor holds one node back for nine hours.
   if (shown === "delay" || shown === "stall" || shown === "hold") return stalledOrHeld(missionFixture("running", now), now, shown);
   // `decided`: nothing is the operator's turn and the Conductor's own skips are listed; `net`: one cause on five nodes behind one safety net card.
@@ -707,10 +715,13 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
         {state === "settings" ? (
           <div className="p-xl"><SettingsPageTitle /><ConductorTab actions={actions} /></div>
         ) : pane ? (
-          <div className="flex h-(--size-pane-header) min-w-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption" data-mission-scene-pane="true">
-            <AgentMark kind="claude" />
-            <span className="truncate">Conductor</span>
-            <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
+          // The pane's container, so `width` below 440 draws the narrow pane head.
+          <div className="@container/pane">
+            <div className="flex h-(--size-pane-header) min-w-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption" data-mission-scene-pane="true">
+              <AgentMark kind="claude" />
+              <span className="truncate">Conductor</span>
+              <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
+            </div>
           </div>
         ) : (
           <MissionScreen actions={actions} />

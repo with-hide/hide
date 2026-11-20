@@ -75,6 +75,10 @@ pub(crate) struct NodeFacts {
     /// The node waits on the operator alone (`Runtime::operator_waits`):
     /// settling a stall reads the same answer raising it did.
     pub operator_waits: bool,
+    /// A heal is bringing the worker back after its work was cut
+    /// (`Runtime::healing`): neither its stop nor its quiet is its own, so
+    /// neither warns (PRD letters-missions-simplify B19).
+    pub healing: bool,
 }
 
 /// A worker whose row reads stopped with nothing of its own to wait on: no
@@ -623,9 +627,12 @@ fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
     !pull.badge.is_settled() && !pull.is_draft && needs(pull).is_empty()
 }
 
-/// The failures in a row of a node's review or verification that warn its
-/// Conductor (with-hide/hide-private#552). Fixed: no Settings row sets it.
-pub(crate) const REVIEW_FAILS_THAT_WARN: u32 = 2;
+/// The review rounds a node of `mission` gets (`Strength::review_rounds`),
+/// a mission from before verification strength counting as `normal`.
+pub(crate) fn review_limit(mission: &Mission) -> u32 {
+    mission.strength.unwrap_or_default().review_rounds()
+}
+
 /// How long a node at work goes with no push before its Conductor is warned.
 pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
 /// How long a node's worker stands stopped (`stopped_worker`) before its
@@ -657,6 +664,7 @@ pub(crate) fn stopped_worker<'a>(
         .is_some_and(|raise| raise.reason != AttentionReason::WarningStood);
     let stands = node_works(mission, node)
         && fact.worker == Some(WorkerLife::Running)
+        && !fact.healing
         && !stall_excused(mission, node, operator_waits)
         && !raised
         && owed_elsewhere(mission, node, pulls, operator_waits) == Some(false);
@@ -687,8 +695,10 @@ pub(crate) enum WarnAct {
 }
 
 /// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
-/// a node at work in a running mission warns once its review or
-/// verification failed `REVIEW_FAILS_THAT_WARN` times in a row, and once it went
+/// a node at work in a running mission warns once the round of its review
+/// or verification at the strength's limit (`review_limit`) failed, and
+/// the warning stands, through any round after it, until that line passes
+/// or is skipped, so the Conductor is told once; and once it went
 /// `QUIET_THAT_WARNS_MS` with no push
 /// while it had work of its own, a change by pull request whose pull request
 /// does not just wait on others. The first goes when that line passes or
@@ -717,6 +727,7 @@ pub(crate) fn warn_acts(
         let fact = facts.get(at);
         let stopped =
             fact.and_then(|fact| stopped_worker(mission, node, fact, pulls, operator_waits));
+        let healing = fact.is_some_and(|fact| fact.healing);
         match standing(WarningKind::Stopped) {
             Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
                 node: at,
@@ -736,26 +747,38 @@ pub(crate) fn warn_acts(
             }
             _ => {}
         }
-        let fails = works && node.review_fails() >= REVIEW_FAILS_THAT_WARN;
+        let limit = review_limit(mission);
+        let past = works
+            .then(|| node.review_line(limit))
+            .flatten()
+            .filter(|line| line.past_limit(limit));
         match standing(WarningKind::ReviewFails) {
-            Some(_) if !fails => acts.push(WarnAct::Clear {
+            Some(_) if past.is_none() => acts.push(WarnAct::Clear {
                 node: at,
                 kind: WarningKind::ReviewFails,
             }),
-            None if fails => acts.push(WarnAct::Raise {
-                node: at,
-                kind: WarningKind::ReviewFails,
-                from: last_review_at(node).unwrap_or(now),
-                cause: None,
-            }),
+            None if past.is_some_and(|line| {
+                line.state == crate::mission_criteria::CriterionState::Fail
+            }) =>
+            {
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::ReviewFails,
+                    from: last_review_at(node).unwrap_or(now),
+                    cause: None,
+                })
+            }
             _ => {}
         }
         let quiet = node.quiet_since();
         match standing(WarningKind::NoPush) {
+            // A warning not told yet is held while the worker is healed:
+            // the restart, not the worker, holds its push (B19).
             Some(warning)
                 if !works
                     || stopped.is_some()
-                    || quiet.is_some_and(|since| since > warning.from_unix_ms) =>
+                    || quiet.is_some_and(|since| since > warning.from_unix_ms)
+                    || (healing && warning.told_unix_ms.is_none()) =>
             {
                 acts.push(WarnAct::Clear {
                     node: at,
@@ -764,6 +787,7 @@ pub(crate) fn warn_acts(
             }
             None if works
                 && stopped.is_none()
+                && !healing
                 && node.asks_push()
                 && quiet.is_some_and(|since| now.saturating_sub(since) >= QUIET_THAT_WARNS_MS)
                 && quiet_waits(mission, node, pulls, operator_waits) == Some(false) =>
@@ -1633,6 +1657,7 @@ mod tests {
             summary: None,
             at_unix_ms: Some(5),
             commit: None,
+            rounds: 1,
             pane_id: None,
             machine: None,
         });
@@ -1650,35 +1675,148 @@ mod tests {
         }
     }
 
-    /// with-hide/hide-private#552: the review failing twice in a row warns,
-    /// once, and the review passing takes it away.
+    /// mission-82 review O4: a node with a review and a verification names
+    /// one rounds line everywhere: the one past the limit and not passed,
+    /// else the one with the most rounds.
     #[test]
-    fn a_review_failed_twice_in_a_row_warns_until_it_passes() {
+    fn a_node_names_the_line_past_the_limit_before_the_one_with_most_rounds() {
+        use crate::mission_criteria::CriterionState::{Fail, Pass};
         let mut m = reviewed();
-        m.nodes[0].criteria[1].fails_in_a_row = 1;
-        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
-        m.nodes[0].criteria[1].fails_in_a_row = 2;
+        let mut verify = m.nodes[0].criteria[1].clone();
+        verify.key = "verify".into();
+        verify.kind = crate::mission_criteria::CriterionKind::Verify;
+        m.nodes[0].criteria.push(verify);
+        let set = |m: &mut Mission, at: usize, rounds: u32, state| {
+            m.nodes[0].criteria[at].rounds = rounds;
+            m.nodes[0].criteria[at].state = state;
+        };
+        set(&mut m, 1, 5, Pass);
+        set(&mut m, 2, 4, Fail);
+        let named = |m: &Mission| m.nodes[0].review_line(4).map(|line| line.key.clone());
+        assert_eq!(named(&m).as_deref(), Some("verify"));
+        // Both past it: the failed one, even with fewer rounds (n1).
+        set(&mut m, 1, 5, crate::mission_criteria::CriterionState::Open);
+        assert_eq!(named(&m).as_deref(), Some("verify"));
+        set(&mut m, 1, 5, Pass);
+        set(&mut m, 2, 3, Fail);
+        assert_eq!(named(&m).as_deref(), Some("review"));
+        set(&mut m, 1, 0, Pass);
+        set(&mut m, 2, 0, Fail);
+        assert_eq!(named(&m), None);
+    }
+
+    /// mission-82: the round at the strength's limit failing warns, once:
+    /// a round before it failing does not, nor the limit's round still
+    /// open; standing, the rounds after it raise nothing more, and the line
+    /// passing or skipped takes it away. A mission from before strength
+    /// counts as normal.
+    #[test]
+    fn the_review_round_at_the_strengths_limit_failing_warns_once_until_the_line_passes() {
+        use crate::mission_criteria::CriterionState::{Fail, Open, Pass, Skipped};
+        use crate::missions::Strength;
+        for (strength, limit) in [
+            (Some(Strength::Fast), 1),
+            (Some(Strength::Normal), 3),
+            (Some(Strength::Thorough), 4),
+            (None, 3),
+        ] {
+            let mut m = reviewed();
+            m.strength = strength;
+            let review = |m: &mut Mission, rounds: u32, state| {
+                m.nodes[0].criteria[1].rounds = rounds;
+                m.nodes[0].criteria[1].state = state;
+            };
+            review(&mut m, limit - 1, Fail);
+            assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            review(&mut m, limit, Open);
+            assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            review(&mut m, limit, Fail);
+            assert_eq!(
+                warn_acts(&m, None, &[], &[], 10),
+                [WarnAct::Raise {
+                    node: 0,
+                    kind: WarningKind::ReviewFails,
+                    from: 5,
+                    cause: None,
+                }],
+                "{strength:?}"
+            );
+            m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
+            for state in [Open, Fail] {
+                review(&mut m, limit + 1, state);
+                assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            }
+            for state in [Pass, Skipped] {
+                review(&mut m, limit + 1, state);
+                assert_eq!(
+                    warn_acts(&m, None, &[], &[], 10),
+                    [WarnAct::Clear {
+                        node: 0,
+                        kind: WarningKind::ReviewFails,
+                    }],
+                    "{strength:?} {state:?}"
+                );
+            }
+        }
+    }
+
+    /// PRD letters-missions-simplify B19: while a heal brings a node's
+    /// worker back, neither its stop nor its quiet warns; once it is back,
+    /// the same facts warn as before.
+    #[test]
+    fn a_worker_being_healed_raises_no_stopped_or_no_push_warning() {
+        let m = reviewed();
+        let pulls = listed(Vec::new());
+        let stopped = |healing| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            stopped: Some(WorkerStopped {
+                since_unix_ms: 0,
+                cause: None,
+            }),
+            healing,
+            ..Default::default()
+        };
+        let quiet = |healing| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            healing,
+            ..Default::default()
+        };
+        let late = 200 * MINUTE;
+        assert!(warn_acts(&m, Some(&pulls), &[stopped(true)], &[false], late).is_empty());
+        assert!(warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late).is_empty());
         assert_eq!(
-            warn_acts(&m, None, &[], &[], 10),
+            warn_acts(&m, Some(&pulls), &[stopped(false)], &[false], late),
             [WarnAct::Raise {
                 node: 0,
-                kind: WarningKind::ReviewFails,
-                from: 5,
+                kind: WarningKind::Stopped,
+                from: 0,
                 cause: None,
             }]
         );
-        // Standing, a third failure raises nothing more.
-        m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
-        m.nodes[0].criteria[1].fails_in_a_row = 3;
-        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
-        m.nodes[0].criteria[1].fails_in_a_row = 0;
         assert_eq!(
-            warn_acts(&m, None, &[], &[], 10),
-            [WarnAct::Clear {
+            warn_acts(&m, Some(&pulls), &[quiet(false)], &[false], late),
+            [WarnAct::Raise {
                 node: 0,
-                kind: WarningKind::ReviewFails,
+                kind: WarningKind::NoPush,
+                from: 0,
+                cause: None,
             }]
         );
+        // A warning raised before the heal and not told yet is held; one
+        // already told stays as it was.
+        let mut m = reviewed();
+        let mut untold = warn(WarningKind::NoPush, 0);
+        untold.told_unix_ms = None;
+        m.nodes[0].warnings.push(untold);
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late),
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::NoPush,
+            }]
+        );
+        m.nodes[0].warnings[0].told_unix_ms = Some(1);
+        assert!(warn_acts(&m, Some(&pulls), &[quiet(true)], &[false], late).is_empty());
     }
 
     /// with-hide/hide-private#552: a change at work warns at ninety minutes
@@ -1783,7 +1921,8 @@ mod tests {
     #[test]
     fn only_a_change_at_work_warns() {
         let mut m = reviewed();
-        m.nodes[0].criteria[1].fails_in_a_row = 2;
+        m.nodes[0].criteria[1].rounds = 3;
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
         m.nodes[0].warnings = vec![
             warn(WarningKind::ReviewFails, 5),
             warn(WarningKind::NoPush, 0),
@@ -1803,7 +1942,7 @@ mod tests {
             ]
         );
         m.nodes[0].warnings.clear();
-        m.nodes[0].criteria[1].fails_in_a_row = 0;
+        m.nodes[0].criteria[1].rounds = 0;
         m.nodes[0].status = NodeStatus::Working;
         m.nodes[0].back_to_work(100 * MINUTE);
         assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
@@ -1932,7 +2071,8 @@ mod tests {
     fn a_failed_review_is_never_raised_as_a_stall() {
         let failed = || {
             let mut m = reviewed();
-            m.nodes[0].criteria[1].fails_in_a_row = 3;
+            m.nodes[0].criteria[1].rounds = 3;
+            m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
             m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
             m
         };
