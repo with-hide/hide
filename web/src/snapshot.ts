@@ -138,7 +138,7 @@ export type AgentRow = {
   resolved_recent?: boolean;
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
-  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
+  escalation?: { cause: "parent_blocked" | "draft" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
   /** On a lineage root: every raised descendant, lead first. */
@@ -820,7 +820,7 @@ export type PrFeedback = {
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
-/** `branch_diffs`: the Hide AI branch files read now, the 보기 slot's and the open 제안 row's, at most two. */
+/** `branch_diffs`: the Hide AI branch files read now, a card tab's and the open 제안 row's, at most two. */
 export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diffs?: BranchDiff[] };
 
 /** One file's committed diff on a Hide AI branch against its base, read on the Project's machine (PRD hide-ai-branch-first-apply B4). */
@@ -1388,7 +1388,7 @@ export type ProjectAddReceipt = { request_id: string; device_id: string; path: s
 );
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
-/** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
+/** One card a desk tab shows (`DetailItem`, PRD sidebar-task-lens D-50; lane-desk-pair-view D-13). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
@@ -1405,11 +1405,12 @@ export type DetailItem =
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
 
 /**
- * Which agent's 보기 slot an item opens in, where it was pressed (operator
- * decision 2026-11-09): `here` the slot in front, over what it shows, for
- * what a card opens inside the slot; `{ pane }` the slot of the agent whose
- * row, head or chip was pressed, that pane taking the keyboard; `owner` the
- * slot of the agent that owns the item, pressed where no agent is.
+ * Which Agent tab's desk a card opens on, where it was pressed (PRD
+ * lane-desk-pair-view D-12, B6, B7): `here` the desk in front, beside what
+ * it holds, for what a card opens inside a card; `{ pane }` the desk of the
+ * tab of the agent whose row, head or chip was pressed, that pane taking the
+ * keyboard; `owner` the desk of the tab of the agent that owns the item,
+ * pressed where no agent is.
  */
 export type DetailPlace = "here" | "owner" | { pane: string };
 
@@ -1451,7 +1452,7 @@ export type MissionBlocked = "upstream_dropped";
 export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
-export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_no_push", "warning_stopped"] as const;
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
 export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1639,7 +1640,7 @@ export type MissionEvent = {
   action?: MissionOperatorAction;
 };
 
-/** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
+/** The events of the mission open as a card tab on a desk (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
 export type MissionEventsSnapshot = { mission: string | null; events: MissionEvent[]; dropped: number };
 
 /** The brief of the node whose folded box the operator opened (`mission_brief`): one node at a time, `text` null when the node holds none. */
@@ -1735,8 +1736,6 @@ export type MissionNode = {
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
   warnings?: MissionNodeWarning[];
-  /** A push is asked of it (`MissionNode::asks_push`): a change at work delivered by pull request. */
-  asks_push?: boolean;
   /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
   waiting_on?: MissionWaitingOn | null;
   /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
@@ -1745,12 +1744,12 @@ export type MissionNode = {
   gate?: MissionGate;
   /** Who merges its pull request and where that stands (`NodeMerge`); absent for a node that is no change by pull request, and from a core before it. */
   merge?: MissionNodeMerge;
-  /** Why and until when its Conductor holds this node back (`MissionNode::hold`): it cannot start and raises no stall until then; absent from an older core. */
-  hold?: MissionNodeHold | null;
+  /** What it waits on that its Conductor set (`Mission::wait_of`): its own hold (`hide mission node --hold`) or the mission's delay (`hide mission delay`, `mission` true), why and until when; no warning or stall rises on it until then. Null while nothing holds it, absent from an older core. */
+  wait?: MissionNodeWait | null;
 };
 
-/** A Conductor's hold on one node that has not started (`hide mission node --hold <why> --for <span>`). */
-export type MissionNodeHold = { why: string; until_unix_ms: number };
+/** A node's wait as the core decides it (`NodeWait`): the map's and the phone's `기다리는 중 · <why> · <time>`. */
+export type MissionNodeWait = { why: string; until_unix_ms: number; mission: boolean };
 
 /** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
 export type MissionNodeWork =
@@ -1762,7 +1761,7 @@ export type MissionNodeWork =
 export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
 
 /** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
-export type MissionLettersHeldFor = "unreachable" | "approval" | "draft" | "unanswered";
+export type MissionLettersHeldFor = "approval" | "draft";
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
@@ -1780,8 +1779,8 @@ export type MissionWaitingOn =
 /** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
 export type MissionReviewRounds = { line: string; rounds: number; limit: number };
 
-/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, a long quiet with no push, or its worker stopped. */
-export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, or its worker stopped. */
+export type MissionWarningKind = "review_fails" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
 
@@ -1860,7 +1859,7 @@ export type Mission = {
  * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
  */
 /** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
-export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge" | "wait"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
 /** What those rules read of a mission, and so what the phone receives of one. */
 export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
   conductor: Pick<Mission["conductor"], "present">;
@@ -1936,9 +1935,6 @@ export type ConductorCandidate = { agent: string; profile?: string | null; model
 export type MissionMapFlow = "down" | "across";
 export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
 
-/** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
-export type DetailSlot = { items: DetailItem[]; shown: boolean };
-
 /** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
 export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
 export type GraphProjectKey = { device_id: string; workspace_id: string };
@@ -1984,7 +1980,7 @@ export type ViewDisplaySnapshot = {
   path: string;
   /** The document's name, a browser page's title (its host until it has one), or an outside file's name. */
   label: string;
-  kind: "file" | "diff" | "browser" | "external";
+  kind: "file" | "diff" | "browser" | "external" | "card";
   /** Which History group a diff shows; null for a file. */
   committed: boolean | null;
   preview: boolean;
@@ -2006,6 +2002,10 @@ export type ViewDisplaySnapshot = {
   unseen?: boolean;
   /** An outside file's desktop grant, name and viewer (PRD outside-path-in-hide); absent for every other kind. */
   external?: { grant: string; name: string; kind: import("./host").ExternalKind };
+  /** A card tab's card (PRD lane-desk-pair-view D-13); absent for every other kind. */
+  card?: DetailItem;
+  /** The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view B24, D-41): an agent's View its opener's, a card its owner's; absent for what the operator opened. */
+  owner_pane?: string | null;
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */
@@ -3171,7 +3171,7 @@ export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging
 /** What the attempt's agent was asked: commit on the branch, push it as one pull request, or make it again on its base. */
 export type SuggestionAttemptPurpose = "branch" | "pr" | "rebase";
 
-/** A ready branch as its row and the 보기 slot's branch card draw it (B3, B4). */
+/** A ready branch as its row and a branch card tab draw it (B3, B4). */
 export type SuggestionBranch = {
   name: string;
   base: string | null;
@@ -3891,7 +3891,7 @@ export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
-  /** The events of the mission open in the 보기 slot (PRD mission-plan-visibility D-22). */
+  /** The events of the mission open as a card tab on a desk (PRD mission-plan-visibility D-22). */
   mission_events?: MissionEventsSnapshot;
   /** The brief of the one node whose folded box was opened; `text` is null when it holds none. */
   mission_brief?: MissionBriefSnapshot;
@@ -3981,8 +3981,6 @@ export type SnapshotRest = {
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
     practice_invite_closed?: boolean;
-    /** The lane's 보기 slot (D-50) of the Agent tab in front; each tab keeps its own in the core. */
-    detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
     overview_graph?: OverviewGraphChoices;
     selected_path?: string | null;
@@ -4086,7 +4084,11 @@ export type SnapshotRest = {
   /** The front Workspace's layout and tools (S6 D-10); absent when no Workspace is in front. */
   workspace_view?: import("./workspace").WorkspaceView | null;
   /** All retained Browser Views, including those outside the front Workspace. */
-  browser_views?: { device_id: string; path: string; view_id: string; area_id: string }[];
+  /**
+   * `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37).
+   * `url` and `load`: a web page's address and the load the core last asked of it, so the host loads a page no desk on screen shows (B32); null and 0 for an outside HTML file.
+   */
+  browser_views?: { device_id: string; path: string; view_id: string; area_id: string; tray?: string | null; url?: string | null; load?: number }[];
   /** Positive connected Workspace area authority from the core, including empty areas; incarnation changes on revoke/regrant. */
   browser_scopes?: { device_id: string; path: string; area_id: string; incarnation: number }[];
   /** The desktop grants every outside file's tab stands on, across every Workspace; absent while none does. */

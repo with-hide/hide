@@ -47,6 +47,7 @@ fn ledger_with_sender(sender: &Actor) -> Ledger {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     ledger.next_id = 10;
     ledger

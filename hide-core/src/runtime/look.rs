@@ -84,7 +84,14 @@ impl Runtime {
         let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| change(self)));
         self.look.open -= 1;
         match answer {
-            Ok(answer) => (answer, self.follow_operator_look()),
+            Ok(answer) => {
+                // Pair view goes where the look went (D-45), before the rows
+                // are read.
+                if !self.look.selecting() {
+                    self.follow_pair_look();
+                }
+                (answer, self.follow_operator_look())
+            }
             Err(panic) => std::panic::resume_unwind(panic),
         }
     }

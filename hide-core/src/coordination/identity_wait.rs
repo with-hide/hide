@@ -477,6 +477,7 @@ mod tests {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         }
     }
 

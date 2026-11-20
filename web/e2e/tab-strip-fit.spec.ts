@@ -5,7 +5,7 @@ import { newTab, tabsOf, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { dumpOnFailure, pageTabs } from "./failure-dump";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
+import { enterWorkspace, screenshot, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 180_000 });
@@ -31,10 +31,27 @@ function expected(room: number, count: number): { selected: [number, Fit]; other
   return { selected: selected >= ICON + 2 * CONTROL ? [selected, "compact"] : [ICON + CONTROL, "marks"], others: [ICON, "marks"] };
 }
 
+/**
+ * The View strip's curve: the same stages, and the selected tab growing to
+ * `need`, its whole name's width, up to what the others' marks leave, the
+ * others splitting the rest (PRD lane-desk-pair-view D-30).
+ */
+function expectedView(room: number, count: number, need: number | null): { selected: [number, Fit]; others: [number, Fit] } {
+  const base = expected(room, count);
+  if (need === null || count < 2 || base.selected[0] >= need) return base;
+  const width = Math.max(base.selected[0], Math.min(need, room - (count - 1) * ICON));
+  if (width < TITLE_MIN) return base;
+  const rest = (room - width) / (count - 1);
+  const others: [number, Fit] = rest >= TITLE_MIN ? [Math.min(PREFERRED, rest), "titled"] : rest >= ICON + CONTROL ? [rest, "compact"] : [Math.max(ICON, rest), "marks"];
+  return { selected: [width, "titled"], others };
+}
+
 type Strip = {
   room: number;
   scrolls: boolean;
   selectedInView: boolean;
+  /** The selected View tab's whole name's width while its title shows, else null. */
+  need: number | null;
   tabs: { selected: boolean; width: number; title: boolean; close: boolean }[];
 };
 
@@ -49,8 +66,11 @@ async function strip(page: Page, column: "agent" | "view" = "agent"): Promise<St
     const newTab = zone.querySelector<HTMLElement>("[data-new-agent-tab], [data-view-new-tab]")!;
     const bounds = list.getBoundingClientRect();
     const tabs = [...list.querySelectorAll<HTMLElement>("[role=tab]")];
-    const selected = tabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.getBoundingClientRect();
+    const selectedTab = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
+    const selected = selectedTab?.getBoundingClientRect();
+    const title = selectedTab?.querySelector<HTMLElement>("[data-tab-title]");
     return {
+      need: selectedTab && title && shown(title) ? Math.ceil(selectedTab.offsetWidth - title.clientWidth + title.scrollWidth) : null,
       room: Math.floor(zone.getBoundingClientRect().width - newTab.getBoundingClientRect().width - (zone.querySelector<HTMLElement>("[data-new-tab-menu]")?.getBoundingClientRect().width ?? 0)),
       scrolls: list.scrollWidth > list.clientWidth,
       selectedInView: !!selected && selected.left >= bounds.left - 1 && selected.right <= bounds.right + 1,
@@ -202,13 +222,12 @@ test("File View tabs use the same shrinking strip and transfer the longest title
     const tabs = page.locator("[data-view-tab-bar] [role=tab]");
     for (const name of names) await page.locator(`[data-explorer-row="${toPage(root)}/${name}"]`).dblclick();
     await expect(tabs).toHaveCount(names.length);
-    // Pinned, the lane docks with a divider at its edge that widens the column there (PRD right-lane B5, B6; lane-two-columns B17).
-    await setLanePinned(page, true);
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+    // The lane over the agents has a divider at its edge that widens the column there (PRD lane-two-columns B17; lane-desk-pair-view B16).
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
     const handle = page.locator('[data-lane-divider="lane"]');
     const divider = await handle.boundingBox();
     const body = await page.locator("[data-lane-row]").boundingBox();
-    if (!divider || !body) throw new Error("the docked lane has no resize geometry");
+    if (!divider || !body) throw new Error("the lane has no resize geometry");
     const sidebarWidth = (await page.locator("[data-sidebar-box]").boundingBox())!.width;
     await page.mouse.move(divider.x + divider.width / 2, divider.y + 150);
     expect(await handle.evaluate((node, point) => node.contains(document.elementFromPoint(point.x, point.y)), {
@@ -233,12 +252,12 @@ test("File View tabs use the same shrinking strip and transfer the longest title
       let drawn = await strip(page, "view");
       await expect.poll(async () => {
         drawn = await strip(page, "view");
-        const want = expected(drawn.room, names.length);
+        const want = expectedView(drawn.room, names.length, drawn.need);
         return drawn.tabs.every((tab) => Math.abs(tab.width - (tab.selected ? want.selected[0] : want.others[0])) < 0.5)
           && drawn.scrolls === (want.selected[0] + (names.length - 1) * want.others[0] > drawn.room + 0.01)
           && drawn.selectedInView;
       }).toBe(true);
-      const want = expected(drawn.room, names.length);
+      const want = expectedView(drawn.room, names.length, drawn.need);
       for (const tab of drawn.tabs) {
         const fit = tab.selected ? want.selected : want.others;
         expect(tab.width, `File tab at room ${drawn.room}`).toBeCloseTo(fit[0], 0);
@@ -253,8 +272,9 @@ test("File View tabs use the same shrinking strip and transfer the longest title
         await tabs.first().click();
         await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
         const moved = await strip(page, "view");
-        expect(moved.tabs[0]!.width).toBeCloseTo(TITLE_MIN, 0);
-        expect(moved.tabs.at(-1)!.width).toBeCloseTo(want.others[0], 0);
+        const after = expectedView(moved.room, names.length, moved.need);
+        expect(moved.tabs[0]!.width).toBeCloseTo(after.selected[0], 0);
+        expect(moved.tabs.at(-1)!.width).toBeCloseTo(after.others[0], 0);
         await tabs.last().click();
         await expect(tabs.last()).toHaveAttribute("aria-selected", "true");
       }

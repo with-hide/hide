@@ -1,7 +1,7 @@
 import { expect, type ElectronApplication, type Page, type TestInfo } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { enterWorkspace, pinState, setLanePinned, showExplorer } from "../../web/e2e/wire";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { afterCleanup } from "../../web/e2e/worker-owned";
 import { fitWindow, focusPage, launchShell, NEEDS_FOCUS, startStack, test } from "./fixture";
 
@@ -140,12 +140,10 @@ test("Command T and Command W from a native page act on its View area, and after
     await page.locator('[data-explorer-row$="/page.html"]').click({ button: "right" });
     await page.locator('[data-explorer-menu] [data-menu-item="open-browser"]').click();
     await expect(page.locator("[data-browser-slot]")).toBeVisible();
-    // The page and the Explorer fit at their minimums beside 480px of
-    // agents, so the pin docks both columns, and the lane stays through a
-    // terminal click (PRD lane-two-columns B19).
-    await setLanePinned(page, true);
-    expect(await pinState(page)).toBe("on");
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+    // The page and the Explorer are up over the agents, and the lane stays
+    // through a click on the first pane, which it leaves uncovered (PRD
+    // lane-two-columns B19; lane-desk-pair-view B16).
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
 
     // Command T: the page's area gets the View strip's New tab.
     await terminal(fixture.panes[0]);
@@ -168,7 +166,7 @@ test("Command T and Command W from a native page act on its View area, and after
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(0);
     await expect(panes).toHaveCount(2);
 
-    // Command E from the page closes the pinned lane and leaves the keyboard
+    // Command E from the page closes the lane and leaves the keyboard
     // with the terminal; the next Command E brings it back on Files, and one
     // more closes it. Command W must still close the pane, not the page (B20, B23).
     await showExplorer(page);

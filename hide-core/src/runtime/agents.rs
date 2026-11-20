@@ -327,9 +327,18 @@ impl Runtime {
         terminal_intent: bool,
         report: FailureReport,
     ) -> bool {
+        // The operator choosing a device's pane moves its tab's pair view as
+        // choosing one of this machine does (B25, `follow_pair_focus`).
+        let focused = match &payload.request {
+            RemoteControlRequest::FocusPane { pane_id } => Some(pane_id.clone()),
+            _ => None,
+        };
         let (changed, read) = self.change_look(|runtime| {
             runtime.request_remote_control_inner_steps(payload, terminal_intent, report)
         });
+        if changed && let Some(pane) = focused {
+            self.follow_pair_focus(&pane);
+        }
         changed || read
     }
 

@@ -760,7 +760,7 @@ impl Runtime {
             .filter_map(|owed| {
                 let target = match owed.body {
                     // The line to go on waits for the agent in its pane.
-                    Body::GoOn { .. } => self.observed_registration(&owed.to),
+                    Body::GoOn { .. } => self.observed_agent(&owed.to),
                     _ => self.registered_target(&owed.to),
                 }?;
                 Some(Note {
@@ -772,18 +772,17 @@ impl Runtime {
             .collect()
     }
 
-    /// The live registration `id`.
+    /// The live registration in `id`'s place: `id` itself, or the agent that
+    /// took its pane over (`coordination::live_successor`), so a line owed
+    /// to an agent goes to the one after it, as the letters waiting for it
+    /// do (PRD letters-missions-simplify B2).
     fn registration(&self, id: &str) -> Option<&AgentRecord> {
-        self.delivery_ledger
-            .as_ref()
-            .ok()?
-            .agents
-            .iter()
-            .find(|record| !record.ended && record.id == id)
+        crate::coordination::live_successor(self.delivery_ledger.as_ref().ok()?, id)
+            .and_then(Result::ok)
     }
 
     /// The agent registered as `id`, observed in its pane.
-    fn observed_registration(&self, id: &str) -> Option<Observation> {
+    fn observed_agent(&self, id: &str) -> Option<Observation> {
         let record = self.registration(id)?;
         let observed = self
             .delivery_observations
@@ -798,7 +797,7 @@ impl Runtime {
     /// in its pane, else that pane's agent asleep, whose mailbox keeps it
     /// for its next wake.
     fn registered_target(&self, id: &str) -> Option<Observation> {
-        if let Some(observed) = self.observed_registration(id) {
+        if let Some(observed) = self.observed_agent(id) {
             return Some(observed);
         }
         let record = self.registration(id)?;

@@ -60,7 +60,7 @@ function draw(count = 2) {
   const layout = { root: { area: { id: "a1", active: "d1", displays } }, active_area: "a1", display_count: count, limits: { areas: 6, depth: 5, displays: 64 } };
   const rest = {
     navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }], workspaces: [{ agent_scope: emptyScope(), id: "w", label: "fixture", device_id: "local", checkouts: [{ agent_scope: emptyScope(), id: "c", workspace_id: "w", path: "/fixture", label: "fixture", tabs: [], active_tab_id: null, strip: [] }] }] },
-    workspace_view: { device_id: "local", path: "/fixture", open: true, documents: true, tool: null, layout },
+    workspace_view: { device_id: "local", path: "/fixture", open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, layout },
   } as unknown as SnapshotRest;
   const sizes = { areaMinWidth: 100, areaMinHeight: 100, divider: 4, tabStrip: 30 };
   const workspace = { device_id: "local", path: "/fixture" };
@@ -184,7 +184,7 @@ describe("close chords close what covers the screen first", () => {
   const press = (init: KeyboardEventInit) => window.dispatchEvent(new PlatformKeyboardEvent("keydown", init));
   const closeChord = { key: "w", code: "KeyW", metaKey: true };
   // The documents are drawn in the lane, so the chord's ordinary target is the focused View's page.
-  beforeEach(() => useUiStore.setState({ drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } }));
+  beforeEach(() => useUiStore.setState({ drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } }));
 
   it("closes the focused view when nothing covers it", () => {
     press(closeChord);

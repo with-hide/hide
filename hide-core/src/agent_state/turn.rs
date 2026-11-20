@@ -1266,14 +1266,13 @@ pub mod push {
     }
 
     /// The states a notification announces; the wire value is also the key of
-    /// the phone's translated word for it. The last two are the human delivery
-    /// causes (`hide_core::delivery::worker::HumanNoticeKind`).
+    /// the phone's translated word for it. The last is the human delivery
+    /// cause (`hide_core::delivery::worker::HumanNoticeKind`).
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum NoticeState {
         NeedsYou,
         Done,
         ObserverUnconfirmed,
-        LetterUndelivered,
     }
 
     impl NoticeState {
@@ -1282,7 +1281,6 @@ pub mod push {
                 Self::NeedsYou => "needs_you",
                 Self::Done => "done",
                 Self::ObserverUnconfirmed => "observer_unconfirmed",
-                Self::LetterUndelivered => "letter_undelivered",
             }
         }
     }

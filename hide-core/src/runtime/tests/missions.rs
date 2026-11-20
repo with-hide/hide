@@ -215,20 +215,26 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
         created["mission"]["cap"], 4,
         "the settings' concurrency is the default cap"
     );
-    assert!(
-        runtime.snapshot.ui_state.detail.items.is_empty(),
-        "an empty mission opens nothing"
-    );
-    let detail = runtime.snapshot.ui_state.detail.clone();
+    let views = |runtime: &Runtime| {
+        runtime.workspace_views.as_ref().map_or(0, |store| {
+            store
+                .views
+                .workspaces
+                .iter()
+                .map(|view| view.view_count())
+                .sum::<usize>()
+        })
+    };
+    assert_eq!(views(&runtime), 0, "an empty mission opens nothing");
 
     // The first plan shows on the Conductor pane's chip, which the shell
-    // draws; the lane's 보기 slot stays as it was (mission-pane-chip B11).
+    // draws; no card opens on any desk (mission-pane-chip B11).
     let (planned, _) = command(&mut runtime, "sender", plan()).unwrap();
     assert_eq!(planned["mission"]["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(runtime.snapshot.ui_state.detail, detail);
+    assert_eq!(views(&runtime), 0);
 
     command(&mut runtime, "sender", plan()).unwrap();
-    assert_eq!(runtime.snapshot.ui_state.detail, detail);
+    assert_eq!(views(&runtime), 0);
 
     runtime.refresh_missions();
     let view = &runtime.snapshot.missions.items[0];
@@ -633,6 +639,7 @@ impl Resumed {
             ended: false,
             terminal_id: Some(format!("t-{}", actor.pane_id)),
             forked: false,
+            successor: None,
         };
         self.submit(
             by,
@@ -782,6 +789,158 @@ impl Resumed {
                 .is_empty()
         );
     }
+}
+
+/// PRD letters-missions-simplify B2: a new conversation started in the
+/// Conductor's pane takes its registration over, and with it the mission it
+/// conducts and the worker it started; the next read of the pane, still the
+/// same conversation, hands nothing over again.
+#[test]
+fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
+    let fixture = conducting();
+    let observe = |runtime: &mut Runtime, session: &str| {
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            resumed_agent("sender", "codex", session),
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    };
+    let (client, conductor) = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        observe(&mut runtime, "sender-session");
+        runtime.snapshot.navigator.agents = vec![conductor_row()];
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        (
+            runtime.delivery_client.clone().unwrap(),
+            runtime.delivery_observations["sender"].actor.clone(),
+        )
+    };
+    let register = |actor: &Actor, by: &Actor, session: &str, parent: Option<String>| {
+        let record = crate::coordination::AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: crate::node::TEST_NODE.into(),
+            session: session.into(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent,
+            origin: None,
+            project: Some(PROJECT.into()),
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        };
+        client
+            .submit(
+                crate::delivery::worker::Effect::Agents {
+                    authority: authority(by),
+                    actor: by.clone(),
+                    mutation: Box::new(crate::coordination::Mutation::Register {
+                        record,
+                        check: false,
+                    }),
+                },
+                Duration::from_secs(10),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let former = register(&conductor, &conductor, "sender-session", None);
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest("worker-session"),
+    };
+    let worker = register(&worker, &conductor, "worker-session", Some(former.clone()));
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        // The pane's row shows the next conversation, as the engine reads it.
+        runtime.snapshot.navigator.agents[0].session_id = Some("next-session".into());
+        observe(&mut runtime, "next-session");
+        assert!(runtime.delivery_successions().contains_key(&former));
+    }
+    // The store's next batch hands the registration over.
+    client
+        .submit(
+            crate::delivery::worker::Effect::HumanClaim,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+    let runtime = fixture.runtime.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    let old = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == former)
+        .unwrap();
+    let successor = old.successor.clone().expect("taken over");
+    assert!(old.ended);
+    let next = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == successor)
+        .unwrap();
+    assert_eq!(
+        next.actor.session,
+        crate::engine::tokens::session_digest("next-session")
+    );
+    let child = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == worker)
+        .unwrap();
+    assert_eq!(child.parent.as_ref(), Some(&successor));
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
+    assert!(mission.conductor.actor.same_identity(&next.actor));
+    assert!(runtime.delivery_successions().is_empty());
+    assert_eq!(
+        child.parent.as_ref(),
+        Some(&successor),
+        "it takes the children"
+    );
+    assert_eq!(next.parent, None, "and is the child of no one");
+    drop(runtime);
+
+    // A stop after the ledger kept the takeover and before the mission book
+    // did: the book the next start reads names the former registration as
+    // the Conductor, a node's worker and a line's checker, and the first
+    // ledger that start gets moves each to the agent after it.
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    let stored = runtime.delivery_state().unwrap();
+    {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.conductor.agent_id = Some(former.clone());
+        let node = &mut mission.nodes[0];
+        node.agent_id = Some(former.clone());
+        node.criteria[0].checkers.push(
+            serde_json::from_value(json!({"worker": {"agent": "codex"}, "agent_id": former}))
+                .unwrap(),
+        );
+    }
+    runtime.delivery_ledger = Err("delivery_unavailable".into());
+    runtime.publish_delivery(stored, true);
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
+    assert_eq!(mission.nodes[0].agent_id.as_ref(), Some(&successor));
+    assert_eq!(
+        mission.nodes[0].criteria[0].checkers[0].agent_id.as_ref(),
+        Some(&successor)
+    );
 }
 
 /// The pane the conversation came back in is registered as the mission
@@ -4723,29 +4882,46 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's card on top of the front pane's
-/// 보기 slot sends its events while the slot is drawn; the mission
-/// screen's detail, when the page names one, wins; the card goes with its
-/// mission.
+/// The fixture's checkout in front, as the operator chose it.
+fn fixture_in_front(runtime: &mut Runtime) -> crate::runtime::workspace_view::WorkspaceKey {
+    runtime.snapshot.navigator.focused_workspace_id = Some("workspace".into());
+    runtime.snapshot.navigator.focused_checkout_id = Some("checkout".into());
+    runtime.sync_workspace_view();
+    runtime
+        .front_workspace_key()
+        .expect("the fixture's checkout")
+}
+
+/// PRD lane-desk-pair-view D-13, conductor decision 3: a mission's card in
+/// front of the desk the front Workspace draws sends its events; a lane
+/// closed over it sends nothing; the mission screen's detail, when the page
+/// names one, wins; another card in front sends no mission's; and the card
+/// keeps its tab when its mission goes, with no events to send.
 #[test]
-fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
+fn the_mission_card_in_front_sends_its_events_and_keeps_its_tab_when_its_mission_goes() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
-    runtime.open_detail(DetailItem::Mission {
+    let key = fixture_in_front(&mut runtime);
+    let map = DetailItem::Mission {
         mission: "mission-1".into(),
-    });
+    };
+    assert!(runtime.open_card_in_front(map.clone()));
     runtime.refresh_mission_events();
     assert_eq!(
         runtime.snapshot.mission_events.mission.as_deref(),
         Some("mission-1")
     );
     assert_eq!(runtime.snapshot.mission_events.events.len(), 1);
-    // The slot folded behind the documents sends nothing; shown again, it does.
-    runtime.snapshot.ui_state.detail.shown = false;
+    // A lane closed over the desk sends nothing; opened again, it does.
+    let lane = |runtime: &mut Runtime, open: bool| {
+        let store = runtime.workspace_views.as_mut().unwrap();
+        store.views.entry(&key.0, &key.1).open = open;
+    };
+    lane(&mut runtime, false);
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);
-    runtime.snapshot.ui_state.detail.shown = true;
+    lane(&mut runtime, true);
     // The mission screen's detail wins over the card while the page names it.
     runtime.missions.shown = Some("mission-404".into());
     runtime.refresh_mission_events();
@@ -4759,36 +4935,47 @@ fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
         runtime.snapshot.mission_events.mission.as_deref(),
         Some("mission-1")
     );
-    // Another card on top sends no mission's events; ← brings the map back.
-    runtime.open_detail(DetailItem::Cost {
+    // Another card in front sends no mission's events; pressing the
+    // mission's card again brings its own tab forward, not a second one.
+    runtime.open_card_in_front(DetailItem::Cost {
         workspace_id: "w".into(),
     });
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);
-    runtime.detail_back();
+    runtime.open_card_in_front(map.clone());
     runtime.refresh_mission_events();
     assert_eq!(
         runtime.snapshot.mission_events.mission.as_deref(),
         Some("mission-1")
     );
-    // The mission deleted with its Conductor's session takes its card along.
+    let cards = |runtime: &Runtime| {
+        runtime
+            .front_tray_layout(&key)
+            .unwrap()
+            .displays()
+            .filter_map(|display| display.card.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(cards(&runtime).len(), 2);
+    // The mission deleted with its Conductor's session leaves its tab.
     let session = runtime.missions.book.missions[0]
         .conductor
         .session
         .clone()
         .unwrap();
     assert!(runtime.drop_missions_of(&[(session.device_id, session.session_id)]));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail,
-        crate::model::DetailSlot::default()
+    assert!(
+        cards(&runtime).contains(&map),
+        "a gone subject keeps its tab"
     );
     runtime.refresh_mission_events();
-    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's row opens its map in the slot
-/// of its Conductor's pane, which comes forward with it, and leaves the focus
-/// where it was while no Conductor holds it.
+/// Operator decision 2026-11-09, PRD lane-desk-pair-view B6: a mission's row
+/// opens its map on the desk of its Conductor's tab, the Conductor's pane
+/// coming forward with it, and leaves the focus where it was while no
+/// Conductor holds it.
 #[test]
 fn a_mission_opens_in_its_conductors_slot() {
     let fixture = conducting();
@@ -4804,10 +4991,18 @@ fn a_mission_opens_in_its_conductors_slot() {
     let map = DetailItem::Mission {
         mission: "mission-1".into(),
     };
+    let key = fixture_in_front(&mut runtime);
     assert!(runtime.dispatch_json(&operator_focus_event("recipient")));
     open(&mut runtime);
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
-    assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&map));
+    let shows_map = |runtime: &Runtime| {
+        runtime.front_tray_layout(&key).is_some_and(|layout| {
+            layout
+                .displays()
+                .any(|display| display.card.as_ref() == Some(&map))
+        })
+    };
+    assert!(shows_map(&runtime), "on the desk of the Conductor's tab");
 
     // Its Conductor's pane is gone: the pane in front stays.
     runtime.missions.book.missions[0].conductor.actor.pane_id = "gone".into();
@@ -4855,6 +5050,7 @@ fn with_worker_and_reviewer(runtime: &mut Runtime) {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
     }
     runtime.delivery_ledger = Ok(Arc::new(ledger));
@@ -8627,6 +8823,7 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -9442,6 +9639,7 @@ fn far_agent(id: &str, pane: &str) -> (Actor, crate::coordination::AgentRecord) 
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     (actor, record)
 }
@@ -9885,8 +10083,6 @@ fn a_node_waits_on_what_the_core_decides_from_its_lines_and_its_decision() {
     )
     .unwrap();
     assert_eq!(waits(&runtime, "fix"), Some(WaitingOn::Worker));
-    assert!(node_view(&runtime, "fix").asks_push);
-    assert!(!node_view(&runtime, "docs").asks_push);
     command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
     command(
         &mut runtime,
@@ -10360,6 +10556,14 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
     let worked = crate::runtime::unix_milliseconds() - 120 * minute;
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission.nodes[0].worked_at_unix_ms = Some(worked);
+    // Its review failed at the round limit.
+    let review = mission.nodes[0]
+        .criteria
+        .iter_mut()
+        .find(|line| line.key == "review")
+        .unwrap();
+    review.rounds = 3;
+    review.state = crate::mission_criteria::CriterionState::Fail;
     mission.wakes = (0..PENDING_WAKE_LIMIT)
         .map(|at| PendingWake {
             seq: at as u64 + 1,
@@ -10381,7 +10585,10 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
-    assert_eq!(warnings_of(&runtime), (vec![WarningKind::NoPush], vec![]));
+    assert_eq!(
+        warnings_of(&runtime),
+        (vec![WarningKind::ReviewFails], vec![])
+    );
     let fix = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().nodes[0].clone();
     assert_eq!(fix(&runtime).warnings[0].told_unix_ms, None);
     runtime
@@ -10410,22 +10617,14 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
     assert_eq!(warnings_of(&runtime).1, Vec::<String>::new(), "told once");
 }
 
-/// with-hide/hide-private#552 c2: a change at work with no push for ninety
-/// minutes warns its Conductor at the minute decision, once, and the next
-/// push GitHub shows takes the warning away.
+/// PRD letters-missions-simplify D-32, B32: a change at work that GitHub
+/// shows no push of for hours warns its Conductor nothing, and its letters
+/// say nothing of pushes.
 #[test]
-fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
-    use crate::missions::WarningKind;
+fn a_change_without_a_push_for_hours_warns_nothing() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "create", "title": "Fix the bug"}),
-    )
-    .unwrap();
-    command(&mut runtime, "sender", criteria_plan()).unwrap();
-    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    running_criteria_mission(&mut runtime);
     command(
         &mut runtime,
         "sender",
@@ -10433,37 +10632,11 @@ fn a_change_ninety_minutes_without_a_push_warns_until_github_shows_one() {
     )
     .unwrap();
     let minute = 60_000;
-    // It went to work two hours ago, so a push read now is after it.
-    let worked = crate::runtime::unix_milliseconds() - 120 * minute;
+    let worked = crate::runtime::unix_milliseconds() - 600 * minute;
     runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms = Some(worked);
-    // No worker is bound here: the first judgment times the node as one no
-    // worker stands for, which the map draws from then, and warns nothing.
-    assert!(runtime.warn_missions(worked));
-    assert_eq!(warnings_of(&runtime).0, []);
-    assert!(!runtime.warn_missions(worked + 89 * minute));
-    assert!(runtime.warn_missions(worked + 90 * minute));
-    let (kinds, letters) = warnings_of(&runtime);
-    assert_eq!(kinds, [WarningKind::NoPush]);
-    assert_eq!(letters.len(), 1);
-    assert!(!runtime.warn_missions(worked + 120 * minute));
-    let mission = runtime.missions.book.get("mission-1").unwrap();
-    let wake = mission
-        .wakes
-        .iter()
-        .find(|wake| wake.event == crate::missions::WakeEvent::Warning)
-        .unwrap();
-    let body = super::super::missions::wake_body(mission, wake);
-    assert!(body.contains("worked 90 minutes with no push"), "{body}");
-    // The worker opens its pull request: the head GitHub shows is a push.
-    command(
-        &mut runtime,
-        "sender",
-        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
-    )
-    .unwrap();
-    let pushed = github(vec![pull(7, "b2", PullRequestBadge::Open, None)], false);
-    runtime.note_mission_pulls(crate::node::TEST_NODE, &pushed);
-    assert!(runtime.warn_missions(crate::runtime::unix_milliseconds()));
+    runtime.warn_missions(worked);
+    runtime.warn_missions(worked + 90 * minute);
+    runtime.warn_missions(worked + 600 * minute);
     assert_eq!(warnings_of(&runtime), (vec![], vec![]));
 }
 
@@ -11231,13 +11404,12 @@ fn a_stopped_workers_warning_is_told_once_and_goes_when_it_works_again() {
     );
 }
 
-/// Review of with-hide/hide#2447: a worker that stops while its node warns
-/// of no push, the warning not told yet because the Conductor's queue was
-/// full, hands the node to the stopped rule: the no-push warning goes at
-/// once and is never told, the stop warns alone five minutes on, and once
-/// the worker works again the no-push warning stands again.
+/// PRD letters-missions-simplify D-07, B22: a delay its Conductor sets
+/// takes a stopped worker's warning away and none rises while it holds,
+/// however long the worker stands stopped; once the delay ends, the stop is
+/// timed again from then and warns five minutes on, once.
 #[test]
-fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
+fn a_delay_takes_a_stop_warning_away_and_the_stop_counts_again_from_its_end() {
     use crate::missions::WarningKind;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -11248,43 +11420,199 @@ fn a_stop_takes_over_a_no_push_warning_until_the_worker_works_again() {
         json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
     )
     .unwrap();
-    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].worked_at_unix_ms =
-        Some(STOPPED_SINCE - 100 * MINUTE);
     let worker = runtime.delivery_observations["recipient"].actor.clone();
     let mut row = shown_row("recipient", "recipient", "working");
     row.lineage_session = worker.session.clone();
-    runtime.snapshot.navigator.agents = vec![row.clone()];
-    assert!(runtime.warn_missions(STOPPED_SINCE - MINUTE));
-    assert_eq!(warnings_of(&runtime).0, [WarningKind::NoPush]);
-    // As a full queue leaves it: standing, untold, no letter queued.
-    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    mission.nodes[0].warnings[0].told_unix_ms = None;
-    mission
-        .wakes
-        .retain(|wake| wake.event != crate::missions::WakeEvent::Warning);
-
     row.activity = "stopped".into();
     row.changed_at_unix_ms = Some(STOPPED_SINCE);
-    runtime.snapshot.navigator.agents = vec![row.clone()];
-    assert!(runtime.warn_missions(STOPPED_SINCE));
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "usage", "for_minutes": 60}),
+    )
+    .unwrap();
+    // The delay takes the standing warning off at once, before any
+    // judgment (review of with-hide/hide#2750, S2).
     assert_eq!(
         warnings_of(&runtime),
         (vec![], vec![]),
-        "the stop takes the node's quiet"
+        "taken off when set"
     );
-    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    // Its end on the stop's clock, as a delay set then would have it.
+    let until = STOPPED_SINCE + 60 * MINUTE;
+    runtime
+        .missions
+        .book
+        .get_mut("mission-1")
+        .unwrap()
+        .delay_until_unix_ms = Some(until);
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]), "none rises");
+    runtime.warn_missions(until - MINUTE);
+    assert_eq!(warnings_of(&runtime).0, []);
+
+    assert!(runtime.stall_missions(until));
+    runtime.warn_missions(until);
+    runtime.warn_missions(until + 5 * MINUTE - 1);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [],
+        "timed from the end of the wait"
+    );
+    assert!(runtime.warn_missions(until + 5 * MINUTE));
     let (kinds, letters) = warnings_of(&runtime);
     assert_eq!(kinds, [WarningKind::Stopped]);
-    assert_eq!(letters.len(), 1, "one letter, the stop's");
-    assert!(letters[0].contains("warn:stopped"), "{letters:?}");
+    assert_eq!(letters.len(), 1, "{letters:?}");
+}
 
-    row.activity = "working".into();
+/// Review of with-hide/hide#2750 (S2): a delay set and cleared between two
+/// warning judgments still counts a worker's stop again from then: the
+/// stop seen before it is not reused, so it warns five minutes after the
+/// second judgment, not at once.
+#[test]
+fn a_delay_set_and_cleared_between_judgments_counts_the_stop_again() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
     runtime.snapshot.navigator.agents = vec![row];
-    assert!(runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
-    let (kinds, letters) = warnings_of(&runtime);
-    assert_eq!(kinds, [WarningKind::NoPush], "the quiet is judged again");
-    assert_eq!(letters.len(), 1);
-    assert!(letters[0].contains("warn:no_push"), "{letters:?}");
+    runtime.warn_missions(STOPPED_SINCE);
+    for line in [
+        json!({"op": "delay", "line": "usage", "for_minutes": 60}),
+        json!({"op": "delay", "line": null}),
+    ] {
+        command(&mut runtime, "sender", line).unwrap();
+    }
+    runtime.warn_missions(STOPPED_SINCE + 2 * MINUTE);
+    runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [],
+        "not timed from before the wait"
+    );
+    assert!(runtime.warn_missions(STOPPED_SINCE + 7 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+}
+
+/// Review of with-hide/hide#2750 (S2): a hold set and lifted on another
+/// node leaves a worker's stop where it was: only the held node's clocks
+/// start again, so the stop still warns five minutes after it was seen.
+#[test]
+fn a_hold_on_another_node_keeps_a_workers_stop_time() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    for patch in [
+        json!({"hold": {"why": "tonight", "for_minutes": 30}}),
+        json!({"hold": null}),
+    ] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "docs", "patch": patch}),
+        )
+        .unwrap();
+    }
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+}
+
+/// PRD letters-missions-simplify D-07, B21: a mission's delay and a node's
+/// hold read as one wait on each node they hold, why and until when: the
+/// delay on every node not done or dropped, a node's own hold before it;
+/// a closed mission's nodes wait on nothing.
+#[test]
+fn a_delay_and_a_hold_read_as_one_wait_on_each_node_they_hold() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let wait = |runtime: &Runtime, key: &str| {
+        node_view(runtime, key)
+            .wait
+            .map(|wait| (wait.why, wait.until_unix_ms, wait.mission))
+    };
+    assert_eq!(
+        (wait(&runtime, "fix"), wait(&runtime, "docs")),
+        (None, None)
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"hold": {"why": "tonight", "for_minutes": 30}}}),
+    )
+    .unwrap();
+    let held = runtime.missions.book.get("mission-1").unwrap().nodes[1]
+        .hold
+        .clone()
+        .unwrap()
+        .until_unix_ms;
+    assert_eq!(wait(&runtime, "fix"), None);
+    assert_eq!(
+        wait(&runtime, "docs"),
+        Some(("tonight".into(), held, false))
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "delay", "line": "disk", "for_minutes": 60}),
+    )
+    .unwrap();
+    let until = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .delay_until_unix_ms
+        .unwrap();
+    assert_eq!(wait(&runtime, "fix"), Some(("disk".into(), until, true)));
+    assert_eq!(
+        wait(&runtime, "docs"),
+        Some(("tonight".into(), held, false)),
+        "its own hold says why it waits"
+    );
+    runtime.missions.book.get_mut("mission-1").unwrap().nodes[0].status =
+        crate::missions::NodeStatus::Done;
+    assert_eq!(wait(&runtime, "fix"), None, "a done node waits on nothing");
+    runtime.missions.book.get_mut("mission-1").unwrap().status =
+        crate::missions::MissionStatus::Cancelled;
+    assert_eq!(wait(&runtime, "docs"), None);
 }
 
 /// mission-60: a stop is timed from the first judgment that saw it, never
@@ -11420,10 +11748,11 @@ fn conductor_letter(runtime: &mut Runtime, ago: u64) -> String {
 
 /// with-hide/hide-private#678: letters to a running mission's Conductor
 /// that the doorbell holds for something only the operator can lift, for
-/// two minutes or more, are counted on the mission with what to do (a pane
-/// it cannot reach named first); a hold that ends on its own and a letter
-/// held for less than two minutes are not, a delivered letter leaves the
-/// count, the line going with the last, and an undelivered one never joins.
+/// two minutes or more, are counted on the mission with what to do (an
+/// approval named first); a hold that ends on its own, a pane Hide cannot
+/// reach (PRD letters-missions-simplify B14) and a letter held for less
+/// than two minutes are not, a delivered letter leaves the count, the line
+/// going with the last, and one that ended with no recipient never joins.
 #[test]
 fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     use crate::delivery::doorbell::Hold;
@@ -11454,8 +11783,15 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         Some((1, HeldFor::Draft))
     );
 
+    let unreachable = conductor_letter(&mut runtime, 3 * MINUTE);
+    runtime.delivery_holds.insert(unreachable, Hold::Absent);
+    assert_eq!(
+        held(&runtime),
+        Some((1, HeldFor::Draft)),
+        "a pane Hide cannot reach is Hide's to settle"
+    );
     let gone = conductor_letter(&mut runtime, 3 * MINUTE);
-    runtime.delivery_holds.insert(gone.clone(), Hold::Absent);
+    runtime.delivery_holds.insert(gone.clone(), Hold::Blocked);
     let shown = runtime
         .mission_view_of("mission-1")
         .unwrap()
@@ -11463,8 +11799,8 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .unwrap();
     assert_eq!(
         (shown.count, shown.reason),
-        (2, HeldFor::Unreachable),
-        "an unreachable pane is named before a draft"
+        (2, HeldFor::Approval),
+        "an approval is named before a draft"
     );
     assert!(shown.since_unix_ms <= crate::delivery::worker::now() - 5 * MINUTE);
 
@@ -11478,11 +11814,9 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     assert_eq!(held(&runtime), None, "delivered letters leave");
     assert!(runtime.delivery_holds.contains_key(&fresh));
 
-    // A letter that ended undelivered asks nothing of the operator: one to
-    // a Conductor still in its pane is not ended by its deadline, and the
-    // rest went to a Conductor that is gone or were told to their sender
-    // (operator decision 2026-11-14; a settings worker's report stood here
-    // for good once that worker had ended).
+    // A letter that ended with no recipient asks nothing of the operator:
+    // it went to a Conductor that is gone, and only its sender sees it
+    // (D-05).
     let lost = conductor_letter(&mut runtime, 0);
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger
@@ -11490,7 +11824,7 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .iter_mut()
         .find(|letter| letter.id == lost)
         .unwrap()
-        .state = crate::delivery::ledger::State::Undelivered;
+        .state = crate::delivery::ledger::State::NoRecipient;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     assert_eq!(held(&runtime), None);
 }
@@ -12299,7 +12633,7 @@ fn view_in(
     path: &str,
 ) -> String {
     runtime
-        .change_view_layout(key, |layout, stamp| {
+        .change_front_layout(key, |layout, stamp| {
             let display =
                 layout.new_display(path, crate::view_layout::DisplayKind::File, None, false);
             let id = display.id.clone();
@@ -12364,7 +12698,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     };
     let url = "https://example.test/screens";
     let page = runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_browser_display(url, 1);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12374,7 +12708,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
         .unwrap();
     let diff_path = "/checkouts/fixture/src/main.rs";
     let diff = runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_display(diff_path, DisplayKind::Diff, Some(false), false);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12406,7 +12740,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     };
     let close = |runtime: &mut Runtime, view: &str| {
         runtime
-            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
             .unwrap();
     };
     let press = |runtime: &mut Runtime, key: u64, view: &str, request: &str| {
@@ -12420,7 +12754,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     };
     let shown = |runtime: &Runtime, kind: DisplayKind, address: &str| -> Vec<Display> {
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .map(|layout| {
                 layout
                     .displays()
@@ -12600,6 +12934,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let worker = Actor {
         pane_id: "worker".into(),
@@ -12619,7 +12954,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
     let close = |runtime: &mut Runtime, view: &str| {
         runtime
-            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
             .unwrap();
     };
 
@@ -12629,7 +12964,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     runtime.link_mission_view(&key, &page, "sender", 10);
     let unseen = |runtime: &Runtime, view: &str| {
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .and_then(|layout| layout.display(view))
             .map(|display| display.unseen.is_some())
     };
@@ -12782,6 +13117,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let worker = Actor {
         pane_id: "worker".into(),
@@ -12803,7 +13139,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
     runtime.link_mission_view(&key, &results, "recipient", 10);
     let url = "https://example.test/spec";
     let spec = runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_browser_display(url, 1);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12845,7 +13181,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
 
     // Closed, the page stays listed under the name it had.
     runtime
-        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
+        .change_front_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
         .unwrap();
     assert_eq!(rows(&mut runtime)[1], (label.clone(), true, page.clone()));
     let press = |runtime: &mut Runtime, key: Option<u64>, node: Option<&str>| {
@@ -12859,7 +13195,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
     };
     let pages = |runtime: &Runtime| {
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .map(|layout| {
                 layout
                     .displays()
@@ -13016,7 +13352,7 @@ fn a_decisions_views_moving_tell_the_operator_nothing_new() {
     let later = project_view(&mut runtime, "/checkouts/fixture/later.md");
     runtime.link_mission_view(&key, &later, "sender", 20);
     runtime
-        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
+        .change_front_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
         .unwrap();
     let moved = conductor_shown(&mut runtime);
     assert_eq!(told(&moved), told(&asked));
@@ -14461,11 +14797,26 @@ fn a_mission_delay_ends_by_itself() {
     assert_eq!(delay(&runtime).0.as_deref(), Some("disk"));
     assert!(runtime.stall_missions(until));
     assert_eq!(delay(&runtime), (None, None));
-    // A delay kept with no end is given a day.
-    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    mission.delay = Some("usage".into());
-    assert!(runtime.stall_missions(until + minute));
-    assert_eq!(delay(&runtime).1, Some(until + minute + 24 * 60 * minute));
+    // A delay a build before its end kept is given a day when the book is
+    // read, so its nodes wait from the first judgment: a review failed at
+    // its limit warns nothing (review of with-hide/hide#2750, S3).
+    let mut book = runtime.missions.book.clone();
+    let kept = &mut book.missions[0];
+    kept.delay = Some("usage".into());
+    kept.delay_until_unix_ms = None;
+    kept.nodes[0].status = crate::missions::NodeStatus::Working;
+    let review = kept.nodes[0]
+        .criteria
+        .iter_mut()
+        .find(|line| line.key == "review")
+        .unwrap();
+    review.rounds = 3;
+    review.state = crate::mission_criteria::CriterionState::Fail;
+    super::super::missions::settle_endless_delays(&mut book, until);
+    let kept = &book.missions[0];
+    assert_eq!(kept.delay_until_unix_ms, Some(until + 24 * 60 * minute));
+    assert!(kept.wait_of(&kept.nodes[0]).is_some());
+    assert!(crate::mission_health::warn_acts(kept, None, &[], &[], until).is_empty());
     // A delay with no end is refused.
     assert!(
         command(
@@ -16197,6 +16548,7 @@ fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped(
         ended: true,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     // Until the book is read, even a registration with no mission spawn
@@ -17340,7 +17692,16 @@ fn published(mission: &Value) -> Value {
                     .collect(),
             );
             row.insert("gate".into(), field(&node["gate"], "state"));
-            row.insert("hold".into(), field(&node["hold"], "why"));
+            // A release before one wait state published a node's own hold
+            // as `hold`; this build's `wait` that is not the mission's.
+            let own_wait = node["wait"]
+                .as_object()
+                .filter(|wait| wait.get("mission") == Some(&json!(false)))
+                .map(|_| &node["wait"]);
+            row.insert(
+                "hold".into(),
+                field(own_wait.unwrap_or(&node["hold"]), "why"),
+            );
             Value::Object(row)
         })
         .collect();
@@ -17955,10 +18316,10 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
     assert!(stood.contains("shown it in 20 minutes"), "{stood}");
     let review = body(WakeEvent::Warning, None, Some(WarningKind::ReviewFails));
     assert!(!review.contains("raised on the node"), "{review}");
-    let quiet = body(WakeEvent::Warning, None, Some(WarningKind::NoPush));
+    let stop = body(WakeEvent::Warning, None, Some(WarningKind::Stopped));
     assert!(
-        quiet.contains("still stands in 30 minutes it is raised on the node"),
-        "{quiet}"
+        stop.contains("still stands in 30 minutes it is raised on the node"),
+        "{stop}"
     );
 }
 
@@ -18752,6 +19113,7 @@ fn what_a_registered_conductor_saw_outlives_a_restart_of_the_core() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let (_worker, client) =
         Worker::spawn(Arc::downgrade(&runtime), ChangeNotifier::noop(), path).unwrap();
@@ -18887,7 +19249,7 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
             reason: None,
             why: None,
             action: None,
-            warning: Some(WarningKind::NoPush),
+            warning: Some(WarningKind::Stopped),
             ci: None,
             line: None,
             key: None,
@@ -19027,6 +19389,7 @@ fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         };
         let registered = client
             .submit(

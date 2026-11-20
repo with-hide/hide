@@ -1342,8 +1342,6 @@
                                 "input_unconfirmed",
                                 "draft",
                                 "parent_blocked",
-                                "bell_exhausted",
-                                "undelivered",
                                 "observer_unconfirmed"
                             ],
                             "type": "string"
@@ -2266,9 +2264,17 @@
                             "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                             "type": "boolean"
                         },
+                        "from": {
+                            "default": null,
+                            "description": "The registration that sent the letter (PRD letters-missions-simplify D-02), whose live successor an answer goes to; null when the sender had none, as an older build's letters may.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "handed": {
                             "default": false,
-                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
+                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and when its recipient ends with no successor it ends delivered without a receipt (`Ledger::end_letters_to`).",
                             "type": "boolean"
                         },
                         "handed_at_unix_ms": {
@@ -2314,16 +2320,6 @@
                             "minimum": 0.0,
                             "type": "integer"
                         },
-                        "intake_from": {
-                            "default": null,
-                            "description": "Where the letter's wait for intake began: on its recipient machine's clock while the ledger keeps one (`Ledger::node_clocks`), on the wall clock otherwise; null is its creation on the wall clock.",
-                            "format": "uint64",
-                            "minimum": 0.0,
-                            "type": [
-                                "integer",
-                                "null"
-                            ]
-                        },
                         "intent": {
                             "type": "string"
                         },
@@ -2345,6 +2341,14 @@
                         "state": {
                             "$ref": "#/definitions/State"
                         },
+                        "to": {
+                            "default": null,
+                            "description": "The registration the letter is addressed to: the agent, not its pane. `recipient` is where that registration runs now, which the store keeps with it: a move, a wake or Reopen carries it (`coordination::rebind`), and an end hands a pending letter to the agent that took over its pane (`coordination::succeed`) or ends it `no_recipient`. A letter an agent, a tool or Desk sends always names one, since the send registers an agent that had none (`Runtime::prepare_as`); null only when a letter Hide writes, or an older build wrote, went to an agent with none.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "tool_handovers": {
                             "default": 0,
                             "description": "How many tool events handed the letter over while its recipient worked (PRD letters-to-busy-agents D-11): a handover is confirmed by the script once the host kept it, and after three unconfirmed ones the letter waits for the next prompt or `hide inbox`, as it does after three bells.",
@@ -2365,6 +2369,16 @@
                                 }
                             ],
                             "default": null
+                        },
+                        "written": {
+                            "default": null,
+                            "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                            "format": "uint",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
                         }
                     },
                     "required": [
@@ -2372,8 +2386,11 @@
                         "intent",
                         "sender",
                         "recipient",
+                        "from",
+                        "to",
                         "kind",
                         "body",
+                        "written",
                         "state",
                         "hook_confirmed",
                         "waiting_answer",
@@ -2390,7 +2407,6 @@
                         "bell_turn",
                         "handed",
                         "handed_at_unix_ms",
-                        "intake_from",
                         "immediate",
                         "forced",
                         "tool_handovers",
@@ -2436,15 +2452,39 @@
                     ]
                 },
                 "State": {
-                    "enum": [
-                        "pending",
-                        "delivered",
-                        "acknowledged",
-                        "cancelled",
-                        "expired",
-                        "undelivered"
-                    ],
-                    "type": "string"
+                    "description": "Where a letter stands. Hide ends a pending letter one of four ways (PRD letters-missions-simplify D-04): `delivered` once its recipient took it in, `superseded` by its sender's newer letter under the same intent, `no_recipient` when its recipient ended with no agent after it in its pane, and `expired` only at the update to this build. `acknowledged` is a delivered letter with its recipient's receipt, and `cancelled` its sender's own withdrawal.",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "pending",
+                                "delivered",
+                                "acknowledged",
+                                "cancelled"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same sender sent another body under the same intent while this one waited (`mailbox::send`).",
+                            "enum": [
+                                "superseded"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Its recipient's registration ended with no successor (B2).",
+                            "enum": [
+                                "no_recipient"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Ended at the update to this build (B25): a Hide letter still waiting then, or a letter an older build ended at its delivery deadline, which it called `undelivered`.",
+                            "enum": [
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "WarningReceipt": {
                     "description": "The inactivity episode and external notification reservation survive the watch itself, so stopping/restarting or sibling watches cannot resend.",
@@ -2665,15 +2705,39 @@
                     ]
                 },
                 "State": {
-                    "enum": [
-                        "pending",
-                        "delivered",
-                        "acknowledged",
-                        "cancelled",
-                        "expired",
-                        "undelivered"
-                    ],
-                    "type": "string"
+                    "description": "Where a letter stands. Hide ends a pending letter one of four ways (PRD letters-missions-simplify D-04): `delivered` once its recipient took it in, `superseded` by its sender's newer letter under the same intent, `no_recipient` when its recipient ended with no agent after it in its pane, and `expired` only at the update to this build. `acknowledged` is a delivered letter with its recipient's receipt, and `cancelled` its sender's own withdrawal.",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "pending",
+                                "delivered",
+                                "acknowledged",
+                                "cancelled"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same sender sent another body under the same intent while this one waited (`mailbox::send`).",
+                            "enum": [
+                                "superseded"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Its recipient's registration ended with no successor (B2).",
+                            "enum": [
+                                "no_recipient"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Ended at the update to this build (B25): a Hide letter still waiting then, or a letter an older build ended at its delivery deadline, which it called `undelivered`.",
+                            "enum": [
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "WarningReceipt": {
                     "description": "The inactivity episode and external notification reservation survive the watch itself, so stopping/restarting or sibling watches cannot resend.",
@@ -2815,9 +2879,17 @@
                     "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                     "type": "boolean"
                 },
+                "from": {
+                    "default": null,
+                    "description": "The registration that sent the letter (PRD letters-missions-simplify D-02), whose live successor an answer goes to; null when the sender had none, as an older build's letters may.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "handed": {
                     "default": false,
-                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
+                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and when its recipient ends with no successor it ends delivered without a receipt (`Ledger::end_letters_to`).",
                     "type": "boolean"
                 },
                 "handed_at_unix_ms": {
@@ -2863,16 +2935,6 @@
                     "minimum": 0.0,
                     "type": "integer"
                 },
-                "intake_from": {
-                    "default": null,
-                    "description": "Where the letter's wait for intake began: on its recipient machine's clock while the ledger keeps one (`Ledger::node_clocks`), on the wall clock otherwise; null is its creation on the wall clock.",
-                    "format": "uint64",
-                    "minimum": 0.0,
-                    "type": [
-                        "integer",
-                        "null"
-                    ]
-                },
                 "intent": {
                     "type": "string"
                 },
@@ -2894,6 +2956,14 @@
                 "state": {
                     "$ref": "#/definitions/State"
                 },
+                "to": {
+                    "default": null,
+                    "description": "The registration the letter is addressed to: the agent, not its pane. `recipient` is where that registration runs now, which the store keeps with it: a move, a wake or Reopen carries it (`coordination::rebind`), and an end hands a pending letter to the agent that took over its pane (`coordination::succeed`) or ends it `no_recipient`. A letter an agent, a tool or Desk sends always names one, since the send registers an agent that had none (`Runtime::prepare_as`); null only when a letter Hide writes, or an older build wrote, went to an agent with none.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "tool_handovers": {
                     "default": 0,
                     "description": "How many tool events handed the letter over while its recipient worked (PRD letters-to-busy-agents D-11): a handover is confirmed by the script once the host kept it, and after three unconfirmed ones the letter waits for the next prompt or `hide inbox`, as it does after three bells.",
@@ -2914,6 +2984,16 @@
                         }
                     ],
                     "default": null
+                },
+                "written": {
+                    "default": null,
+                    "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                    "format": "uint",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
                 }
             },
             "required": [
@@ -2921,8 +3001,11 @@
                 "intent",
                 "sender",
                 "recipient",
+                "from",
+                "to",
                 "kind",
                 "body",
+                "written",
                 "state",
                 "hook_confirmed",
                 "waiting_answer",
@@ -2939,7 +3022,6 @@
                 "bell_turn",
                 "handed",
                 "handed_at_unix_ms",
-                "intake_from",
                 "immediate",
                 "forced",
                 "tool_handovers",
@@ -3711,8 +3793,6 @@
                                 "input_unconfirmed",
                                 "draft",
                                 "parent_blocked",
-                                "bell_exhausted",
-                                "undelivered",
                                 "observer_unconfirmed"
                             ],
                             "type": "string"
@@ -7212,7 +7292,6 @@
                 "composer_not_empty",
                 "composer_unconfirmed",
                 "force_target_asleep",
-                "intent_conflict",
                 "no_parent",
                 "outbox_full",
                 "outbox_unavailable",
@@ -9178,7 +9257,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:97bebb727a8048c2b4f206ad92e369699a2b4054692e20aeaa935823f0b84076",
+    "digest": "sha256:b789620df8c066dc4d232d14377a00066c8973c8d98396a6b34e0ee26ea6fae4",
     "envelopes": {
         "access": {
             "answer": "value",

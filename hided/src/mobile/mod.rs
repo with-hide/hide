@@ -1449,12 +1449,10 @@ impl Mobile {
                 subject: None,
                 state: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => push::NoticeState::ObserverUnconfirmed,
-                    HumanNoticeKind::LetterUndelivered => push::NoticeState::LetterUndelivered,
                     HumanNoticeKind::MissionAttention => push::NoticeState::NeedsYou,
                 },
                 place: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => notice.about.clone(),
-                    HumanNoticeKind::LetterUndelivered => notice.id.clone(),
                     HumanNoticeKind::MissionAttention => String::new(),
                 },
             },

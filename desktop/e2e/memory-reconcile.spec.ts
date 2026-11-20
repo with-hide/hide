@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
 import { openProject, withControl } from "../../web/e2e/daemon-actions";
-import { countSent, setLanePinned, showProjectMemory, showProjectRow } from "../../web/e2e/wire";
+import { countSent, showProjectMemory, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, launchShell, screenshot, startStack, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { progressGithub } from "./memory-progress-fixture";
@@ -65,11 +65,10 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     await fitWindow(app, { width: 900, height: 760 });
     await showProjectMemory(page);
     await screenshot(page, "memory-compact-light-narrow");
-    // Pinned, the lane has a divider that proves its minimum width (PRD
-    // right-lane B6).
+    // The lane's edge divider proves its minimum width (PRD right-lane B6;
+    // lane-two-columns B17).
     await fitWindow(app, { width: 1440, height: 900 });
     await showProjectMemory(page);
-    await setLanePinned(page, true);
     const divider = page.locator('[data-lane-divider="lane"]');
     for (let step = 0; step < 6; step++) await divider.press("ArrowRight");
     await expect.poll(() => page.locator("[data-lane-frame]").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(360);

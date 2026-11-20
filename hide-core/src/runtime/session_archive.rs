@@ -2225,6 +2225,7 @@ mod tests {
             actor: actor(session),
             ended: true,
             forked: false,
+            successor: None,
         }
     }
 

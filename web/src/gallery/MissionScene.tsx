@@ -208,12 +208,12 @@ function rejectedReview(one: MissionNode): MissionNode {
 
 /**
  * The warned state (hide-private issue 552): the rejected search fix
- * failed the review round at its strength's limit, and the reopen fix went ninety-five
- * minutes with no push; Hide told the Conductor about each.
+ * failed the review round at its strength's limit, and the reopen fix's
+ * worker stood stopped on an API error; Hide told the Conductor about each.
  */
 function warned(one: MissionNode, now: number): MissionNode {
   if (one.key === "fix-1490") return { ...one, review_rounds: { line: "review", rounds: 3, limit: 3 }, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
-  if (one.key === "fix-1487") return { ...one, pushed_at_unix_ms: now - 95 * MINUTE, warnings: [{ kind: "no_push", from_unix_ms: now - 95 * MINUTE, since_unix_ms: now - 5 * MINUTE, told_unix_ms: now - 5 * MINUTE }] };
+  if (one.key === "fix-1487") return { ...one, warnings: [{ kind: "stopped", from_unix_ms: now - 11 * MINUTE, since_unix_ms: now - 6 * MINUTE, told_unix_ms: now - 6 * MINUTE, cause: { kind: "error", line: "API Error: 500" } }] };
   return one;
 }
 
@@ -565,18 +565,20 @@ function absentNet(mission: Mission): Mission["safety_net"] {
   return nodes.length > 0 ? { conductor_present: false, since_unix_ms: nodes[0]!.since_unix_ms, nodes } : null;
 }
 
-/** The running mission held as a whole (`delay`), with one node held back (`hold`), or with one node stalled and its raise unsettled behind the safety net (`stall`). */
+/** The running mission held as a whole (`delay`), which every node not finished shows as its wait, with one node held back (`hold`), or with one node stalled and its raise unsettled behind the safety net (`stall`). */
 function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "delay" | "stall" | "hold"): { mission: Mission; rest: SnapshotRest } {
   mission.decision = null;
   mission.question = null;
   if (shown === "delay") {
     mission.delay = "디스크 여유 4 GiB, 빌드 하나 끝나면 재개";
     mission.delay_until_unix_ms = now + 40 * MINUTE;
+    // The core lays the delay on each node it holds (`Mission::wait_of`).
+    for (const one of mission.nodes) if (one.status !== "done" && one.status !== "dropped") one.wait = { why: mission.delay, until_unix_ms: mission.delay_until_unix_ms, mission: true };
     return { mission, rest };
   }
   const node = mission.nodes.find((one) => one.status === "planned") ?? mission.nodes[mission.nodes.length - 1]!;
   if (shown === "hold") {
-    node.hold = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE };
+    node.wait = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE, mission: false };
     return { mission, rest };
   }
   // The raise is the Conductor's; standing 31 minutes unsettled, it is the mission's safety net.
@@ -609,7 +611,7 @@ function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest 
     { reason: "ci_failed", pr: true },
     { reason: "worker_ended", pr: false },
     { reason: "changes_requested", pr: true },
-    { reason: "warning_no_push", pr: false },
+    { reason: "warning_stopped", pr: false },
   ] as const;
   const held = raised.map((one, index) => {
     const since = now - (25 - index) * MINUTE;

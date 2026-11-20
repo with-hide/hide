@@ -26,7 +26,7 @@ use crate::missions::{
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
-use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
+use crate::model::{PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
 
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
@@ -327,13 +327,12 @@ pub struct NodeView {
     pub own_met_at_unix_ms: Option<u64>,
     /// When Hide last read a new head on one of its pull requests.
     pub pushed_at_unix_ms: Option<u64>,
-    /// A push is asked of it (`MissionNode::asks_push`), the node whose
-    /// quiet can warn: `hide mission show` says `push 없음` before its first.
-    pub asks_push: bool,
     /// The warnings it carries, its Conductor's alone: the card's `⚠`.
     pub warnings: Vec<crate::missions::NodeWarning>,
-    /// Why and until when its Conductor holds it (`MissionNode::hold`).
-    pub hold: Option<crate::missions::NodeHold>,
+    /// What it waits on that its Conductor set (`Mission::wait_of`): its
+    /// own hold or the mission's delay, why and until when; the map's and
+    /// the phone's `기다리는 중 · 이유 · 언제까지`.
+    pub wait: Option<crate::missions::NodeWait>,
     /// Who or what it waits on now (`waiting_on`), which `hide mission show`
     /// prints; none for a node that waits on nothing.
     pub waiting_on: Option<WaitingOn>,
@@ -1353,11 +1352,6 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                         ),
                     )
                 }
-                (Some(WarningKind::NoPush), _, Some(warning)) => (
-                    format!("has worked {} minutes with no push", minutes(warning)),
-                    "judge whether its worker needs another approach or the node a fresh worker"
-                        .to_owned(),
-                ),
                 (Some(WarningKind::Stopped), _, Some(warning)) => {
                     use crate::missions::StopCause;
                     let why = match &warning.cause {
@@ -1808,6 +1802,20 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
 /// (with-hide/hide#2518) may hold one on a mission its Conductor closed,
 /// where nothing could take it off: it is settled now, as that close
 /// settles it today.
+/// A delay a build from before `Mission::delay_until_unix_ms` kept has no
+/// end: it is given one `DELAY_LIMIT_MINUTES` from `now`, when the book is
+/// read, before any view, watch or warning reads the wait (`Mission::wait_of`),
+/// so a delayed node is a waiting node from the first judgment (PRD
+/// letters-missions-simplify B22). It is written with the mission's next save.
+pub(super) fn settle_endless_delays(book: &mut crate::missions::MissionBook, now: u64) {
+    let limit = u64::from(crate::missions::DELAY_LIMIT_MINUTES) * 60_000;
+    for mission in &mut book.missions {
+        if mission.delay.is_some() && mission.delay_until_unix_ms.is_none() {
+            mission.delay_until_unix_ms = Some(now + limit);
+        }
+    }
+}
+
 fn settle_closed_refusals(book: &mut crate::missions::MissionBook) {
     for mission in &mut book.missions {
         if !matches!(
@@ -1834,6 +1842,7 @@ impl Runtime {
                 // cell again (`runtime::status_cells`).
                 // A standing cell from before cells counts its time from now.
                 let now = super::unix_milliseconds();
+                settle_endless_delays(&mut book, now);
                 for mission in &mut book.missions {
                     super::mission_health::ensure_raise_cells(mission);
                     for wake in &mut mission.wakes {
@@ -1857,6 +1866,7 @@ impl Runtime {
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         self.missions.finished = super::agent_sleep::missions::finished_nodes(&self.missions.book);
+        self.follow_successors();
     }
 
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
@@ -2175,10 +2185,6 @@ impl Runtime {
             .iter()
             .map(|mission| mission.id.clone())
             .collect();
-        self.drop_detail_items(|item| match item {
-            DetailItem::Mission { mission } => known.contains(mission),
-            _ => true,
-        });
         if self
             .missions
             .shown
@@ -2676,7 +2682,7 @@ impl Runtime {
                 // A hold set or lifted is the Conductor's move on the node:
                 // whatever stood before it is counted again from now.
                 if patch.hold.is_some() {
-                    self.restart_stall_clock(&id, Some(&node));
+                    self.wait_moved(&id, Some(&node));
                 }
                 // What the Conductor just did may follow a pull request it
                 // pushed: its project is read again within the read's own
@@ -3012,7 +3018,7 @@ impl Runtime {
         target.delay_until_unix_ms = until;
         if changed {
             target.updated_at_unix_ms = now;
-            self.restart_stall_clock(&id, None);
+            self.wait_moved(&id, None);
             self.save_missions();
         }
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))
@@ -3328,48 +3334,137 @@ impl Runtime {
     /// the engine published (`payload`) rather than an engine read under
     /// the lock: none while the observation names no scope or the engine no
     /// session for it.
-    fn heir_record(
+    pub(super) fn heir_record(
         &self,
         device: &str,
         pane: &str,
         payload: &crate::sidebar::SessionSnapshotPayload,
         project: Option<String>,
     ) -> Option<crate::coordination::AgentRecord> {
-        use crate::coordination::executor::{HostIdentity, Native, native_session, registration};
         let observation = self.delivery_observations.get(pane)?;
-        observation.actor.require_native_identity().ok()?;
         let agent = payload
             .agents
             .iter()
             .find(|agent| agent.pane_id.as_deref() == Some(observation.raw_pane_id.as_str()))?;
-        let on_node = device == self.node.as_str();
-        // The engine the agent was observed on: its socket on this node, the
-        // device itself for a device's (`continue_moved_registrations`).
-        let scope = observation
-            .host_scope
-            .clone()
-            .or_else(|| (!on_node).then(|| device.to_owned()))?;
-        let native_machine = self.native_machine(device).ok()?;
-        let native = Native {
-            pane: &observation.raw_pane_id,
-            session: native_session(agent.agent_session.as_ref()).ok()?,
-            terminal_id: observation.terminal_id.clone(),
-            actor: observation.actor.clone(),
-        };
-        let host = HostIdentity {
-            machine: device,
-            on_node,
-            scope: &scope,
-            native_machine: &native_machine,
-        };
-        Some(registration(
-            native,
-            &host,
-            observation.raw_pane_id.clone(),
+        self.observed_registration(
+            device,
+            observation,
+            agent.agent_session.as_ref(),
             agent.name.clone(),
-            None,
             project,
-        ))
+        )
+    }
+
+    /// Hands each role in the open missions whose registration ended with an
+    /// agent after it in its pane (`coordination::succeed`, PRD
+    /// letters-missions-simplify B2) to the live registration that runs in
+    /// its place now (`coordination::live_successor`): a mission's
+    /// Conductor, a node's worker and a line's checker. It reads only what
+    /// the ledger and the mission book hold, so a role a stop left behind
+    /// between the ledger's save and the book's follows on the next start,
+    /// whichever of the two loads first. A closed mission keeps who ran it.
+    pub(super) fn follow_successors(&mut self) {
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let ledger = std::sync::Arc::clone(ledger);
+        let mut held = std::collections::BTreeSet::new();
+        for mission in self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status.open())
+        {
+            held.extend(self.registration_of(&mission.conductor));
+            for node in &mission.nodes {
+                held.extend(node.agent_id.clone());
+                for criterion in &node.criteria {
+                    held.extend(
+                        criterion
+                            .checkers
+                            .iter()
+                            .filter_map(|checker| checker.agent_id.clone()),
+                    );
+                }
+            }
+        }
+        for former in held {
+            let successor = match crate::coordination::live_successor(&ledger, &former) {
+                Some(Ok(record)) if record.id != former => record.id.clone(),
+                _ => continue,
+            };
+            self.follow_successor(&former, &successor);
+        }
+    }
+
+    /// Hands the roles registration `former` held in the open missions to
+    /// `successor`, the live registration in its place.
+    fn follow_successor(&mut self, former: &str, successor: &str) {
+        let Some(record) = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == successor && !record.ended)
+                .cloned()
+        }) else {
+            return;
+        };
+        let now = crate::delivery::worker::now();
+        let conducted: Vec<String> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| {
+                mission.status.open()
+                    && self.registration_of(&mission.conductor).as_deref() == Some(former)
+            })
+            .map(|mission| mission.id.clone())
+            .collect();
+        let mut moved = false;
+        for id in &conducted {
+            let conductor =
+                self.conductor_of(&record.machine, &record.actor.pane_id, record.actor.clone());
+            if let Some(mission) = self.missions.book.get_mut(id) {
+                mission.conductor = conductor;
+                mission.updated_at_unix_ms = now;
+                moved = true;
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.conductor_succeeded",
+                    "mission": id, "agent_id": former, "successor": successor,
+                }));
+            }
+        }
+        let bound = |agent: &mut Option<String>| {
+            let held = agent.as_deref() == Some(former);
+            if held {
+                *agent = Some(successor.to_owned());
+            }
+            held
+        };
+        for mission in self
+            .missions
+            .book
+            .missions
+            .iter_mut()
+            .filter(|mission| mission.status.open())
+        {
+            for node in &mut mission.nodes {
+                moved |= bound(&mut node.agent_id);
+                for criterion in &mut node.criteria {
+                    for checker in &mut criterion.checkers {
+                        moved |= bound(&mut checker.agent_id);
+                    }
+                }
+            }
+        }
+        if moved {
+            self.save_missions();
+        }
+        for id in conducted {
+            self.note_conductor_arrived(&id, now);
+        }
     }
 
     /// The registration `conductor` conducted under: the one the mission
@@ -4309,19 +4404,9 @@ impl Runtime {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "missions.deleted_with_session", "count": dropped,
         }));
-        // A slot card of a mission that is gone would draw nothing, and the
-        // mission screen's detail of it sends nothing.
-        let known: Vec<String> = self
-            .missions
-            .book
-            .missions
-            .iter()
-            .map(|mission| mission.id.clone())
-            .collect();
-        self.drop_detail_items(|item| match item {
-            DetailItem::Mission { mission } => known.contains(mission),
-            _ => true,
-        });
+        // The mission screen's detail of a mission that is gone sends
+        // nothing; its card keeps its tab (PRD lane-desk-pair-view,
+        // conductor decision 3).
         if self
             .missions
             .shown
@@ -4904,9 +4989,8 @@ impl Runtime {
                     worked_at_unix_ms: node.worked_at_unix_ms,
                     own_met_at_unix_ms: node.own_met_at_unix_ms,
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
-                    asks_push: node.asks_push(),
                     warnings: node.warnings.clone(),
-                    hold: node.hold.clone(),
+                    wait: mission.wait_of(node),
                     waiting_on: None,
                     work: None,
                     gate: self.gate_view(mission, node),

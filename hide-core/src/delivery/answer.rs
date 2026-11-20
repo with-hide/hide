@@ -165,8 +165,6 @@ pub enum WaitCause {
     HumanTurn,
     Draft,
     ParentBlocked,
-    BellExhausted,
-    Undelivered,
     ObserverUnconfirmed,
 }
 

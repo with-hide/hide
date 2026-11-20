@@ -33,6 +33,26 @@ describe("tabStripFit", () => {
     ]);
   });
 
+  it("lets the selected tab read its whole name and shrinks only the others (PRD lane-desk-pair-view D-30)", () => {
+    const needing = (room: number, count: number, need: number) => {
+      const { selected, others } = tabStripFit(room, count, true, SIZES, need);
+      return `${round(selected.width)} ${selected.fit} / ${round(others.width)} ${others.fit}`;
+    };
+    expect([
+      needing(485, 4, 150), // a share of 121 would cut it: it takes 150, three others share 335
+      needing(485, 4, 90), // a short name keeps its stage's width
+      needing(300, 4, 260), // capped where the others are marks alone
+      needing(1200, 6, 240), // room to spare: past the preferred width
+      needing(200, 6, 150), // below the title minimum after the others' marks: the stages as before
+    ]).toEqual([
+      "150 titled / 111.67 titled",
+      "121.25 titled / 121.25 titled",
+      "180 titled / 40 marks",
+      "240 titled / 180 titled",
+      "64 marks / 40 marks",
+    ]);
+  });
+
   it("gives a lone tab the same rules", () => {
     expect([drawn(400, 1), drawn(150, 1), drawn(100, 1), drawn(88, 1), drawn(87, 1), drawn(30, 1)]).toEqual([
       "180 titled / 180 titled",

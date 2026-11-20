@@ -308,10 +308,21 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
     runtime.ui_attached = true;
     runtime.snapshot.ui_state.right_panel_visible = true;
     runtime.snapshot.ui_state.right_panel_section = RightPanelSection::Changes;
+    // A View store with no file roots pinned, so the fixture's folders,
+    // which are not on disk, stay readable.
+    let (folder, views) = super::workspace_view::views_path("remains-front");
+    let mut runtime = super::workspace_view::with_views_only(runtime, &views);
+    runtime.test_dirs.push(folder);
     assert!(
         runtime.remains_request().0.is_none(),
         "nothing shows it yet"
     );
+    // The lane shows the Changes tool, beside which the card's desk opens.
+    assert!(event(
+        &mut runtime,
+        "workspace_view",
+        serde_json::json!({"tool": "changes"})
+    ));
     assert!(event(
         &mut runtime,
         "detail_open",
@@ -353,10 +364,11 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
         ("emails", Some("/fixture/emails")),
         "the read names its checkout, not only a folder inside the primary's"
     );
+    // The lane closed over the card: no tab of a desk in front reads it.
     assert!(event(
         &mut runtime,
-        "detail_show",
-        serde_json::json!({"shown": false})
+        "workspace_view",
+        serde_json::json!({"open": false})
     ));
     assert_eq!(
         runtime.remains_request(),
@@ -374,7 +386,14 @@ fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
 fn the_remains_view_states_a_failed_read_instead_of_nothing_left() {
     let mut runtime = runtime();
     project(&mut runtime, vec![worktree("emails", 4, "aaa", None)]);
+    runtime.snapshot.navigator.focused_workspace_id = Some("project".into());
+    runtime.snapshot.navigator.focused_checkout_id = Some("main".into());
     runtime.ui_attached = true;
+    // A View store with no file roots pinned, so the fixture's folders,
+    // which are not on disk, stay readable.
+    let (folder, views) = super::workspace_view::views_path("remains-failed");
+    let mut runtime = super::workspace_view::with_views_only(runtime, &views);
+    runtime.test_dirs.push(folder);
     assert!(event(
         &mut runtime,
         "detail_open",

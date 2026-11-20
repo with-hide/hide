@@ -20,7 +20,7 @@ import { openProject, withControl } from "./daemon-actions";
 import { OMP_ID, PI_ID, prepareNativeWriter } from "./session-reader-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable, fixtureProgram } from "./platform-fixture";
-import { countSent, screenshot, showProjectRow, showSidebarPrs } from "./wire";
+import { closeFrontCard, countSent, screenshot, showProjectRow, showSidebarPrs } from "./wire";
 import { chord } from "./chords";
 import { animationsFinished } from "./wait";
 import { initGithubRepository } from "./github-remote";
@@ -144,7 +144,7 @@ async function openCard(page: Page, number: number, fresh = true): Promise<Locat
   await page.locator('[data-pr-group] [data-pr-focus="group"]').first().waitFor({ timeout: 30_000 });
   for (const header of await page.locator('[data-pr-group][data-folded="true"] [data-pr-focus="group"]').all()) await header.click();
   await page.locator(`[data-pr-row="${number}"]`).click({ timeout: 30_000 });
-  const card = page.locator(`aside[data-lane="detail"] [data-pr-card="${number}"]`);
+  const card = page.locator(`[data-card] [data-pr-card="${number}"]`);
   // The timeline is never folded (PRD pr-card-and-session-record-redesign D-03).
   await card.locator("[data-pr-card-timeline]").waitFor({ timeout: 30_000 });
   return card;
@@ -208,20 +208,20 @@ test("a pull request's panel shows the sessions that made it and worked on it af
     await screenshot(page, "link-graph-panel-light");
 
     // An ended row's buttons take the time's place on the pointer; View
-    // conversation opens that session's record in the 보기 slot (B9, B10,
-    // B11; PRD sidebar-task-lens B47), and the slot's ← comes back to the card.
+    // conversation opens that session's record as a desk tab (B9, B10,
+    // B11; PRD sidebar-task-lens B47), and closing it comes back to the card.
     await maker.hover();
     await expect(maker.locator('[data-link-button="view"]')).toBeVisible();
     await expect(maker.locator('[data-link-button="resume"]')).toBeVisible();
     await maker.locator('[data-link-button="view"]').click();
-    await expect(page.locator('aside[data-lane="detail"] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-card] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-overview-page]")).toHaveCount(0);
-    await page.locator("[data-detail-back]").click();
+    await closeFrontCard(page);
     await expect(panel).toBeVisible();
 
     // A session whose file is gone stays as a dim line, and Resume says why (B15);
     // the card reads the record again when it opens. The close chord, pressed
-    // with the keyboard in the lane (← took it), closes the slot as its ✕ does.
+    // with the keyboard in the lane, closes the card tab as its ✕ does.
     fs.rmSync(files["s-gone"]);
     await page.keyboard.press(chord("close_tab"));
     await expect(panel).toHaveCount(0);
@@ -293,10 +293,10 @@ test(`a ${kind} archive resume keeps its selected source and uses the current co
     await archived.hover();
     await expect(archived.locator('[data-link-button="view"]')).toBeVisible();
     await archived.locator('[data-link-button="view"]').click();
-    await expect(page.locator('aside[data-lane="detail"] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-card] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
     await screenshot(page, `${kind}-archive-record`);
-    // The record took the 보기 slot; its ← brings the card back.
-    await page.locator("[data-detail-back]").click();
+    // The record opened as a tab in front of the card; closing it brings the card back.
+    await closeFrontCard(page);
     await expect(panel.locator(`[data-pr-panel-worktree="${tree}"]`)).not.toHaveAttribute("data-removed", "true");
     await expect(panel.locator("[data-link-loading]")).toHaveCount(0, { timeout: 60_000 });
     // The card's own parts settle first: a failed part draws a line that moves the row under the pointer.

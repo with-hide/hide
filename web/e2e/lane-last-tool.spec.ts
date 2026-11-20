@@ -121,8 +121,10 @@ test("a tool pressed into a lane ⌘E or Escape closed opens alone, and the docu
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
 
-    // Escape closes the unpinned lane as ⌘E does, so Memory again opens alone.
-    await page.locator("[data-editor-body] .cm-content").click();
+    // Escape closes the lane as ⌘E does, so Memory again opens alone; from
+    // the desk's tab, since Escape in the editor is the editor's (PRD
+    // lane-desk-pair-view B30).
+    await page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]').focus();
     await page.keyboard.press("Escape");
     await closed(page);
     await page.locator('[data-lane-tool="memory"]').click();

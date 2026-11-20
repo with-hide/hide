@@ -409,7 +409,7 @@ function viewOf(model: AgentsModel, view: NonNullable<WorldSnapshot["rest"]["wor
   const lane = { ...view, open: model.tool !== null || model.viewed, tool: model.tool, lane_called: model.calls, lane_calls: model.calls, lane_called_side: "view" as const };
   if (!model.viewed) return lane;
   const display: ViewDisplaySnapshot = { id: "view1", tab_id: EDITOR_TAB, path: REVIEW_PATH, label: REVIEW_FILE, kind: "file", committed: null, preview: true, state: "open", reason: null };
-  return { ...lane, documents: true, layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } } };
+  return { ...lane, tray: { ...lane.tray, shown: true, count: 1 }, layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } } };
 }
 
 function opened(model: AgentsModel): { editor?: { tabs: EditorTabSnapshot[]; active_tab_id: string }; documents?: Record<string, EditorDocumentSnapshot> } {

@@ -23,7 +23,7 @@ import { useShellStore } from "./store";
 // place, the pointer or the keyboard's focus shows the popover, the nodes a
 // worker is at now while the mission runs and what it left once it ends, and
 // a press, Enter or Space on the chip, or the popover's last row `지도 열기 ›`,
-// opens the mission's map in the lane's 보기 slot, the one place the map is
+// opens the mission's map as a card tab on a desk, the one place the map is
 // drawn.
 
 /** A finished mission's popover lists this many results; `+N` says the rest (B11). */
