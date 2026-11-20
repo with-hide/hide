@@ -269,7 +269,7 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
           <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} />
         </div>
       ) : null}
-      {guide !== null ? <DividerGuide left={guide} /> : null}
+      {guide !== null ? <DividerGuide left={guide} pair={frame.mode === "pair"} /> : null}
     </div>
   );
 }
