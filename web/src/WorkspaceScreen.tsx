@@ -20,7 +20,9 @@ import { RunningServers } from "./RunningServers";
 import { useUiStore } from "./ui";
 import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
-import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
+import { PairLayer } from "./PairLayer";
+import { drawnPair } from "./pairView";
+import { laneFrame, laneViewOf, pageLaneWidth, pairPaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -71,6 +73,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
   // The viewing column draws the front tab's desk (PRD lane-desk-pair-view D-06).
   const laneView = laneViewOf(view, hasViews);
+  const pair = drawnPair(view);
   const input: LaneInput = {
     open: view?.open === true,
     view: laneView,
@@ -79,6 +82,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
     expanded,
+    pair: pair !== null,
     front: stackFront,
     body: width,
     sizes,
@@ -167,7 +171,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-shows={drawnTool ?? "none"}
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} frame={frame} documents={documents} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} />
+      <LaneRow view={view} frame={frame} documents={documents} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair?.pane_id ?? null} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, actions)}>
         <ToolRail actions={actions} />
       </div>
@@ -223,13 +227,16 @@ function useWidth(element: HTMLElement | null): number {
  * never mounts it again, and Agent Views keeps the width it has (B8;
  * lane-desk-pair-view B35).
  */
-function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checkout }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout }) {
+function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: string | null }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // A terminal click leaves the lane where it is: only the operator closes
   // it, with ⌘E or Escape (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
-  const placed = frame.mode === "expanded" ? "inset-0 z-20" : "inset-y-0 right-0 z-20";
+  // In pair view the lane is the half beside the paired pane, under the tab
+  // row and the strip (PRD lane-desk-pair-view B17, D-16); it is the same
+  // element in every mode, so entering pair view mounts no desk again.
+  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-[calc(var(--size-tab-strip)*2)] z-20" : "inset-y-0 right-0 z-20";
 
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
@@ -239,9 +246,12 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
       <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" inert={frame.mode === "expanded"} data-agent-area="true">
         <AgentArea checkout={checkout} actions={actions} />
       </div>
+      {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.agents > 0 ? pairPaneWidth(frame.agents) : 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (
         <div
-          className={cn("absolute flex min-h-0 min-w-0 flex-col border-l border-border bg-card shadow-overlay", placed)}
+          // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its
+          // outer edge, so the divider is where the landing math puts it; elsewhere the frame draws the line itself.
+          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode !== "overlay" && "border-l border-border", frame.mode !== "pair" && "shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}

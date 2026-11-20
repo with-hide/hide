@@ -57,6 +57,8 @@ export type WorkspaceView = {
   tray: TraySnapshot;
   /** Every Agent tab of the checkout in pair view, so the strip and the sidebar mark them (D-17); absent while none is. */
   pairs?: PairView[];
+  /** The panes of this Workspace's Agent tabs with something to show beside the desk (B19): ◧ is off, with why, on every other. */
+  pairable?: string[];
   /** The View areas (S7) of the desk in front; absent only from a core that predates them. */
   layout?: ViewLayoutSnapshot;
   /** Null on a device this core dials, whose engine shows one tab. */
@@ -70,7 +72,8 @@ export type WorkspaceView = {
 /** One Agent tab's desk as the screen draws it. */
 export type TraySnapshot = { tab_id: string; shown: boolean; count: number; pair?: PairView | null };
 /** An Agent tab in pair view: the pane drawn beside its desk. */
-export type PairView = { tab_id: string; pane_id: string };
+/** An Agent tab in pair view: the pane drawn beside its desk, and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
+export type PairView = { tab_id: string; pane_id: string; folded?: string[] };
 
 /** The Views of unsaved documents one pane's session alone opened. */
 export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };
@@ -144,7 +147,8 @@ export type LaneSizes = {
  * - `overlay`: drawn over Agent Views, which keeps its width.
  * - `expanded`: over the whole body; Agent Views keeps the width it had.
  */
-export type LaneMode = "closed" | "overlay" | "expanded";
+/** `pair`: the lane is the right half of the body beside the paired pane (PRD lane-desk-pair-view B17, D-16). */
+export type LaneMode = "closed" | "overlay" | "expanded" | "pair";
 
 /** The Workspace widths the columns draw from (D-09). */
 export type LaneWidthField = "document_width" | "explorer_width" | "panel_width";
@@ -178,6 +182,8 @@ export type LaneInput = {
   explorerWidth: number | null;
   panelWidth: number | null;
   expanded: boolean;
+  /** The front tab is in pair view with its desk drawn (`drawnPair`): the lane is the body's right half. */
+  pair?: boolean;
   /** The column a stacked lane draws (B19); ignored while both fit. */
   front: LaneSide;
   /** The body's width left of the tool rail. */
@@ -232,9 +238,17 @@ export function laneFrame(input: LaneInput): LaneFrame {
   const tool = toolWant(input);
   const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false };
   if (!input.open || (!view && !tool)) return none;
-  const mode: LaneMode = input.expanded ? "expanded" : "overlay";
+  const mode: LaneMode = input.expanded ? "expanded" : input.pair && view ? "pair" : "overlay";
   if (body <= 0) return { ...none, mode, agents: 0 };
   const column = (want: Want, width: number): LaneColumn => ({ field: want.field, width, min: want.min });
+  if (mode === "pair" && view) {
+    // The desk takes the half the paired pane leaves (B17); a tool opened
+    // meanwhile stands beside it at its width, the desk keeping the rest (B15).
+    const width = body - pairPaneWidth(body);
+    if (!tool) return { mode, agents: body, width, view: column(view, width), tool: null, stacked: false };
+    const toolWidth = Math.min(tool.want, Math.max(0, width - sizes.divider - view.min));
+    return { mode, agents: body, width, view: column(view, width - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false };
+  }
   if (mode === "expanded") {
     // The tool column keeps its width and the viewing column takes the rest (B15).
     if (view && tool) {
@@ -403,4 +417,9 @@ export function readCalls(seen: CallsSeen, view: FrontView | null | undefined): 
   if (!view) return { seen, call: false };
   const call = seen.last !== null && view.lane_calls >= seen.last && view.lane_called > seen.last;
   return { seen: seen.last === view.lane_calls ? seen : { last: view.lane_calls }, call };
+}
+
+/** The paired pane's width in a body `body` pixels wide: its left half, the same whether the lane beside it is expanded or not, so expanding resizes no terminal (B15, B29). */
+export function pairPaneWidth(body: number): number {
+  return Math.floor(body / 2);
 }

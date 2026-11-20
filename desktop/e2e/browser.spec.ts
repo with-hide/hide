@@ -1226,7 +1226,9 @@ test("zoom: the text-size commands zoom a focused page in Chrome's steps and a p
 // reloads itself took the keyboard from the terminal the operator typed in.
 test("refresh focus: a page that loads itself again never takes the keyboard from the terminal", { tag: NEEDS_FOCUS }, async () => {
   ({ app } = await launchShell(run.env));
-  await fitWindow(app, WINDOW);
+  // Wide enough that the lane over the agents (the page and the tool column, 768) leaves the focused terminal's left
+  // side uncovered; at WINDOW it covers every pane.
+  await fitWindow(app, { ...WINDOW, width: 1440 });
   const page = await shellPage(app);
   await enterWorkspaceWithLane(page, "fixture");
   const refresh = `${origin}/refresh.html`;

@@ -252,7 +252,7 @@ impl Runtime {
                 .find(|held| held.id.as_deref() == Some(tab.as_str()))
                 .map(|held| held.panes.iter().map(|pane| pane.id.as_str()).collect());
             if listed.is_some_and(|panes| !panes.contains(&pane.as_str())) {
-                ended |= self.end_pair_view(&key, &tab, "pane_gone");
+                ended |= self.end_pair_view(&key, &tab, super::pair_view::PairEnd::PaneGone);
             }
         }
         ended

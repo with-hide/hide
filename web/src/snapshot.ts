@@ -1983,6 +1983,8 @@ export type ViewDisplaySnapshot = {
   external?: { grant: string; name: string; kind: import("./host").ExternalKind };
   /** A card tab's card (PRD lane-desk-pair-view D-13); absent for every other kind. */
   card?: DetailItem;
+  /** The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view B24, D-41): an agent's View its opener's, a card its owner's; absent for what the operator opened. */
+  owner_pane?: string | null;
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */

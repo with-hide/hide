@@ -1364,12 +1364,14 @@ impl Runtime {
             let tray = view.tray(tab);
             let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
             let layout = self.view_layout_snapshot(key, tray_layout);
+            let every = self.every_view_snapshot(key);
             let pair_of = |tray: &crate::workspace_views::Tray| {
                 tray.pair
                     .as_ref()
                     .map(|pair| crate::model::PairViewSnapshot {
                         tab_id: tray.tab.clone(),
                         pane_id: pair.pane.clone(),
+                        folded: Vec::new(),
                     })
             };
             WorkspaceViewSnapshot {
@@ -1401,12 +1403,16 @@ impl Runtime {
                     },
                     shown: tray.is_some_and(|tray| tray.shown),
                     count: tray_layout.display_count(),
-                    pair: tray.and_then(pair_of),
+                    pair: tray.and_then(pair_of).map(|mut pair| {
+                        pair.folded = self.pair_folded(key, &pair, &layout.root);
+                        pair
+                    }),
                 },
                 pairs: view.trays.iter().filter_map(pair_of).collect(),
+                pairable: self.pairable_panes(key),
                 // A pane's `N views` lists what its session opened, on a
                 // tray or not (PRD lane-desk-pair-view D-04, D-19).
-                feedback: self.view_feedback_snapshot(key, &self.every_view_snapshot(key)),
+                feedback: self.view_feedback_snapshot(key, &every),
                 session_drafts: self.session_drafts(key),
                 layout,
                 agent_layout: self

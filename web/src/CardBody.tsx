@@ -11,7 +11,7 @@ import { ProjectCostView, RemainsView, WorktreesView } from "./ProjectDetail";
 import { BranchCardView } from "./BranchCard";
 import { PrCardView } from "./PrCard";
 import { SlotSessionRecord } from "./SessionRecord";
-import { cardOwnerPane, cardPath, cardTitle } from "./cardTitle";
+import { cardPath, cardTitle } from "./cardTitle";
 import { OpenerMark } from "./ViewComments";
 import { useDeskFront } from "./deskFront";
 import { workKey } from "./sessionWork";
@@ -57,14 +57,14 @@ export function DetailIcon({ item, className }: { item: DetailItem; className?: 
  * file (PRD lane-desk-pair-view D-30), with what the card points at
  * (`cardPath`), a mission's way to every mission and its settings, and the
  * logo of the agent the card belongs to where it has one, as a View's opener
- * ends a file's; then what the card shows. A pull request's GitHub page is
+ * ends a file's (`ownerPane`, the core's owner of the card's desk tab); then
+ * what the card shows. A pull request's GitHub page is
  * its card's own button, so the path line carries none.
  */
-export function CardBody({ item, actions }: { item: DetailItem; actions: Actions }) {
+export function CardBody({ item, ownerPane = null, actions }: { item: DetailItem; ownerPane?: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const name = useShellStore((s) => cardPath(s, t, item));
   const front = useDeskFront(item);
-  const ownerPane = useShellStore((s) => cardOwnerPane(s, item));
   const ownerRow = useShellStore((s) => (ownerPane ? s.agents.find((row) => row.pane_id === ownerPane) ?? null : null));
   const owner: ViewOpener | null = ownerRow ? { name: ownerRow.identity_label, provider: ownerRow.agent_kind, device_id: ownerRow.device_id, pane_id: ownerRow.pane_id, resumable: false } : null;
   const key = item.kind === "pull_request" ? `pr:${item.workspace_id}:${item.number}` : item.kind === "mission" ? `mission:${item.mission}` : item.kind === "record" || item.kind === "plan" ? `${item.kind}:${workKey(item.session)}` : item.kind === "branch" ? `branch:${item.workspace_id}:${item.row}:${item.path ?? ""}` : `${item.kind}:${item.workspace_id}`;

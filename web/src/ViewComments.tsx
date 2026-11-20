@@ -133,10 +133,15 @@ export function CommentCount({ display }: { display: Pick<ViewDisplaySnapshot, "
 // --- a pane's views (B8) ---------------------------------------------------------
 
 /** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, newest open first as the core lists them, those the operator has not looked at marked on their rows and once on the chip. */
+/** The Views `paneId`'s agent opened, the one reading the views chip and the pane head's split button share. */
+export function usePaneViewRows(paneId: string) {
+  const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
+  return useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId), [opened, paneId]);
+}
+
 export function PaneViews({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
-  const rows = useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId), [opened, paneId]);
+  const rows = usePaneViewRows(paneId);
   if (rows.length === 0) return null;
   const label = t("feedback.views", { count: rows.length });
   const unseen = rows.some((row) => row.unseen);

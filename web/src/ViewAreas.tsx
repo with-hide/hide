@@ -27,7 +27,9 @@ import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
 import { displayIdentity, displayMenu, focusRequestArrived, placeKey, shownDisplays, workspaceKey, showsSameDocument, VIEW_WORDS, type ViewMenuId, type ViewWorkspace } from "./viewLayout";
-import { locateDisplay } from "./areaLayout";
+import { findArea, locateDisplay } from "./areaLayout";
+import { DeskPin, PairOthers } from "./DeskPairControls";
+import { drawnPair } from "./pairView";
 import { workspaceViewOf } from "./workspace";
 
 /**
@@ -131,8 +133,18 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   );
 
 
+  // Pair view (PRD lane-desk-pair-view D-41, D-42): the strip folds the tabs
+  // of another agent of the paired tab into one menu at its end; the pin
+  // beside ✕ only enters it and is not drawn while it is on.
+  const pair = useShellStore((s) => drawnPair(workspaceViewOf(s.rest)));
+  const front = findArea(layout.root, layout.active_area)?.active ?? null;
+  // The core names the tabs another agent of the paired tab owns (D-41); the strip leaves them out and nothing else.
+  const folded = pair?.folded ?? [];
+  const inStrip = folded.length > 0 ? (display: ViewDisplaySnapshot) => !folded.includes(display.id) : undefined;
   const adapter: AreaAdapter<ViewDisplaySnapshot> = {
     words: VIEW_WORDS,
+    inStrip,
+    barEnd: inStrip ? (area) => <PairOthers hidden={area.displays.filter((display) => display.id !== area.active && !inStrip(display))} label={(display) => tabLabel(display, t)} actions={actions} /> : undefined,
     keyboardArea: owner.kind === "view" && owner.workspace === checkoutId ? owner.areaId : null,
     label: (display) => tabLabel(display, t),
     sameContent: showsSameDocument,
@@ -157,7 +169,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
-    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" } },
+    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" }, beside: pair === null ? <DeskPin displayId={front} actions={actions} /> : undefined },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };
@@ -171,7 +183,7 @@ function DisplayBody({ display, workspace, actions }: { display: ViewDisplaySnap
   const { t } = useInterfaceTranslation();
   if (display.kind === "browser") return <BrowserDisplay display={display} workspace={workspace} actions={actions} />;
   if (display.kind === "external") return <ExternalDisplay display={display} workspace={workspace} actions={actions} />;
-  if (display.kind === "card") return display.card ? <CardBody item={display.card} actions={actions} /> : <AreaEmpty state="view-unavailable" text={display.reason ?? ""} />;
+  if (display.kind === "card") return display.card ? <CardBody item={display.card} ownerPane={display.owner_pane ?? null} actions={actions} /> : <AreaEmpty state="view-unavailable" text={display.reason ?? ""} />;
   if (display.state === "open") {
     return <DisplayEditor display={display} workspace={workspace} placeKey={placeKey(workspaceKey(workspace), display)} actions={actions} />;
   }

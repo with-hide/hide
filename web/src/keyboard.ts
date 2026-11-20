@@ -381,6 +381,8 @@ export function installKeyboard(actions: Actions): () => void {
         if ((owner.kind === "view" || owner.kind === "tool") && lane !== "closed") return ui().setLaneExpanded(!ui().laneExpanded);
         return actions.toggleZoom();
       }
+      case "pair_view":
+        return actions.pairViewKey();
       case "toggle_plan":
         return actions.togglePlanChip();
       case "close_pane":

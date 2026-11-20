@@ -118,6 +118,7 @@ import {
   type ViewWorkspace,
 } from "./viewLayout";
 import { frontCard, workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { drawnPair, pairOffer } from "./pairView";
 import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
@@ -3161,6 +3162,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         sendRemote(host.targetId, { action: "toggle_pane_zoom", pane_id: paneId });
         return;
       }
+      // Pair view leaves the tab's layout and zoom as they are (PRD lane-desk-pair-view D-16).
+      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("toggle_zoom: no focused pane");
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
@@ -3173,8 +3176,35 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * in front and refuses a pane with nothing to show.
      */
     togglePairView(paneId: string) {
-      const pair = workspaceViewOf(rest())?.tray.pair;
+      // Pressed only while drawn: a pair view the closed lane hides is entered again.
+      const pair = drawnPair(workspaceViewOf(rest()));
       dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
+    },
+
+    /**
+     * ⌘. (B18, B26): the tab in pair view goes back to its own layout,
+     * wherever the keyboard is; otherwise the focused pane goes beside its
+     * desk, and a pane with nothing to show changes nothing (B19).
+     */
+    pairViewKey() {
+      const view = workspaceViewOf(rest());
+      if (drawnPair(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      const paneId = useShellStore.getState().focusedPaneId;
+      if (!paneId || pairOffer(view, paneId) !== "off") return diagnostic(`pair_view: nothing to show beside ${paneId ?? "no pane"}`);
+      dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * A desk tab's pin (B17, D-21, D-42): that tab beside the pane of the
+     * agent it belongs to, or the focused pane for a tab nobody's agent
+     * opened. The desk draws no pin in pair view.
+     */
+    pinPairView(displayId: string) {
+      const view = workspaceViewOf(rest());
+      const owner = view?.layout ? locateDisplay(view.layout.root, displayId)?.display.owner_pane : null;
+      const paneId = owner ?? useShellStore.getState().focusedPaneId;
+      if (!paneId) return diagnostic("pair_view: the pin has no pane to show beside the desk");
+      dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId, display_id: displayId } });
     },
 
     /** ⌘= / ⌘- / ⌘0 scale whichever surface is showing: an image or PDF

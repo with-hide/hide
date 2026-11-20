@@ -435,6 +435,28 @@ Web owner: the shell draws the snapshot projection of the desk on screen and ask
 Core owner: `hide-core/src/runtime/{view_sessions,view_callers,view_areas,workspace_control,workspace_view}.rs` and `hide-core/src/workspace_views.rs`.
 Regression owners are `runtime/tests/desk_views.rs`, `runtime/tests/unseen_views.rs`, `runtime/view_sessions.rs`, `web/e2e/right-lane.spec.ts` and `desktop/e2e/browser.spec.ts`.
 
+### Pair view
+
+Pair view shows one pane beside its Agent tab's desk, the body between the sidebar and the rail split in half under the tab row (PRD lane-desk-pair-view D-08, D-16, B17).
+It replaces the docked lane: the lane otherwise stays over the agents and never docks (B16).
+Three ways in: the pin beside the desk's `✕` on the usual screen, which puts the tab in front beside the pane of the agent it belongs to, or beside the focused pane when the tab is the operator's own (D-21); ◧ on a pane's head, in its menu or the terminal's menu; and ⌘. (Ctrl+Shift+. on Windows and Linux), which puts the focused pane beside the desk (B18, D-24).
+Entering puts in front of the desk what the pane's agent opened that the operator has not looked at, else what it opened last, else its session's record as a card tab; a pane with none of these has ◧ off and ⌘. does nothing (B19).
+The left half draws the pane's own terminal, moved from its tab's canvas, never a copy; the tab's other panes are out of sight with their terminals alive, fed and at their size, and the tab's pane layout and the engine's zoom are not touched (D-16, D-26).
+The left terminal's grid changes once on entering and once on leaving, as a zoom does, and the Zoom pane chord does nothing while the tab is in pair view, the menus' Zoom item off with why (B29).
+The desk takes the right half; a tool opened meanwhile stands beside the desk at its width, the desk keeping the rest (B15), and Expand still fills the body with the lane and returns to pair view.
+
+Pair view is unmistakable in three places at once (D-17, B22): a strip at the top of the body in the pair view accent with `짝 보기 · <agent>` and `원래 화면으로 ⌘.`, the pair view mark ◧ before the tab's name in the tab row, and the same mark on the paired agent's sidebar row; the left pane's ◧ is drawn pressed, and the desk draws no pin, which is a way in only (D-42).
+The left and right always have one owner (D-09): bringing another agent's desk tab in front takes that agent's pane to the left, a tab the operator opened leaves the left pane (B24, D-21), and choosing another pane of the tab from the sidebar, on this machine or a device, takes it to the left with its own View on the right, or ends pair view when it has nothing to show, so the pane chosen is on screen (B25).
+Entering by ◧, ⌘. or the pin, and choosing another pane from the sidebar, gives the left pane the keyboard, so the keys, ⇧⌘W and the text scale reach the pane on screen; a desk tab the operator brings in front moves the left pane and leaves the keyboard on the desk, where the operator pressed, and leaving gives the keyboard back to the pane that held it before entering (B26).
+The desk's tab strip shows the left agent's tabs, the operator's own and those of an agent in another Agent tab; the tabs another agent of the paired tab owns fold into one `다른 것 N ▾` (`Others N`) menu at the strip's end, listed under their agent, and choosing one brings it in front with its agent on the left (D-41); the core names the folded tabs (`folded` on the pair view), and the web only reads them.
+Which agent a desk tab belongs to is the core's one rule (`owner_pane` on each display): an agent's View its opener's pane now, a card its owner's (a record's or a plan's session, a mission's Conductor, the agent that made a pull request), as the card's path line shows it.
+The sidebar stays visible and live; a hidden pane that waits on the operator reaches Needs You, and pair view draws nothing more for it (B23).
+`원래 화면으로`, the pressed ◧, ⌘. from anywhere, or closing the desk's last tab brings the tab's own layout back with every pane at the place, size and grid it had, the desk staying over the agents (B26).
+Pair view is the Agent tab's state, kept with its desk: another tab shows its own layout, and coming back or restarting the app finds the same pane beside the same tab (D-15, B27); it is drawn while the lane shows that tab's desk, so ⌘E or folding the desk shows the tab's own layout until the desk comes back; the marks and the pressed ◧ follow what is drawn, so they leave with it, and ⌘. then enters again.
+The left pane closing, its agent ending or the pane leaving the tab ends pair view with no notice, and the tab's remaining panes come back (D-22, B28).
+Web owner: `web/src/PairLayer.tsx` (the strip and the left half), `web/src/pairView.ts` (what ◧ offers, and when pair view is drawn), `web/src/DeskPairControls.tsx` (the pin and the folded tabs), `web/src/PaneGrid.tsx` (`PairPaneCanvas`, and the paired tab's canvas giving its panes up); core owner: `hide-core/src/runtime/pair_view.rs`.
+Regression owners are `web/e2e/pair-view.spec.ts` and the pair view tests of `hide-core/src/runtime/tests/desk_views.rs`.
+
 ### Opening, preview, and Open to the side
 
 A single click on an Explorer file or a History row opens it in the active area's preview view (italic title), and the next single click replaces that preview in place, so browsing leaves one tab per area rather than a trail.
@@ -574,10 +596,11 @@ The browser display's toolbar and its loading, load failed, and plain browser ta
 ### Agent panes and the Agents explorer
 
 A pane header's first row is the pane: its state on the left, what can be done to it on the right, and nothing in it changes place when a control shows or hides; the turn row under it is the conversation.
-On the left stand the move grip, the ancestor path, the status mark, the agent's logo and title, then the fork mark, the PR mark, the plan chip, the views chip, the Answer tag and the letters-waiting pill; on the right stand ◧ (pair view), zoom, the overflow control and close, after the limited-integration icon.
-The grip, ◧ and zoom are drawn on the pane that holds the keyboard, on any other pane while its header is pointed at or focused, and always on a screen with no hover, keeping their place while hidden, so the hidden places sit together left of the overflow control; a zoomed pane's zoom chip is always drawn, since it names the panes it hides, and so is a pressed ◧ (PRD lane-desk-pair-view B20, B21, D-31, D-32).
-◧ shows the pane beside its Agent tab's desk (pair view), its hint `짝 보기` (`Pair view`); on the pane in pair view it is drawn pressed and its hint reads `원래 화면으로` (`Back to the usual view`), and a press brings the tab's own layout back.
-A pane with nothing to show beside it, a plain shell with no View and no session, draws ◧ off, its hint saying why (`옆에 보여 줄 뷰나 세션이 아직 없어요`), and a press does nothing (B19).
+On the left stand the move grip, the ancestor path, the status mark, the agent's logo and title, then the fork mark, the PR mark, the plan chip, the views and ◧ button, the Answer tag and the letters-waiting pill; on the right stand zoom first, then the desk's way back, the children chip, the connection and limited-integration icons, a zoomed pane's zoom chip, the overflow control and close.
+The grip and zoom are drawn on the pane that holds the keyboard, on any other pane while its header is pointed at or focused, and always on a screen with no hover, keeping their place while hidden; zoom leads the right side so the controls always drawn stay at its end and the place it keeps while hidden reads as the title's margin, not as a gap between icons; a zoomed pane's zoom chip is always drawn, since it names the panes it hides (PRD lane-desk-pair-view B20, B21, D-31, D-32).
+The views chip and ◧ are one button of two joined cells, always drawn (D-43): the left cell, `뷰 N개` with its unseen dot, lists what the agent opened as before, and the right cell, ◧, puts the pane beside its desk; an agent that opened no View but runs a session draws ◧ alone, and a pane with nothing to show draws neither. Below the tight breakpoint the views cell gives way, and below the narrow one ◧ too, which the pane menu then holds.
+◧ shows the pane beside its Agent tab's desk (pair view), its hint `짝 보기` (`Pair view`) with its chord ⌘. (Ctrl+Shift+. on Windows and Linux); on the pane in pair view only its cell is drawn pressed, in the pair view accent, and its hint reads `원래 화면으로` (`Back to the usual view`), and a press brings the tab's own layout back.
+A pane with nothing to show beside it, one whose agent opened no View and that runs no session, draws no ◧ on its head, and its menus show ◧ off with why (`옆에 보여 줄 뷰나 세션이 아직 없어요`) (B19); the core decides which panes have something to show (`pairable` in the Workspace's snapshot), so the head, the pane menu and the terminal's menu say the same, and a pane whose session the core does not know yet draws no ◧ rather than one whose press does nothing.
 The pane menu holds both, at its top: `다른 에이전트에게 말 걸기` (`Talk to another agent`, an agent pane's `@`) and ◧ with the same words as the button; a right-click in the terminal draws ◧ after Zoom terminal and `@` with the pane menu's items.
 A narrow pane folds its head from the left side's end, and the overflow control and close stay whole at every width.
 Below 440px the pane draws neither ◧ nor zoom (◧ stays in the pane menu, zoom in the terminal's menu), and the mission, plan and views chips keep their mark and count without their word and cells, as the Answer tag drops its wait.
@@ -3588,6 +3611,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Focus pane up | `⌥⌘↑` | `Ctrl+Shift+Up` | `⌥⌘↑` | `Ctrl+Shift+Up` |
 | Focus pane down | `⌥⌘↓` | `Ctrl+Shift+Down` | `⌥⌘↓` | `Ctrl+Shift+Down` |
 | Zoom pane | `⇧⌘↩` | `Alt+Shift+Enter` | `⇧⌘↩` | `Alt+Shift+Enter` |
+| Pair view | `⌘.` | `Ctrl+Shift+.` | `⌘.` | `Ctrl+Shift+.` |
 | Show task steps | `⇧⌘U` | `Alt+Shift+U` | `⇧⌘U` | `Alt+Shift+U` |
 | Close pane | `⇧⌘W` | `Alt+Shift+W` | `⌥⇧W` | `Alt+Shift+W` |
 | Larger text (exception) | `⌘=` | `Ctrl+=` | `⌘=` | `Ctrl+=` |

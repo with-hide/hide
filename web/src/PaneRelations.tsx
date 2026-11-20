@@ -20,6 +20,8 @@ import type { TerminalContextLink } from "./terminalLinkProvider";
 import type { RevealHost } from "./revealExternal";
 import { archiveOffer, type ArchiveOffer } from "./archive";
 import { agentsByPane, allAgents } from "./paneAgents";
+import { pairLabelKey, type PairOffer } from "./pairView";
+import { commandLabel } from "./shortcutLabels";
 
 // The delegation tree where the operator works (PRD S6 D-07, B14-B16): a
 // child pane's header returns to its parent, a parent's badge lists every
@@ -159,13 +161,14 @@ export type RevisitOffer = "hidden" | "star" | "done";
  * pair view, `on` on the pane in it to leave it, `none` disabled with why on
  * a pane with nothing to show beside it (B19).
  */
-export type PaneHeadOffer = { mention: boolean; pair: "off" | "on" | "none" };
+export type PaneHeadOffer = { mention: boolean; pair: PairOffer };
 
-function pairEntry(pair: PaneHeadOffer["pair"]): MenuEntry<PaneMenuId> {
+function pairEntry(pair: PairOffer): MenuEntry<PaneMenuId> {
   return {
     id: "pair_view", icon: "pair",
-    label: translate(pair === "on" ? "panes.menu.pairOff" : "panes.menu.pair"),
-    unavailable: pair === "none" ? translate("panes.menu.pairNone") : null,
+    label: translate(pair === "on" ? pairLabelKey("on") : pairLabelKey("off")),
+    unavailable: pair === "none" ? translate(pairLabelKey("none")) : null,
+    shortcut: commandLabel("pair_view") || undefined,
   };
 }
 
@@ -277,7 +280,8 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     {
       id: "toggle_zoom", menuLabel: translate(context.zoomed ? "menus.unzoom" : "menus.zoom"), icon: context.zoomed ? "unzoom" : "zoom",
       label: context.zoomed ? translate("panes.unzoom") : translate("panes.menu.zoom"),
-      unavailable: context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
+      // Pair view leaves the tab's zoom as it is (D-16), so the item says why rather than doing nothing.
+      unavailable: head?.pair === "on" ? translate("panes.menu.pairZoom") : context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
       shortcut: chords.zoom,
     },
     ...(head ? [pairEntry(head.pair)] : []),

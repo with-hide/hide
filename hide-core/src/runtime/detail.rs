@@ -390,16 +390,27 @@ impl Runtime {
     /// holds the mission, the agent that made a pull request for its card.
     /// An owner on a connected device is not looked up, so its card opens
     /// on the tray in front (`docs/INSTALL.md`, What each system supports).
-    fn detail_owner_pane(&self, item: &DetailItem) -> Option<String> {
+    pub(super) fn detail_owner_pane(&self, item: &DetailItem) -> Option<String> {
+        self.detail_owner_pane_among(item, &self.live_sessions())
+    }
+
+    /// `detail_owner_pane` over `sessions`, the machine's live sessions by
+    /// pane, so a caller that asks for many cards reads them once; it
+    /// borrows the project it looks in rather than copying it.
+    pub(super) fn detail_owner_pane_among(
+        &self,
+        item: &DetailItem,
+        sessions: &[(String, crate::links::ledger::SessionIdentity)],
+    ) -> Option<String> {
         match item {
             DetailItem::Record { session } | DetailItem::Plan { session } => {
                 if session.device_id != self.node.as_str() {
                     return None;
                 }
-                self.live_sessions()
-                    .into_iter()
+                sessions
+                    .iter()
                     .find(|(_, live)| live == session)
-                    .map(|(pane, _)| pane)
+                    .map(|(pane, _)| pane.clone())
             }
             DetailItem::Mission { mission } => {
                 let mission = self
@@ -418,8 +429,8 @@ impl Runtime {
                 workspace_id,
                 number,
             } => {
-                let (_, project) = self.issue_project(workspace_id)?;
-                super::pull_requests::pull_request_lead(&project, *number)
+                let (_, project) = self.issue_project_ref(workspace_id)?;
+                super::pull_requests::pull_request_lead(project, *number)
                     .filter(|pane| self.local_tab_pane(pane))
             }
             _ => None,
@@ -441,26 +452,32 @@ impl Runtime {
     /// The Agent tab that holds `pane` in the Workspace `key`, on this
     /// machine or a device.
     pub(super) fn pane_tab(&self, key: &WorkspaceKey, pane: &str) -> Option<String> {
+        self.checkout_tabs(key)
+            .find(|tab| tab.panes.iter().any(|row| row.id == pane))
+            .and_then(|tab| tab.id.clone())
+    }
+
+    /// The Agent tabs of the Workspace `key`, on this machine or a device.
+    pub(super) fn checkout_tabs(
+        &self,
+        key: &WorkspaceKey,
+    ) -> impl Iterator<Item = &crate::model::TabSnapshot> {
         let workspaces: &[crate::model::WorkspaceSnapshot] = if key.0 == self.node.as_str() {
             &self.snapshot.navigator.workspaces
         } else {
-            &self
-                .snapshot
+            self.snapshot
                 .status
                 .remote
                 .iter()
-                .find(|remote| remote.target_id == key.0)?
-                .session
-                .as_ref()?
-                .workspaces
+                .find(|remote| remote.target_id == key.0)
+                .and_then(|remote| remote.session.as_ref())
+                .map_or(&[], |session| session.workspaces.as_slice())
         };
         workspaces
             .iter()
             .flat_map(|workspace| &workspace.checkouts)
-            .filter(|checkout| checkout.path == key.1)
+            .filter(move |checkout| checkout.path == key.1)
             .flat_map(|checkout| &checkout.tabs)
-            .find(|tab| tab.panes.iter().any(|row| row.id == pane))
-            .and_then(|tab| tab.id.clone())
     }
 
     /// B40: the sidebar shows the 태스크 list with the row's ancestors
