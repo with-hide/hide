@@ -869,6 +869,20 @@ impl Runtime {
         }
     }
 
+    /// Asks the coordinator of `machine`, this one's or a connected
+    /// device's, to read its session again and publish it.
+    fn read_machine_again(&mut self, machine: &str) {
+        if machine == self.node.as_str() {
+            self.request_republish();
+        } else if let Some(sync) = self
+            .remote_connections
+            .get(machine)
+            .and_then(|connection| connection.sync.as_ref())
+        {
+            sync.republish_waker().wake();
+        }
+    }
+
     /// The registrations the delivery store has still to hand over to the
     /// next agent in their pane.
     pub(crate) fn delivery_successions(
@@ -2398,11 +2412,15 @@ impl Runtime {
         // roles the first ledger after a start shows handed over, which a
         // stop before the mission book's save left behind.
         let mut succeeded = self.delivery_ledger.is_err();
+        let mut handed_over = std::collections::BTreeSet::new();
         self.registration_successions.retain(|id, _| {
             let Some(record) = ledger.agents.iter().find(|record| &record.id == id) else {
                 return false;
             };
-            succeeded |= record.ended && record.successor.is_some();
+            if record.ended && record.successor.is_some() {
+                succeeded = true;
+                handed_over.insert(record.machine.clone());
+            }
             !record.ended
         });
         // Only a change in who waits for a reply, from whom, and whether that
@@ -2448,6 +2466,14 @@ impl Runtime {
         self.delivery_ledger = Ok(ledger);
         if succeeded {
             self.follow_successors();
+        }
+        // The pane's lineage tokens name the agent before it until the
+        // lineage writer, which runs on that machine's session reads, sees
+        // the successor with the parent it took; nothing on the engine moves
+        // to read it again, so it is asked to (PRD letters-missions-simplify
+        // D-24). One read per machine with a handover in this ledger.
+        for machine in handed_over {
+            self.read_machine_again(&machine);
         }
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
