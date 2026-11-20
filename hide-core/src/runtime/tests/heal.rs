@@ -724,18 +724,13 @@ fn a_worker_heals_while_its_engine_names_it_and_while_its_line_is_owed() {
     assert!(!runtime.healing(&worker));
 }
 
-/// B17: the line goes through the delivery store as Hide's `hide:heal`. A
-/// send that cannot start, and one the store refuses, leave it owed; the
-/// next tick sends it under the same intent, the store admits it once, and
-/// only then is it settled.
+/// B17, B30: the line is a news cell of the resumed agent's registration.
+/// One refused for room stays owed and lands once there is room, under the
+/// same subject and revision; once posted it is settled and never posted
+/// again.
 #[test]
-fn a_line_stays_owed_until_the_store_admits_it() {
-    use std::sync::Mutex;
+fn a_line_stays_owed_until_its_cell_is_posted() {
     let root = tempfile::tempdir().unwrap();
-    let state = root.path().join("state");
-    hide_platform::fs::private::create_dir_all(&state).unwrap();
-    // The store holds the child and its parent, each registered with the
-    // session its digest names.
     let node = crate::node::TEST_NODE;
     let registered_as = |id: &str, pane: &str, session: &str, parent: Option<&str>| {
         let mut actor = actor(node, pane, session);
@@ -755,107 +750,63 @@ fn a_line_stays_owed_until_the_store_admits_it() {
         next_id: 10,
         ..Default::default()
     };
-    crate::delivery::store::save(&hide_kit::layout::delivery_store(&state), &ledger).unwrap();
-    // The parent is not in its pane: its count stays owed, unsent.
     let go_on = |runtime: &Runtime| -> Vec<String> {
         let mut owed = runtime.heal_letters_owed();
         owed.retain(|key| key.starts_with("go-on:"));
         owed
     };
-    let runtime = Arc::new(Mutex::new(super::runtime()));
-    let (worker, client) = crate::delivery::worker::Worker::store(
-        Arc::downgrade(&runtime),
-        ChangeNotifier::noop(),
-        hide_kit::layout::delivery_store(&state),
-    )
-    .unwrap();
+    let mut runtime = super::runtime();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    // The child is back in its pane, as the session sync sees it.
+    let observed: crate::sidebar::SessionSnapshotPayload =
+        serde_json::from_value(serde_json::json!({"agents":[
+            {"id":"agent-1","pane_id":"w1:p1","agent":"claude","agent_status":"idle",
+             "state_change_seq":1,
+             "lineage_session":crate::engine::tokens::session_digest("s-1")},
+        ]}))
+        .unwrap();
+    runtime.observe_delivery_laid(node, &observed, None, None);
+    let child = runtime.delivery_observations["w1:p1"].actor.clone();
+    started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
+    heal(&mut runtime, node, &["w1:p1".to_owned()], 1_000);
+    assert_eq!(go_on(&runtime), ["go-on:agent-1:1000"]);
+    // No room for one more cell: the line stays owed.
+    let mut filled = 0;
+    while runtime
+        .post_status(&child, format!("letter:{filled}"), "ended".into(), true, 1)
+        .is_ok()
     {
-        let mut guard = runtime.lock().unwrap();
-        // What the store read back, as it publishes it.
-        guard.publish_delivery(Arc::new(ledger.clone()), true);
-        // The child is back in its pane, as the session sync sees it.
-        let observed: crate::sidebar::SessionSnapshotPayload =
-            serde_json::from_value(serde_json::json!({"agents":[
-                {"id":"agent-1","pane_id":"w1:p1","agent":"claude","agent_status":"idle",
-                 "state_change_seq":1,
-                 "lineage_session":crate::engine::tokens::session_digest("s-1")},
-            ]}))
-            .unwrap();
-        guard.observe_delivery_laid(node, &observed, None, None);
-        started_with(&mut guard, root.path(), &[("w1:p1", "s-1", true)]);
-        heal(&mut guard, node, &["w1:p1".to_owned()], 1_000);
-        assert_eq!(go_on(&guard), ["go-on:agent-1:1000"]);
-        guard.install_worker_context(Arc::downgrade(&runtime), ChangeNotifier::noop());
-        // No delivery client yet: the send cannot start.
-        guard.drive_heal_letters(1_000);
-        assert!(!guard.heal_letters_sending());
-        assert_eq!(go_on(&guard), ["go-on:agent-1:1000"]);
-        guard.install_delivery_client(client);
-        // The ledger the core holds reads unavailable (a parent it does not
-        // hold), so the store refuses the send.
-        let mut broken = ledger.clone();
-        broken.agents[1].parent = Some("agent-8".into());
-        guard.publish_delivery(Arc::new(broken), true);
+        filled += 1;
+        assert!(filled <= 4_096, "the cells are capped");
     }
-    let settle = |what: &str| {
-        super::wait_for(what, || !runtime.lock().unwrap().heal_letters_sending());
+    runtime.drive_heal_letters(1_500);
+    assert_eq!(go_on(&runtime), ["go-on:agent-1:1000"], "refused for room");
+    runtime.retract_status("letter:0");
+    runtime.drive_heal_letters(2_000);
+    assert!(go_on(&runtime).is_empty(), "posted, it is settled");
+    let ledger = runtime.delivery_state().ok();
+    let heal_cells = |runtime: &mut Runtime| -> Vec<(String, u64)> {
+        runtime
+            .take_status_of("agent-1", ledger.as_deref(), None)
+            .into_iter()
+            .filter(|cell| cell.subject.starts_with("heal:"))
+            .map(|cell| (cell.subject, cell.revision))
+            .collect()
     };
-    let letters = || -> Vec<(String, String, String)> {
-        let guard = runtime.lock().unwrap();
-        guard
-            .delivery_state()
-            .map(|ledger| {
-                ledger
-                    .letters
-                    .iter()
-                    .map(|letter| {
-                        (
-                            letter.sender.name.clone(),
-                            letter.recipient.pane_id.clone(),
-                            letter.intent.clone(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    runtime.lock().unwrap().drive_heal_letters(1_500);
-    settle("the refused send ended");
-    assert_eq!(
-        go_on(&runtime.lock().unwrap()),
-        ["go-on:agent-1:1000"],
-        "a refused send leaves the line owed"
-    );
-    assert!(letters().is_empty());
-
-    runtime
-        .lock()
-        .unwrap()
-        .publish_delivery(Arc::new(ledger), true);
-    runtime.lock().unwrap().drive_heal_letters(2_000);
-    settle("the line was sent");
-    let sent = (
-        "hide:heal".to_owned(),
-        "w1:p1".to_owned(),
-        "heal:go-on:agent-1:1000".to_owned(),
-    );
-    assert_eq!(letters(), std::slice::from_ref(&sent));
-    assert!(go_on(&runtime.lock().unwrap()).is_empty());
-    runtime.lock().unwrap().drive_heal_letters(3_000);
-    settle("nothing more was sent");
-    assert_eq!(letters(), [sent], "admitted once");
-    drop(worker);
+    let mut given = Vec::new();
+    for _ in 0..(filled / 64 + 2) {
+        given.extend(heal_cells(&mut runtime));
+    }
+    assert_eq!(given, [("heal:go-on:agent-1".to_owned(), 1_000)]);
+    runtime.drive_heal_letters(3_000);
+    assert!(heal_cells(&mut runtime).is_empty(), "posted once");
 }
 
-/// B18: each batch of a parent's lost children is a letter of its own: once
-/// the store admitted one, the next children lost go as a new letter to the
-/// same parent, and both arrive.
+/// B18, B30: each batch of a parent's lost children is a news cell of its
+/// own for the parent: once the first was posted, the next children lost
+/// make another, and the parent is given both.
 #[test]
-fn a_parent_hears_each_batch_of_lost_children_through_the_store() {
-    use std::sync::Mutex;
-    let root = tempfile::tempdir().unwrap();
-    let state = root.path().join("state");
-    hide_platform::fs::private::create_dir_all(&state).unwrap();
+fn a_parent_hears_each_batch_of_lost_children_as_a_cell() {
     let node = crate::node::TEST_NODE;
     let registered_as = |id: &str, pane: &str, session: &str, parent: Option<&str>| {
         let mut actor = actor(node, pane, session);
@@ -876,71 +827,33 @@ fn a_parent_hears_each_batch_of_lost_children_through_the_store() {
         next_id: 10,
         ..Default::default()
     };
-    crate::delivery::store::save(&hide_kit::layout::delivery_store(&state), &ledger).unwrap();
-    let runtime = Arc::new(Mutex::new(super::runtime()));
-    let (worker, client) = crate::delivery::worker::Worker::store(
-        Arc::downgrade(&runtime),
-        ChangeNotifier::noop(),
-        hide_kit::layout::delivery_store(&state),
-    )
-    .unwrap();
-    {
-        let mut guard = runtime.lock().unwrap();
-        guard.publish_delivery(Arc::new(ledger), true);
-        // The parent is in its pane.
-        let observed: crate::sidebar::SessionSnapshotPayload =
-            serde_json::from_value(serde_json::json!({"agents":[
-                {"id":"agent-9","pane_id":"w1:p9","agent":"claude","agent_status":"idle",
-                 "state_change_seq":1,
-                 "lineage_session":crate::engine::tokens::session_digest("s-9")},
-            ]}))
-            .unwrap();
-        guard.observe_delivery_laid(node, &observed, None, None);
-        guard.install_worker_context(Arc::downgrade(&runtime), ChangeNotifier::noop());
-        guard.install_delivery_client(client);
-    }
-    let letters = || -> Vec<(String, String, String)> {
-        let guard = runtime.lock().unwrap();
-        guard
-            .delivery_state()
-            .map(|ledger| {
-                ledger
-                    .letters
-                    .iter()
-                    .map(|letter| {
-                        (
-                            letter.recipient.pane_id.clone(),
-                            letter.intent.clone(),
-                            letter.body.clone(),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
+    let mut runtime = super::runtime();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    // The parent is in its pane.
+    let observed: crate::sidebar::SessionSnapshotPayload =
+        serde_json::from_value(serde_json::json!({"agents":[
+            {"id":"agent-9","pane_id":"w1:p9","agent":"claude","agent_status":"idle",
+             "state_change_seq":1,
+             "lineage_session":crate::engine::tokens::session_digest("s-9")},
+        ]}))
+        .unwrap();
+    runtime.observe_delivery_laid(node, &observed, None, None);
     for (n, child) in ["agent-1", "agent-2"].into_iter().enumerate() {
-        {
-            let mut guard = runtime.lock().unwrap();
-            guard.heal_not_woken(&[child.to_owned()]);
-            guard.drive_heal_letters(1_000 * (n as u64 + 1));
-            assert!(guard.heal_letters_sending(), "batch {n} is sent");
-        }
-        super::wait_for("the batch was sent", || {
-            !runtime.lock().unwrap().heal_letters_sending()
-        });
-        assert!(runtime.lock().unwrap().heal_letters_owed().is_empty());
+        runtime.heal_not_woken(&[child.to_owned()]);
+        runtime.drive_heal_letters(1_000 * (n as u64 + 1));
+        assert!(runtime.heal_letters_owed().is_empty(), "batch {n} posted");
     }
-    let sent = letters();
-    assert_eq!(sent.len(), 2, "{sent:?}");
-    assert_ne!(sent[0].1, sent[1].1, "a new batch is a new letter");
-    assert_eq!(
-        sent.iter()
-            .map(|(pane, _, body)| (pane.as_str(), body.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            ("w1:p9", "Could not wake agent-1"),
-            ("w1:p9", "Could not wake agent-2"),
-        ]
+    let ledger = runtime.delivery_state().ok();
+    let given = runtime.take_status_of("agent-9", ledger.as_deref(), None);
+    assert_eq!(given.len(), 2, "{given:?}");
+    assert_ne!(
+        given[0].subject, given[1].subject,
+        "a new batch is a new cell"
     );
-    drop(worker);
+    let mut lines = given
+        .iter()
+        .map(|cell| cell.line.as_str())
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    assert_eq!(lines, ["Could not wake agent-1", "Could not wake agent-2"]);
 }

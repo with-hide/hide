@@ -13,7 +13,6 @@ use serde_json::json;
 
 use super::super::Runtime;
 use super::super::delivery::Observation;
-use super::super::hide_notes::{Note, NoteKind};
 use crate::agent_sleep::{DormantPhase, SleepId, SleepPhase, WakeMode};
 use crate::delivery::Actor;
 use crate::delivery::doorbell::Turn;
@@ -26,19 +25,6 @@ pub(in crate::runtime) const MAX_LETTER_WAKES: usize = 4;
 /// The Hide role that tells a sender its letter's recipient could not be
 /// woken (D-16).
 pub(crate) const WAKE_ROLE: &str = "wake";
-
-/// The note that tells a sender its letter's wake failed for good. The
-/// sender may be waiting on that letter while it works, and would otherwise
-/// read the note only after five minutes of its work, so it goes `--now`, read
-/// at the sender's next tool call (with-hide/hide-private#675).
-pub(in crate::runtime) const WAKE_FAILED_NOTE: NoteKind = NoteKind {
-    role: WAKE_ROLE,
-    thread: "hide-wake-notes",
-    intent: "wake-failed",
-    component: "agent_sleep",
-    unsent: "agent_sleep.wake_note_unsent",
-    now: true,
-};
 
 /// The letter wakes a sleeper gets in a row while each fails for a cause
 /// that can pass: a letter has as many tries to reach its agent by a wake
@@ -137,8 +123,6 @@ pub(in crate::runtime) struct LetterWakes {
     /// only, bounded by the ledger's pending letters; a restart lets each
     /// wake once more.
     woke: BTreeMap<String, u64>,
-    /// A thread is telling senders; it is the only one.
-    noting: bool,
     /// The letter wakes each sleeper had in a row: a wake that typed
     /// nothing for a cause that can pass is asked again after a wait rather
     /// than failing its letters, up to `WAKE_TRIES` (with-hide/hide-private#660,
@@ -148,6 +132,17 @@ pub(in crate::runtime) struct LetterWakes {
     /// Sleepers whose last wake failed for a cause that can pass
     /// (`WakeOutcome::Failed::passing`), told by the wake's answer.
     passing: BTreeSet<Route>,
+    /// The newest status cell each sleeping worker was woken for, by
+    /// registration (`Runtime::worker_cells_unseen`), once its wake woke it
+    /// or failed for good: a cell wakes its worker once, as a letter does.
+    /// Memory only, bounded by the workers with a cell; a restart lets each
+    /// wake once more.
+    cells_woke: BTreeMap<String, u64>,
+    /// The wakes a worker's cell started that have not woken or failed for
+    /// good yet: the worker's registration and the cell's revision. A wake
+    /// that fails for a cause that can pass is asked again; one that fails
+    /// for good leaves the worker's node a raise for its Conductor.
+    cell_wakes: BTreeMap<Route, (String, u64)>,
 }
 
 impl LetterWakes {
@@ -405,6 +400,7 @@ impl Runtime {
                 // Woke: the delivery's own bell carries the letters on.
                 None => {
                     self.letter_wakes.tries.remove(&route);
+                    self.cell_wake_ended(&route);
                 }
                 Some(Stage::Waking | Stage::Ending) => {
                     self.letter_wakes.running.insert(route);
@@ -435,6 +431,23 @@ impl Runtime {
             .filter(|(_, stage)| matches!(stage, Stage::Sleeping | Stage::Failed(_)))
             .map(|(route, _)| route)
             .collect::<Vec<_>>();
+        // A worker's new status cell wakes it as a `request` did before it
+        // was a cell (`Runtime::worker_cells_unseen`).
+        let cells = self.worker_cells_unseen();
+        self.letter_wakes
+            .cells_woke
+            .retain(|agent, _| cells.iter().any(|(of, ..)| of == agent));
+        let mut cell_routes: BTreeMap<Route, (String, u64)> = BTreeMap::new();
+        for (agent, actor, revision) in cells {
+            if self.letter_wakes.cells_woke.get(&agent) >= Some(&revision) {
+                continue;
+            }
+            if let Some((route, Stage::Sleeping | Stage::Failed(_))) = self.asleep_route(&actor) {
+                cell_routes.insert(route, (agent, revision));
+            }
+        }
+        let mut waiting = waiting;
+        waiting.extend(cell_routes.keys().cloned());
         for route in &waiting {
             if !self.letter_wakes.running.contains(route)
                 && !self.letter_wakes.queue.contains(route)
@@ -461,10 +474,23 @@ impl Runtime {
                 self.letter_wakes.queue.push_back(route);
                 continue;
             }
-            changed |= self.start_letter_wake(&ledger, route, now);
+            if let Some(cell) = cell_routes.get(&route) {
+                self.letter_wakes
+                    .cell_wakes
+                    .insert(route.clone(), cell.clone());
+            }
+            changed |= self.start_letter_wake(&ledger, route.clone(), now);
+            // Awake already: the wake ran to its end in the start.
+            if self.route_stage(&route).is_none() {
+                self.cell_wake_ended(&route);
+            }
         }
         // A sleeper whose wake neither runs nor waits needs no count.
         let wakes = &mut self.letter_wakes;
+        let (running, queue) = (&wakes.running, &wakes.queue);
+        wakes
+            .cell_wakes
+            .retain(|route, _| running.contains(route) || queue.contains(route));
         let (running, queue) = (&wakes.running, &wakes.queue);
         wakes
             .tries
@@ -475,6 +501,54 @@ impl Runtime {
         self.forget_failures(&ledger);
         self.note_failed_letters(&ledger);
         changed
+    }
+
+    /// The wake a worker's cell started on `route` woke it: the cell does not
+    /// wake it again.
+    fn cell_wake_ended(&mut self, route: &Route) {
+        if let Some((agent, revision)) = self.letter_wakes.cell_wakes.remove(route) {
+            self.letter_wakes.cells_woke.insert(agent, revision);
+        }
+    }
+
+    /// The wake a cell of worker `agent` started failed for good: each node
+    /// whose fix the cell carries is raised to its Conductor
+    /// (`AttentionReason::WakeRefused`), whose cell says Hide could not wake
+    /// the worker, so the failure reaches who can act on it (engineering #10).
+    fn cell_wake_failed(&mut self, agent: &str, reason: &str) {
+        let now = crate::runtime::unix_milliseconds();
+        let mut raised = Vec::new();
+        for mission in &mut self.missions.book.missions {
+            let nodes: Vec<(String, Option<u32>)> = mission
+                .wakes
+                .iter()
+                .filter(|wake| wake.to.as_deref() == Some(agent))
+                .map(|wake| (wake.node.clone(), wake.pr))
+                .collect();
+            for (node, pr) in nodes {
+                let events = crate::runtime::mission_health::raise(
+                    mission,
+                    &node,
+                    crate::missions::AttentionReason::WakeRefused,
+                    pr,
+                    now,
+                );
+                if !events.is_empty() {
+                    raised.push((mission.id.clone(), events));
+                }
+            }
+        }
+        crate::diagnostic!(json!({
+            "component": "agent_sleep", "kind": "agent_sleep.cell_wake_failed",
+            "agent_id": agent, "reason": reason, "raised": raised.len(),
+        }));
+        if raised.is_empty() {
+            return;
+        }
+        for (mission, events) in raised {
+            self.record_mission_events(&mission, events);
+        }
+        self.save_missions();
     }
 
     fn route_stage(&self, route: &Route) -> Option<Stage> {
@@ -609,6 +683,10 @@ impl Runtime {
     /// Fails the `request` and `block` letters waiting on `route`'s wake
     /// (D-16); a later one tries the wake again.
     fn fail_letters(&mut self, ledger: &Ledger, route: &Route, reason: &str) {
+        if let Some((agent, revision)) = self.letter_wakes.cell_wakes.remove(route) {
+            self.letter_wakes.cells_woke.insert(agent.clone(), revision);
+            self.cell_wake_failed(&agent, reason);
+        }
         let letters = self.route_letters(ledger, route);
         crate::diagnostic!(json!({
             "component": "agent_sleep",
@@ -671,10 +749,6 @@ impl Runtime {
     /// not woken and why (B6), once the ledger shows the letter undelivered.
     /// A sender that is Hide's or the operator's own reads no letters.
     fn note_failed_letters(&mut self, ledger: &Ledger) {
-        // The thread marks the wakes moved when it ends, which looks again.
-        if self.letter_wakes.noting {
-            return;
-        }
         let mut notes = Vec::new();
         let due = self
             .letter_wakes
@@ -709,19 +783,25 @@ impl Runtime {
                 }));
                 continue;
             };
-            notes.push(Note {
-                body: note_body(&letter.recipient.name, &letter.kind, &id, &reason),
-                letter: id,
-                target,
-            });
+            notes.push((
+                id.clone(),
+                target.actor,
+                super::super::status_cells::letter_subject(&id),
+                note_body(&letter.recipient.name, &letter.kind, &id, &reason),
+            ));
         }
-        if notes.is_empty() {
-            return;
+        let now = crate::runtime::unix_milliseconds();
+        for (id, sender, subject, body) in notes {
+            // Refused for room: the note stays owed and the next pass tries.
+            // News, posted once (its record says it went) and gone once
+            // given: the moment it was found is the fact.
+            if self.post_status(&sender, subject, body, true, now).is_err()
+                && let Some(failure) = self.letter_wakes.failed.get_mut(&id)
+            {
+                failure.noted = false;
+                self.letter_wakes.touch();
+            }
         }
-        self.letter_wakes.noting = self.send_hide_notes(WAKE_FAILED_NOTE, notes, |runtime, _| {
-            runtime.letter_wakes.noting = false;
-            runtime.letter_wakes.dirty = true;
-        });
     }
 }
 

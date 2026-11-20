@@ -339,19 +339,6 @@ impl Letter {
                 .is_none_or(|finished| now.saturating_sub(finished) < RETENTION_MS)
     }
 
-    /// Whether the letter is a first inactivity warning to a pane observer
-    /// whose escalation to the operator (`human::claim`) may still be owed:
-    /// not yet notified, and neither acknowledged nor cancelled. A letter
-    /// that finished so stays when a full ledger drops finished letters, as
-    /// the escalation reads it; the one-day cleanup still takes it.
-    pub(crate) fn escalation_owed(&self) -> bool {
-        self.watch_warning
-            .as_ref()
-            .is_some_and(|warning| warning.ordinal == 1 && !warning.parent_notified)
-            && !self.recipient.code_owned()
-            && !matches!(self.state, State::Acknowledged | State::Cancelled)
-    }
-
     pub(crate) fn intake_confirmed(&self) -> bool {
         // Only legacy Delivered proves a hook confirmation. A legacy Ack
         // may have preceded intake, so its missing receipt remains unknown,
@@ -500,6 +487,14 @@ pub struct Ledger {
     /// bound it. Left out of the file while there are none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub human_turns: BTreeMap<String, crate::coordination::human_turn::HumanTurn>,
+    /// What each agent saw of its status cells (`runtime::status_cells`), by
+    /// registration id: the subject of each cell and the revision it saw, so
+    /// a turn after a restart is not told again what it already read. One
+    /// entry per subject a cell stands for now, kept by the core; left out of
+    /// the file while there are none, and an older build drops it at its
+    /// next save, which shows each cell standing then once more.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub status_seen: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 impl Default for Ledger {
@@ -515,6 +510,7 @@ impl Default for Ledger {
             spawn_placement_revision: 0,
             node_clocks: BTreeMap::new(),
             human_turns: BTreeMap::new(),
+            status_seen: BTreeMap::new(),
         }
     }
 }
