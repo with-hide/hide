@@ -1347,6 +1347,10 @@ fn store_secret(
             StorePassRefusal::KeysSecretGone,
         )),
         Ok(secret) => Ok(secret),
+        // A secret that cannot be read, while servers carry keys, is as
+        // gone: the same manual start-over brings the store back
+        // (docs/agent-hooks.md, When the MCP keys' secret is lost).
+        Err(error) if keyed => Err((error.to_string(), StorePassRefusal::KeysSecretGone)),
         Err(error) => Err((error.to_string(), StorePassRefusal::Unreadable)),
     }
 }

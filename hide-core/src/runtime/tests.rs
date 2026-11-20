@@ -101,6 +101,7 @@ mod issues;
 mod key_routing;
 #[path = "tests/kit_store.rs"]
 mod kit_store;
+mod store_cli;
 #[path = "tests/labels.rs"]
 mod labels;
 #[path = "tests/launch_choice.rs"]

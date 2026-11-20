@@ -1100,6 +1100,12 @@ fn a_store_whose_secret_is_gone_or_unreadable_is_kept_and_no_agent_file_changes(
         // every server Hide wrote as the operator's.
         let refused = crate::apply_store(&fixture.target, Vec::new());
         assert!(refused.refused.is_some(), "{damage}");
+        // The screen says so on the section, with the manual start-over (decisions 2026-11-19).
+        assert_eq!(
+            refused.refusal,
+            Some(crate::store::StorePassRefusal::KeysSecretGone),
+            "{damage}"
+        );
         assert_eq!(secret.exists(), damage == "garbage");
 
         let report = remove(&fixture.target);
