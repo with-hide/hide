@@ -518,6 +518,51 @@ struct Raises {
     shown: HashMap<PeerKey, PeerUpdate>,
     /// The build each machine named when its raise was last begun.
     tried: HashMap<PeerKey, String>,
+    /// The raise that waits or runs for each machine, by the number it was
+    /// begun under: only that raise's end is written.
+    running: HashMap<PeerKey, u64>,
+    begun: u64,
+}
+
+impl Raises {
+    /// Begins a raise of `key`'s machine, which names the build `theirs`,
+    /// and answers its number; none when one runs for it already, or when
+    /// that build was tried and nobody `asked` again.
+    fn begin(&mut self, key: PeerKey, theirs: &str, asked: bool) -> Option<u64> {
+        if self.running.contains_key(&key)
+            || (!asked && self.tried.get(&key).map(String::as_str) == Some(theirs))
+        {
+            return None;
+        }
+        self.begun += 1;
+        self.running.insert(key, self.begun);
+        self.tried.insert(key, theirs.to_owned());
+        self.shown.insert(key, PeerUpdate::Updating);
+        Some(self.begun)
+    }
+
+    /// Writes how raise `attempt` of `key`'s machine ended. A raise that is
+    /// no longer that machine's, because the machine was taken off while it
+    /// ran, writes nothing and answers false.
+    fn finish(&mut self, key: PeerKey, attempt: u64, raised: Result<Raised, Failure>) -> bool {
+        if self.running.get(&key) != Some(&attempt) {
+            return false;
+        }
+        self.running.remove(&key);
+        match raised {
+            Ok(_) => self.shown.remove(&key),
+            Err(failure) => self.shown.insert(key, raise_failure(failure)),
+        };
+        true
+    }
+
+    /// Keeps only what belongs to a machine among `paired`: what a raise
+    /// left of a machine goes with the machine.
+    fn keep(&mut self, paired: &std::collections::HashSet<PeerKey>) {
+        self.shown.retain(|key, _| paired.contains(key));
+        self.tried.retain(|key, _| paired.contains(key));
+        self.running.retain(|key, _| paired.contains(key));
+    }
 }
 
 /// A failed raise as its row names it.
@@ -757,7 +802,7 @@ impl Pairing {
             return;
         };
         let ours = crate::build_order::Release::of_this_build().version;
-        {
+        let attempt = {
             let mut raises = lock(&self.raises);
             if !crate::build_order::may_be_older(&ours, theirs) {
                 // It caught up, by this machine's raise or another's.
@@ -766,31 +811,24 @@ impl Pairing {
                 }
                 return;
             }
-            if raises.shown.get(&key) == Some(&PeerUpdate::Updating)
-                || (!asked && raises.tried.get(&key).map(String::as_str) == Some(theirs))
-            {
+            let Some(attempt) = raises.begin(key, theirs, asked) else {
                 return;
-            }
-            raises.tried.insert(key, theirs.to_owned());
-            raises.shown.insert(key, PeerUpdate::Updating);
-        }
+            };
+            attempt
+        };
         self.look.send_modify(|count| *count += 1);
         let (pairing, peers) = (Arc::clone(self), peers.clone());
         tokio::spawn(async move {
             let raised = pairing.raise(login).await;
-            {
-                let mut raises = lock(&pairing.raises);
-                match raised {
-                    Ok(_) => raises.shown.remove(&key),
-                    Err(failure) => raises.shown.insert(key, raise_failure(failure)),
-                };
-            }
+            let written = lock(&pairing.raises).finish(key, attempt, raised);
             if raised == Ok(Raised::Updated) {
                 // The core there restarted: its connection is made again
                 // now, not at the next redial.
                 peers.network_changed();
             }
-            pairing.look.send_modify(|count| *count += 1);
+            if written {
+                pairing.look.send_modify(|count| *count += 1);
+            }
         });
     }
 
@@ -841,9 +879,7 @@ impl Pairing {
                 .iter()
                 .filter_map(|machine| PeerKey::from_hex(&machine.key).ok())
                 .collect();
-            let mut raises = lock(&self.raises);
-            raises.shown.retain(|key, _| paired.contains(key));
-            raises.tried.retain(|key, _| paired.contains(key));
+            lock(&self.raises).keep(&paired);
         }
         // A guest's work here follows its grant: one that holds none any
         // more was taken off this machine (`Guests::granted`).
@@ -2175,6 +2211,36 @@ mod tests {
         for code in switch.refusals {
             assert!(!next_action(code).starts_with("Retry;"), "{code}");
         }
+    }
+
+    /// One raise runs for a machine at a time, a build already tried is
+    /// tried again only when asked, and a raise whose machine was taken off
+    /// while it ran leaves nothing of that machine behind when it ends.
+    #[test]
+    fn a_raise_that_ends_after_its_machine_was_taken_off_writes_nothing() {
+        let (kept, gone) = (PeerKey::from_bytes([1; 32]), PeerKey::from_bytes([2; 32]));
+        let mut raises = Raises::default();
+        let first = raises.begin(kept, "1.2.9", false).unwrap();
+        assert_eq!(raises.begin(kept, "1.2.9", true), None, "one already runs");
+        assert!(raises.finish(kept, first, Err(Failure::Busy)));
+        assert_eq!(raises.shown.get(&kept), Some(&PeerUpdate::UpdateBusy));
+        assert_eq!(raises.begin(kept, "1.2.9", false), None, "tried, not asked");
+        let again = raises.begin(kept, "1.2.9", true).unwrap();
+        assert!(raises.finish(kept, again, Ok(Raised::Updated)));
+        assert_eq!(raises.shown.get(&kept), None);
+
+        let late = raises.begin(gone, "1.2.9", false).unwrap();
+        raises.keep(&std::collections::HashSet::from([kept]));
+        assert!(!raises.finish(gone, late, Err(Failure::Failed)));
+        // Paired again while the first raise still ran: only the new
+        // raise's end is the machine's.
+        let new = raises.begin(gone, "1.2.9", false).unwrap();
+        assert!(!raises.finish(gone, late, Err(Failure::Failed)));
+        assert_eq!(raises.shown.get(&gone), Some(&PeerUpdate::Updating));
+        assert!(raises.finish(gone, new, Ok(Raised::Current)));
+        raises.keep(&std::collections::HashSet::from([kept]));
+        assert!(raises.shown.is_empty() && raises.running.is_empty());
+        assert_eq!(raises.tried.len(), 1);
     }
 
     /// An address an operator gives goes first and the last ones past the
