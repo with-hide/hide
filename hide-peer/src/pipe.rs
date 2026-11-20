@@ -31,16 +31,13 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{Semaphore, mpsc, watch};
 
 use crate::key::MachineKey;
-use crate::mux::{Carrier, Pipe, PipeRecv, PipeSend};
+use crate::mux::{Carrier, PROOF_PRIORITY, Pipe, PipeRecv, PipeSend};
 use crate::transport::{PeerConn, PeerTransport, RelayState, TransportError};
 use crate::{limits, proof};
 
 /// Proved connections that wait to be accepted; one past it is closed
 /// busy.
 const BACKLOG: usize = 16;
-
-/// The proof's stream goes ahead of anything else on the carrier.
-const PROOF_PRIORITY: i32 = i32::MAX;
 
 /// The distribution `to` is reached through, when it names one.
 pub fn distribution(to: &PeerAddr) -> Option<&str> {

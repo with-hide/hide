@@ -49,6 +49,21 @@ use super::{
 /// The version of the peer frames this build writes and reads.
 pub const VERSION: u8 = 1;
 
+/// The priority of the stream a connection's two ends prove their keys on,
+/// ahead of anything else on the carrier.
+pub const PROOF_PRIORITY: i32 = i32::MAX;
+
+/// Whether a stream may be opened with `priority`: a stream kind's, or the
+/// proof's. Each priority keeps its frames' place in the outbox for as long
+/// as the connection lives and the other end names the number, so the
+/// connection carries these few and no other.
+fn carried(priority: i32) -> bool {
+    priority == PROOF_PRIORITY
+        || hide_peer_protocol::StreamKind::ALL
+            .iter()
+            .any(|kind| kind.priority() == priority)
+}
+
 /// Streams one end has open at once, counted until both directions of each
 /// ended; its next open is refused.
 pub const MAX_STREAMS: usize = crate::limits::MAX_STREAMS;
@@ -105,6 +120,18 @@ impl Default for State {
             incoming: Mutex::new(None),
             greeted: AtomicBool::new(false),
             closed: watch::channel(None).0,
+        }
+    }
+}
+
+impl State {
+    /// A peer connection's state, with where the other end's streams go.
+    /// It is whole before the connection's threads start, so an open the
+    /// carrier already holds is not refused for want of it.
+    fn accepting(incoming: mpsc::Sender<(PipeSend, PipeRecv)>) -> Self {
+        Self {
+            incoming: Mutex::new(Some(incoming)),
+            ..Self::default()
         }
     }
 }
@@ -248,7 +275,8 @@ pub(super) fn frame_in(
                 shared.tell(PEER_FIN, stream);
             };
             let theirs = streams.keys().filter(|id| opened_by(**id, !dialed)).count();
-            let Some(incoming) = incoming.filter(|_| theirs < MAX_THEIRS) else {
+            let Some(incoming) = incoming.filter(|_| theirs < MAX_THEIRS && carried(priority))
+            else {
                 drop(streams);
                 refused(shared);
                 return Ok(());
@@ -331,15 +359,15 @@ impl Pipe {
         carrier: Carrier,
         dialed: bool,
     ) -> io::Result<(Self, mpsc::Receiver<(PipeSend, PipeRecv)>)> {
+        let (incoming, accepted) = mpsc::channel(BACKLOG);
         let shared = start_with(
             Side::Peer { dialed },
             carrier,
             None,
             Vec::new(),
+            State::accepting(incoming),
             &spawn_thread,
         )?;
-        let (incoming, accepted) = mpsc::channel(BACKLOG);
-        *lock(&shared.peer.incoming) = Some(incoming);
         shared.tell_with(HELLO, 0, &[VERSION]);
         Ok((
             Self {
@@ -353,11 +381,18 @@ impl Pipe {
 
     /// Opens a stream; frames of a larger `priority` are written first.
     /// Refused once [`MAX_STREAMS`] streams this end opened hold a place, or
-    /// the connection ended.
+    /// the connection ended, and for a priority no stream kind has, which
+    /// the other end would refuse.
     pub fn open(&self, priority: i32) -> io::Result<(PipeSend, PipeRecv)> {
         let shared = &self.shared;
         if shared.ended.load(Ordering::SeqCst) {
             return Err(super::ended_error());
+        }
+        if !carried(priority) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("no stream kind has priority {priority}"),
+            ));
         }
         let id = self.next.fetch_add(2, Ordering::SeqCst);
         let (send, recv) = {
@@ -911,6 +946,65 @@ mod tests {
         assert_eq!(said, [PEER_STOP, PEER_FIN]);
         assert_eq!(acceptor.streams(), MAX_THEIRS);
         assert!(acceptor.ended().is_none());
+    }
+
+    /// The other end names each stream's priority, and each priority keeps
+    /// a place in the outbox while the connection lives: an open with a
+    /// number no stream kind has is refused like one past the cap, and
+    /// leaves nothing behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_other_ends_stream_of_a_priority_no_kind_has_is_refused() {
+        use std::io::{Read, Write};
+        let (near, mut far) = LocalStream::pair().unwrap();
+        let (acceptor, mut accepts) = Pipe::start(near.into(), false).unwrap();
+        far.write_all(&frame(HELLO, 0, &[VERSION])).unwrap();
+        // More numbers than a connection has stream kinds.
+        let strange: Vec<u32> = (0..64).map(|opened| 2 * opened + 1).collect();
+        for (stream, priority) in strange.iter().zip(1_000_i32..) {
+            far.write_all(&frame(PEER_OPEN, *stream, &priority.to_be_bytes()))
+                .unwrap();
+        }
+        // One a kind has, opened after them, is the first to arrive.
+        let kept = 2 * strange.len() as u32 + 1;
+        far.write_all(&frame(PEER_OPEN, kept, &PROOF_PRIORITY.to_be_bytes()))
+            .unwrap();
+        let (send, _recv) = within("the stream", accepts.recv()).await.unwrap();
+        assert_eq!(send.id, kept);
+        far.set_read_timeout(Some(WITHIN)).unwrap();
+        let wanted = strange.len();
+        let reading = tokio::task::spawn_blocking(move || {
+            let mut said = Vec::new();
+            while said.len() < 2 * wanted {
+                let mut header = [0_u8; 9];
+                far.read_exact(&mut header).unwrap();
+                let stream = u32::from_be_bytes([header[1], header[2], header[3], header[4]]);
+                let length = u32::from_be_bytes([header[5], header[6], header[7], header[8]]);
+                far.read_exact(&mut vec![0_u8; length as usize]).unwrap();
+                if stream != 0 && stream != kept {
+                    said.push((stream, header[0]));
+                }
+            }
+            (said, far)
+        });
+        let (said, _far) = within("the refusals", reading).await.unwrap();
+        let refused: Vec<(u32, u8)> = strange
+            .iter()
+            .flat_map(|stream| [(*stream, PEER_STOP), (*stream, PEER_FIN)])
+            .collect();
+        assert_eq!(said, refused);
+        assert_eq!(acceptor.streams(), 1);
+        let classes: Vec<i32> = lock(&acceptor.shared.outbox.state)
+            .classes
+            .keys()
+            .copied()
+            .collect();
+        assert_eq!(classes, [PROOF_PRIORITY]);
+        assert!(acceptor.ended().is_none());
+        // This end's own open is refused before it is told.
+        assert_eq!(
+            acceptor.open(1_000).map(drop).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 
     /// A carrier's writing direction that hands each frame to the test, one

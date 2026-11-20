@@ -3278,10 +3278,11 @@ An endpoint that ends without being asked is built again, and iroh's own spellin
 
 **The link multiplexer.**
 `hide_peer::mux` carries many streams over a carrier that has one byte stream; it never runs over iroh, whose connection already carries streams of its own.
-It has two forms on one frame (`[kind][stream][length]`, at most 16 KiB of payload).
+It has two forms on one frame (`[kind][stream][length]`, read with at most 64 KiB of payload, `mux::MAX_FRAME`; a peer stream's writer puts at most 16 KiB in one, `streams::MAX_CHUNK`).
 The link form is the one the SSH and WSL helper links and the attach role run ([A core on another machine](#a-core-on-another-machine)): stream 0 is the node's link and every other stream a TCP forward.
 The peer form (`mux::streams`, `Pipe`) is what the pipe transport's connection is: each end greets with its version, the dialer opens odd stream ids and the acceptor even ones, and a stream is opened at a priority, half-closed (`FIN`), refused by its reader (`STOP`) and paid for with credit, as a QUIC stream is.
 A sender may have 16 frames of a stream unread by the other end and gets credit back as they are read, so a reader that stops reading stops only its own stream; the outbox sends control frames first and then each priority class whole before a lower one, with 16 places per class, so keys never wait behind a file (D-62).
+A class lives as long as its connection and the other end names a stream's priority, so a stream is opened only at a priority a stream kind has, or the proof's: an open at any other number is answered `STOP` like one past the cap, and this end's own is refused before it is told.
 Each end opens at most `limits::MAX_STREAMS` (72) streams of its own and takes at most twice that from the other end, 16 of them unaccepted; a frame for a stream past that is answered `STOP`, never queued.
 A close is one `BYE` frame with its code, written before the carrier ends and waited for at most 2 s; a carrier that ends without one reads as a lost connection on every stream.
 

@@ -40,7 +40,7 @@
 
 mod streams;
 
-pub use streams::{Pipe, PipeRecv, PipeSend};
+pub use streams::{PROOF_PRIORITY, Pipe, PipeRecv, PipeSend};
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, BufReader, Read, Write};
@@ -633,7 +633,14 @@ fn start(
     pending: Vec<u8>,
 ) -> io::Result<(Arc<Shared>, LocalStream)> {
     let (ours, link) = LocalStream::pair()?;
-    let shared = start_with(side, carrier.into(), Some(ours), pending, &spawn_thread)?;
+    let shared = start_with(
+        side,
+        carrier.into(),
+        Some(ours),
+        pending,
+        streams::State::default(),
+        &spawn_thread,
+    )?;
     Ok((shared, link))
 }
 
@@ -645,6 +652,7 @@ fn start_with(
     carrier: Carrier,
     link: Option<LocalStream>,
     pending: Vec<u8>,
+    peer: streams::State,
     spawn: Spawn<'_>,
 ) -> io::Result<Arc<Shared>> {
     let Carrier {
@@ -657,7 +665,7 @@ fn start_with(
         outbox: Outbox::default(),
         carrier: carrier_end,
         link: link.as_ref().map(LocalStream::shutdown_handle),
-        peer: streams::State::default(),
+        peer,
         streams: Mutex::new(HashMap::new()),
         pings: Mutex::new(HashMap::new()),
         next: AtomicU32::new(1),
@@ -1444,7 +1452,14 @@ mod tests {
                 )
             };
             let (ours, _link) = LocalStream::pair().unwrap();
-            let started = start_with(Side::Core, carrier.into(), Some(ours), Vec::new(), &spawn);
+            let started = start_with(
+                Side::Core,
+                carrier.into(),
+                Some(ours),
+                Vec::new(),
+                streams::State::default(),
+                &spawn,
+            );
             assert!(started.is_err());
             assert_eq!(finished.load(Ordering::SeqCst), fail_at - 1);
             peer.set_read_timeout(Some(Duration::from_secs(15)))
