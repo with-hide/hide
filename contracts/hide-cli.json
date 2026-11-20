@@ -2335,6 +2335,16 @@
                                 }
                             ],
                             "default": null
+                        },
+                        "written": {
+                            "default": null,
+                            "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                            "format": "uint",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
                         }
                     },
                     "required": [
@@ -2346,6 +2356,7 @@
                         "to",
                         "kind",
                         "body",
+                        "written",
                         "state",
                         "hook_confirmed",
                         "waiting_answer",
@@ -2939,6 +2950,16 @@
                         }
                     ],
                     "default": null
+                },
+                "written": {
+                    "default": null,
+                    "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                    "format": "uint",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
                 }
             },
             "required": [
@@ -2950,6 +2971,7 @@
                 "to",
                 "kind",
                 "body",
+                "written",
                 "state",
                 "hook_confirmed",
                 "waiting_answer",
@@ -8160,7 +8182,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6e79ad5bad81f7225ad68294a241defe05742ca4f85b795820026dba3de8df6b",
+    "digest": "sha256:88881dc85be92722db803667508453a2b4b0d670bf3293dbbe1941808116d1a1",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -102,7 +102,7 @@ pub struct Letter {
     /// sender opened, `Runtime::list_opened_views`); null when the body is
     /// all the sender's. A send under the same intent is the same letter
     /// again only when it says exactly the sender's part (B5).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub written: Option<usize>,
     pub state: State,
     #[serde(default)]
