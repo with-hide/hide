@@ -20,7 +20,7 @@ use crate::env::Env;
 
 pub const SKILL_USAGE: &str = "hide skill list [--machine <device id>]\nhide skill show <name> [--machine <device id>]\nhide skill add <github address|folder> [--name <skill>]... [--machine <device id>]\nhide skill update <name> [--machine <device id>]\nhide skill on|off <name> [--agent <agent>] [--machine <device id>]\nhide skill remove <name> [--machine <device id>]\nadd and update wait until the operator answers the confirm in their 내 차례.";
 
-pub const MCP_USAGE: &str = "hide mcp list [--machine <device id>]\nhide mcp show <name> [--machine <device id>]\nhide mcp add|update <name> [--env <NAME>]... -- <command> [<argument>...] [--machine <device id>]\nhide mcp add|update <name> --url <https address> [--sse] [--header <NAME>]... [--machine <device id>]\nhide mcp on|off <name> [--agent <agent>] [--machine <device id>]\nhide mcp remove <name> [--machine <device id>]\n--env and --header take a key's name only; the operator types its value on the confirm in their 내 차례.";
+pub const MCP_USAGE: &str = "hide mcp list [--machine <device id>]\nhide mcp show <name> [--machine <device id>]\nhide mcp add|update <name> [--env <NAME>]... [--machine <device id>] -- <command> [<argument>...]\nhide mcp add|update <name> --url <https address> [--sse] [--header <NAME>]... [--machine <device id>]\nhide mcp on|off <name> [--agent <agent>] [--machine <device id>]\nhide mcp remove <name> [--machine <device id>]\nHide's own options come before --, and every word after it is the server's.\n--env and --header take a key's name only; the operator types its value on the confirm in their 내 차례.";
 
 /// The answer comes a little after the core's own wait ends, which then
 /// answers `store_unanswered` itself.
@@ -276,6 +276,36 @@ mod tests {
 
     fn words(line: &str) -> Vec<String> {
         line.split(' ').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn the_help_s_server_command_line_reads_with_its_machine_as_written() {
+        let line = MCP_USAGE
+            .lines()
+            .find(|line| line.contains(" -- "))
+            .expect("a usage line with a server command");
+        // The help's own line, its placeholders filled in as an agent would.
+        let filled = line
+            .trim_start_matches("hide mcp ")
+            .replace("add|update", "add")
+            .replace("<name>", "demo")
+            .replace("[--env <NAME>]...", "--env TOKEN")
+            .replace("[--machine <device id>]", "--machine mini")
+            .replace("<command>", "npx")
+            .replace("[<argument>...]", "server --stdio");
+        assert_eq!(
+            parse(ItemKind::Mcp, &words(&filled)),
+            Ok(StoreCommand::AddMcp {
+                name: "demo".to_owned(),
+                reach: Reach::Local {
+                    command: "npx".to_owned(),
+                    args: vec!["server".to_owned(), "--stdio".to_owned()],
+                    env: vec!["TOKEN".to_owned()],
+                },
+                machine: Some("mini".to_owned()),
+            }),
+            "{filled}"
+        );
     }
 
     #[test]

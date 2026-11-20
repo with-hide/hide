@@ -155,7 +155,7 @@
     "example": "hide mcp show github"
   },
   "mcp add": {
-    "line": "Adds an MCP server once the operator confirms it in Needs You and types its keys there; --env and --header take a key's name only.",
+    "line": "Adds an MCP server once the operator confirms it in Needs You and types its keys there; --env and --header take a key's name only, and Hide's options, --machine among them, come before --.",
     "example": "hide mcp add github --env GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github"
   },
   "mcp update": {
