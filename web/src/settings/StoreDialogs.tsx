@@ -381,14 +381,21 @@ export function McpFields({ report, server, pasted, onClose, onNext }: { report:
   const [reach, setReach] = useState<McpReach>(server.reach);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [extra, setExtra] = useState("");
+  // Which argument rows the operator added here: one left empty is no
+  // argument, while an empty argument the server was read with stays one.
+  const [added, setAdded] = useState<boolean[]>([]);
   const names = keyNames({ name: title, reach });
   const taken = report.items.some((item) => item.kind === "mcp" && item.name === title.trim());
   const args = reach.kind === "local" ? (reach.args ?? []) : [];
-  const setArgs = (next: string[]) => setReach((now) => (now.kind === "local" ? { ...now, args: next } : now));
+  const fresh = args.map((_, at) => added[at] === true);
+  const setArgs = (next: string[], nextFresh: boolean[]) => {
+    setReach((now) => (now.kind === "local" ? { ...now, args: next } : now));
+    setAdded(nextFresh);
+  };
   const reached = reach.kind === "local" ? reach.command.trim() : reach.url.trim();
   const built = (): McpServer => {
     if (reach.kind === "remote") return { name: title.trim(), reach: { ...reach, url: reach.url.trim() } };
-    return { name: title.trim(), reach: { ...reach, command: reach.command.trim(), args: args.filter((arg) => arg !== "") } };
+    return { name: title.trim(), reach: { ...reach, command: reach.command.trim(), args: args.filter((arg, at) => !(fresh[at] && arg === "")) } };
   };
   const addKey = () => {
     const key = extra.trim();
@@ -434,14 +441,14 @@ export function McpFields({ report, server, pasted, onClose, onNext }: { report:
               <span className="flex flex-col gap-xs">
                 {args.map((arg, index) => (
                   <span key={index} className="flex items-center gap-xs">
-                    <Input mono value={arg} onChange={(event) => setArgs(args.map((kept, at) => (at === index ? event.target.value : kept)))} aria-label={t("store.mcp.argNumbered", { n: index + 1 })} data-store-mcp-arg={index} />
-                    <Button variant="row-action" size="icon-xs" aria-label={t("store.mcp.removeArg", { n: index + 1 })} onClick={() => setArgs(args.filter((_, at) => at !== index))} data-store-mcp-arg-remove={index}>
+                    <Input mono value={arg} onChange={(event) => setArgs(args.map((kept, at) => (at === index ? event.target.value : kept)), fresh)} aria-label={t("store.mcp.argNumbered", { n: index + 1 })} data-store-mcp-arg={index} />
+                    <Button variant="row-action" size="icon-xs" aria-label={t("store.mcp.removeArg", { n: index + 1 })} onClick={() => setArgs(args.filter((_, at) => at !== index), fresh.filter((_, at) => at !== index))} data-store-mcp-arg-remove={index}>
                       <XIcon aria-hidden="true" />
                     </Button>
                   </span>
                 ))}
                 <span>
-                  <Button variant="secondary" size="sm" onClick={() => setArgs([...args, ""])} data-store-mcp-arg-add="true">
+                  <Button variant="secondary" size="sm" onClick={() => setArgs([...args, ""], [...fresh, true])} data-store-mcp-arg-add="true">
                     <PlusIcon aria-hidden="true" />
                     {t("store.mcp.addArg")}
                   </Button>

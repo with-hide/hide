@@ -259,6 +259,29 @@ fn a_server_reaches_every_agents_file_and_a_profiles_with_its_key_and_a_second_p
 }
 
 #[test]
+fn an_empty_argument_reaches_every_agents_file_in_its_place() {
+    let fixture = mcp_agents();
+    let server = Server {
+        name: "files".to_owned(),
+        reach: Reach::Local {
+            command: "node".to_owned(),
+            args: ["server.js", "--prefix", "", "--stdio"]
+                .map(str::to_owned)
+                .to_vec(),
+            env: Vec::new(),
+        },
+    };
+
+    let report = add(&fixture, server.clone(), &[]);
+
+    assert_eq!(cells(&report, "mcp:files"), every(CellState::On));
+    for (agent, _) in FILES {
+        let entry = held(&fixture, agent, "files").unwrap_or_else(|| panic!("{agent}"));
+        assert_eq!(entry.0, server, "{agent}");
+    }
+}
+
+#[test]
 fn an_agent_that_takes_no_sse_server_reads_unsupported_and_gets_nothing() {
     let fixture = mcp_agents();
     let asana = Server {

@@ -8,8 +8,8 @@ import type { McpServer, StoreReport } from "../snapshot";
 import { McpFields } from "./StoreDialogs";
 
 // MCP 추가's fields keep the command and each argument as the paste parser
-// read them: Next hands on the same words, and an argument with a space in
-// it stays one argument.
+// read them: Next hands on the same words, an argument with a space in it
+// stays one argument, and an empty argument stays in its place.
 afterEach(() => {
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
@@ -50,6 +50,19 @@ it("takes an argument out and an empty one added is left out", async () => {
     expect(document.querySelectorAll("[data-store-mcp-arg]")).toHaveLength(2);
     await shown.press("[data-store-mcp-next]");
     expect(shown.next).toHaveBeenCalledWith({ name: "github", reach: { kind: "local", command: "npx", args: ["@modelcontextprotocol/server-github"], env: [] } }, {});
+  } finally {
+    await shown.unmount();
+  }
+});
+
+it("keeps an empty argument the server was read with, and leaves out only an added row left empty", async () => {
+  const server: McpServer = { name: "files", reach: { kind: "local", command: "node", args: ["server.js", "--prefix", "", "--stdio"], env: [] } };
+  const shown = await fields(server);
+  try {
+    expect(document.querySelectorAll("[data-store-mcp-arg]")).toHaveLength(4);
+    await shown.press("[data-store-mcp-arg-add]");
+    await shown.press("[data-store-mcp-next]");
+    expect(shown.next).toHaveBeenCalledWith(server, {});
   } finally {
     await shown.unmount();
   }
