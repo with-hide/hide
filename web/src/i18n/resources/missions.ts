@@ -691,7 +691,7 @@ const ko: Catalog<typeof missionsEnglish> = {
   "mission.attention.reason.ci_failed": "{{pr}} CI 실패",
   "mission.attention.reason.ci_cancelled": "{{pr}} CI 취소됨",
   "mission.attention.reason.changes_requested": "{{pr}} 수정 요청 받음",
-  "mission.attention.reason.outside_failed": "미션 밖 {{pr}}가 머지 없이 닫힘",
+  "mission.attention.reason.outside_failed": "미션 밖 {{pr}} · 머지 없이 닫힘",
   "mission.attention.reason.warning_review_fails": "경고 · 리뷰·검증이 계속 FAIL",
   "mission.attention.reason.warning_no_push": "경고 · 오래 push 없음",
   "mission.attention.reason.warning_stopped": "경고 · 일꾼이 멈춤",
