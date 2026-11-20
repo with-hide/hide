@@ -3,7 +3,7 @@ import type { Actions } from "./actions";
 import { markTone } from "./agentRow";
 import { useInterfaceTranslation } from "./i18n/client";
 import { PaneView } from "./PaneView";
-import { contextAgents, frameStyle, type RemoteView } from "./remote";
+import { contextAgents, frameStyle, remoteTargetOfPane, type RemoteView } from "./remote";
 import { dividerPaneId, resizeStep } from "./resize";
 import { windowDeviceId } from "./screenMachine";
 import { cn } from "./lib/utils";
@@ -91,7 +91,11 @@ const EMPTY_TRANSPORTS: TerminalPane[] = [];
  * they are (D-16).
  */
 export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: Actions }) {
-  const tab = useShellStore((s) => focusedCheckout(s.rest)?.tabs.find((row) => row.panes.some((pane) => pane.id === paneId)) ?? null);
+  // A connected device's pane is found in that device's session (B31).
+  const tab = useShellStore((s) => [focusedCheckout(s.rest), ...(s.rest?.status?.remote ?? []).flatMap((row) => row.session?.workspaces.flatMap((workspace) => workspace.checkouts) ?? [])]
+    .flatMap((checkout) => checkout?.tabs ?? [])
+    .find((row) => row.panes.some((pane) => pane.id === paneId)) ?? null);
+  const local = useShellStore((s) => remoteTargetOfPane(s.rest, paneId) === null);
   const transport = useShellStore((s) => s.rest?.terminal?.panes?.find((row) => row.pane_id === paneId));
   const scale = useShellStore((s) => s.rest?.ui_state?.pane_text_scales?.[paneId] ?? 1);
   const focused = useShellStore((s) => s.focusedPaneId === paneId);
@@ -100,7 +104,7 @@ export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: A
   return (
     <div className="relative h-full w-full min-h-0 min-w-0" data-layout-pane={paneId} data-pair-pane={paneId}>
       {pane ? (
-        <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} />
+        <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} />
       ) : (
         <div className="h-full bg-background" data-pane-missing={paneId} />
       )}
@@ -128,10 +132,13 @@ export function RemotePaneCanvas({
   const transportRows = useShellStore((s) => s.rest?.terminal?.panes ?? EMPTY_TRANSPORTS);
   const scales = useShellStore((s) => s.rest?.ui_state?.pane_text_scales ?? EMPTY_SCALES);
   const agents = useAgentsByPane();
+  // A device tab in pair view gives its pane to the pair layer, as this machine's does (B31).
+  const paired = useShellStore((s) => drawnPair(workspaceViewOf(s.rest))?.tab_id === view.tab?.id);
   // A device's panes wear its border, except a node's own drawn in its own window.
   const away = useShellStore((s) => view.workspace.device_id !== windowDeviceId(s.rest?.navigator?.devices));
   const { t } = useInterfaceTranslation();
   const { tab, layout } = view;
+  if (paired && tab) return <div className="relative min-h-0 min-w-0 flex-1" data-canvas={tab.id ?? ""} data-remote-canvas="true" data-paired-canvas="true" />;
   if (!tab || !layout) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-caption text-muted-foreground" data-canvas="empty">

@@ -3,11 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { agentPane } from "./agent-pane";
 import { chord, commandLabel } from "./chords";
-import { focusPane, splitPane, withControl } from "./daemon-actions";
+import { closePane, focusPane, focusTab, newTab, splitPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { quietFor } from "./wait";
-import { enterWorkspace, screenshot, showDocuments } from "./wire";
+import { enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
 
 // Pair view (PRD lane-desk-pair-view B16-B29): a pane drawn beside its
 // Agent tab's desk, the body split in half under the tab row, told from the
@@ -24,14 +24,23 @@ const paneView = (page: Page, pane: string) => page.locator(`[data-pane-view="${
 const pairButton = (page: Page, pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-pair]`);
 const strip = (page: Page) => page.locator("[data-pair-strip]");
 
-/** Every `terminal_resize` the page sends, by pane. */
+/**
+ * Every grid change the page sends, by pane: a `terminal_resize` whose size
+ * differs from the one the pane last sent. A view attached again reports the
+ * size it already had, which the core drops without resizing the PTY.
+ */
 function countResizes(page: Page): Map<string, number> {
   const counts = new Map<string, number>();
+  const last = new Map<string, string>();
   page.on("websocket", (ws) => {
     ws.on("framesent", (frame) => {
       try {
-        const event = JSON.parse(String(frame.payload)) as { kind?: string; payload?: { pane_id?: string } };
-        if (event.kind === "terminal_resize" && event.payload?.pane_id) counts.set(event.payload.pane_id, (counts.get(event.payload.pane_id) ?? 0) + 1);
+        const event = JSON.parse(String(frame.payload)) as { kind?: string; payload?: { pane_id?: string; cols?: number; rows?: number } };
+        const pane = event.payload?.pane_id;
+        if (event.kind !== "terminal_resize" || !pane) return;
+        const size = `${event.payload?.cols}x${event.payload?.rows}`;
+        if (last.get(pane) !== size) counts.set(pane, (counts.get(pane) ?? 0) + 1);
+        last.set(pane, size);
       } catch {
         /* the handshake is not an event */
       }
@@ -122,10 +131,8 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(strip(page)).toBeVisible();
     // B24, D-21: a tab the operator opened belongs to nobody, so the left pane stays.
-    await page.locator('[data-explorer-row$="/notes.md"]').click().catch(async () => {
-      await page.locator('[data-lane-tool="explorer"]').click();
-      await page.locator('[data-explorer-row$="/notes.md"]').click();
-    });
+    await showTool(page, "explorer");
+    await page.locator('[data-explorer-row$="/notes.md"]').click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/notes\.md/);
     await expect(page.locator(`[data-pair-pane="${other}"]`)).toBeVisible();
     await screenshot(page, "pair-owner-less-tab");
@@ -147,10 +154,82 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
       expect(await box(page, pane)).toEqual(before[pane]!.box);
       expect(await grid(page, pane)).toEqual(before[pane]!.grid);
     }
-    for (const pane of [other!, shell]) expect(resizes.get(pane) ?? 0).toBe(beforeLeave.get(pane) ?? 0);
+    // The shell never left its canvas; the other agent's pane was last drawn on the left (B24), so it takes its grid back once.
+    expect(resizes.get(shell) ?? 0).toBe(beforeLeave.get(shell) ?? 0);
+    expect((resizes.get(other!) ?? 0) - (beforeLeave.get(other!) ?? 0)).toBe(1);
     expect((await live(page)).sort()).toEqual(liveBefore);
     await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
     await screenshot(page, "pair-left");
+  } finally {
+    daemon?.stop();
+    engine.stop();
+  }
+});
+
+test("the desk's pin pairs the tab in front with its agent, pair view stays the tab's through another tab and a restart, and ends when its pane closes", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const engine = await startFixture({ agents: false });
+  let daemon: Daemon | null = null;
+  try {
+    const fixture = path.join(engine.root, "fixture");
+    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    daemon = await startHided(engine, "pair-view-tab");
+    const [left, other] = engine.panes;
+    const leftAgent = await agentPane(engine, daemon.stateDir, left!);
+    const second = await withControl(daemon, async (control) => {
+      const made = await newTab(control, engine, "second");
+      await focusTab(control, engine, engine.tab);
+      await focusPane(control, other!);
+      return made;
+    });
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    // The watched pane is `other`: `left`'s open waits in its pane's list until the operator puts it on the desk.
+    const answer = await leftAgent(["file", "open", "a.md"]);
+    expect(answer.status, answer.out).toBe(0);
+    await page.locator(`[data-pane-views="${left}"]`).click();
+    await page.getByRole("menuitem", { name: /a\.md/ }).click();
+    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
+
+    // B17: the pin puts the tab in front beside the pane of the agent it belongs to, not the focused one.
+    await page.locator('[data-desk-pin="off"]').click();
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await expect(page.locator('[data-desk-pin="on"]')).toBeVisible();
+    await expect(strip(page)).toBeVisible();
+
+    // B27: another tab shows its own layout; the strip marks the paired tab still, and coming back finds pair view.
+    await page.locator(`[data-agent-tab-bar] [data-tab="${second.tab}"]`).click();
+    await expect(strip(page)).toHaveCount(0);
+    await expect(paneView(page, second.pane)).toBeVisible();
+    await expect(page.locator(`[data-pair-tab="${engine.tab}"]`)).toBeVisible();
+    await page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`).click();
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+
+    // B27: a restart keeps the same pane beside the same tab.
+    daemon = await daemon.restart();
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible({ timeout: 20_000 });
+    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
+
+    // B26: the strip's way back, then the pressed ◧, both bring the tab's own layout back.
+    await page.locator("[data-pair-leave]").click();
+    await expect(strip(page)).toHaveCount(0);
+    await expect(paneView(page, other!)).toBeVisible();
+    await pairButton(page, left!).click();
+    await expect(pairButton(page, left!)).toHaveAttribute("aria-pressed", "true");
+    await pairButton(page, left!).click();
+    await expect(strip(page)).toHaveCount(0);
+    await pairButton(page, left!).click();
+    await expect(strip(page)).toBeVisible();
+
+    // B28: the left pane closing ends pair view with no notice; the tab's other pane comes back.
+    await withControl(daemon, (control) => closePane(control, left!));
+    await expect(strip(page)).toHaveCount(0);
+    await expect(paneView(page, other!)).toBeVisible();
+    await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
+    await expect(page.locator('[role="alert"]')).toHaveCount(0);
   } finally {
     daemon?.stop();
     engine.stop();

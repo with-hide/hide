@@ -466,7 +466,7 @@ export const PaneView = memo(function PaneView({
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`shrink-0 hover:bg-popover aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent ${paired ? "bg-secondary text-foreground" : `text-subtle-foreground ${tools}`} pane-head-narrow:hidden`}
+            className={`shrink-0 hover:bg-popover aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent ${paired ? "bg-pair-view text-primary-foreground hover:bg-pair-view" : `text-subtle-foreground ${tools}`} pane-head-narrow:hidden`}
             aria-label={pairLabel}
             aria-pressed={paired}
             aria-disabled={head.pair === "none"}
