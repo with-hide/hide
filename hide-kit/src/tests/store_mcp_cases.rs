@@ -397,9 +397,13 @@ fn a_key_edit_rewrites_every_file_the_server_is_in_and_a_file_that_failed_gets_i
         .and_then(|item| item.cells.iter().find(|cell| cell.column == "grok"))
         .unwrap();
     assert_eq!(cell.failure, Some(CellFailure::Unreadable));
+    // The same file, however this system spells it (`/private/var` on
+    // macOS, no `\\?\` on Windows).
     assert_eq!(
-        cell.path.as_deref().map(std::path::Path::new),
-        Some(std::fs::canonicalize(&grok).unwrap().as_path())
+        cell.path
+            .as_deref()
+            .map(|path| std::fs::canonicalize(path).unwrap()),
+        Some(std::fs::canonicalize(&grok).unwrap())
     );
     assert_eq!(
         std::fs::read_to_string(&grok).unwrap(),

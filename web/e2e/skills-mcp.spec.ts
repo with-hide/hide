@@ -12,7 +12,7 @@ import { everyAgentOn, install, moveUpstream, openStore, seedStore, startStore, 
 import { chooseTheme, screenshot } from "./wire";
 
 test.skip(process.platform === "win32", "the fixture's sources are POSIX git repositories over file://");
-test.describe.configure({ timeout: 240_000 });
+test.describe.configure({ timeout: 240_000 }); // wait-ok: a daemon, a page and the kit's real git sources and passes finish their real startup
 
 test("each kind is one table whose cells show state, a row unfolds below itself, and a partial row's switch turns it on everywhere", async ({ page }) => {
   const fixture = await startStore("store-views");
@@ -76,7 +76,7 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     const partial = light.locator('[data-store-all="skill:aside-browser"]');
     await expect(partial).toHaveAttribute("aria-checked", "true");
     await partial.click();
-    await expect(light.locator('[data-store-cell="skill:aside-browser:antigravity"]')).toHaveAttribute("data-store-cell-state", "on", { timeout: 60_000 });
+    await expect(light.locator('[data-store-cell="skill:aside-browser:antigravity"]')).toHaveAttribute("data-store-cell-state", "on", { timeout: 60_000 }); // wait-ok: the kit's pass that writes the skill into Antigravity's folder
     await expect(light.locator('[data-store-detail="skill:aside-browser"]')).toBeVisible();
   } finally {
     stopStore(fixture);
@@ -88,14 +88,14 @@ test("a skill is added from a git address and from a folder, picked and confirme
   try {
     await everyAgentOn(fixture.daemon);
     const machine = await openStore(page, fixture.daemon);
-    await expect(machine.locator(`[data-store-empty="${fixture.daemon.node}"]`)).toContainText("Nothing on This Mac yet");
+    await expect(machine.locator(`[data-store-empty="${fixture.daemon.node}"]`)).toContainText(/Nothing on This (Mac|PC|computer) yet/);
 
     // A source with several skills asks which; the ones left ticked are confirmed with their files and agents.
     await machine.locator("[data-store-empty-add]").click();
     await page.locator("[data-store-add-input]").fill(fixture.repos.archify);
     await page.locator("[data-store-add-next]").click();
     const pick = page.locator('[data-store-dialog="pick"]');
-    await expect(pick).toContainText("3 skills found", { timeout: 60_000 });
+    await expect(pick).toContainText("3 skills found", { timeout: 60_000 }); // wait-ok: the kit's read of the source repository
     await pick.locator('[data-store-pick="archify-legacy"] button[role="checkbox"]').click();
     await screenshot(page, "store-add-pick");
     await pick.locator("[data-store-pick-next]").click();
@@ -105,7 +105,7 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await expect(confirm).toContainText("Every profile included");
     await screenshot(page, "store-add-confirm");
     await confirm.locator("[data-store-install]").click();
-    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's install pass
     await expect(machine.locator('[data-store-row="skill:archify-export"]')).toBeVisible();
     await expect(machine.locator('[data-store-row="skill:archify-legacy"]')).toHaveCount(0);
 
@@ -113,16 +113,16 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await machine.locator("[data-store-add]").click();
     await page.locator("[data-store-add-input]").fill(fixture.folder);
     await page.locator("[data-store-add-next]").click();
-    await expect(page.locator('[data-store-dialog="install"]')).toContainText("Install 1 skill", { timeout: 60_000 });
+    await expect(page.locator('[data-store-dialog="install"]')).toContainText("Install 1 skill", { timeout: 60_000 }); // wait-ok: the kit's read of the folder source
     await page.locator("[data-store-install]").click();
-    await expect(machine.locator('[data-store-row="skill:aside-browser"]')).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="skill:aside-browser"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's install pass
 
     // An MCP paste fills the fields; the key's value is typed here, hidden, and never shown again.
     await machine.locator("[data-store-add]").click();
     await page.locator("[data-store-add-input]").fill("npx -y @modelcontextprotocol/server-github");
     await page.locator("[data-store-add-next]").click();
     const fields = page.locator('[data-store-dialog="mcp"]');
-    await expect(fields.locator("[data-store-mcp-line]")).toHaveValue("npx -y @modelcontextprotocol/server-github", { timeout: 60_000 });
+    await expect(fields.locator("[data-store-mcp-line]")).toHaveValue("npx -y @modelcontextprotocol/server-github", { timeout: 60_000 }); // wait-ok: the paste parser's read of the README
     await fields.locator("[data-store-mcp-name]").fill("github");
     await fields.locator("[data-store-mcp-extra]").fill("GITHUB_TOKEN");
     await fields.getByRole("button", { name: "Add", exact: true }).click();
@@ -134,7 +134,7 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await expect(mcp).toContainText("GITHUB_TOKEN ••••••");
     await screenshot(page, "store-mcp-confirm");
     await mcp.locator("[data-store-mcp-add]").click();
-    await machine.locator('[data-store-row-toggle="mcp:github"]').click({ timeout: 60_000 });
+    await machine.locator('[data-store-row-toggle="mcp:github"]').click({ timeout: 60_000 }); // wait-ok: the kit's pass that adds the server
     await expect(machine.locator('[data-store-keys="mcp:github"]')).toContainText("GITHUB_TOKEN ••••••");
     await expect(page.locator("body")).not.toContainText("e2e-typed-value");
     const snapshot = await withControl(fixture.daemon, (control) => control.until((rest) => JSON.stringify(rest), "snapshot"));
@@ -156,33 +156,33 @@ test("an update shows what changes before it is taken, a delete can be undone, a
     // 업데이트 n walks the items a check found newer, each shown as its diff first (B23).
     await machine.locator("[data-store-updates]").click();
     const update = page.locator('[data-store-dialog="update"]');
-    await expect(update.locator("[data-store-diff-files]")).toContainText("scripts/merge.py", { timeout: 60_000 });
+    await expect(update.locator("[data-store-diff-files]")).toContainText("scripts/merge.py", { timeout: 60_000 }); // wait-ok: the kit's read of the update's diff
     await expect(update).toContainText("▲ new executable");
     await expect(update).toContainText("Add merge command");
     await screenshot(page, "store-update-confirm");
     await update.locator("[data-store-update-confirm]").click();
-    await expect(machine.locator('[data-store-update-dot="skill:pdf-tools"]')).toHaveCount(0, { timeout: 60_000 });
+    await expect(machine.locator('[data-store-update-dot="skill:pdf-tools"]')).toHaveCount(0, { timeout: 60_000 }); // wait-ok: the kit's update pass
     await expect(machine.locator("[data-store-updates]")).toHaveCount(0);
 
     // A delete leaves the row's notice with Undo, which brings the row back whole.
     await machine.locator('[data-store-row-toggle="skill:archify"]').click();
     await deleteRow(machine, "skill:archify");
-    await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveCount(0, { timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveCount(0, { timeout: 60_000 }); // wait-ok: the kit's delete pass
     const toast = machine.locator('[data-store-undo="skill:archify"]');
     await expect(toast).toContainText("Deleted archify");
     await screenshot(page, "store-undo");
     await toast.locator("[data-store-undo-restore]").click();
-    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's restore pass
 
     // Deleted again and installed again under the same name, its undo entry cannot come back over it.
     await machine.locator('[data-store-row-toggle="skill:archify"]').click();
     await deleteRow(machine, "skill:archify");
-    await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveCount(0, { timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveCount(0, { timeout: 60_000 }); // wait-ok: the kit's delete pass
     await install(fixture.daemon, { kind: "git", url: fixture.repos.archify }, ["archify"]);
     await machine.locator("[data-store-trash-toggle]").click();
     const entry = machine.locator("[data-store-trash-entry]").first();
     await entry.locator("[data-store-restore]").click();
-    await expect(entry.locator("[data-store-trash-taken]")).toContainText("archify cannot come back while an item of that name is in the list", { timeout: 60_000 });
+    await expect(entry.locator("[data-store-trash-taken]")).toContainText("archify cannot come back while an item of that name is in the list", { timeout: 60_000 }); // wait-ok: the kit's refusal of the restore
   } finally {
     stopStore(fixture);
   }
@@ -200,7 +200,7 @@ test("another machine is picked at the head, and one that is not connected says 
     await machine.locator("[data-store-machines]").click();
     await page.locator('[data-store-machine-choice="studio"]').click();
     const studio = page.locator('[data-store-machine="studio"]');
-    await expect(studio.locator('[data-store-away="studio"]')).toContainText("studio is not connected", { timeout: 60_000 });
+    await expect(studio.locator('[data-store-away="studio"]')).toContainText("studio is not connected", { timeout: 60_000 }); // wait-ok: the device link's end reaching the core
     await expect(studio.locator("[data-store-add]")).toBeDisabled();
     await screenshot(page, "store-device-away");
   } finally {
@@ -229,10 +229,10 @@ test("a store whose keys' secret is lost says so with the start-over, and the st
     // docs/agent-hooks.md's start-over: the folder moved aside, the next pass lists Hide's server as one to take in.
     fs.renameSync(dir, path.join(fixture.home, ".hide", "store-lost-secret"));
     await check(fixture);
-    await expect(note).toHaveCount(0, { timeout: 60_000 });
-    await expect(machine.locator('[data-store-unmanaged="mcp:linear"]')).toBeVisible({ timeout: 60_000 });
+    await expect(note).toHaveCount(0, { timeout: 60_000 }); // wait-ok: the kit's pass after the start-over
+    await expect(machine.locator('[data-store-unmanaged="mcp:linear"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's pass after the start-over
     await machine.locator('[data-store-adopt="mcp:linear"]').click();
-    await expect(machine.locator('[data-store-row="mcp:linear"]')).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="mcp:linear"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's adopt pass
   } finally {
     stopStore(fixture);
   }
@@ -286,10 +286,10 @@ test("deleting the last item leaves the empty page with its undo list, which bri
     await deleteRow(machine, "skill:archify");
 
     // Nothing is left to list, and the undo list still stands (B18).
-    await expect(machine.locator("[data-store-empty]")).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator("[data-store-empty]")).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's delete pass
     await machine.locator("[data-store-trash-toggle]").click();
     await machine.locator('[data-store-trash-entry] [data-store-restore]').first().click();
-    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 });
+    await expect(machine.locator('[data-store-row="skill:archify"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's restore pass
     await expect(machine.locator("[data-store-empty]")).toHaveCount(0);
   } finally {
     stopStore(fixture);

@@ -10,7 +10,7 @@ import { everyAgentOn, startStore, stopStore, type StoreFixture } from "./skills
 import { enterWorkspace, screenshot, showTasks } from "./wire";
 
 test.skip(process.platform === "win32", "the fixture's sources are POSIX git repositories over file://");
-test.describe.configure({ timeout: 240_000 });
+test.describe.configure({ timeout: 240_000 }); // wait-ok: a daemon, an agent pane and the kit's real git reads and installs finish their real startup and passes
 
 type Line = { ok: boolean; value?: { items?: { name: string; cells: { column: string; state: string }[] }[] }; error?: { code: string } };
 
@@ -24,7 +24,7 @@ async function openAsk(page: Page, fixture: StoreFixture) {
   const [root] = fixture.engine.panes;
   const tasks = await showTasks(page);
   const task = tasks.locator(`[data-task-row="${root}"]`);
-  await expect(task.locator("[data-human-turn-place]")).toContainText("Install confirm · archify", { timeout: 60_000 });
+  await expect(task.locator("[data-human-turn-place]")).toContainText("Install confirm · archify", { timeout: 60_000 }); // wait-ok: the kit's read of the source before the install confirm stands
   await screenshot(page, "store-ask-needs-you");
   await task.locator("[data-human-turn-install]").click();
   const card = page.locator('[data-store-dialog="install"]');
