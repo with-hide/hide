@@ -9,7 +9,10 @@
 //! keyed by its number in the ledger's one id sequence, so rows read back in
 //! the order they were made. The rest of the ledger (its next id, watches,
 //! machine clocks, identity waits and declared turns, each bounded by the
-//! records) is one row. A write is the rows that changed between the ledger
+//! records) is one row. What each registered agent saw of its status cells
+//! (`Ledger::status_seen`) is a row of its own per agent, in the `seen`
+//! table schema version 2 added; a version-1 file gets the table, empty, on
+//! its first open. A write is the rows that changed between the ledger
 //! the file holds and the one to keep, in one transaction
 //! ([`LedgerStore::write`]): a sent letter is one new row, not a new file.
 //!
@@ -45,8 +48,9 @@ use crate::coordination::identity_wait::IdentityWait;
 use crate::coordination::{AGENT_LIMIT, AgentRecord, SPAWN_LIMIT, SpawnRecord};
 
 /// The tables this build makes and reads. A file of a higher version was
-/// made by a newer build and is refused.
-pub const SCHEMA_VERSION: i64 = 1;
+/// made by a newer build and is refused; one of version 1 gets the `seen`
+/// table on its first open ([`MIGRATE_1`]).
+pub const SCHEMA_VERSION: i64 = 2;
 
 const PAGE_BYTES: usize = 4_096;
 
@@ -55,7 +59,7 @@ const PAGE_BYTES: usize = 4_096;
 /// (a row a little past a page leaves most of its last page empty), twice
 /// over for the tables' inner pages and the pages a write frees for the next.
 pub const STORE_PAGE_LIMIT: u32 =
-    (2 * (FILE_LIMIT / PAGE_BYTES + LETTER_LIMIT + AGENT_LIMIT + SPAWN_LIMIT + 1)) as u32;
+    (2 * (FILE_LIMIT / PAGE_BYTES + LETTER_LIMIT + 2 * AGENT_LIMIT + SPAWN_LIMIT + 1)) as u32;
 
 /// How much of the write-ahead log is kept after a checkpoint: the import of
 /// a large ledger writes one long transaction, and its log would otherwise
@@ -66,7 +70,12 @@ const SCHEMA: &str = "\
     CREATE TABLE ledger (only INTEGER PRIMARY KEY CHECK (only = 1), body TEXT NOT NULL);\
     CREATE TABLE letters (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);\
     CREATE TABLE agents (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);\
-    CREATE TABLE spawns (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);";
+    CREATE TABLE spawns (seq INTEGER PRIMARY KEY, id TEXT NOT NULL, body TEXT NOT NULL);\
+    CREATE TABLE seen (recipient TEXT PRIMARY KEY, body TEXT NOT NULL);";
+
+/// Version 1 to 2: what each agent saw of its status cells, one row per
+/// registration (`Ledger::status_seen`).
+const MIGRATE_1: &str = "CREATE TABLE seen (recipient TEXT PRIMARY KEY, body TEXT NOT NULL);";
 
 /// How an open found the file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +138,10 @@ impl LedgerStore {
             .map_err(|error| failed(path, &error))?;
         let opened = match version {
             SCHEMA_VERSION => Opened::Existing,
+            1 => {
+                migrate_1(&mut connection).map_err(|error| failed(path, &error))?;
+                Opened::Existing
+            }
             0 => import(&mut connection, path)?,
             _ => return Err(refused(path, "newer")),
         };
@@ -169,6 +182,20 @@ impl LedgerStore {
             .map(|_| ())
             .map_err(|error| code(&error).to_owned())
     }
+}
+
+/// Adds version 2's `seen` table to a version-1 file, in one transaction: a
+/// start cut short before it commits finds version 1 and adds it again.
+fn migrate_1(connection: &mut Connection) -> rusqlite::Result<()> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(MIGRATE_1)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    crate::diagnostic!(
+        json!({"component":"delivery","kind":"ledger.store_migrated",
+        "from":1,"to":SCHEMA_VERSION})
+    );
+    Ok(())
 }
 
 /// Makes this build's tables in a file that has none, holding what
@@ -236,7 +263,8 @@ pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
             "SELECT (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM ledger) \
              + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM letters) \
              + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM agents) \
-             + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM spawns)",
+             + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM spawns) \
+             + (SELECT coalesce(sum(length(CAST(body AS BLOB))), 0) FROM seen)",
             [],
             |row| row.get(0),
         )
@@ -250,9 +278,28 @@ pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
         })
         .map_err(unavailable)?;
     let rest: Rest = serde_json::from_str(&rest).map_err(|_| "ledger_unavailable")?;
-    let ledger = rest.with(rows(connection)?, rows(connection)?, rows(connection)?);
+    let mut ledger = rest.with(rows(connection)?, rows(connection)?, rows(connection)?);
+    ledger.status_seen = seen_rows(connection)?;
     ledger.validate().map_err(|_| "ledger_unavailable")?;
     Ok(ledger)
+}
+
+/// What each agent saw, from the `seen` table: one row per registration.
+fn seen_rows(connection: &Connection) -> Result<BTreeMap<String, BTreeMap<String, u64>>, String> {
+    let unavailable = |_| "ledger_unavailable".to_owned();
+    let mut statement = connection
+        .prepare("SELECT recipient, body FROM seen")
+        .map_err(unavailable)?;
+    let mut read = statement.query([]).map_err(unavailable)?;
+    let mut seen = BTreeMap::new();
+    while let Some(row) = read.next().map_err(unavailable)? {
+        let recipient: String = row.get(0).map_err(unavailable)?;
+        let body: String = row.get(1).map_err(unavailable)?;
+        let subjects: BTreeMap<String, u64> =
+            serde_json::from_str(&body).map_err(|_| "ledger_unavailable")?;
+        seen.insert(recipient, subjects);
+    }
+    Ok(seen)
 }
 
 /// Every row of `T`'s table, in the order its records were made.
@@ -492,6 +539,8 @@ impl Rest {
             spawn_placement_revision,
             node_clocks,
             human_turns,
+            // The `seen` table's, read beside the row (`seen_rows`).
+            status_seen: BTreeMap::new(),
         }
     }
 }
@@ -510,7 +559,16 @@ struct RestRef<'a> {
 
 /// `ledger` as its one row and its three tables' records. Every field is
 /// named, so a field added to the ledger fails to build until it is kept.
-fn split(ledger: &Ledger) -> (RestRef<'_>, &[Letter], &[AgentRecord], &[SpawnRecord]) {
+#[allow(clippy::type_complexity)]
+fn split(
+    ledger: &Ledger,
+) -> (
+    RestRef<'_>,
+    &[Letter],
+    &[AgentRecord],
+    &[SpawnRecord],
+    &BTreeMap<String, BTreeMap<String, u64>>,
+) {
     let Ledger {
         version,
         next_id,
@@ -522,6 +580,7 @@ fn split(ledger: &Ledger) -> (RestRef<'_>, &[Letter], &[AgentRecord], &[SpawnRec
         spawn_placement_revision,
         node_clocks,
         human_turns,
+        status_seen,
     } = ledger;
     (
         RestRef {
@@ -536,6 +595,7 @@ fn split(ledger: &Ledger) -> (RestRef<'_>, &[Letter], &[AgentRecord], &[SpawnRec
         letters,
         agents,
         spawns,
+        status_seen,
     )
 }
 
@@ -620,34 +680,55 @@ pub struct Changes<'a> {
     agents: Rows<'a, AgentRecord>,
     spawns: Rows<'a, SpawnRecord>,
     rest: Option<RestRef<'a>>,
+    /// The `seen` rows to put, by registration, and the ones to take away.
+    seen_put: Vec<(&'a str, &'a BTreeMap<String, u64>)>,
+    seen_gone: Vec<&'a str>,
 }
 
 impl<'a> Changes<'a> {
     /// The rows that keep `after` in a file holding `before`.
     pub fn between(before: &'a Ledger, after: &'a Ledger) -> Self {
-        let (rest_before, letters_before, agents_before, spawns_before) = split(before);
-        let (rest, letters, agents, spawns) = split(after);
+        let (rest_before, letters_before, agents_before, spawns_before, seen_before) =
+            split(before);
+        let (rest, letters, agents, spawns, seen) = split(after);
         Self {
             letters: Rows::between(letters_before, letters),
             agents: Rows::between(agents_before, agents),
             spawns: Rows::between(spawns_before, spawns),
             rest: (rest != rest_before).then_some(rest),
+            seen_put: seen
+                .iter()
+                .filter(|(recipient, subjects)| seen_before.get(*recipient) != Some(subjects))
+                .map(|(recipient, subjects)| (recipient.as_str(), subjects))
+                .collect(),
+            seen_gone: seen_before
+                .keys()
+                .filter(|recipient| !seen.contains_key(*recipient))
+                .map(String::as_str)
+                .collect(),
         }
     }
 
     /// Every row of `ledger`, for a file that holds none.
     fn all(ledger: &'a Ledger) -> Self {
-        let (rest, letters, agents, spawns) = split(ledger);
+        let (rest, letters, agents, spawns, seen) = split(ledger);
         Self {
             letters: Rows::all(letters),
             agents: Rows::all(agents),
             spawns: Rows::all(spawns),
             rest: Some(rest),
+            seen_put: seen
+                .iter()
+                .map(|(recipient, subjects)| (recipient.as_str(), subjects))
+                .collect(),
+            seen_gone: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.rest.is_none()
+            && self.seen_put.is_empty()
+            && self.seen_gone.is_empty()
             && [
                 self.letters.put.len() + self.letters.gone.len(),
                 self.agents.put.len() + self.agents.gone.len(),
@@ -661,6 +742,23 @@ impl<'a> Changes<'a> {
         self.letters.write(transaction)?;
         self.agents.write(transaction)?;
         self.spawns.write(transaction)?;
+        let refused = |error: rusqlite::Error| SaveError::Refused(StoreFailure::of(&error));
+        for recipient in &self.seen_gone {
+            transaction
+                .execute("DELETE FROM seen WHERE recipient = ?1", [recipient])
+                .map_err(refused)?;
+        }
+        for (recipient, subjects) in &self.seen_put {
+            let body = serde_json::to_string(subjects)
+                .map_err(|_| SaveError::Validation("ledger_unavailable".into()))?;
+            transaction
+                .execute(
+                    "INSERT INTO seen (recipient, body) VALUES (?1, ?2) \
+                     ON CONFLICT(recipient) DO UPDATE SET body = excluded.body",
+                    params![recipient, body],
+                )
+                .map_err(refused)?;
+        }
         if let Some(rest) = &self.rest {
             let body = serde_json::to_string(rest)
                 .map_err(|_| SaveError::Validation("ledger_unavailable".into()))?;
@@ -686,6 +784,7 @@ impl<'a> Changes<'a> {
             "agents": table(self.agents.ids().collect()),
             "spawns": table(self.spawns.ids().collect()),
             "ledger_row": self.rest.is_some(),
+            "seen_rows": self.seen_put.len() + self.seen_gone.len(),
         })
     }
 }
@@ -1010,5 +1109,73 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION + 1);
+    }
+
+    /// What each agent saw of its status cells is a row per registration:
+    /// kept across a reopen, changed by its own row, and gone when the agent
+    /// has nothing seen.
+    #[test]
+    fn what_each_agent_saw_is_a_row_of_its_own_and_outlives_a_reopen() {
+        let (_root, state) = state();
+        let path = hide_kit::layout::delivery_store(&state);
+        let (mut store, empty, _) = LedgerStore::open(&path).unwrap();
+        let mut first = Ledger::default();
+        send(&mut first, "letter", "body", 1);
+        first.status_seen.insert(
+            "agent-1".into(),
+            BTreeMap::from([("node:mission-1:fix".into(), 3)]),
+        );
+        first
+            .status_seen
+            .insert("agent-2".into(), BTreeMap::from([("letter:9".into(), 7)]));
+        store.write(&empty, &first).unwrap();
+        let before = store.connection.total_changes();
+        let mut second = first.clone();
+        second.status_seen.remove("agent-2");
+        second
+            .status_seen
+            .get_mut("agent-1")
+            .unwrap()
+            .insert("child:w1:p2".into(), 4);
+        store.write(&first, &second).unwrap();
+        assert_eq!(
+            store.connection.total_changes() - before,
+            2,
+            "one row put, one taken away"
+        );
+        drop(store);
+        assert_eq!(load(&path).unwrap().status_seen, second.status_seen);
+    }
+
+    /// A file version 1 made gets version 2's `seen` table on its first open
+    /// and keeps every row it held.
+    #[test]
+    fn a_version_one_file_gets_the_seen_table_and_keeps_its_rows() {
+        let (_root, state) = state();
+        let path = hide_kit::layout::delivery_store(&state);
+        let (mut store, empty, _) = LedgerStore::open(&path).unwrap();
+        let mut ledger = Ledger::default();
+        send(&mut ledger, "kept", "body", 1);
+        store.write(&empty, &ledger).unwrap();
+        drop(store);
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch("DROP TABLE seen;").unwrap();
+            connection.pragma_update(None, "user_version", 1).unwrap();
+        }
+        let (mut store, read, opened) = LedgerStore::open(&path).unwrap();
+        assert_eq!(opened, Opened::Existing);
+        assert_eq!(read, ledger);
+        let version: i64 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let mut seen = ledger.clone();
+        seen.status_seen
+            .insert("agent-1".into(), BTreeMap::from([("letter:1".into(), 1)]));
+        store.write(&ledger, &seen).unwrap();
+        drop(store);
+        assert_eq!(load(&path).unwrap(), seen);
     }
 }
