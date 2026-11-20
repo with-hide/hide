@@ -78,6 +78,9 @@ pub(in crate::runtime) struct HealLetters {
     /// The children each parent's count waits on, by the parent's
     /// registration id.
     resumed: BTreeMap<String, Resumed>,
+    /// The last batch a parent's lost children were named in: each batch is
+    /// a new letter, later than every one before, even after a restart.
+    last_batch: u64,
     /// The letters a thread is sending now; it is the only one.
     sending: BTreeSet<String>,
     /// The panes each machine's engine names healing, by the machine's own
@@ -121,8 +124,11 @@ enum Body {
     /// This many of your children came back, these by name.
     Resumed { count: usize, names: Vec<String> },
     /// These children were lost to the heal, oldest first; the ones past
-    /// [`CHILDREN_SAID`] only counted. `told` is how many were said before.
+    /// [`CHILDREN_SAID`] only counted. `batch` names this entry's letters
+    /// apart from every earlier entry's to the same parent; `told` is how
+    /// many of its children were said before.
     Children {
+        batch: u64,
         told: usize,
         lost: Vec<(Lost, String)>,
         more: usize,
@@ -452,19 +458,22 @@ impl Runtime {
     /// Adds the child `name`, lost as `lost`, to the parent's one entry of
     /// lost children: a new letter, so one being sent says the ones before.
     fn tell_parent(&mut self, parent: &str, lost: Lost, name: String) {
-        let owed = self
-            .heal_letters
-            .owed
-            .entry(format!("children:{parent}"))
-            .or_insert_with(|| Owed {
-                letter: String::new(),
-                to: parent.to_owned(),
-                body: Body::Children {
-                    told: 0,
-                    lost: Vec::new(),
-                    more: 0,
-                },
-            });
+        let key = format!("children:{parent}");
+        let letters = &mut self.heal_letters;
+        if !letters.owed.contains_key(&key) {
+            letters.last_batch = crate::links::now_ms().max(letters.last_batch + 1);
+        }
+        let batch = letters.last_batch;
+        let owed = letters.owed.entry(key).or_insert_with(|| Owed {
+            letter: String::new(),
+            to: parent.to_owned(),
+            body: Body::Children {
+                batch,
+                told: 0,
+                lost: Vec::new(),
+                more: 0,
+            },
+        });
         if let Body::Children {
             lost: said, more, ..
         } = &mut owed.body
@@ -581,15 +590,22 @@ impl Runtime {
             if admitted.contains(&owed.letter) {
                 return false;
             }
-            let Body::Children { told, lost, more } = &mut owed.body else {
+            let Body::Children {
+                batch,
+                told,
+                lost,
+                more,
+            } = &mut owed.body
+            else {
                 return true;
             };
             let Some(said) = admitted.iter().find_map(|letter| {
-                letter
+                let (of, said) = letter
                     .strip_prefix(key.as_str())?
                     .strip_prefix(':')?
-                    .parse::<usize>()
-                    .ok()
+                    .split_once(':')?;
+                (of.parse::<u64>().ok()? == *batch).then_some(())?;
+                said.parse::<usize>().ok()
             }) else {
                 return true;
             };
@@ -761,12 +777,18 @@ impl Runtime {
     }
 }
 
-/// The letter of a parent's lost children: how many it has said in all, so
-/// each name added makes a new letter.
+/// The letter of a parent's lost children: its batch and how many the
+/// batch has said in all, so each name added makes a new letter and a new
+/// batch never meets an earlier one's.
 fn children_letter(owed: &Owed) -> String {
     match &owed.body {
-        Body::Children { told, lost, more } => {
-            format!("children:{}:{}", owed.to, told + lost.len() + more)
+        Body::Children {
+            batch,
+            told,
+            lost,
+            more,
+        } => {
+            format!("children:{}:{batch}:{}", owed.to, told + lost.len() + more)
         }
         _ => owed.letter.clone(),
     }
