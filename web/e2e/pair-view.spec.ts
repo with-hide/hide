@@ -7,7 +7,7 @@ import { closePane, focusPane, focusTab, newTab, splitPane, withControl } from "
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { quietFor } from "./wait";
-import { enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
+import { chooseExpand, enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
 
 // Pair view (PRD lane-desk-pair-view B16-B29, D-44..D-47): one mode for the
 // window that draws the pane the operator is on beside its Agent tab's desk,
@@ -163,8 +163,6 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     expect((resizes.get(other!) ?? 0) - (beforeLeave.get(other!) ?? 0)).toBe(1);
     expect((await live(page)).sort()).toEqual(liveBefore);
     await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
-    // D-44: the desk closed with it; the tool column opened meanwhile stays.
-    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await screenshot(page, "pair-left");
   } finally {
     daemon?.stop();
@@ -334,10 +332,20 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await screenshot(page, "pair-divider-dragged");
     const dragged = (await pairPane.boundingBox())!.width;
 
+    // B29: expanding the desk over the pane and back keeps the dragged split and resizes no terminal.
+    const beforeExpand = resizes.get(left!) ?? 0;
+    await chooseExpand(page);
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "expanded");
+    await chooseExpand(page);
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
+    expect(resizes.get(left!) ?? 0, "expanding and back resizes no terminal").toBe(beforeExpand);
+
     // D-44: ⌘. leaves, with no desk on the right; entering again draws the same split.
     await page.keyboard.press(chord("pair_view"));
     await expect(strip(page)).toHaveCount(0);
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await page.keyboard.press(chord("pair_view"));
     await expect(pairPane).toBeVisible();
     await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
