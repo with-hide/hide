@@ -177,6 +177,7 @@ mod snapshot_delta;
 mod ssh_hosts_list;
 mod ssh_sign_in;
 mod start_geometry;
+mod store_cli;
 mod strays;
 mod suggestions;
 #[path = "tests/terminal.rs"]

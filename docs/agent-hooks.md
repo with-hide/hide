@@ -652,13 +652,26 @@ The file goes where its item's folder goes: a delete moves it to the undo list w
 Two items of one name, one in the store and one in the undo list, therefore never share a key.
 A copy set aside from an agent's file keeps that entry's text in the same file, since it holds the entry's keys, until it is put back or the folder's keys are next written.
 It is the only place Hide keeps a key: the store's record, its report, the snapshot and the logs carry a server with the names of its keys and never a value, and a key reaches an agent's file only when the converter writes it.
-A value travels only from the screen to a machine's store, inside the change that carries it (`ReadMcp`'s paste, `AddMcp` and `SetMcp`'s keys), and from one machine's store to another's inside a copy (`Receive`), each as `hide_kit::store::Sealed`, which prints as `••••`; a change's outcome, `status.store_answer` and every log line hold it emptied (`StoreChange::redacted`).
+A value travels only from the screen to a machine's store, inside the change that carries it (`ReadMcp`'s paste, `AddMcp` and `SetMcp`'s keys), and from one machine's store to another's inside a copy (`Receive`), each as `hide_kit::store::Sealed`, which prints as `••••`; a change's outcome, `status.store_answers` and every log line hold it emptied (`StoreChange::redacted`).
 What a paste gave stays staged in the store's folder, owner-only, until an add takes it (the staged copy goes then, and the paste's answer once every server in it is added), the operator closes the answer (`CancelMcp`), or, answered by no one, it passes its hour or four newer pastes; the screen learns only which keys it gave.
 A pasted command line whose program is neither a path nor found on the account's search, as a sentence pasted into the field is, reads as no server, as an unreadable paste does (`mcp::paste::read` asks the kit's agent search); a JSON snippet's servers stay whatever they run, as a README gives them.
 A key edit rewrites every file Hide wrote the server to, profile accounts included, and a file that could not be written then gets the new key on a later pass (B12, B26); a copy to a device that brings only a new key does the same there (B28).
 A value prints as `••••` wherever a key is formatted, and a failure of the key file never quotes it, since a parser's message can quote the value it stopped at (B13).
 A key that starts with `!` is refused for every agent: Pi and omp run such a value as a shell command in place of the value, and `${NAME}` in a value is expanded by them too.
 The key stays in the agent's file as plain text, as it would if the operator had put it there by hand (PRD skill-mcp-manager Non-goals).
+
+### When the MCP keys' secret is lost
+
+A store whose record holds a key fingerprint, and whose `keys.secret` is gone or can no longer be read, refuses every pass, so no agent's file changes; Settings › Skills and MCP says so on that machine's section (`keys_secret_gone`), with a link here, and every switch there is read only.
+Hide never makes a new secret on its own, since a new one would read every server it wrote with keys as the operator's and Hide would never take them out; bringing the store back is the operator's step, by hand.
+
+1. Move the store's folder aside, keeping it: `mv ~/.hide/store ~/.hide/store-lost-secret` (on Windows `%USERPROFILE%\.hide\store`).
+   Each item's `keys.json` under it still holds the keys typed for it, owner-only, and its `store.json` names, for each agent's file, the servers and skills Hide wrote there.
+2. The next pass, within a few seconds, starts an empty store, and every server and skill Hide had written is now an entry the operator has: Settings lists each under the agents that have it, to take in (B22).
+   Taking a server in keeps its keys as the agent's file has them.
+   A skill taken in is a copy with no updates, so a skill that came from a repository is better removed from the agents' folders and added again from that repository, which follows its updates again.
+3. Take Hide's servers out of the agents' files by hand instead, when they should go: each agent's file is in the table under [MCP servers](#mcp-servers), and an entry is one server's name in it.
+4. Delete `~/.hide/store-lost-secret` once nothing in it is needed.
 
 ## Project guardrails
 

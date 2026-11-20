@@ -61,6 +61,8 @@ pub(crate) struct Fetched {
     previews: Vec<(SourceSpec, Result<Preview, StoreRefusal>)>,
     latest: Option<Result<Vec<(String, Latest)>, StoreRefusal>>,
     diffs: Vec<(String, Result<UpdateDiff, StoreRefusal>)>,
+    /// Owners' pictures downloaded for the pass to keep under the lock.
+    avatars: Vec<(String, Vec<u8>)>,
 }
 
 impl Fetched {
@@ -138,10 +140,18 @@ impl Fetched {
             }
             store.checked_at_unix_ms = Some(now_unix_ms());
         }
+        // The pictures are let in here, under the lock, against the folder
+        // and the store as they are now.
+        let used = super::avatar_owners(store);
+        for (owner, bytes) in &self.avatars {
+            super::avatar::admit(&ctx.dir, owner, bytes, &used);
+        }
     }
 }
 
-/// Asks every source `changes` names, outside the account lock.
+/// Asks every source `changes` names, outside the account lock. A source or
+/// an update asked twice in one pass is read once, and every change that
+/// asked for it names that one reading.
 pub(crate) fn fetch(
     target: &KitTarget,
     dir: &Path,
@@ -152,12 +162,32 @@ pub(crate) fn fetch(
     let staging = dir.join("staging");
     for change in changes {
         match change {
+            StoreChange::Inspect { source }
+                if fetched.previews.iter().any(|(asked, _)| asked == source) => {}
+            StoreChange::PreviewUpdate { item }
+                if fetched.diffs.iter().any(|(asked, _)| asked == item) => {}
             StoreChange::Inspect { source } => {
                 let preview = inspect(target, &staging, source);
+                // The owner's picture comes with the source it was read with,
+                // and stays while the answer or an item of that owner does.
+                if let (SourceSpec::Git { url }, Ok(_)) = (source, &preview)
+                    && let Ok(address) = parse(url)
+                    && let Some(owner) = super::avatar::owner(&address.url)
+                    && let Some(bytes) = super::avatar::download(dir, owner)
+                {
+                    fetched.avatars.push((owner.to_owned(), bytes));
+                }
                 fetched.previews.push((source.clone(), preview));
             }
             StoreChange::CheckUpdates => {
                 fetched.latest = Some(check(target, record));
+                let owners: std::collections::BTreeSet<&str> =
+                    record.items.iter().filter_map(StoreItem::owner).collect();
+                for owner in owners {
+                    if let Some(bytes) = super::avatar::download(dir, owner) {
+                        fetched.avatars.push((owner.to_owned(), bytes));
+                    }
+                }
             }
             StoreChange::PreviewUpdate { item } => {
                 let diff = match record.item(item) {

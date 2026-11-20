@@ -120,6 +120,7 @@ const SECTIONS = [
   ["For agents and tools", ["guide", "issue", "contract"]],
   ["Letters and watches", ["request", "inbox", "watch"]],
   ["Agents", ["agent", "ps"]],
+  ["Skills and MCP servers", ["skill", "mcp"]],
   ["Missions", ["mission"]],
   ["Tasks", ["task"]],
   ["Panes and workspaces", ["pane", "workspace"]],

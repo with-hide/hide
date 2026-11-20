@@ -424,6 +424,7 @@ fn entry_at(at: &Path, fresh: bool) -> Result<Option<Entry>, String> {
             link: Some(target),
             whole,
             keys: None,
+            server: None,
         }));
     }
     let (digest, whole) = facts(at, fresh)?;
@@ -432,6 +433,7 @@ fn entry_at(at: &Path, fresh: bool) -> Result<Option<Entry>, String> {
         link: None,
         whole,
         keys: None,
+        server: None,
     }))
 }
 

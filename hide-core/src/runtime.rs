@@ -116,6 +116,7 @@ mod snapshot_delta;
 mod spent_bells;
 mod ssh_hosts;
 pub(crate) mod start_hook;
+mod store_cli;
 mod strays;
 mod suggestion_apply;
 mod suggestion_evidence;
@@ -149,6 +150,7 @@ pub(crate) use inbound::InboundLink;
 pub(crate) use kit::{DeviceKitAnswer, DeviceKitCall, DeviceKitWork, KitJob, ProfilesRead};
 pub(crate) use kit_store::{StoreAnswered, StoreJob};
 pub use snapshot_delta::serialize_snapshot_delta;
+pub use store_cli::StoreAskSnapshot;
 
 use agent_areas::AgentLayoutPayload;
 use agent_groups::AgentGroupPayload;
@@ -1193,6 +1195,9 @@ pub struct Runtime {
     /// ledger last read says, which every row pass lays on its row
     /// (`human_turn.rs`). A ledger that could not be read leaves it as it was.
     human_turns_laid: HashMap<String, crate::model::DeclaredHumanTurn>,
+    /// The person's turns the ledger holds, by pane; `human_turns_laid` adds
+    /// the store's confirms to them (`store_cli`).
+    human_turns_declared: HashMap<String, crate::model::DeclaredHumanTurn>,
     /// Counts `observe_delivery` passes; fences each observation's laid turn.
     delivery_observe_generation: u64,
     /// View openers waiting for their document, Sends under way, and the
@@ -1509,6 +1514,8 @@ pub struct Runtime {
     /// Each machine's store work, schedule and new-session marks
     /// (`runtime/kit_store.rs`).
     stores: kit_store::Stores,
+    /// The `hide skill` / `hide mcp` commands waiting (`store_cli`).
+    store_runs: store_cli::StoreRuns,
     /// The passes spawns asked of each machine's kit before starting an
     /// agent there, by device id (`runtime/start_hook.rs`); one entry per
     /// machine, dropped with the device's kit work.
@@ -2447,6 +2454,7 @@ impl Runtime {
             delivery_observations: HashMap::new(),
             human_turns_settling: Arc::default(),
             human_turns_laid: HashMap::new(),
+            human_turns_declared: HashMap::new(),
             delivery_observe_generation: 0,
             view_feedback: view_feedback::FeedbackRuntime::default(),
             view_sessions: view_sessions::ViewSessions::default(),
@@ -2556,6 +2564,7 @@ impl Runtime {
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),
             stores: kit_store::Stores::default(),
+            store_runs: store_cli::StoreRuns::default(),
             start_passes: BTreeMap::new(),
             device_first_run_choice: BTreeMap::new(),
             device_kit_running: BTreeSet::new(),

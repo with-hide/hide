@@ -30,6 +30,8 @@ pub enum CommandKind {
     Plan(crate::plan_cli::PlanCli),
     /// `hide agent profile …` (PRD agent-profiles D-33).
     AgentProfile(hide_core::agent_profiles::ProfileCommand),
+    /// `hide skill …` / `hide mcp …` (PRD skill-mcp-manager D-19).
+    Store(hide_core::store_command::StoreCommand),
     /// `hide agent catalog [--machine <id>]`.
     AgentCatalog {
         machine: Option<String>,
@@ -206,6 +208,8 @@ fn topic_usage(topic: &str) -> Option<String> {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
+        "skill" => usage(crate::store_cli::SKILL_USAGE),
+        "mcp" => usage(crate::store_cli::MCP_USAGE),
         "device" => usage(crate::device_cli::usage_here()),
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
@@ -248,6 +252,8 @@ fn help_text() -> String {
         crate::delivery_cli::USAGE,
         crate::agent_cli::USAGE,
         crate::ps_cli::USAGE,
+        crate::store_cli::SKILL_USAGE,
+        crate::store_cli::MCP_USAGE,
         crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
@@ -439,6 +445,22 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::profile_cli::parse(&args[3..])
                 .map(CommandKind::AgentProfile)
                 .map_err(|reason| wrong(reason, crate::profile_cli::USAGE))
+        }
+        Some(topic @ ("skill" | "mcp")) => {
+            let (kind, usage_text) = if topic == "skill" {
+                (hide_kit::store::ItemKind::Skill, crate::store_cli::SKILL_USAGE)
+            } else {
+                (hide_kit::store::ItemKind::Mcp, crate::store_cli::MCP_USAGE)
+            };
+            if matches!(args.get(2).map(String::as_str), None | Some("help" | "--help")) {
+                println!("{usage_text}");
+                std::process::exit(0);
+            }
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(usage_text)))?;
+            crate::store_cli::parse(kind, &args[2..])
+                .map(CommandKind::Store)
+                .map_err(|reason| wrong(reason, usage_text))
         }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
@@ -946,6 +968,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::Plan(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::AgentProfile(_)
+                    | CommandKind::Store(_)
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
@@ -986,6 +1009,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),
+        CommandKind::Store(command) => crate::store_cli::run(&env, command),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),

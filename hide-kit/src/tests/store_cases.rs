@@ -124,12 +124,10 @@ fn store(fixture: &Fixture, changes: Vec<StoreChange>) -> StoreReport {
 /// Installs the named skills of the source's answer.
 fn install(fixture: &Fixture, source: SourceSpec, names: &[&str]) -> StoreReport {
     let inspected = store(fixture, vec![StoreChange::Inspect { source }]);
-    let preview = inspected
-        .previews
-        .last()
-        .expect("the source answered")
-        .id
-        .clone();
+    let preview = inspected.outcomes[0]
+        .made
+        .clone()
+        .expect("the source answered");
     store(
         fixture,
         vec![StoreChange::Install {
@@ -360,6 +358,52 @@ fn a_tagged_commit_shows_its_tag_and_a_newer_commit_is_an_update_taken_only_when
             skill_md("archify", "Draw it better.")
         );
     }
+}
+
+#[test]
+fn each_inspect_names_the_preview_of_its_own_source_and_the_same_source_twice_is_read_once() {
+    let fixture = every_agent();
+    let source = |name: &str| {
+        let folder = fixture.root.join("mine").join(name);
+        write(&folder.join("SKILL.md"), &skill_md(name, "Write."));
+        SourceSpec::Folder {
+            path: folder.display().to_string(),
+        }
+    };
+    let (a, b) = (source("writer"), source("reader"));
+
+    let report = store(
+        &fixture,
+        vec![
+            StoreChange::Inspect { source: a.clone() },
+            StoreChange::Inspect { source: b.clone() },
+            StoreChange::Inspect { source: a.clone() },
+        ],
+    );
+
+    for (outcome, asked) in report.outcomes.iter().zip([&a, &b, &a]) {
+        let made = outcome
+            .made
+            .as_deref()
+            .expect("an inspect names its preview");
+        let preview = report
+            .previews
+            .iter()
+            .find(|preview| preview.id == made)
+            .unwrap();
+        assert_eq!(&preview.source, asked);
+    }
+    assert_eq!(report.outcomes[0].made, report.outcomes[2].made);
+    assert_eq!(
+        report
+            .previews
+            .iter()
+            .filter(|preview| preview.source == a)
+            .count(),
+        1,
+        "{:#?}",
+        report.previews
+    );
 }
 
 #[test]

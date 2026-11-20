@@ -24,6 +24,11 @@ pub enum HumanKind {
     Auth,
     /// Granting access: an app connection, an OS permission.
     Permission,
+    /// Confirming an install or an update an agent asked for with
+    /// `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared
+    /// with `hide agent ask-human`, it stands while the command waits and is
+    /// answered on the confirm, not with Done.
+    Install,
 }
 
 impl HumanKind {
@@ -39,6 +44,7 @@ impl HumanKind {
         match self {
             Self::Auth => "auth",
             Self::Permission => "permission",
+            Self::Install => "install",
         }
     }
 }
@@ -255,10 +261,12 @@ pub(crate) fn done_letter(turn: &HumanTurn) -> String {
     let word = match turn.kind {
         HumanKind::Auth => "인증",
         HumanKind::Permission => "허용",
+        HumanKind::Install => "설치 확인",
     };
     let english = match turn.kind {
         HumanKind::Auth => "sign-in",
         HumanKind::Permission => "permission",
+        HumanKind::Install => "install confirm",
     };
     format!(
         "운영자가 처리함: {word}\nThe operator finished the {english} you asked for with hide agent ask-human. Continue from where you stopped; if it is still not done, declare it again."

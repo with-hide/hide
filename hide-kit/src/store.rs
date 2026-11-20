@@ -23,6 +23,7 @@
 //! The pass runs under the kit's account lock; what reaches the network
 //! (`source`) runs before it, so a slow fetch never holds another pass up.
 
+mod avatar;
 mod mcp;
 mod skill;
 mod source;
@@ -229,6 +230,14 @@ pub struct StoreItem {
 }
 
 impl StoreItem {
+    /// The GitHub account a git source belongs to (the icon tile's picture).
+    pub(crate) fn owner(&self) -> Option<&str> {
+        match &self.source {
+            Source::Git { url, .. } => avatar::owner(url),
+            _ => None,
+        }
+    }
+
     pub fn id_of(kind: ItemKind, name: &str) -> String {
         format!("{}:{name}", kind.code())
     }
@@ -610,6 +619,11 @@ pub struct ChangeOutcome {
     pub change: StoreChange,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<StoreRefusal>,
+    /// What the change made for its asker to show, found by the request and
+    /// never by time: an inspect's preview, a paste's MCP preview, an update
+    /// preview's diff. Another request's reads never stand in for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -721,6 +735,39 @@ pub enum CellState {
     AgentOff,
 }
 
+/// Why a cell failed, for the screen to word in one short line; the
+/// kit's sentence is the cell's `reason` and the log's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellFailure {
+    /// The agent's file or folder is not in a shape Hide reads, so Hide
+    /// left it untouched.
+    Unreadable,
+    /// Writing the copy or taking it out failed.
+    Unwritable,
+    /// The item's keys could not be read for the write.
+    Keys,
+    /// The copy is not yet where its switch says; the next pass tries
+    /// again.
+    Pending,
+}
+
+/// Why a place could not be judged or changed.
+#[derive(Clone, Debug)]
+struct Failure {
+    cause: CellFailure,
+    reason: String,
+}
+
+impl Failure {
+    fn new(cause: CellFailure, reason: impl Into<String>) -> Self {
+        Self {
+            cause,
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     /// The [`Column::id`].
@@ -729,6 +776,9 @@ pub struct Cell {
     /// Why, for a failed, waiting, hand-written or unsupported cell.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// What kind of failure a failed cell's is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CellFailure>,
     /// When the column's copy last changed (B17).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_at_unix_ms: Option<u64>,
@@ -739,6 +789,14 @@ pub struct Cell {
     /// with no place on this machine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place: Option<String>,
+    /// The real path of `place`, the agent's file or folder, for the
+    /// screen to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// A hand-written MCP cell's server as the agent's own file at `place`
+    /// holds it, key-less: what taking it over brings in (B20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<Server>,
 }
 
 /// One item's row.
@@ -747,13 +805,26 @@ pub struct ItemReport {
     pub id: String,
     pub kind: ItemKind,
     pub name: String,
+    /// The GitHub account a git source belongs to, whose kept picture is
+    /// in [`StoreReport::avatars`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub source: Source,
     pub version: Version,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<Version>,
     pub on: bool,
+    /// The columns switched off while the item is on ([`StoreItem::off_for`]),
+    /// so the screen sends a column's own switch, or tries a failed cell
+    /// again, with what the operator last set there (B16, B26).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub off_for: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub folder_missing: bool,
+    /// A skill's description, as its `SKILL.md` gives it, for the unfolded
+    /// row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The skill's files, for the confirm screens.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
@@ -783,6 +854,10 @@ pub struct FoundCopy {
     /// folder's other entries are listed as ever (B19).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// An MCP copy's server as this place holds it, key-less: what taking
+    /// it over brings in (B20). None for a skill or an unreadable copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<Server>,
 }
 
 /// An entry agents hold that Hide does not manage ('에이전트에만 있음', B19).
@@ -836,6 +911,31 @@ pub struct StoreReport {
     /// changed; the sentence says why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// What kind of refusal `refused` is, for the screen to word: the log
+    /// keeps the sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<StorePassRefusal>,
+    /// The machine's home folder, for the screen to spell the paths under
+    /// it with `~`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    /// The kept pictures of the items' GitHub owners ([`ItemReport::owner`]),
+    /// as data addresses.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub avatars: BTreeMap<String, String>,
+}
+
+/// Why a whole pass did not run (`StoreReport::refused`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorePassRefusal {
+    /// The store's key secret its record needs is gone: every pass is
+    /// refused and nothing is taken out, until the operator takes Hide's
+    /// MCP servers out of the agents' files and starts the store over
+    /// (docs/agent-hooks.md).
+    KeysSecretGone,
+    /// The store's folder, record or secret could not be read or saved.
+    Unreadable,
 }
 
 // --- Places and the per-kind seam ------------------------------------------------
@@ -886,6 +986,10 @@ pub(crate) struct Entry {
     /// variables and headers); none for a kind without keys. A copy is an
     /// item, or the one Hide wrote, only when these agree too.
     pub(crate) keys: Option<mcp::KeyValues>,
+    /// An MCP server's own fields as the agent's file holds them, read with
+    /// the entry: the command and arguments or the address, and its keys'
+    /// names, never a value. None for a skill or an unreadable server.
+    pub(crate) server: Option<Server>,
 }
 
 /// One entry as a place's listing read it, or why it could not be read.
@@ -1194,7 +1298,7 @@ fn run(
     let before = store.clone();
     let secret = match store_secret(&dir, &store, mode == Mode::Apply && dir.is_dir()) {
         Ok(secret) => secret,
-        Err(reason) => return refused(reason),
+        Err((reason, cause)) => return StoreReport::refused_as(reason, cause),
     };
     let ctx = Ctx {
         target,
@@ -1211,13 +1315,17 @@ fn run(
         follow(&ctx, &mut store);
         fetched.keep_into(&ctx, &mut store);
         for change in &scope.store {
-            let refused = change_one(&ctx, &mut store, change, &fetched).err();
-            if let Some(refusal) = &refused {
-                log("store.change_refused", None, &refusal.reason);
-            }
+            let (made, refused) = match change_one(&ctx, &mut store, change, &fetched) {
+                Ok(made) => (made, None),
+                Err(refusal) => {
+                    log("store.change_refused", None, &refusal.reason);
+                    (None, Some(refusal))
+                }
+            };
             outcomes.push(ChangeOutcome {
                 change: change.redacted(),
                 refused,
+                made,
             });
         }
         trim_staging(&ctx, &mut store);
@@ -1243,6 +1351,7 @@ fn run(
         log("store.save_failed", None, &reason);
         return StoreReport {
             refused: Some(format!("the store's changes were made, but {reason}")),
+            refusal: Some(StorePassRefusal::Unreadable),
             ..report
         };
     }
@@ -1256,9 +1365,14 @@ fn refused(reason: String) -> StoreReport {
 impl StoreReport {
     /// The report of a pass that could not read or lock the store.
     pub(crate) fn refused(reason: String) -> Self {
+        Self::refused_as(reason, StorePassRefusal::Unreadable)
+    }
+
+    pub(crate) fn refused_as(reason: String, cause: StorePassRefusal) -> Self {
         log("store.refused", None, &reason);
         Self {
             refused: Some(reason),
+            refusal: Some(cause),
             ..Self::default()
         }
     }
@@ -1301,18 +1415,25 @@ fn store_secret(
     dir: &Path,
     store: &StoreRecord,
     make: bool,
-) -> Result<Option<crate::mcp_keys::KeysSecret>, String> {
+) -> Result<Option<crate::mcp_keys::KeysSecret>, (String, StorePassRefusal)> {
     let keyed = store
         .written
         .values()
         .any(|place| place.entries.values().any(|written| written.keys.is_some()));
     match crate::mcp_keys::secret(dir, make && !keyed) {
-        Ok(None) if keyed => Err(format!(
-            "{} is gone, so Hide cannot tell the MCP servers it wrote from ones changed by hand; the store is left as it is",
-            dir.join(crate::mcp_keys::SECRET_FILE).display()
+        Ok(None) if keyed => Err((
+            format!(
+                "{} is gone, so Hide cannot tell the MCP servers it wrote from ones changed by hand; the store is left as it is",
+                dir.join(crate::mcp_keys::SECRET_FILE).display()
+            ),
+            StorePassRefusal::KeysSecretGone,
         )),
         Ok(secret) => Ok(secret),
-        Err(error) => Err(error.to_string()),
+        // A secret that cannot be read, while servers carry keys, is as
+        // gone: the same manual start-over brings the store back
+        // (docs/agent-hooks.md, When the MCP keys' secret is lost).
+        Err(error) if keyed => Err((error.to_string(), StorePassRefusal::KeysSecretGone)),
+        Err(error) => Err((error.to_string(), StorePassRefusal::Unreadable)),
     }
 }
 
@@ -1337,7 +1458,7 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
     // so the store stays rather than leave them in the agents' files.
     let secret = match store_secret(&dir, &store, false) {
         Ok(secret) => secret,
-        Err(reason) => {
+        Err((reason, _)) => {
             log("store.secret_unreadable", None, &reason);
             return vec![("store".to_owned(), RemoveOutcome::Failed { reason })];
         }
@@ -1544,15 +1665,19 @@ fn failed(reason: String) -> StoreRefusal {
     StoreRefusal::new(StoreRefusalCause::Failed, reason)
 }
 
+/// One change of a pass, and the id of what it made for its asker to show.
 fn change_one(
     ctx: &Ctx<'_>,
     store: &mut StoreRecord,
     change: &StoreChange,
     fetched: &source::Fetched,
-) -> Result<(), StoreRefusal> {
+) -> Result<Option<String>, StoreRefusal> {
+    let nothing = |()| None;
     match change {
-        StoreChange::Inspect { source } => fetched.preview_of(source).map(drop),
-        StoreChange::Install { preview, names } => install(ctx, store, preview, names),
+        StoreChange::Inspect { source } => fetched
+            .preview_of(source)
+            .map(|preview| Some(preview.id.clone())),
+        StoreChange::Install { preview, names } => install(ctx, store, preview, names).map(nothing),
         StoreChange::Set { item, column, on } => {
             let found = store
                 .item_mut(item)
@@ -1564,10 +1689,10 @@ fn change_one(
                 return Err(not_found(format!("no column {column}")));
             }
             set(found, &columns, column.as_deref(), *on);
-            Ok(())
+            Ok(None)
         }
-        StoreChange::Delete { item } => delete(ctx, store, item),
-        StoreChange::Restore { entry } => restore(ctx, store, entry),
+        StoreChange::Delete { item } => delete(ctx, store, item).map(nothing),
+        StoreChange::Restore { entry } => restore(ctx, store, entry).map(nothing),
         StoreChange::Forget { entry } => {
             let index = store
                 .trash
@@ -1576,24 +1701,28 @@ fn change_one(
                 .ok_or_else(|| not_found(format!("no undo entry {entry}")))?;
             let gone = store.trash.remove(index);
             purge(ctx, &gone);
-            Ok(())
+            Ok(None)
         }
-        StoreChange::Adopt { kind, name, from } => adopt(ctx, store, *kind, name, from.as_deref()),
-        StoreChange::CheckUpdates => fetched.checked().map(drop),
+        StoreChange::Adopt { kind, name, from } => {
+            adopt(ctx, store, *kind, name, from.as_deref()).map(nothing)
+        }
+        StoreChange::CheckUpdates => fetched.checked().map(nothing),
         StoreChange::PreviewUpdate { item } => {
             store
                 .item(item)
                 .ok_or_else(|| not_found(format!("no item {item}")))?;
-            fetched.diff_of(item).map(drop)
+            fetched.diff_of(item).map(|diff| Some(diff.id.clone()))
         }
-        StoreChange::Update { item, commit } => update(ctx, store, item, commit),
-        StoreChange::ReadMcp { text } => mcp::read_paste(ctx, store, text),
+        StoreChange::Update { item, commit } => update(ctx, store, item, commit).map(nothing),
+        StoreChange::ReadMcp { text } => mcp::read_paste(ctx, store, text).map(Some),
         StoreChange::AddMcp { server, keys, from } => {
-            mcp::add(ctx, store, server, keys, from.as_ref())
+            mcp::add(ctx, store, server, keys, from.as_ref()).map(nothing)
         }
-        StoreChange::CancelMcp { preview } => mcp::cancel(ctx, store, preview),
-        StoreChange::SetMcp { item, server, keys } => mcp::set(ctx, store, item, server, keys),
-        StoreChange::Receive { item } => receive(ctx, store, item),
+        StoreChange::CancelMcp { preview } => mcp::cancel(ctx, store, preview).map(nothing),
+        StoreChange::SetMcp { item, server, keys } => {
+            mcp::set(ctx, store, item, server, keys).map(nothing)
+        }
+        StoreChange::Receive { item } => receive(ctx, store, item).map(nothing),
     }
 }
 
@@ -2193,13 +2322,14 @@ enum Held {
     Current,
     /// Hide's copy of an earlier content of the item.
     Older,
-    /// The operator's, or Hide's edited by them.
-    Theirs,
+    /// The operator's, or Hide's edited by them, with an MCP server's own
+    /// fields as that copy holds them.
+    Theirs(Option<Server>),
 }
 
 /// Why a place could not be judged or changed, by item id and place key.
 #[derive(Default)]
-struct PlaceFailures(BTreeMap<(String, String), String>);
+struct PlaceFailures(BTreeMap<(String, String), Failure>);
 
 /// What a column's switch and agents ask of its places for an item.
 struct Want {
@@ -2238,10 +2368,12 @@ fn reconcile(
     let keys = match applier.keys(item, &ctx.item_files(&item.id)) {
         Ok(keys) => keys_mark(keys.as_ref(), ctx.secret.as_ref()),
         Err(reason) => {
+            log("store.keys_unreadable", Some(&item.id), &reason);
             for place in places {
-                failures
-                    .0
-                    .insert((item.id.clone(), place.key.clone()), reason.clone());
+                failures.0.insert(
+                    (item.id.clone(), place.key.clone()),
+                    Failure::new(CellFailure::Keys, reason.clone()),
+                );
             }
             return;
         }
@@ -2271,9 +2403,11 @@ fn reconcile(
         let held = match judge(store, applier, place, item, &digest, ctx.secret.as_ref()) {
             Ok(held) => held,
             Err(reason) => {
-                failures
-                    .0
-                    .insert((item.id.clone(), place.key.clone()), reason);
+                log("store.place_unreadable", Some(&item.id), &reason);
+                failures.0.insert(
+                    (item.id.clone(), place.key.clone()),
+                    Failure::new(CellFailure::Unreadable, reason),
+                );
                 continue;
             }
         };
@@ -2296,7 +2430,7 @@ fn reconcile(
                     record_written(store, place, item, &digest, keys.clone());
                     Ok(false)
                 }
-                Held::Theirs => Ok(false),
+                Held::Theirs(_) => Ok(false),
             }
         } else if !want.kept {
             match held {
@@ -2306,7 +2440,7 @@ fn reconcile(
                 }),
                 // An edited copy is the operator's now, and the record lets
                 // it go.
-                Held::Missing | Held::Theirs => {
+                Held::Missing | Held::Theirs(_) => {
                     forget_written(store, &place.key, &item.name);
                     Ok(false)
                 }
@@ -2327,9 +2461,10 @@ fn reconcile(
             Ok(false) => {}
             Err(reason) => {
                 log("store.place_failed", Some(&item.id), &reason);
-                failures
-                    .0
-                    .insert((item.id.clone(), place.key.clone()), reason);
+                failures.0.insert(
+                    (item.id.clone(), place.key.clone()),
+                    Failure::new(CellFailure::Unwritable, reason),
+                );
             }
         }
     }
@@ -2382,7 +2517,7 @@ fn judge(
         .filter(|written| written.item == item.id);
     Ok(match applier.entry(place, &item.name)? {
         None => Held::Missing,
-        Some(entry) if !ours(written, &entry, secret) => Held::Theirs,
+        Some(entry) if !ours(written, &entry, secret) => Held::Theirs(entry.server),
         Some(entry) if entry.digest == digest => Held::Current,
         Some(_) => Held::Older,
     })
@@ -2512,6 +2647,11 @@ fn report(
             .collect(),
         diffs: store.diffs.clone(),
         mcp_previews: mcp::previews(ctx, store),
+        home: Some(ctx.home().display().to_string()),
+        avatars: avatar::reported(
+            store_dir(ctx.home(), false).ok().as_deref(),
+            store.items.iter().filter_map(StoreItem::owner),
+        ),
         checked_at_unix_ms: store.checked_at_unix_ms,
         follows: store
             .items
@@ -2519,6 +2659,7 @@ fn report(
             .any(|item| matches!(item.source, Source::Folder { .. })),
         outcomes,
         refused: None,
+        refusal: None,
     }
 }
 
@@ -2531,12 +2672,13 @@ fn item_report(
 ) -> ItemReport {
     let applier = applier(item.kind);
     let digest = item.digest();
-    let held: Vec<(&Place, Result<Held, String>)> = places
+    let held: Vec<(&Place, Result<Held, Failure>)> = places
         .iter()
         .map(|place| {
             let held = match failures.0.get(&(item.id.clone(), place.key.clone())) {
-                Some(reason) => Err(reason.clone()),
-                None => judge(store, applier, place, item, &digest, ctx.secret.as_ref()),
+                Some(failure) => Err(failure.clone()),
+                None => judge(store, applier, place, item, &digest, ctx.secret.as_ref())
+                    .map_err(|reason| Failure::new(CellFailure::Unreadable, reason)),
             };
             (place, held)
         })
@@ -2545,23 +2687,40 @@ fn item_report(
         .columns()
         .iter()
         .map(|column| {
-            let mine: Vec<&(&Place, Result<Held, String>)> = held
+            let mine: Vec<&(&Place, Result<Held, Failure>)> = held
                 .iter()
                 .filter(|(place, _)| place.governed_by(&column.id))
                 .collect();
-            let (state, reason, about) = cell_state(ctx, item, applier, column, &mine);
+            let judged = cell_state(ctx, item, applier, column, &mine);
+            // A hand-written cell carries the server its place holds, the
+            // one a take-over of that place brings in.
+            let theirs = match judged.state {
+                CellState::HandWritten => mine.iter().find_map(|(place, held)| match held {
+                    Ok(Held::Theirs(server))
+                        if judged.about.is_some_and(|about| about.key == place.key) =>
+                    {
+                        server.clone()
+                    }
+                    _ => None,
+                }),
+                _ => None,
+            };
+            let place = judged
+                .about
+                .or_else(|| mine.first().map(|(place, _)| *place));
             Cell {
                 column: column.id.clone(),
-                state,
-                reason,
-                place: about
-                    .or_else(|| mine.first().map(|(place, _)| *place))
-                    .map(|place| place.key.clone()),
+                state: judged.state,
+                reason: judged.reason,
+                failure: judged.failure,
+                place: place.map(|place| place.key.clone()),
+                path: place.map(|place| place.path.display().to_string()),
                 changed_at_unix_ms: store
                     .changed
                     .get(&item.id)
                     .and_then(|changed| changed.get(&column.id))
                     .copied(),
+                server: theirs,
             }
         })
         .collect();
@@ -2569,11 +2728,17 @@ fn item_report(
         id: item.id.clone(),
         kind: item.kind,
         name: item.name.clone(),
+        owner: item.owner().map(str::to_owned),
         source: item.source.clone(),
         version: item.version(),
         update: item.update(),
         on: item.on,
+        off_for: item.off_for.clone(),
         folder_missing: item.folder_missing,
+        description: match &item.body {
+            ItemBody::Skill(body) => body.description.clone(),
+            ItemBody::Mcp(_) => None,
+        },
         files: match &item.body {
             ItemBody::Skill(body) => body.files.clone(),
             ItemBody::Mcp(_) => Vec::new(),
@@ -2586,23 +2751,51 @@ fn item_report(
     }
 }
 
-/// A cell's state, why, and the place that state speaks of when it is one
-/// of the column's places in particular.
+/// A cell as judged: its state, why, the failure's kind for a failed one,
+/// and the place the state speaks of when it is one of the column's places
+/// in particular.
+struct Judged<'p> {
+    state: CellState,
+    reason: Option<String>,
+    failure: Option<CellFailure>,
+    about: Option<&'p Place>,
+}
+
+impl<'p> Judged<'p> {
+    fn plain(state: CellState, reason: Option<String>, about: Option<&'p Place>) -> Self {
+        Self {
+            state,
+            reason,
+            failure: None,
+            about,
+        }
+    }
+
+    fn failed(place: &'p Place, failure: Failure) -> Self {
+        Self {
+            state: CellState::Failed,
+            reason: Some(failure.reason),
+            failure: Some(failure.cause),
+            about: Some(place),
+        }
+    }
+}
+
 fn cell_state<'p>(
     ctx: &Ctx<'_>,
     item: &StoreItem,
     applier: &dyn Applier,
     column: &Column,
-    places: &[&(&'p Place, Result<Held, String>)],
-) -> (CellState, Option<String>, Option<&'p Place>) {
+    places: &[&(&'p Place, Result<Held, Failure>)],
+) -> Judged<'p> {
     let failed = places
         .iter()
-        .find_map(|(place, held)| held.as_ref().err().map(|reason| (*place, reason.clone())));
+        .find_map(|(place, held)| held.as_ref().err().map(|failure| (*place, failure.clone())));
     if let Err(reason) = applier.supports(item, column) {
-        return (CellState::Unsupported, Some(reason), None);
+        return Judged::plain(CellState::Unsupported, Some(reason), None);
     }
     if !column.agents.iter().any(|agent| ctx.enabled(agent)) {
-        return (CellState::AgentOff, None, None);
+        return Judged::plain(CellState::AgentOff, None, None);
     }
     if !item.on_for(&column.id) {
         let still: Vec<&Place> = places
@@ -2619,33 +2812,35 @@ fn cell_state<'p>(
             .map(String::as_str)
             .collect();
         // A copy Hide could not take out is still read: the cell is not off.
-        return match failed {
-            Some((place, reason)) => (CellState::Failed, Some(reason), Some(place)),
-            None if !still.is_empty() && !keeping.is_empty() => (
+        return match (failed, still.first()) {
+            (Some((place, failure)), _) => Judged::failed(place, failure),
+            (None, Some(place)) if !keeping.is_empty() => Judged::plain(
                 CellState::Off,
                 Some(format!(
                     "its folder is also the {} column's, whose switch keeps the {} there",
                     keeping.into_iter().collect::<Vec<_>>().join(", "),
                     item.kind.code()
                 )),
-                still.first().copied(),
+                Some(*place),
             ),
-            None if !still.is_empty() => (
-                CellState::Failed,
-                Some("Hide's copy is still in place; the next pass takes it out".to_owned()),
-                still.first().copied(),
+            (None, Some(place)) => Judged::failed(
+                place,
+                Failure::new(
+                    CellFailure::Pending,
+                    "Hide's copy is still in place; the next pass takes it out",
+                ),
             ),
-            None => (CellState::Off, None, None),
+            (None, None) => Judged::plain(CellState::Off, None, None),
         };
     }
-    if let Some((place, reason)) = failed {
-        return (CellState::Failed, Some(reason), Some(place));
+    if let Some((place, failure)) = failed {
+        return Judged::failed(place, failure);
     }
     if let Some((place, _)) = places
         .iter()
-        .find(|(_, held)| matches!(held, Ok(Held::Theirs)))
+        .find(|(_, held)| matches!(held, Ok(Held::Theirs(_))))
     {
-        return (
+        return Judged::plain(
             CellState::HandWritten,
             Some(format!(
                 "{} already holds a {} named {} that Hide did not write; Hide left it alone",
@@ -2661,24 +2856,26 @@ fn cell_state<'p>(
         .iter()
         .any(|agent| ctx.enabled(agent) && ctx.installed(agent))
     {
-        return (
+        return Judged::plain(
             CellState::Waiting,
             Some("none of its agents is found on this machine".to_owned()),
             None,
         );
     }
     if let Some((place, _)) = places.iter().find(|(place, _)| place.blocked.is_some()) {
-        return (CellState::Waiting, place.blocked.clone(), Some(*place));
+        return Judged::plain(CellState::Waiting, place.blocked.clone(), Some(*place));
     }
     match places
         .iter()
         .find(|(_, held)| !matches!(held, Ok(Held::Current)))
     {
-        None => (CellState::On, None, None),
-        Some((place, _)) => (
-            CellState::Failed,
-            Some("the copy is not in place yet; the next pass tries again".to_owned()),
-            Some(*place),
+        None => Judged::plain(CellState::On, None, None),
+        Some((place, _)) => Judged::failed(
+            place,
+            Failure::new(
+                CellFailure::Pending,
+                "the copy is not in place yet; the next pass tries again",
+            ),
         ),
     }
 }
@@ -2718,7 +2915,7 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                 }
                 // One entry that cannot be read is listed with why, and the
                 // folder's others as ever.
-                let (digest, link, refused) = match read {
+                let (digest, link, refused, server) = match read {
                     Ok(entry) => {
                         sameness
                             .entry((*kind, name.clone()))
@@ -2728,9 +2925,10 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                             entry.digest,
                             entry.link.as_ref().map(|link| link.display().to_string()),
                             None,
+                            entry.server,
                         )
                     }
-                    Err(reason) => (String::new(), None, Some(reason)),
+                    Err(reason) => (String::new(), None, Some(reason), None),
                 };
                 found
                     .entry((*kind, name.clone()))
@@ -2743,6 +2941,7 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
                         link,
                         digest,
                         refused,
+                        server,
                     });
             }
         }
@@ -2761,12 +2960,32 @@ fn unmanaged(store: &StoreRecord, places: &BTreeMap<ItemKind, Vec<Place>>) -> Ve
         .collect()
 }
 
+/// The owners whose pictures the store keeps: its items' and the source
+/// answers' it still holds.
+pub(crate) fn avatar_owners(store: &StoreRecord) -> BTreeSet<&str> {
+    store
+        .items
+        .iter()
+        .filter_map(StoreItem::owner)
+        .chain(
+            store
+                .previews
+                .iter()
+                .filter_map(|preview| preview.url.as_deref().and_then(avatar::owner)),
+        )
+        .collect()
+}
+
 /// Drops the previews and update previews past their limits, with their
-/// staged files, and any staged folder no record names. A folder a fetch is
-/// still filling outside the lock (`source::FETCHING`) is left for an hour.
+/// staged files and the pictures only they used, and any staged folder no
+/// record names. A folder a fetch is still filling outside the lock
+/// (`source::FETCHING`) is left for an hour.
 fn trim_staging(ctx: &Ctx<'_>, store: &mut StoreRecord) {
     while store.previews.len() > PREVIEW_LIMIT {
         store.previews.remove(0);
+    }
+    if let Ok(dir) = store_dir(ctx.home(), false) {
+        avatar::keep_only(&dir, &avatar_owners(store));
     }
     while store.diffs.len() > PREVIEW_LIMIT {
         store.diffs.remove(0);

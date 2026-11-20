@@ -1,5 +1,5 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `workspace
+//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `skill`, `mcp`, `workspace
 //! purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
@@ -45,6 +45,7 @@ fn hidden(spec: &Spec) -> bool {
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
     "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane", "access",
+    "skill", "mcp",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -325,7 +326,222 @@ const fn profile_spec(
     }
 }
 
+/// A store item's name: `hide skill <verb> <name>`, `hide mcp <verb> <name>`.
+const ITEM: &[Arg] = &[Arg {
+    name: "name",
+    value: Text,
+    required: true,
+    value_with: None,
+}];
+
+/// What every `hide skill` and `hide mcp` command can answer: the machine
+/// it names, and the store's own refusals (`hide_core::store_command`).
+const STORE_REFUSALS: &[&str] = &[
+    "machine_unknown",
+    hide_core::store_command::NOT_FOUND,
+    hide_core::store_command::INVALID,
+    hide_core::store_command::BUSY,
+    hide_core::store_command::UNAVAILABLE,
+    hide_core::store_command::REFUSED,
+];
+
+/// The refusals of a command that waits on the operator's confirm.
+const CONFIRM_REFUSALS: &[&str] = &[
+    "machine_unknown",
+    hide_core::store_command::NOT_FOUND,
+    hide_core::store_command::INVALID,
+    hide_core::store_command::BUSY,
+    hide_core::store_command::UNAVAILABLE,
+    hide_core::store_command::REFUSED,
+    hide_core::store_command::DECLINED,
+    hide_core::store_command::UNANSWERED,
+];
+
+/// The options every store command takes.
+const STORE_OPTIONS: &[Opt] = &[optional("--machine", Text), switch("--json")];
+
+/// A switch of one item, for every agent or one (`--agent`).
+const STORE_SWITCH: &[Opt] = &[
+    optional("--agent", Text),
+    optional("--machine", Text),
+    switch("--json"),
+];
+
+/// How an MCP server is reached: a command after `--` with the names of its
+/// variables, or an address with the names of its headers. A key's value is
+/// never an option; the operator types it on the confirm (B33).
+const MCP_REACH: &[Opt] = &[
+    Opt {
+        name: "--url",
+        value: Some(Text),
+        required: false,
+        requires: &[],
+        conflicts: &["--env", REST],
+        repeats: None,
+    },
+    Opt {
+        name: "--sse",
+        value: None,
+        required: false,
+        requires: &["--url"],
+        conflicts: &["--env", REST],
+        repeats: None,
+    },
+    Opt {
+        name: "--header",
+        value: Some(Text),
+        required: false,
+        requires: &["--url"],
+        conflicts: &["--env", REST],
+        repeats: Some(hide_agent_hooks::mcp::MAX_KEY_NAMES),
+    },
+    Opt {
+        name: "--env",
+        value: Some(Text),
+        required: false,
+        requires: &[],
+        conflicts: &["--url", "--sse", "--header"],
+        repeats: Some(hide_agent_hooks::mcp::MAX_KEY_NAMES),
+    },
+    optional("--machine", Text),
+    switch("--json"),
+];
+
+/// What a `conflicts` entry names when an option cannot come with the words
+/// after `--`.
+pub const REST: &str = "--";
+
+const fn store_spec(
+    words: &'static [&'static str],
+    arguments: &'static [Arg],
+    options: &'static [Opt],
+    answers: &'static [&'static str],
+    refusals: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments,
+        repeats: None,
+        needs_one_of: &[],
+        options,
+        rest: None,
+        answers,
+        refusals,
+    }
+}
+
+const fn mcp_reach_spec(words: &'static [&'static str]) -> Spec {
+    Spec {
+        words,
+        arguments: ITEM,
+        repeats: None,
+        needs_one_of: &[],
+        options: MCP_REACH,
+        rest: Some("a local server's command and its arguments, which --url replaces"),
+        answers: &["store_changed"],
+        refusals: CONFIRM_REFUSALS,
+    }
+}
+
 pub const COMMANDS: &[Spec] = &[
+    // `hide skill` and `hide mcp`: a machine's store, as Settings › Skills
+    // and MCP changes it (PRD skill-mcp-manager B31-B33). `add` and
+    // `update` wait on the operator's confirm; nothing skips it.
+    store_spec(
+        &["skill", "list"],
+        &[],
+        STORE_OPTIONS,
+        &["store_list"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "show"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_item"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "add"],
+        &[Arg {
+            name: "source",
+            value: Text,
+            required: true,
+            value_with: None,
+        }],
+        &[
+            repeated("--name", Text, hide_core::store_command::NAMES_LIMIT),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["store_changed"],
+        CONFIRM_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "update"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_changed"],
+        CONFIRM_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "on"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "off"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "remove"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "list"],
+        &[],
+        STORE_OPTIONS,
+        &["store_list"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "show"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_item"],
+        STORE_REFUSALS,
+    ),
+    mcp_reach_spec(&["mcp", "add"]),
+    mcp_reach_spec(&["mcp", "update"]),
+    store_spec(
+        &["mcp", "on"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "off"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "remove"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
     profile_spec(
         &["agent", "profile", "list"],
         &[],
@@ -2108,6 +2324,8 @@ fn body() -> Value {
             "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
             "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
             "access": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
         },
         // An external tool runs the commands above as its connection, at
         // the level the operator chose; any of them may answer one of
@@ -2250,6 +2468,9 @@ fn answers() -> Value {
     for (name, schema) in hide_core::worktree_command::answer_schemas() {
         map.insert(name.into(), schema);
     }
+    for (name, schema) in hide_core::store_command::answer_schemas() {
+        map.insert(name.into(), schema);
+    }
     answers
 }
 
@@ -2370,7 +2591,13 @@ mod tests {
                 });
             }
         }
-        if spec.rest.is_some() {
+        // The words after `--` come unless an option chosen rules them out.
+        let rest_ruled_out = selected.iter().any(|name| {
+            spec.options
+                .iter()
+                .any(|option| option.name == *name && option.conflicts.contains(&REST))
+        });
+        if spec.rest.is_some() && !leave_out.contains(&REST) && !rest_ruled_out {
             argv.extend(["--".to_owned(), "--model".to_owned()]);
         }
         argv
@@ -2397,6 +2624,7 @@ mod tests {
                 | CommandKind::Device(_)
                 | CommandKind::Access(_)
                 | CommandKind::Pane(_)
+                | CommandKind::Store(_)
                 | CommandKind::WorkspaceRemove(_))
         )
     }
@@ -2435,6 +2663,16 @@ mod tests {
                     parse_args(&allowed)
                 );
                 for conflict in option.conflicts {
+                    if *conflict == REST {
+                        let mut both = allowed.clone();
+                        both.extend(["--".to_owned(), "--model".to_owned()]);
+                        assert!(
+                            !takes(&both),
+                            "hide {command} {} with words after --",
+                            option.name
+                        );
+                        continue;
+                    }
                     let other = spec
                         .options
                         .iter()
@@ -2584,13 +2822,29 @@ mod tests {
             for option in repeated {
                 let flag = option["name"].as_str().unwrap();
                 let most = option["repeats_at_most"].as_u64().unwrap() as usize;
-                let mut argv = base.clone();
-                for _ in 0..most {
-                    argv = with(&argv, flag);
-                }
-                assert!(takes(&argv), "hide {name} {flag} x{most}");
+                // The option comes with the ones it requires, and with the
+                // words after `--` unless it rules them out (`hide mcp add`'s
+                // `--env` with its command, `--header` with `--url`).
+                let rest = !command["rest"].is_null()
+                    && !option["conflicts"]
+                        .as_array()
+                        .is_some_and(|conflicts| conflicts.iter().any(|name| name == REST));
+                let repeat = |times: usize| {
+                    let mut argv = base.clone();
+                    for need in option["requires"].as_array().into_iter().flatten() {
+                        argv = with(&argv, need.as_str().unwrap());
+                    }
+                    for _ in 0..times {
+                        argv = with(&argv, flag);
+                    }
+                    if rest {
+                        argv.extend(["--".to_owned(), "--model".to_owned()]);
+                    }
+                    argv
+                };
+                assert!(takes(&repeat(most)), "hide {name} {flag} x{most}");
                 assert!(
-                    !takes(&with(&argv, flag)),
+                    !takes(&repeat(most + 1)),
                     "hide {name} {flag} x{}",
                     most + 1
                 );

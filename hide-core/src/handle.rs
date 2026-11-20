@@ -1055,6 +1055,26 @@ impl Core {
         lock_recover(&self.runtime).prepare_agent_profile_command(device, command)
     }
 
+    /// `hide skill` / `hide mcp` for a caller in `pane_id` on `device`: a
+    /// read answered at once, or a change queued, which the daemon then
+    /// waits on off this thread (`store_command::Prepared::run`). A refusal
+    /// is a delivery refusal string (`coordination::split_refusal`).
+    pub fn prepare_store(
+        &self,
+        device: &str,
+        pane_id: &str,
+        command: crate::store_command::StoreCommand,
+    ) -> Result<crate::store_command::Prepared, String> {
+        if !check_owner_thread(self, "store.prepare") {
+            return Err(crate::store_command::UNAVAILABLE.into());
+        }
+        let mut runtime = lock_recover(&self.runtime);
+        let prepared = runtime.prepare_store_command(device, pane_id, command);
+        drop(runtime);
+        self.notifier.notify();
+        prepared
+    }
+
     /// A read of the operator's agent definition folder in `home`, made off
     /// the lock by the daemon with the development switch on (PRD
     /// engine-bundle-3-core-owns D-17); the first one turns the definitions

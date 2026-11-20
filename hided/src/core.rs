@@ -153,6 +153,12 @@ enum Command {
         command: hide_core::agent_profiles::ProfileCommand,
         reply: Sender<Result<hide_core::agent_profiles::Prepared, String>>,
     },
+    Store {
+        device_id: String,
+        pane_id: String,
+        command: hide_core::store_command::StoreCommand,
+        reply: Sender<Result<hide_core::store_command::Prepared, String>>,
+    },
     AgentCatalog {
         device_id: String,
         machine: Option<String>,
@@ -780,6 +786,28 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?
+    }
+
+    /// `hide skill` / `hide mcp`, planned on the owner thread; the caller
+    /// waits on the plan (`Prepared::run`) on its own.
+    pub fn prepare_store(
+        &self,
+        device: &str,
+        pane: &str,
+        command: hide_core::store_command::StoreCommand,
+    ) -> Result<hide_core::store_command::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Store {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                command,
+                reply,
+            })
+            .map_err(|_| hide_core::store_command::UNAVAILABLE.to_owned())?;
+        result
+            .recv()
+            .map_err(|_| hide_core::store_command::UNAVAILABLE.to_owned())?
     }
 
     /// `hide agent sleep`, run on the owner thread.
@@ -1804,6 +1832,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.prepare_agent_profile(&device_id, command));
+            }
+            Command::Store {
+                device_id,
+                pane_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_store(&device_id, &pane_id, command));
             }
             Command::AgentCatalog {
                 device_id,

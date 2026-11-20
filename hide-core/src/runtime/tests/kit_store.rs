@@ -24,7 +24,10 @@ fn switch_off_agy() -> StoreChange {
 /// One GitHub skill on a tagged commit with a newer tag out, on in Claude's
 /// folders, waiting for the shared folder's agents and just switched off
 /// for agy.
-fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -> StoreReport {
+pub(super) fn store_report(
+    outcomes: Vec<ChangeOutcome>,
+    checked_at_unix_ms: Option<u64>,
+) -> StoreReport {
     let column = |id: &str, agents: &[&str]| Column {
         id: id.to_owned(),
         agents: agents.iter().map(|agent| (*agent).to_owned()).collect(),
@@ -34,8 +37,11 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
         column: column.to_owned(),
         state,
         reason: None,
+        failure: None,
         changed_at_unix_ms,
         place: None,
+        path: None,
+        server: None,
     };
     StoreReport {
         columns: [(
@@ -52,6 +58,7 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
             id: "skill:style".to_owned(),
             kind: ItemKind::Skill,
             name: "style".to_owned(),
+            owner: Some("acme".to_owned()),
             source: Source::Git {
                 url: "https://github.com/acme/skills".to_owned(),
                 path: "style".to_owned(),
@@ -62,7 +69,9 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
             version: Version::Tag("v1.0".to_owned()),
             update: Some(Version::Tag("v1.1".to_owned())),
             on: true,
+            off_for: Default::default(),
             folder_missing: false,
+            description: None,
             files: Vec::new(),
             server: None,
             cells: vec![
@@ -83,8 +92,9 @@ fn answer(shared: &Mutex<Runtime>) -> Option<crate::model::StoreAnswer> {
         .unwrap()
         .snapshot()
         .status
-        .store_answer
-        .clone()
+        .store_answers
+        .last()
+        .cloned()
 }
 
 fn store_calls(helper: &KitDevice) -> Vec<KitAction> {
@@ -102,6 +112,7 @@ fn a_store_request_reaches_the_device_and_its_row_carries_items_cells_version_an
     let outcome = ChangeOutcome {
         change: switch_off_agy(),
         refused: None,
+        made: None,
     };
     helper.answer_store(Ok(serde_json::to_value(store_report(
         vec![outcome.clone()],
@@ -212,6 +223,7 @@ fn a_change_the_store_refuses_is_answered_with_its_cause() {
             cause: StoreRefusalCause::NotFound,
             reason: "no item skill:gone".to_owned(),
         }),
+        made: None,
     };
     helper.answer_store(Ok(serde_json::to_value(store_report(
         vec![refused.clone()],
@@ -255,6 +267,7 @@ fn a_github_item_is_checked_daily_and_a_followed_folder_every_few_seconds_withou
         vec![ChangeOutcome {
             change: StoreChange::CheckUpdates,
             refused: None,
+            made: None,
         }],
         Some(two_days_ago + 2 * 24 * 60 * 60 * 1000),
     );
@@ -307,6 +320,7 @@ fn a_daily_check_waits_while_a_request_is_queued_and_the_request_is_answered() {
         vec![ChangeOutcome {
             change: switch_off_agy(),
             refused: None,
+            made: None,
         }],
         Some(two_days_ago),
     ))
@@ -417,6 +431,7 @@ fn a_copy_from_this_mac_reaches_the_device_whole_and_its_answer_holds_no_file_by
     let outcome = ChangeOutcome {
         change: received.redacted(),
         refused: None,
+        made: None,
     };
     helper.answer_store(Ok(serde_json::to_value(store_report(
         vec![outcome.clone()],
@@ -500,6 +515,7 @@ fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
         outcomes: vec![ChangeOutcome {
             change: change.redacted(),
             refused: None,
+            made: None,
         }],
         ..StoreReport::default()
     })
@@ -535,7 +551,13 @@ fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
     .unwrap();
     assert!(wire.contains("github"), "the snapshot carries the request");
     assert!(!wire.contains(KEY), "{wire}");
-    let answered = runtime.snapshot.status.store_answer.clone().unwrap();
+    let answered = runtime
+        .snapshot
+        .status
+        .store_answers
+        .last()
+        .cloned()
+        .unwrap();
     assert!(!format!("{answered:?}").contains(KEY));
     assert!(!format!("{change:?}").contains(KEY));
     assert!(!records.is_empty());
