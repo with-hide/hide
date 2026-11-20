@@ -785,6 +785,109 @@ impl Resumed {
     }
 }
 
+/// PRD letters-missions-simplify B2: a new conversation started in the
+/// Conductor's pane takes its registration over, and with it the mission it
+/// conducts and the worker it started; the next read of the pane, still the
+/// same conversation, hands nothing over again.
+#[test]
+fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
+    let fixture = conducting();
+    let observe = |runtime: &mut Runtime, session: &str| {
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            resumed_agent("sender", "codex", session),
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    };
+    let (client, conductor) = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        observe(&mut runtime, "sender-session");
+        runtime.snapshot.navigator.agents = vec![conductor_row()];
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        (
+            runtime.delivery_client.clone().unwrap(),
+            runtime.delivery_observations["sender"].actor.clone(),
+        )
+    };
+    let register = |actor: &Actor, by: &Actor, session: &str, parent: Option<String>| {
+        let record = crate::coordination::AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: crate::node::TEST_NODE.into(),
+            session: session.into(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent,
+            origin: None,
+            project: Some(PROJECT.into()),
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        };
+        client
+            .submit(
+                crate::delivery::worker::Effect::Agents {
+                    authority: authority(by),
+                    actor: by.clone(),
+                    mutation: Box::new(crate::coordination::Mutation::Register {
+                        record,
+                        check: false,
+                    }),
+                },
+                Duration::from_secs(10),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let former = register(&conductor, &conductor, "sender-session", None);
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest("worker-session"),
+    };
+    let worker = register(&worker, &conductor, "worker-session", Some(former.clone()));
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        // The pane's row shows the next conversation, as the engine reads it.
+        runtime.snapshot.navigator.agents[0].session_id = Some("next-session".into());
+        observe(&mut runtime, "next-session");
+        assert!(runtime.delivery_successions().contains_key(&former));
+    }
+    // The store's next batch hands the registration over.
+    client
+        .submit(crate::delivery::worker::Effect::HumanClaim, Duration::from_secs(10))
+        .unwrap();
+    let runtime = fixture.runtime.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    let old = ledger.agents.iter().find(|record| record.id == former).unwrap();
+    let successor = old.successor.clone().expect("taken over");
+    assert!(old.ended);
+    let next = ledger.agents.iter().find(|record| record.id == successor).unwrap();
+    assert_eq!(
+        next.actor.session,
+        crate::engine::tokens::session_digest("next-session")
+    );
+    let child = ledger.agents.iter().find(|record| record.id == worker).unwrap();
+    assert_eq!(child.parent.as_ref(), Some(&successor));
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
+    assert!(mission.conductor.actor.same_identity(&next.actor));
+    assert!(runtime.delivery_successions().is_empty());
+}
+
 /// The pane the conversation came back in is registered as the mission
 /// moves, before it starts any worker, and its first `hide agent end` of
 /// the former registration's worker holds; a later registration of the same
