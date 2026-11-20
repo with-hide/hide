@@ -19,7 +19,7 @@ use crate::runtime::delivery::{Observation, ProjectedTurn};
 use crate::runtime::mission_events::SendFailure;
 
 use super::Actor;
-use super::ledger::{BELLS, Ledger, Letter, State};
+use super::ledger::{BELL_ROUND_MS, BELLS, Ledger, Letter, State};
 use super::worker::{Client, Effect, Rang, now};
 
 /// How long a recipient works on without a rest, counted from the later of
@@ -397,6 +397,10 @@ struct Tried {
 struct Rung {
     episode: Episode,
     letter: String,
+    /// When it was rung: a bell its agent did not take in the same episode
+    /// a round later (`BELL_ROUND_MS`) is announced no more, so the pane is
+    /// rung again (B6).
+    at: u64,
 }
 
 /// What the doorbell keeps between passes. Each map is keyed by a letter or
@@ -723,6 +727,12 @@ impl Doorbell {
                 }
             };
             if letter.attempts() >= BELLS {
+                // A live agent that took none of three bells is woken again a
+                // round later (B6): the store gives the letter three more,
+                // which the next pass rings through every guard a bell has.
+                if letter.bell_round_due(now) {
+                    bell_round(client, letter);
+                }
                 self.hold(&letter.id, pane, Hold::Exhausted);
                 continue;
             }
@@ -747,7 +757,9 @@ impl Doorbell {
             // names every waiting letter, and mid-turn the next is rung once
             // the agent has taken the last one.
             if self.rung.get(pane).is_some_and(|rung| {
-                rung.episode == episode && (!episode.working || ids.contains(rung.letter.as_str()))
+                rung.episode == episode
+                    && now.saturating_sub(rung.at) < BELL_ROUND_MS
+                    && (!episode.working || ids.contains(rung.letter.as_str()))
             }) {
                 self.hold(&letter.id, pane, Hold::Announced);
                 continue;
@@ -792,6 +804,7 @@ impl Doorbell {
                         Rung {
                             episode,
                             letter: letter.id.clone(),
+                            at: now,
                         },
                     );
                     record(client, &letter.id, &observed, Rang::Sent(route));
@@ -1123,6 +1136,7 @@ fn send_input_notice(
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
             registers: Vec::new(),
+            written: None,
         },
         actor.clone(),
         Some(notice.target.clone()),
@@ -1701,6 +1715,22 @@ pub(crate) const INTERRUPTED: &str = "bell_interrupted";
 /// for its line (`after_lost`), and a letter with none left waits for its
 /// agent's own hooks or `hide inbox`. A result the store does not take now
 /// is tried again the next pass.
+/// Asks the store for `letter`'s next round of bells (`Effect::BellRound`).
+fn bell_round(client: &Client, letter: &Letter) {
+    if let Err(code) = client.submit(
+        Effect::BellRound {
+            id: letter.id.clone(),
+            recipient: letter.recipient.clone(),
+        },
+        Duration::from_secs(5),
+    ) {
+        crate::diagnostic!(
+            json!({"component":"delivery","kind":"doorbell.transaction_failed",
+            "letter_id":letter.id,"code":code})
+        );
+    }
+}
+
 fn end_interrupted(client: &Client, pending: &[&Letter]) {
     for letter in pending.iter().filter(|letter| letter.bell_in_flight()) {
         crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.interrupted",
@@ -3595,11 +3625,13 @@ mod tests {
     }
 
     /// B6: a letter whose three bells are spent and none taken stays pending
-    /// for its agent's own hooks or `hide inbox`, rung no more, with the last
-    /// bell's failure recorded; whether a device's node refused each bell
-    /// before typing it (with-hide/hide-private#677) or each answer was lost.
+    /// for its agent's own hooks or `hide inbox`, rung no more until a round
+    /// after the last, with the last bell's failure recorded; whether a
+    /// device's node refused each bell before typing it
+    /// (with-hide/hide-private#677) or each answer was lost, so no bell has a
+    /// typed time to count the round from.
     #[test]
-    fn a_letter_whose_bells_are_spent_stays_pending_and_is_rung_no_more() {
+    fn a_letter_whose_bells_are_spent_stays_pending_and_is_rung_again_a_round_later() {
         for (error, reason) in [
             ("pane_input_unavailable", "engine_refused"),
             ("timeout", "engine_call_failed"),
@@ -3624,10 +3656,13 @@ mod tests {
             assert_eq!(bell.attempts(), 3, "{error}");
             bell.pass(&mut doorbell, at);
             assert_eq!(bell.typed().len(), 3, "{error}: a spent letter is not rung");
+            // The pane moves on to a rest that began a while ago, so the
+            // store's own clock reads it settled when the round's bell is
+            // reserved.
             crate::runtime::delivery::tests::observe_turn_ended(
                 &mut bell.runtime.lock().unwrap(),
                 "recipient",
-                start + 10,
+                start - 60_000,
             );
             let letter = || {
                 let guard = bell.runtime.lock().unwrap();
@@ -3649,7 +3684,51 @@ mod tests {
             bell.pass(&mut doorbell, at + RETRY_LIMIT_MS);
             assert_eq!(bell.typed().len(), 3, "{error}: still not rung");
             assert_eq!(letter().state, State::Pending, "{error}");
+            let round = letter().last_bell_at() + BELL_ROUND_MS;
+            bell.pass(&mut doorbell, round);
+            until(|| bell.attempts() == 0);
+            let records = bell.pass(&mut doorbell, round + RETRY_LIMIT_MS);
+            assert_eq!(bell.typed().len(), 4, "{error}: a round later {records:?}");
+            assert_eq!(letter().state, State::Pending, "{error}");
         }
+    }
+
+    /// B6: a live agent at rest that takes none of its letter's bells is
+    /// woken again a round later, with its pane, turn and session as they
+    /// were: a bell it did not take is announced for a round only, and once
+    /// its three are spent the letter gets three more. Nothing but time
+    /// passes between the bells.
+    #[test]
+    fn a_resting_agent_that_takes_no_bell_is_rung_again_each_round() {
+        let bell = Bell::start(json!({}));
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        bell.pass(&mut doorbell, start);
+        assert_eq!(bell.typed().len(), 1);
+        bell.pass(&mut doorbell, start + BELL_ROUND_MS - 1);
+        assert_eq!(bell.typed().len(), 1, "announced for a round");
+        for round in 1..=2 {
+            bell.pass(&mut doorbell, start + round * BELL_ROUND_MS);
+            assert_eq!(bell.typed().len() as u64, round + 1, "round {round}");
+        }
+        assert_eq!(bell.attempts(), BELLS);
+        // Spent: the next round asks the store for three more bells, and
+        // the pass after it rings the first of them.
+        let spent = start + 3 * BELL_ROUND_MS;
+        let records = bell.pass(&mut doorbell, spent);
+        assert_eq!(bell.typed().len(), 3, "{records:?}");
+        until(|| bell.attempts() == 0);
+        bell.pass(&mut doorbell, spent + 1);
+        assert_eq!(bell.typed().len(), 4);
+        assert_eq!(bell.attempts(), 1);
+        let guard = bell.runtime.lock().unwrap();
+        let ledger = guard.delivery_state().unwrap();
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == bell.letter)
+            .unwrap();
+        assert_eq!(letter.state, State::Pending, "it waits all the while");
     }
 
     /// Two lost answers, then the third bell reserved and still on its way:

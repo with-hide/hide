@@ -1792,6 +1792,7 @@ impl Runtime {
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
         self.missions.finished = super::agent_sleep::missions::finished_nodes(&self.missions.book);
+        self.follow_successors();
     }
 
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
@@ -3277,12 +3278,52 @@ impl Runtime {
         )
     }
 
+    /// Hands each role in the open missions whose registration ended with an
+    /// agent after it in its pane (`coordination::succeed`, PRD
+    /// letters-missions-simplify B2) to the live registration that runs in
+    /// its place now (`coordination::live_successor`): a mission's
+    /// Conductor, a node's worker and a line's checker. It reads only what
+    /// the ledger and the mission book hold, so a role a stop left behind
+    /// between the ledger's save and the book's follows on the next start,
+    /// whichever of the two loads first. A closed mission keeps who ran it.
+    pub(super) fn follow_successors(&mut self) {
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return;
+        };
+        let ledger = std::sync::Arc::clone(ledger);
+        let mut held = std::collections::BTreeSet::new();
+        for mission in self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status.open())
+        {
+            held.extend(self.registration_of(&mission.conductor));
+            for node in &mission.nodes {
+                held.extend(node.agent_id.clone());
+                for criterion in &node.criteria {
+                    held.extend(
+                        criterion
+                            .checkers
+                            .iter()
+                            .filter_map(|checker| checker.agent_id.clone()),
+                    );
+                }
+            }
+        }
+        for former in held {
+            let successor = match crate::coordination::live_successor(&ledger, &former) {
+                Some(Ok(record)) if record.id != former => record.id.clone(),
+                _ => continue,
+            };
+            self.follow_successor(&former, &successor);
+        }
+    }
+
     /// Hands the roles registration `former` held in the open missions to
-    /// `successor`, the agent that took its pane over
-    /// (`coordination::succeed`, PRD letters-missions-simplify B2): a
-    /// mission's Conductor, a node's worker and a line's checker. A closed
-    /// mission keeps who ran it.
-    pub(super) fn follow_successor(&mut self, former: &str, successor: &str) {
+    /// `successor`, the live registration in its place.
+    fn follow_successor(&mut self, former: &str, successor: &str) {
         let Some(record) = self.delivery_ledger.as_ref().ok().and_then(|ledger| {
             ledger
                 .agents
@@ -4711,6 +4752,7 @@ impl Runtime {
                                 also_reads: Vec::new(),
                                 proven: crate::delivery::worker::Proven::Now,
                                 registers: Vec::new(),
+                                written: None,
                             },
                             actor.clone(),
                             Some(wake.target.clone()),

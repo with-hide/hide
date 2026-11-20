@@ -14,6 +14,11 @@ use super::{
 /// The bells one letter has: the doorbell types it at most this many
 /// times (`Letter::reserve_bell`).
 pub(crate) const BELLS: u8 = 3;
+/// How long a live agent that took none of a letter's bells rests before the
+/// letter's next round of three (PRD letters-missions-simplify B6): Hide
+/// wakes it again rather than leaving the letter to wait for it, and a round
+/// per half hour keeps that from typing into it at every pass.
+pub(crate) const BELL_ROUND_MS: u64 = 30 * 60 * 1000;
 
 /// Where a letter stands. Hide ends a pending letter one of four ways
 /// (PRD letters-missions-simplify D-04): `delivered` once its recipient took
@@ -92,6 +97,13 @@ pub struct Letter {
     pub to: Option<String>,
     pub kind: String,
     pub body: String,
+    /// How many bytes at the start of `body` its sender wrote, when the core
+    /// appended something after them (a report's list of the Views its
+    /// sender opened, `Runtime::list_opened_views`); null when the body is
+    /// all the sender's. A send under the same intent is the same letter
+    /// again only when it says exactly the sender's part (B5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written: Option<usize>,
     pub state: State,
     #[serde(default)]
     pub hook_confirmed: Option<bool>,
@@ -303,6 +315,13 @@ impl Letter {
             .unwrap_or(self.state == State::Delivered && !self.handed)
     }
 
+    /// The part of the body its sender wrote ([`Letter::written`]).
+    pub(crate) fn written_body(&self) -> &str {
+        self.written
+            .and_then(|written| self.body.get(..written))
+            .unwrap_or(&self.body)
+    }
+
     pub(crate) fn awaiting_intake(&self) -> bool {
         self.state == State::Pending
             || (self.state == State::Acknowledged && self.hook_confirmed == Some(false))
@@ -374,6 +393,34 @@ impl Letter {
         self.bell_attempts = Some(attempt);
         self.bell_line = Some(line);
         Ok(attempt)
+    }
+
+    /// When the letter's last bell was typed, failed or was cut short, or when
+    /// the letter was sent if none was.
+    pub(crate) fn last_bell_at(&self) -> u64 {
+        self.bell_typed_at_unix_ms
+            .into_iter()
+            .chain(self.bell_failure.as_ref().map(|failure| failure.at_unix_ms))
+            .max()
+            .unwrap_or(self.created_at_unix_ms)
+    }
+
+    /// Whether the letter waits for its agent with its three bells spent, none
+    /// on its way, and a round since the last (`BELL_ROUND_MS`).
+    pub(crate) fn bell_round_due(&self, now: u64) -> bool {
+        self.state == State::Pending
+            && !self.handed
+            && self.attempts() >= BELLS
+            && !self.bell_in_flight()
+            && now.saturating_sub(self.last_bell_at()) >= BELL_ROUND_MS
+    }
+
+    /// Gives the letter its next round of three bells (`bell_round_due`).
+    /// Its sender was told of the bells not taken once, and is not again.
+    pub(crate) fn renew_bell_round(&mut self) {
+        let noticed = (self.input_noticed, self.input_noticed_at_unix_ms);
+        self.renew_bells();
+        (self.input_noticed, self.input_noticed_at_unix_ms) = noticed;
     }
 
     /// Gives a letter whose bells are spent three more, once its agent runs
@@ -539,6 +586,9 @@ impl Ledger {
                 )
                 || letter.body.len() > BODY_LIMIT
                 || letter.body.trim().is_empty()
+                || letter
+                    .written
+                    .is_some_and(|written| !letter.body.is_char_boundary(written))
                 || letter.bell_errors > BELLS
                 || letter.bell_turn.as_ref().is_some_and(|turn| {
                     !hide_agent_hooks::delivery::valid_sha256_digest(&turn.session)
@@ -562,7 +612,7 @@ impl Ledger {
                 || (letter.hook_confirmed == Some(true)
                     && matches!(
                         letter.state,
-                        State::Pending | State::Superseded | State::NoRecipient | State::Expired
+                        State::Pending | State::NoRecipient | State::Expired
                     ))
                 || (letter.hook_confirmed == Some(false) && letter.state == State::Delivered)
                 || letter
@@ -1245,7 +1295,6 @@ mod tests {
         for (state, receipt) in [
             (State::Pending, true),
             (State::NoRecipient, true),
-            (State::Superseded, true),
             (State::Expired, true),
             (State::Delivered, false),
         ] {

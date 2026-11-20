@@ -1092,6 +1092,7 @@ mod tests {
             recipient: actor("filler"),
             kind: "request".into(),
             body,
+            written: None,
             state: if open {
                 super::super::ledger::State::Delivered
             } else {

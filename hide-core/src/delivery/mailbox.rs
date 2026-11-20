@@ -140,16 +140,20 @@ pub(crate) fn existing_intent<'a>(
     })
 }
 
-/// Whether `body` is what `letter` says: a report's stored body also carries
-/// the list of Views its sender opened (`list_opened_views`), added after the
-/// sender wrote it, so a report is the same when its stored body begins with
-/// the body sent.
+/// Whether `body`, as its sender wrote it, is what `letter`'s sender wrote:
+/// what the core appended to the stored body is left out on both sides
+/// (`Letter::written`), and any other difference, a shorter body too, is
+/// another body (B5).
 fn same_body(letter: &Letter, body: &str) -> bool {
-    if letter.kind == "report" {
-        letter.body.starts_with(body)
-    } else {
-        letter.body == body
-    }
+    letter.written_body() == body
+}
+
+/// The part of a sent `body` its sender wrote: the first `written` bytes when
+/// the core appended something after them.
+fn sender_part(body: &str, written: Option<usize>) -> &str {
+    written
+        .and_then(|written| body.get(..written))
+        .unwrap_or(body)
 }
 
 /// The letter a send under `intent` retries, if its sender already holds one.
@@ -239,6 +243,28 @@ pub(crate) fn send(
     reply_to: Option<String>,
     now: u64,
 ) -> Result<Letter, String> {
+    send_written(
+        ledger, sender, recipient, intent, body, None, kind, reply_to, now,
+    )
+}
+
+/// [`send`] of a `body` whose sender wrote only its first `written` bytes,
+/// the core having appended the rest (`Letter::written`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The private transaction validates each immutable envelope field before persistence"
+)]
+fn send_written(
+    ledger: &mut Ledger,
+    sender: &Actor,
+    recipient: &Actor,
+    intent: &str,
+    body: &str,
+    written: Option<usize>,
+    kind: &str,
+    reply_to: Option<String>,
+    now: u64,
+) -> Result<Letter, String> {
     sender.require_native_identity()?;
     recipient.require_native_identity()?;
     if !sender.valid() || !recipient.valid() {
@@ -253,12 +279,14 @@ pub(crate) fn send(
     ) {
         return Err("invalid_kind".into());
     }
+    let written =
+        written.filter(|written| *written < body.len() && body.is_char_boundary(*written));
     if let Some(letter) = retried_send(
         ledger,
         sender,
         intent,
         kind,
-        body,
+        sender_part(body, written),
         reply_to.as_deref(),
         |stored| stored.same_identity(recipient),
         now,
@@ -333,6 +361,7 @@ pub(crate) fn send(
         recipient: crate::coordination::named(ledger, recipient),
         kind: kind.to_owned(),
         body: body.to_owned(),
+        written,
         state: State::Pending,
         hook_confirmed: Some(false),
         waiting_answer: matches!(kind, "request" | "block"),
@@ -378,12 +407,18 @@ pub fn apply(
         now,
         InterfaceLanguage::English,
         &[],
+        None,
     )
 }
 
-/// [`apply`], with what a handover shows worded in `language` and `also_reads`
+/// [`apply`], with what a handover shows worded in `language`, `also_reads`
 /// the senders whose letters `Show` answers beside the caller's own
-/// (`Authority::also_reads`).
+/// (`Authority::also_reads`), and `written` how much of a sent body its
+/// sender wrote (`Authority::written`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each argument is one thing the core worked out for the command"
+)]
 pub fn apply_in(
     ledger: &mut Ledger,
     actor: &Actor,
@@ -392,11 +427,12 @@ pub fn apply_in(
     now: u64,
     language: InterfaceLanguage,
     also_reads: &[Exchange],
+    written: Option<usize>,
 ) -> Result<Value, String> {
     actor.require_native_identity()?;
     match command {
-        // The runtime judged a repeated send's recipient from the key it
-        // named and hands no target; a target handed here is compared whole.
+        // A send names its recipient as the target: for a repeated send,
+        // the recipient of the letter the core judged it repeats.
         Command::Send {
             intent, kind, body, ..
         } => {
@@ -405,9 +441,9 @@ pub fn apply_in(
                 actor,
                 intent,
                 kind,
-                body,
+                sender_part(body, written),
                 None,
-                |stored| target.is_none_or(|target| target.same_identity(stored)),
+                |stored| target.is_some_and(|target| target.same_identity(stored)),
                 now,
             ) {
                 return Ok(json!(letter));
@@ -442,12 +478,13 @@ pub fn apply_in(
             force,
             ..
         } => {
-            let mut letter = send(
+            let mut letter = send_written(
                 ledger,
                 actor,
                 target.ok_or("target_unavailable")?,
                 intent,
                 body,
+                written,
                 kind,
                 None,
                 now,
@@ -1612,10 +1649,12 @@ mod tests {
         let a = actor("a");
         let b = actor("b");
         let first = send(&mut ledger, &a, &b, "first", "work", "request", None, 1).unwrap();
+        // The core hands a retry the recipient of the letter it repeats,
+        // which need not run any more.
         let retry = apply(
             &mut ledger,
             &a,
-            None,
+            Some(&b),
             &Command::Send {
                 target: "gone".into(),
                 intent: "first".into(),
@@ -1768,30 +1807,30 @@ mod tests {
         assert_eq!(state(&ledger, &first.id), (State::Superseded, Some(2)));
         let id = newer["id"].as_str().unwrap().to_owned();
         assert_eq!(state(&ledger, &id), (State::Pending, None));
-        // The same body again, with or without a target, is the newer one.
-        for target in [Some(&b), None] {
-            let again = apply(
-                &mut ledger,
-                &a,
-                target,
-                &send_command("once", "progress", "2/2"),
-                3,
-            )
-            .unwrap();
-            assert_eq!(again["id"], id.as_str());
+        // The same body again to the same agent is the newer one.
+        let again = apply(
+            &mut ledger,
+            &a,
+            Some(&b),
+            &send_command("once", "progress", "2/2"),
+            3,
+        )
+        .unwrap();
+        assert_eq!(again["id"], id.as_str());
+        // A send names its recipient, a retry too (the core hands the one
+        // of the letter it repeats): with none, nothing is kept.
+        for body in ["2/2", "3/3"] {
+            assert_eq!(
+                apply(
+                    &mut ledger,
+                    &a,
+                    None,
+                    &send_command("once", "progress", body),
+                    4
+                ),
+                Err("target_unavailable".into())
+            );
         }
-        // Another body with no target is refused before anything is kept:
-        // a new version needs its recipient.
-        assert_eq!(
-            apply(
-                &mut ledger,
-                &a,
-                None,
-                &send_command("once", "progress", "3/3"),
-                4
-            ),
-            Err("target_unavailable".into())
-        );
         // Delivered, it is not replaced; another kind stands beside it.
         ledger
             .letters
@@ -1806,30 +1845,96 @@ mod tests {
         assert_eq!(state(&ledger, &asked.id).0, State::Pending);
     }
 
+    /// B4, B5: a letter its recipient's hook took in is replaced under the
+    /// same intent before the hook's receipt comes; the late receipt is kept
+    /// on it, superseded and taken, beside the newer letter's in the same
+    /// confirm, and the ledger stays one the store keeps.
     #[test]
-    fn a_report_retry_matches_the_stored_report_that_gained_a_views_list() {
+    fn a_late_receipt_of_a_superseded_letter_is_kept_with_the_others() {
         let mut ledger = Ledger::default();
         let (a, b) = (actor("a"), actor("b"));
-        let listed = "done\n\nViews this agent opened (read one):\n- v1 page (seen)";
-        let first = send(&mut ledger, &a, &b, "report", listed, "report", None, 1).unwrap();
-        let retry = apply(
-            &mut ledger,
-            &a,
-            None,
-            &send_command("report", "report", "done"),
-            2,
-        )
-        .unwrap();
-        assert_eq!(retry["id"], first.id.as_str());
-        let other = apply(
+        let first = send(&mut ledger, &a, &b, "once", "1/2", "request", None, 1).unwrap();
+        let newer = apply(
             &mut ledger,
             &a,
             Some(&b),
-            &send_command("report", "report", "something else"),
+            &send_command("once", "request", "2/2"),
+            2,
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        apply(
+            &mut ledger,
+            &b,
+            None,
+            &Command::Confirm {
+                ids: vec![first.id.clone(), newer.clone()],
+            },
             3,
         )
         .unwrap();
-        assert_ne!(other["id"], first.id.as_str());
+        let ended = |id: &str| {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap();
+            (letter.state, letter.hook_confirmed)
+        };
+        assert_eq!(ended(&first.id), (State::Superseded, Some(true)));
+        assert_eq!(ended(&newer), (State::Delivered, Some(true)));
+        ledger.validate().unwrap();
+    }
+
+    /// B5: a report is compared on the words its sender wrote
+    /// (`Letter::written`): the same words again are the first report,
+    /// though the core appended the Views its sender opened; fewer words,
+    /// even the start of what it wrote, are another body; and words of the
+    /// sender's own that read like the Views list are its own.
+    #[test]
+    fn a_report_retry_compares_the_words_its_sender_wrote() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (actor("a"), actor("b"));
+        let views = format!("{}\n- v1 page (seen)", super::super::OPENED_VIEWS_HEAD);
+        let mut sent = |body: &str, written: Option<usize>, at: u64| {
+            apply_in(
+                &mut ledger,
+                &a,
+                Some(&b),
+                &send_command("report", "report", body),
+                at,
+                InterfaceLanguage::English,
+                &[],
+                written,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let wrote = "done: UI and API";
+        let first = sent(&format!("{wrote}{views}"), Some(wrote.len()), 1);
+        assert_eq!(sent(wrote, None, 2), first, "the same words");
+        let shorter = sent("done: UI", None, 3);
+        assert_ne!(shorter, first, "fewer words");
+        let own = sent(&format!("done{views}"), None, 4);
+        assert_ne!(own, shorter);
+        assert_ne!(sent("done", None, 5), own, "the list was the sender's");
+        let state = |id: &str| {
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap()
+                .state
+        };
+        assert_eq!(
+            [state(&first), state(&shorter), state(&own)],
+            [State::Superseded; 3]
+        );
+        ledger.validate().unwrap();
     }
 
     fn pending_for(ledger: &mut Ledger, recipient: &Actor, count: usize) -> Vec<String> {

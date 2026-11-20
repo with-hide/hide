@@ -901,6 +901,40 @@ fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
     assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
     assert!(mission.conductor.actor.same_identity(&next.actor));
     assert!(runtime.delivery_successions().is_empty());
+    assert_eq!(
+        child.parent.as_ref(),
+        Some(&successor),
+        "it takes the children"
+    );
+    assert_eq!(next.parent, None, "and is the child of no one");
+    drop(runtime);
+
+    // A stop after the ledger kept the takeover and before the mission book
+    // did: the book the next start reads names the former registration as
+    // the Conductor, a node's worker and a line's checker, and the first
+    // ledger that start gets moves each to the agent after it.
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    let stored = runtime.delivery_state().unwrap();
+    {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.conductor.agent_id = Some(former.clone());
+        let node = &mut mission.nodes[0];
+        node.agent_id = Some(former.clone());
+        node.criteria[0].checkers.push(
+            serde_json::from_value(json!({"worker": {"agent": "codex"}, "agent_id": former}))
+                .unwrap(),
+        );
+    }
+    runtime.delivery_ledger = Err("delivery_unavailable".into());
+    runtime.publish_delivery(stored, true);
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
+    assert_eq!(mission.nodes[0].agent_id.as_ref(), Some(&successor));
+    assert_eq!(
+        mission.nodes[0].criteria[0].checkers[0].agent_id.as_ref(),
+        Some(&successor)
+    );
 }
 
 /// The pane the conversation came back in is registered as the mission

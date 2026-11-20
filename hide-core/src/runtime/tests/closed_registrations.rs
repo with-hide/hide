@@ -361,8 +361,14 @@ fn a_closed_agents_letters_end_with_no_recipient_and_its_reopen_keeps_them_ended
         sent
     };
     let no_recipient = vec![
-        ("by-id".to_owned(), crate::delivery::ledger::State::NoRecipient),
-        ("by-pane".to_owned(), crate::delivery::ledger::State::NoRecipient),
+        (
+            "by-id".to_owned(),
+            crate::delivery::ledger::State::NoRecipient,
+        ),
+        (
+            "by-pane".to_owned(),
+            crate::delivery::ledger::State::NoRecipient,
+        ),
     ];
     pass();
     assert_eq!(sent(&shared.lock().unwrap()), no_recipient);

@@ -450,6 +450,11 @@ fn a_reused_letter_intent_is_a_retry_a_new_version_or_a_letter_of_its_own() {
         assert_eq!(again["id"], first["id"], "{target}");
     }
     let elsewhere = send("neighbor", "progress", "1/2").unwrap();
+    // After a letter to another agent under the intent, the first send again
+    // is still the first letter, to the first agent.
+    let back = send("worker", "progress", "1/2").unwrap();
+    assert_eq!(back["id"], first["id"]);
+    assert_eq!(back["to"], mission.ids["worker"].as_str());
     let asked = send("worker", "request", "1/2").unwrap();
     let newer = send("worker", "progress", "2/2").unwrap();
     for letter in [&elsewhere, &asked, &newer] {

@@ -1949,9 +1949,11 @@ impl Runtime {
                 .ok_or("no_parent")?;
         }
         // A send under an intent its sender already used is a retry of the
-        // same letter, answered with it without a target; another recipient,
-        // kind or body is a new letter, sent to a target as any other.
-        let repeated = match &command {
+        // same letter, answered with it: the store is handed that letter's
+        // recipient as the target, so it finds the same letter again whoever
+        // else got one under the intent. Another recipient, kind or body is
+        // a new letter, sent to a target as any other.
+        let retry = match &command {
             Command::Send {
                 target,
                 intent,
@@ -1974,13 +1976,17 @@ impl Runtime {
                     },
                     unix_milliseconds(),
                 )
-                .is_some(),
-                Err(_) => false,
+                .map(|letter| letter.recipient.clone()),
+                Err(_) => None,
             },
-            _ => false,
+            _ => None,
         };
+        let repeated = retry.is_some();
         let target = match &command {
-            Command::Send { .. } if repeated => None,
+            Command::Send { .. } if repeated => retry.map(|recipient| Observation {
+                status: "repeated".into(),
+                ..super::agent_sleep::letters::asleep_observation(recipient)
+            }),
             // A tool event's ask is judged by the caller's own pane: whether
             // it works, and since when.
             Command::Pull {
@@ -2011,7 +2017,8 @@ impl Runtime {
                 }
                 // An agent Hide put to sleep takes letters, which wait for
                 // its wake (PRD mission-worker-sleep B1), and so does one
-                // closed for Reopen closed, whose letters wait for its reopen.
+                // closed for Reopen closed, whose letters the store's next
+                // pass ends with no recipient (`Runtime::delivery_closed`).
                 let first = match (&command, first) {
                     (Command::Send { .. }, None) => {
                         self.delivery_ledger.as_ref().ok().and_then(|ledger| {
@@ -2038,12 +2045,16 @@ impl Runtime {
             _ => None,
         };
         // A report names the Views its sender opened, so the agent that
-        // answers for its work finds them (PRD unseen-agent-views D-21).
+        // answers for its work finds them (PRD unseen-agent-views D-21); the
+        // letter keeps how much of it the sender wrote (`Letter::written`).
+        let mut written = None;
         if !repeated
             && let Command::Send { kind, body, .. } = &mut command
             && kind == "report"
         {
+            let sender_wrote = body.len();
             self.list_opened_views(&actor.pane_id, body);
+            written = (body.len() > sender_wrote).then_some(sender_wrote);
         }
         // A mission worker's report or progress often follows a push: its
         // project's pull requests are read again (PRD mission-node-simple
@@ -2135,6 +2146,7 @@ impl Runtime {
                 also_reads,
                 proven,
                 registers,
+                written,
             },
             actor,
             target,
@@ -2380,15 +2392,15 @@ impl Runtime {
             })
         });
         // A registration the store handed over leaves the map, and its
-        // mission roles follow it once the ledger below is the core's.
-        let mut succeeded = Vec::new();
+        // mission roles follow it once the ledger below is the core's; so do
+        // roles the first ledger after a start shows handed over, which a
+        // stop before the mission book's save left behind.
+        let mut succeeded = self.delivery_ledger.is_err();
         self.registration_successions.retain(|id, _| {
             let Some(record) = ledger.agents.iter().find(|record| &record.id == id) else {
                 return false;
             };
-            if let Some(successor) = record.successor.as_ref().filter(|_| record.ended) {
-                succeeded.push((id.clone(), successor.clone()));
-            }
+            succeeded |= record.ended && record.successor.is_some();
             !record.ended
         });
         // Only a change in who waits for a reply, from whom, and whether that
@@ -2432,8 +2444,8 @@ impl Runtime {
         let previous = self.delivery_ledger.as_ref().ok().map(Arc::clone);
         self.note_reports(previous.as_deref(), &ledger);
         self.delivery_ledger = Ok(ledger);
-        for (former, successor) in &succeeded {
-            self.follow_successor(former, successor);
+        if succeeded {
+            self.follow_successors();
         }
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();
@@ -2562,6 +2574,7 @@ impl Runtime {
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
                 registers: Vec::new(),
+                written: None,
             },
             actor,
         ))
@@ -2588,6 +2601,7 @@ impl Runtime {
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
                 registers: Vec::new(),
+                written: None,
             },
             actor,
         ))
@@ -2888,6 +2902,7 @@ impl Runtime {
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
                 registers: Vec::new(),
+                written: None,
             },
             actor,
         ))
@@ -3182,6 +3197,7 @@ pub(crate) mod tests {
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
             registers: Vec::new(),
+            written: None,
         }
     }
 

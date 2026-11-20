@@ -337,13 +337,7 @@ pub(crate) fn plan_children(
                 !spawn.completed
                     && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
             }
-            Some(child) => {
-                !asleep.contains(child)
-                    && ledger
-                        .agents
-                        .iter()
-                        .any(|agent| &agent.id == child && !agent.ended)
-            }
+            Some(child) => at_work(ledger, child).is_some_and(|agent| !asleep.contains(&agent.id)),
         })
         .count()
 }
@@ -445,15 +439,17 @@ pub(crate) fn mission_workers(
                 !spawn.completed
                     && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
             }
-            Some(child) => {
-                !closed.contains(child)
-                    && ledger
-                        .agents
-                        .iter()
-                        .any(|agent| &agent.id == child && !agent.ended)
-            }
+            Some(child) => at_work(ledger, child).is_some_and(|agent| !closed.contains(&agent.id)),
         })
         .count()
+}
+
+/// The live registration at the work a spawn started `child` for: the child
+/// itself, or the agent that took its pane over (`succeed`). The spawn's
+/// receipt keeps naming the child it started, whose parent and origin it
+/// was made with; whoever counts the work now reads it through here.
+pub(crate) fn at_work<'a>(ledger: &'a Ledger, child: &str) -> Option<&'a AgentRecord> {
+    live_successor(ledger, child).and_then(Result::ok)
 }
 
 /// The earliest time after `now` a mission's worker still being made stops
@@ -3173,8 +3169,8 @@ pub(crate) struct Succession {
 /// its pane: the old registration ends naming its successor, and the next
 /// agent takes its pending letters (rung and handed to it afresh), the
 /// answers its open letters wait for, its children and their spawn
-/// receipts, and the watches it kept or that were kept on it. A successor
-/// with no parent of its own answers to the old one's parent. A letter the
+/// receipts, and the watches it kept or that were kept on it; not the old
+/// one's parent (`successor_of`). A letter the
 /// old agent took in and still owed an answer to ends that wait, since the
 /// new conversation never read it. The runtime moves mission roles once the
 /// ledger shows the successor (`Runtime::follow_successors`). Only a live
@@ -3216,9 +3212,11 @@ pub(crate) fn succeed(
 }
 
 /// The id of the registration that takes `old`'s place: the live record of
-/// `next`'s agent, given `old`'s parent when it has none of its own, or one
-/// made for it so. `old` is ended first, so the next agent may take its name;
-/// none, with `old` left live, when the ledger has no room for a new record.
+/// `next`'s agent, or one made for it. It is not given `old`'s parent: the
+/// next agent takes what `old` held (B2), and is the child of no one that did
+/// not start it, as the lineage shows it. `old` is ended first, so the next
+/// agent may take its name; none, with `old` left live, when the ledger has
+/// no room for a new record.
 fn successor_of(
     ledger: &mut Ledger,
     old: &AgentRecord,
@@ -3233,20 +3231,12 @@ fn successor_of(
     set_ended(ledger, true);
     if let Some(existing) = ledger
         .agents
-        .iter_mut()
+        .iter()
         .find(|record| !record.ended && record.actor.same_identity(&next.actor))
     {
-        if existing.parent.is_none() && existing.origin.is_none() && !existing.forked {
-            existing.parent.clone_from(&old.parent);
-            existing.origin.clone_from(&old.origin);
-        }
         return Some(existing.id.clone());
     }
     let mut record = next.clone();
-    if record.parent.is_none() && record.origin.is_none() {
-        record.parent.clone_from(&old.parent);
-        record.origin.clone_from(&old.origin);
-    }
     record.project = record.project.or_else(|| old.project.clone());
     record.ended = false;
     record.successor = None;
@@ -4057,6 +4047,71 @@ mod tests {
         apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
         assert_eq!(mission_workers(&ledger, "mission-1", &[], gone), 1);
     }
+    /// B2: a mission's worker whose pane starts another conversation keeps
+    /// its place under the cap in the agent after it, while the spawn's
+    /// receipt keeps naming the worker it started; the ledger saves and
+    /// reads back so, and a second worker is refused.
+    #[test]
+    fn a_mission_worker_taken_over_in_its_pane_still_holds_its_place() {
+        let mut ledger = Ledger::default();
+        let conductor = record("conductor", "native-conductor", None);
+        let caller = conductor.actor.clone();
+        let id = register(&mut ledger, conductor, &caller);
+        let worker = |intent: &str| {
+            let mut spawn = command(intent);
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 1,
+                    ..Default::default()
+                }));
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:a")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        spawn.pane = Some("child".into());
+        spawn.path = Some("/work/child".into());
+        ledger.validate().unwrap();
+        let next = record("child", "another-conversation", None);
+        let successions =
+            std::collections::BTreeMap::from([(child.clone(), Succession { successor: next })]);
+        let succeeded = succeed(&mut ledger, &successions, 3, &Held::default());
+        assert_eq!(succeeded.len(), 1);
+        let heir = &succeeded[0].1;
+        assert_eq!(
+            ledger.spawns[0].child.as_deref(),
+            Some(child.as_str()),
+            "the receipt names the worker it started"
+        );
+        assert_eq!(at_work(&ledger, &child).map(|agent| &agent.id), Some(heir));
+        ledger.validate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = hide_kit::layout::delivery_store(root.path());
+        let (mut store, empty, _) = crate::delivery::store::LedgerStore::open(&path).unwrap();
+        store.write(&empty, &ledger).unwrap();
+        drop(store);
+        let (_, read, _) = crate::delivery::store::LedgerStore::open(&path).unwrap();
+        assert_eq!(read, ledger);
+        assert_eq!(mission_workers(&read, "mission-1", &[], 4), 1);
+        let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 4).unwrap_err();
+        assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
+    }
+
     /// A main's plans hand steps to at most three children at once, counted
     /// at the reserve with the starts still being made, so a fourth start is
     /// refused whatever the order; the same start asked again still answers
@@ -6510,8 +6565,8 @@ mod tests {
     /// B1, B2: a new conversation in a pane takes the registration there
     /// over: the old one ends naming its successor, and the next agent
     /// takes its pending letters (rung afresh), the answers its letters
-    /// wait for, its children with their spawn receipts and its watches,
-    /// and answers to its parent. A request it had already taken in stops
+    /// wait for, its children with their spawn receipts and its watches;
+    /// it is not given the old one's parent. A request it had already taken in stops
     /// waiting for its answer. Run again it changes nothing.
     #[test]
     fn a_new_conversation_in_a_pane_takes_over_its_registration() {

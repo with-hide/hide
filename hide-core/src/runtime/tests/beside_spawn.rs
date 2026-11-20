@@ -438,6 +438,7 @@ impl Spawner {
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
             registers: Vec::new(),
+            written: None,
         };
         crate::coordination::run(
             self.client.clone(),

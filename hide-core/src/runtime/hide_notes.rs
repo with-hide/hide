@@ -81,6 +81,7 @@ impl Runtime {
                             also_reads: Vec::new(),
                             proven: crate::delivery::worker::Proven::Now,
                             registers: Vec::new(),
+                            written: None,
                         },
                         actor.clone(),
                         Some(note.target.clone()),

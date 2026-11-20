@@ -625,12 +625,12 @@ impl Runtime {
             .filter(|spawn| spawn.completed || !queued(&spawn.intent))
             .take(MAX_CARDS)
         {
+            // The agent at the job's work now: the one it started, or the
+            // agent that took its pane over (`coordination::succeed`).
             let registration = ledger.as_ref().and_then(|ledger| {
                 let child = spawn.child.as_ref()?;
-                ledger
-                    .agents
-                    .iter()
-                    .find(|agent| &agent.id == child)
+                crate::coordination::at_work(ledger, child)
+                    .or_else(|| ledger.agents.iter().find(|agent| &agent.id == child))
                     .cloned()
             });
             cards.push(self.desk_card(spawn, registration.as_ref(), index));

@@ -611,6 +611,7 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
                     also_reads: Vec::new(),
                     proven: crate::delivery::worker::Proven::Now,
                     registers: Vec::new(),
+                    written: None,
                 },
                 actor,
                 mutation: Box::new(crate::coordination::Mutation::Register {

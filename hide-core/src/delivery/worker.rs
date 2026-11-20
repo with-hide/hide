@@ -154,6 +154,9 @@ pub(crate) struct Authority {
     /// (`Runtime::party_registration`): a letter names the registrations it
     /// is between (`Letter::to`, PRD letters-missions-simplify B3).
     pub registers: Vec<crate::coordination::AgentRecord>,
+    /// How many bytes at the start of a sent body its sender wrote, when the
+    /// core appended something after them (`Letter::written`).
+    pub written: Option<usize>,
 }
 
 impl Prepared {
@@ -339,6 +342,12 @@ pub(crate) enum Effect {
     /// A forced letter whose recipient's composer showed text when the
     /// doorbell was about to type it: it stays, as an ordinary letter.
     Deferred {
+        id: String,
+        recipient: Actor,
+    },
+    /// A letter whose live recipient took none of its three bells, a round
+    /// ago (`Letter::bell_round_due`): it gets three more (B6).
+    BellRound {
         id: String,
         recipient: Actor,
     },
@@ -790,7 +799,7 @@ fn apply(
     now: u64,
     holds: &dyn crate::coordination::Holds,
 ) -> Result<(Value, bool), String> {
-    let (actor, target, command, language, also_reads) = match &request.effect {
+    let (actor, target, command, language, also_reads, written) = match &request.effect {
         Effect::SpawnNames { work, names } => {
             crate::coordination::naming::apply(ledger, work, names)?;
             return Ok((json!({"saved":true}), false));
@@ -886,6 +895,24 @@ fn apply(
             let changed = !confirmed.is_empty();
             return Ok((json!(confirmed), changed));
         }
+        Effect::BellRound { id, recipient } => {
+            let renewed = ledger.letters.iter_mut().find(|letter| {
+                letter.id == *id
+                    && letter.recipient.same_identity(recipient)
+                    && letter.state == super::ledger::State::Pending
+                    && !letter.handed
+                    && letter.attempts() >= super::ledger::BELLS
+                    && !letter.bell_in_flight()
+            });
+            let renewed = renewed
+                .map(super::ledger::Letter::renew_bell_round)
+                .is_some();
+            if renewed {
+                crate::diagnostic!(json!({"component":"delivery","kind":"letter.bell_round",
+                    "letter_id":id,"pane_id":recipient.pane_id}));
+            }
+            return Ok((Value::Null, renewed));
+        }
         Effect::Deferred { id, recipient } => {
             if let Some(letter) = ledger.letters.iter_mut().find(|letter| {
                 letter.id == *id
@@ -908,7 +935,14 @@ fn apply(
                     crate::coordination::register_party(ledger, record, holds)?;
                 }
             }
-            (actor, target, &**command, *language, &authority.also_reads)
+            (
+                actor,
+                target,
+                &**command,
+                *language,
+                &authority.also_reads,
+                authority.written,
+            )
         }
     };
     let value = match command {
@@ -1002,6 +1036,7 @@ fn apply(
             now,
             language,
             also_reads,
+            written,
         ),
     }?;
     Ok((
@@ -1423,8 +1458,9 @@ fn current(
                 command,
                 Command::WatchStart { .. } | Command::WatchAssign { .. }
             ) || matches!(command, Command::Send { intent, kind, body, .. }
-                    if super::mailbox::retried_send(candidate, actor, intent, kind, body, None,
-                        |stored| target.as_ref().is_none_or(|target| target.actor.same_identity(stored)),
+                    if super::mailbox::retried_send(candidate, actor, intent, kind,
+                        authority.written.and_then(|written| body.get(..written)).unwrap_or(body), None,
+                        |stored| target.as_ref().is_some_and(|target| target.actor.same_identity(stored)),
                         now).is_none());
             runtime
                 .lock()
@@ -1539,7 +1575,10 @@ impl Upkept {
 
 /// Whether a letter still waits for one of the `closed` agents, which the
 /// store's next pass ends.
-fn closed_letters_wait(ledger: &Ledger, closed: &[crate::agent_sleep::DormantRegistration]) -> bool {
+fn closed_letters_wait(
+    ledger: &Ledger,
+    closed: &[crate::agent_sleep::DormantRegistration],
+) -> bool {
     !closed.is_empty()
         && ledger.letters.iter().any(|letter| {
             letter.awaiting_intake()
@@ -2210,7 +2249,7 @@ mod tests {
                     Effect::Command {
                         authority: authority(&actor),
                         actor: actor.clone(),
-                        target: Some(Box::new(target)),
+                        target: Some(Box::new(target.clone())),
                         command: Box::new(command.clone()),
                         language: crate::model::InterfaceLanguage::English,
                     },
@@ -2227,10 +2266,12 @@ mod tests {
             );
             let replay = client
                 .submit(
+                    // The core hands a retry the recipient of the letter
+                    // it repeats, which no longer runs.
                     Effect::Command {
                         authority: authority(&actor),
                         actor,
-                        target: None,
+                        target: Some(Box::new(target)),
                         command: Box::new(command),
                         language: crate::model::InterfaceLanguage::English,
                     },

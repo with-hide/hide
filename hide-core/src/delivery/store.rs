@@ -1059,10 +1059,22 @@ mod tests {
                 letter.waiting_answer = false;
                 letter.finished_at_unix_ms = Some(2);
             }
-            if matches!(end, State::Delivered | State::Acknowledged) {
+            // A superseded letter may carry the receipt that came after it
+            // was replaced, as the build before lets a cancelled one.
+            if matches!(
+                end,
+                State::Delivered | State::Acknowledged | State::Superseded
+            ) {
                 letter.hook_confirmed = Some(true);
             }
+            // A report keeps how much of its body its sender wrote, a field
+            // the build before ignores.
+            if *end == State::Pending {
+                letter.body = "body and the core's list".into();
+                letter.written = Some("body".len());
+            }
         }
+        ledger.validate().unwrap();
         store.write(&before, &ledger).unwrap();
         // The words of `State` in the build before (1.2.11).
         let words = [
