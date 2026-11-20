@@ -384,6 +384,8 @@ function Kind({ kind, items, shown, page }: { kind: StoreItemKind; items: StoreI
   const columns = shownColumns(page.report, kind, shown);
   if (items.length === 0) return null;
   const title = t(kind === "skill" ? "store.section.skill" : "store.section.mcp");
+  // Every head's logos stand on one line; the shared head's word hangs under its logos, in room this padding keeps.
+  const head = cn("align-bottom font-normal", columns.some((column) => column.shared) ? "pb-xl" : "pb-sm");
   return (
     <section className="mb-xl" data-store-section={kind}>
       {/* A machine that is away shows its last list, dimmed and with no controls (scene 6). */}
@@ -396,13 +398,13 @@ function Kind({ kind, items, shown, page }: { kind: StoreItemKind; items: StoreI
           </colgroup>
           <thead>
             <tr>
-              <th className="pb-sm text-left align-bottom font-normal"><SectionLabel title={title} count={items.length} /></th>
+              <th className={cn(head, "text-left")}><SectionLabel title={title} count={items.length} /></th>
               {columns.map((column) => (
-                <th key={column.id} className="pb-sm text-center align-bottom font-normal" data-store-column={column.id}>
+                <th key={column.id} className={cn(head, "text-center")} data-store-column={column.id}>
                   <ColumnHead column={column} columns={columns} />
                 </th>
               ))}
-              <th className="pb-sm font-normal"><span className="sr-only">{t("store.column.on")}</span></th>
+              <th className={head}><span className="sr-only">{t("store.column.on")}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -441,15 +443,15 @@ function ColumnHead({ column, columns }: { column: ShownColumn; columns: readonl
   const hint = [t("store.column.sharedHint", { agents: readers.join(" · ") }), ...also.map(({ other, agents }) => t("store.column.sharedAlso", { agents: agents.map(agentShortName).join(" · "), column: columnName(other, name) }))].join(" ");
   return (
     <Hint label={hint}>
-      <span className="inline-flex flex-col items-center gap-xxs outline-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={0} data-store-shared-hint={column.id}>
+      <span className="relative inline-flex align-bottom outline-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={0} data-store-shared-hint={column.id}>
         <span className="flex" aria-hidden="true">
           {column.readers.map((agent, index) => (
-            <span key={agent} className={cn("inline-flex rounded-xs bg-dialog ring-2 ring-dialog", index > 0 && "-ml-xs")}>
+            <span key={agent} className={cn("inline-flex rounded-xs bg-dialog ring-1 ring-dialog", index > 0 && "-ml-xxs")}>
               <AgentMark kind={agent} />
             </span>
           ))}
         </span>
-        <span className="text-micro text-muted-foreground">{name}</span>
+        <span className="absolute left-1/2 top-full mt-xxs -translate-x-1/2 whitespace-nowrap text-micro text-muted-foreground">{name}</span>
       </span>
     </Hint>
   );
@@ -664,7 +666,7 @@ function PathText({ path, home }: { path: string; home: string | null | undefine
   const { head, tail } = pathParts(homePath(path, home));
   return (
     <Hint label={path}>
-      <span className="inline-flex min-w-0 max-w-full font-mono" tabIndex={0} data-store-path={path}>
+      <span className="inline-flex min-w-0 max-w-full overflow-hidden font-mono" tabIndex={0} data-store-path={path}>
         {head ? <span className="min-w-0 truncate">{head}</span> : null}
         <span className="shrink-0 whitespace-nowrap">{tail}</span>
       </span>
@@ -759,9 +761,11 @@ function CellFix({ first, item, column, cell, page }: { first: boolean; item: St
       <span className="self-start pt-xxs text-caption text-muted-foreground">{first ? t("store.detail.problem") : null}</span>
       <span className="flex min-w-0 items-center gap-sm text-body" data-store-fix={`${item.id}:${column.id}`}>
         {column.agent ? <AgentMark kind={column.agent} /> : null}
-        <span className={cn("min-w-0 truncate", failed ? "text-destructive" : "text-warning")} title={t("store.failure.line", { agent: name, words })}>{t("store.failure.line", { agent: name, words })}</span>
-        {cell.path ? <span className="flex min-w-0 shrink-[4] text-muted-foreground"><PathText path={cell.path} home={page.report.home} /></span> : null}
-        {request.refusal ? <span className="shrink-0 text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
+        <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+          <span className={cn("line-clamp-2 break-words", failed ? "text-destructive" : "text-warning")} title={t("store.failure.line", { agent: name, words })}>{t("store.failure.line", { agent: name, words })}</span>
+          {cell.path ? <span className="flex min-w-0 text-caption text-muted-foreground"><PathText path={cell.path} home={page.report.home} /></span> : null}
+          {request.refusal ? <span className="text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
+        </span>
         {failed ? (
           <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} data-store-retry={`${item.id}:${column.id}`}>
             {t("store.retry")}
