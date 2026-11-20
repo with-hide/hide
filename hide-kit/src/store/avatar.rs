@@ -11,6 +11,11 @@
 //! holds at most [`COUNT_LIMIT`] pictures and [`TOTAL_LIMIT`] bytes; a new
 //! one makes room by dropping unused ones, oldest first, and is not kept when
 //! every one kept is in use (engineering rule 15).
+//!
+//! Only the download runs outside the account lock (`download`, from the
+//! source fetch); deciding room, dropping and writing (`admit`) run under it,
+//! reading the folder and the store as they are then, so two kits of one
+//! account never both take the last place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -52,14 +57,25 @@ fn path(dir: &Path, owner: &str) -> PathBuf {
     dir.join(FOLDER).join(format!("{owner}{SUFFIX}"))
 }
 
-/// Fetches `owner`'s picture unless the store already holds it; `used` are
-/// the owners whose pictures must stay (this one among them).
-pub(crate) fn ensure(dir: &Path, owner: &str, used: &BTreeSet<&str>) {
+/// `owner`'s picture from github.com when the store holds none yet, outside
+/// the account lock; a failure is logged and leaves the GitHub glyph.
+pub(crate) fn download(dir: &Path, owner: &str) -> Option<Vec<u8>> {
+    if path(dir, owner).is_file() {
+        return None;
+    }
+    fetch(owner)
+        .inspect_err(|reason| log("store.avatar_failed", None, &format!("{owner}: {reason}")))
+        .ok()
+}
+
+/// Keeps a downloaded picture, under the account lock: `used` are the owners
+/// the store as it is now still needs, this one among them. Another kit may
+/// have kept it meanwhile, which leaves that one.
+pub(crate) fn admit(dir: &Path, owner: &str, bytes: &[u8], used: &BTreeSet<&str>) {
     if path(dir, owner).is_file() {
         return;
     }
-    let saved = fetch(owner).and_then(|bytes| keep(dir, owner, &bytes, used));
-    if let Err(reason) = saved {
+    if let Err(reason) = keep(dir, owner, bytes, used) {
         log("store.avatar_failed", None, &format!("{owner}: {reason}"));
     }
 }
@@ -280,6 +296,58 @@ mod tests {
         assert!(keep(&dir, "late", PICTURE, &every).is_err());
         assert!(!path(&dir, "late").exists());
         assert_eq!(owners(&dir).len(), COUNT_LIMIT);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn two_kits_that_downloaded_together_take_turns_under_the_lock_and_keep_the_limit() {
+        let dir = folder();
+        let mut used = (0..COUNT_LIMIT - 1)
+            .map(|n| format!("o{n:02}"))
+            .collect::<Vec<_>>();
+        for name in &used {
+            std::fs::write(path(&dir, name), PICTURE).unwrap();
+        }
+        used.extend(["a".to_owned(), "b".to_owned()]);
+        let used = std::sync::Arc::new(used);
+        // Both downloads are in hand before either kit takes the lock; the
+        // lock then gives the folder to one kit at a time, A before B.
+        let downloaded = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let (a_done, b_waits) = std::sync::mpsc::channel::<()>();
+        let kit = |owner: &'static str,
+                   after: Option<std::sync::mpsc::Receiver<()>>,
+                   done: Option<std::sync::mpsc::Sender<()>>| {
+            let (dir, used, downloaded, lock) =
+                (dir.clone(), used.clone(), downloaded.clone(), lock.clone());
+            std::thread::spawn(move || {
+                let bytes = PICTURE.to_vec();
+                downloaded.wait();
+                if let Some(after) = after {
+                    after.recv().unwrap();
+                }
+                let _held = lock.lock().unwrap();
+                admit(
+                    &dir,
+                    owner,
+                    &bytes,
+                    &used.iter().map(String::as_str).collect(),
+                );
+                if let Some(done) = done {
+                    done.send(()).unwrap();
+                }
+            })
+        };
+        let a = kit("a", None, Some(a_done));
+        let b = kit("b", Some(b_waits), None);
+        a.join().unwrap();
+        b.join().unwrap();
+        let now = owners(&dir);
+        assert_eq!(now.len(), COUNT_LIMIT, "{now:?}");
+        assert!(
+            now.contains("a") && !now.contains("b"),
+            "the last place went to A only"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -61,6 +61,8 @@ pub(crate) struct Fetched {
     previews: Vec<(SourceSpec, Result<Preview, StoreRefusal>)>,
     latest: Option<Result<Vec<(String, Latest)>, StoreRefusal>>,
     diffs: Vec<(String, Result<UpdateDiff, StoreRefusal>)>,
+    /// Owners' pictures downloaded for the pass to keep under the lock.
+    avatars: Vec<(String, Vec<u8>)>,
 }
 
 impl Fetched {
@@ -138,6 +140,12 @@ impl Fetched {
             }
             store.checked_at_unix_ms = Some(now_unix_ms());
         }
+        // The pictures are let in here, under the lock, against the folder
+        // and the store as they are now.
+        let used = super::avatar_owners(store);
+        for (owner, bytes) in &self.avatars {
+            super::avatar::admit(&ctx.dir, owner, bytes, &used);
+        }
     }
 }
 
@@ -159,18 +167,20 @@ pub(crate) fn fetch(
                 if let (SourceSpec::Git { url }, Ok(_)) = (source, &preview)
                     && let Ok(address) = parse(url)
                     && let Some(owner) = super::avatar::owner(&address.url)
+                    && let Some(bytes) = super::avatar::download(dir, owner)
                 {
-                    let mut used = super::avatar_owners(record);
-                    used.insert(owner);
-                    super::avatar::ensure(dir, owner, &used);
+                    fetched.avatars.push((owner.to_owned(), bytes));
                 }
                 fetched.previews.push((source.clone(), preview));
             }
             StoreChange::CheckUpdates => {
                 fetched.latest = Some(check(target, record));
-                let used = super::avatar_owners(record);
-                for owner in record.items.iter().filter_map(StoreItem::owner) {
-                    super::avatar::ensure(dir, owner, &used);
+                let owners: std::collections::BTreeSet<&str> =
+                    record.items.iter().filter_map(StoreItem::owner).collect();
+                for owner in owners {
+                    if let Some(bytes) = super::avatar::download(dir, owner) {
+                        fetched.avatars.push((owner.to_owned(), bytes));
+                    }
                 }
             }
             StoreChange::PreviewUpdate { item } => {
