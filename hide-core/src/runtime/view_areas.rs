@@ -686,7 +686,7 @@ impl Runtime {
                 .view_layout_at(key, &from)
                 .is_none_or(|layout| layout.display_count() == 0)
         {
-            self.end_pair_view(key, left, "emptied");
+            self.end_pair_view(key, left, super::pair_view::PairEnd::Emptied);
         }
         true
     }

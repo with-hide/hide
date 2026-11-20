@@ -1,6 +1,6 @@
 import { paneMoveStartTarget } from "./paneMove";
 import { usePaneMove } from "./PaneMoveControls";
-import { useKeyboardOwner } from "./viewFocus";
+import { keyboardCommandOwner, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
 import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
@@ -23,7 +23,7 @@ import { PaneDeskReturn } from "./DeskScreen";
 import { PaneAskMark, PaneForkMark, PaneOpenAsksMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton, usePaneAgents } from "./PaneHeaderBand";
 import { PaneWorkChip } from "./PaneMissionChip";
 import { ToolMark } from "./components/tool-mark";
-import { PaneViews } from "./ViewComments";
+import { PaneViews, usePaneViewRows } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
 import { PaneMention } from "./PaneMention";
 import { AncestorPath, usePaneMenu, type PaneHeadOffer, type TerminalMenuContext } from "./PaneRelations";
@@ -313,6 +313,10 @@ export const PaneView = memo(function PaneView({
     // operator is typing into a palette opened since. The palette hands the
     // keyboard back to the focused pane when it closes (`restoreFocus`).
     if (document.activeElement?.closest("[data-palette]")) return;
+    // A desk tab the operator chose in pair view takes its agent's pane to the left and makes it the tab's keyboard
+    // pane, so pane commands reach the pane on screen; the keys stay on the desk where the operator pressed. An entry
+    // hands the keyboard to the pane first (`actions.pinPairView`, `pairViewKey`).
+    if (keyboardCommandOwner().kind === "view" && pairOffer(workspaceViewOf(useShellStore.getState().rest), paneId) === "on") return;
     focusTerminal(paneId);
   }, [paneId, focused, snapshotIncludesLastClick]);
 
@@ -559,19 +563,20 @@ export const PaneView = memo(function PaneView({
 function PaneSplit({ paneId, name, agent, actions }: { paneId: string; name: string; agent: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const offer = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
-  const views = useShellStore((s) => agent && (workspaceViewOf(s.rest)?.feedback?.opened ?? []).some((row) => row.pane_id === paneId));
+  const views = usePaneViewRows(paneId).length > 0 && agent;
   if (!views && offer === "none") return null;
   const label = t(pairLabelKey(offer));
   const pressed = offer === "on";
   return (
-    <span data-pane-split={paneId} className="flex shrink-0 items-center overflow-hidden rounded-xs border border-border">
+    // Below the narrow breakpoint both cells give way, and the border with them.
+    <span data-pane-split={paneId} className="flex shrink-0 items-center overflow-hidden rounded-xs border border-border pane-head-narrow:hidden">
       {views ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={name} actions={actions} /></span> : null}
       {offer !== "none" ? (
         <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`shrink-0 rounded-none ${views ? "border-l border-border" : ""} ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
+            className={`shrink-0 rounded-none ${views ? "border-l border-border pane-head-tight:border-l-0" : ""} ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
             aria-label={label}
             aria-pressed={pressed}
             data-pane-pair={offer}

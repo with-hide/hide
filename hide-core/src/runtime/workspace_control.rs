@@ -880,7 +880,7 @@ impl Runtime {
                         .view_layout_at(key, &Place::Tray(tab.clone()))
                         .is_some_and(|layout| layout.display_count() == 0)
                 {
-                    self.end_pair_view(key, &tab, "tray_emptied");
+                    self.end_pair_view(key, &tab, super::pair_view::PairEnd::Emptied);
                 }
                 (view_id.clone(), true, area)
             }

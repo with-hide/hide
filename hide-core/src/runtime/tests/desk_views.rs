@@ -2023,10 +2023,9 @@ fn front_pair(runtime: &Runtime) -> crate::model::PairViewSnapshot {
         .expect("in pair view")
 }
 
-/// Entering pair view with a pane that does not hold the keyboard gives it
-/// the keyboard; a desk tab of another agent the operator brings in front
-/// moves the left pane and leaves the keyboard where the operator pressed;
-/// leaving gives it back to the pane that held it before (B26).
+/// The left pane of a pair view is its tab's keyboard pane: on entry, and
+/// when a desk tab of another agent brought in front moves it; leaving
+/// gives the keyboard back to the pane that held it before (B26).
 #[test]
 fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     let (mut runtime, _checkout, directory) = setup("pair-keyboard");
@@ -2054,8 +2053,8 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
-        Some("w-order:t1:q"),
-        "a desk tab chosen keeps the keyboard where it was"
+        Some("w-order:t1:p"),
+        "the pane on screen is the tab's keyboard pane; the shell keeps the keys on the desk"
     );
 
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));

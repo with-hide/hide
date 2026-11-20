@@ -18,6 +18,37 @@ use crate::links::ledger::SessionIdentity;
 use crate::model::DetailItem;
 use crate::workspace_views::{PairView, Place};
 
+/// Why a pair view ended, which the diagnostic names and which decides
+/// whether the keyboard goes back to the pane that held it before (B26).
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PairEnd {
+    /// The operator left: the strip's way back, ⌘., the pressed ◧.
+    Left,
+    /// The desk's last tab closed or moved away.
+    Emptied,
+    /// The left pane closed or left the tab (B28).
+    PaneGone,
+    /// The operator chose a pane of the tab with nothing to show (B25).
+    ChoseUnpaired,
+}
+
+impl PairEnd {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Emptied => "emptied",
+            Self::PaneGone => "pane_gone",
+            Self::ChoseUnpaired => "chose_unpaired_pane",
+        }
+    }
+
+    /// The operator leaving, or closing the desk's last tab, returns the
+    /// keyboard; a pane that went, or another chosen, leaves it.
+    fn returns_keyboard(self) -> bool {
+        matches!(self, Self::Left | Self::Emptied)
+    }
+}
+
 /// What pair view puts on the desk beside a pane (B17, B19): the View its
 /// agent opened, else its session's record. The one rule `pairable`, the
 /// entries and the operator's choice of another pane read.
@@ -56,7 +87,7 @@ impl Runtime {
         };
         let Some(pane) = payload.pane_id else {
             let tab = self.front_tab(&key);
-            return self.end_pair_view(&key, &tab, "left");
+            return self.end_pair_view(&key, &tab, PairEnd::Left);
         };
         // A terminal outside every Agent tab, such as an automation run's
         // chat, has no tray to pair with (inventory X02); a pane of another
@@ -185,7 +216,7 @@ impl Runtime {
     }
 
     /// Ends `tab`'s pair view; whether it was in one.
-    pub(super) fn end_pair_view(&mut self, key: &WorkspaceKey, tab: &str, cause: &str) -> bool {
+    pub(super) fn end_pair_view(&mut self, key: &WorkspaceKey, tab: &str, cause: PairEnd) -> bool {
         let Some(pair) = self
             .workspace_views
             .as_mut()
@@ -197,16 +228,13 @@ impl Runtime {
         };
         crate::diagnostic!(serde_json::json!({
             "component": "pair_view", "kind": "pair_view.ended",
-            "device": key.0, "tab": tab, "pane": pair.pane, "cause": cause,
+            "device": key.0, "tab": tab, "pane": pair.pane, "cause": cause.as_str(),
         }));
         if let Some(store) = self.workspace_views.as_mut() {
             store.generation += 1;
         }
         self.persist_workspace_views();
-        // The operator leaving, or closing the desk's last tab, gives the
-        // keyboard back to the pane that held it before (B26); a pair view
-        // that ends because its pane went, or another was chosen, leaves it.
-        if matches!(cause, "left" | "emptied" | "tray_emptied")
+        if cause.returns_keyboard()
             && let Some(before) = pair.before.filter(|before| {
                 *before != pair.pane && self.pane_tab(key, before).as_deref() == Some(tab)
             })
@@ -282,14 +310,19 @@ impl Runtime {
             .and_then(|view| view.tray_mut(&tab))
         {
             let before = tray.pair.take().and_then(|pair| pair.before);
-            tray.pair = Some(PairView { pane, before });
+            tray.pair = Some(PairView {
+                pane: pane.clone(),
+                before,
+            });
         }
         if let Some(store) = self.workspace_views.as_mut() {
             store.generation += 1;
         }
-        // The keyboard stays on the desk tab the operator chose; the left
-        // pane takes it only on an entry or a choice of a pane.
         self.persist_workspace_views();
+        // The pane on screen is the tab's keyboard pane, so ⇧⌘W, a split and
+        // the sidebar reach it; the shell leaves the keys on the desk tab the
+        // operator chose (`PaneView`).
+        self.focus_tab_pane(key, &pane);
     }
 
     /// The pane of the agent a desk tab belongs to, the one rule the tab's
@@ -417,7 +450,7 @@ impl Runtime {
                 false,
             );
         } else {
-            self.end_pair_view(&key, &tab, "chose_unpaired_pane");
+            self.end_pair_view(&key, &tab, PairEnd::ChoseUnpaired);
         }
     }
 }

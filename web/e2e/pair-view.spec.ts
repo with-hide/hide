@@ -90,7 +90,6 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     // The keyboard goes to the shell, so ◧ is pressed on a pane that does not hold it.
     await paneView(page, shell).locator("[data-terminal-host]").click();
     await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
-    await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
     await pairButton(page, left!).hover();
     await expect(page.getByRole("tooltip")).toContainText("Pair view");
     await expect(page.getByRole("tooltip")).toContainText(commandLabel("pair_view"));
@@ -129,8 +128,9 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await page.locator("[data-pair-others-item]").first().click();
     await expect(page.locator(`[data-pair-pane="${other}"]`)).toBeVisible();
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
-    // A desk tab chosen keeps the keyboard where the operator pressed; the left pane takes it only on an entry or a pane chosen.
-    await expect(paneView(page, other!)).toHaveAttribute("data-focused", "false");
+    // The pane on screen becomes the tab's keyboard pane, so pane commands reach it; the keys stay on the desk.
+    await expect(paneView(page, other!)).toHaveAttribute("data-focused", "true");
+    await expect(paneView(page, other!).locator(".xterm-helper-textarea")).not.toBeFocused();
     // B24, D-21: a tab the operator opened belongs to nobody, so the left pane stays.
     await showTool(page, "explorer");
     await page.locator('[data-explorer-row$="/notes.md"]').click();
