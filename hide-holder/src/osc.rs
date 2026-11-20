@@ -207,11 +207,11 @@ impl OscState {
                 b"7501" => {
                     let next = parse_program_status(payload);
                     // Facts coalesce output: the program acknowledging its
-                    // result must not erase done before a watch can read it.
+                    // result must not erase its end before a watch can read it.
                     let acknowledged = program_status.as_ref().zip(next.as_ref()).is_some_and(
                         |(before, after)| {
                             before.app == after.app
-                                && before.state == ProgramState::Done
+                                && matches!(before.state, ProgramState::Done | ProgramState::Error)
                                 && after.state == ProgramState::Idle
                         },
                     );
@@ -440,6 +440,8 @@ mod tests {
         assert_eq!(state.program_status().unwrap().state, ProgramState::Blocked);
         state.observe(b"\x1b]7501;state=done:app=codex\x1b\\\x1b]7501;state=idle:app=codex\x1b\\");
         assert_eq!(state.program_status().unwrap().state, ProgramState::Done);
+        state.observe(b"\x1b]7501;state=error:app=codex\x1b\\\x1b]7501;state=idle:app=codex\x1b\\");
+        assert_eq!(state.program_status().unwrap().state, ProgramState::Error);
         state.observe(b"\x1b]7501;state=working:app=codex\x07");
         assert_eq!(state.program_status().unwrap().state, ProgramState::Working);
         state.observe(b"\x1b]7501;state=clear\x1b\\");

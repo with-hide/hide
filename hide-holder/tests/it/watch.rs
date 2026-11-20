@@ -117,6 +117,7 @@ fn a_watch_reports_explicit_program_status_only_when_negotiated() {
             b"\x1b]7501;state=idle:app=codex\x1b\\".to_vec(),
             // Both reports in one write must still publish the completion.
             b"\x1b]7501;state=done:app=codex\x1b\\\x1b]7501;state=idle:app=codex\x1b\\".to_vec(),
+            b"\x1b]7501;state=error:app=codex\x1b\\\x1b]7501;state=idle:app=codex\x1b\\".to_vec(),
             b"\x1b]7501;state=clear\x1b\\\x1b]2;cleared\x07".to_vec(),
         ],
     );
@@ -130,6 +131,7 @@ fn a_watch_reports_explicit_program_status_only_when_negotiated() {
         ProgramState::Working,
         ProgramState::Idle,
         ProgramState::Done,
+        ProgramState::Error,
     ]
     .into_iter()
     .enumerate()
@@ -157,14 +159,14 @@ fn a_watch_reports_explicit_program_status_only_when_negotiated() {
             .and_then(Option::as_ref)
             .unwrap()
             .state,
-        ProgramState::Done
+        ProgramState::Error
     );
     watch.rules(None);
     let retired = watch.wait("the retired agent report", |facts| {
         facts.screen == ScreenRead::NoRules
     });
     assert_eq!(retired.program_status, Some(None));
-    script.go(3);
+    script.go(4);
     let cleared = watch.wait("the cleared report", |facts| {
         facts.title.as_deref() == Some("cleared")
     });

@@ -810,8 +810,14 @@ pub(super) fn apply(
             current.live.line_editing = facts.line_editing;
             applied.changed |= current.live.started.is_some();
         }
-        let mut status = reported_status(facts, &current.kind, current.live.status)
-            .unwrap_or_else(|| status_of(&facts.screen, current.live.status));
+        let screen_status = status_of(&facts.screen, current.live.status);
+        // Some visible setup and selection menus have no explicit blocked
+        // report. Keep their input gate even when the program reports ready.
+        let mut status = if screen_status == Status::Blocked {
+            Status::Blocked
+        } else {
+            reported_status(facts, &current.kind, current.live.status).unwrap_or(screen_status)
+        };
         // A screen no rules read never says the agent rests, so once its
         // program takes input it reads idle, and its integration's turns say
         // when it works (they outrank this, `agent_state::axes`). Read unknown,
@@ -858,15 +864,14 @@ fn reported_status(facts: &PaneFacts, kind: &str, before: Status) -> Option<Stat
         .filter(|report| report.app == kind)?;
     Some(match report.state {
         // Startup and other background work also report working. Only an
-        // explicit done finishes a turn; idle cannot invent a completion.
-        // Once done, keep Hide's completion until the next work begins:
+        // explicit done or error finishes a turn; idle cannot invent a
+        // completion. Once done, keep it until the next work begins:
         // the program acknowledging its own result does not mark ours read.
         ProgramState::Idle if before == Status::Done => Status::Done,
         ProgramState::Idle => Status::Idle,
         ProgramState::Working => Status::Working,
         ProgramState::Blocked => Status::Blocked,
-        ProgramState::Done => Status::Done,
-        ProgramState::Error => Status::Unknown,
+        ProgramState::Done | ProgramState::Error => Status::Done,
     })
 }
 
@@ -1166,10 +1171,100 @@ mod tests {
             at(ProgramState::Idle, ScreenState::Idle),
             (Status::Idle, None)
         );
-        assert_eq!(
-            at(ProgramState::Error, ScreenState::Idle),
-            (Status::Unknown, None)
-        );
+        let failed = at(ProgramState::Error, ScreenState::Idle);
+        assert_eq!(failed.0, Status::Done);
+        assert!(failed.1.is_some());
+        assert_eq!(at(ProgramState::Idle, ScreenState::Idle), failed);
+    }
+
+    #[test]
+    fn reported_errors_end_a_hook_turn_without_another_hook_event() {
+        use crate::agent_hooks::facts::HookFacts;
+        use crate::sidebar::SessionSnapshotPayload;
+        use hide_node_link::panes::{HookStatusReport, HookTurn};
+        let mut pane = Pane::new();
+        let at = |state| PaneFacts {
+            foreground: program("codex"),
+            screen: read(ScreenState::Idle),
+            program_status: Some(Box::new(hide_node_link::holders::ProgramStatus {
+                app: "codex".to_owned(),
+                state,
+            })),
+            ..PaneFacts::default()
+        };
+        let snapshot = |pane: &Pane, ended| {
+            let agent = pane.agent.as_ref().unwrap();
+            let mut snapshot: SessionSnapshotPayload = serde_json::from_value(serde_json::json!({
+                "agents": [{"pane_id": "w1:p1", "agent": "codex",
+                    "agent_status": agent.live.status.as_str(),
+                    "state_change_seq": agent.live.seq,
+                    "agent_session": {"kind": "id", "value": "s-1"}}],
+                "panes": [{"pane_id": "w1:p1"}]
+            }))
+            .unwrap();
+            snapshot.agents[0].facts = Some(crate::request_view::RowFacts {
+                turn_ended: ended,
+                ..Default::default()
+            });
+            snapshot
+        };
+        let mut hooks = HookFacts::default();
+        let working: HookStatusReport = serde_json::from_value(serde_json::json!({
+            "runtime": "codex", "version": hide_agent_hooks::HOOK_VERSION,
+            "session": "s-1", "turn": "working"
+        }))
+        .unwrap();
+        hooks.record("w1:p1", &working, 0).unwrap();
+        pane.facts(at(ProgramState::Working));
+        let mut before = snapshot(&pane, None);
+        hooks.lay(&mut before, str::to_owned, |_| true);
+        assert_eq!(before.agents[0].hook, Some(HookTurn::Working));
+        pane.facts(at(ProgramState::Error));
+        let completion = pane.agent.as_ref().unwrap().live.completion;
+        let mut ended = snapshot(&pane, Some(hide_session::turns::TurnEnded::Completed));
+        hooks.lay(&mut ended, str::to_owned, |_| true);
+        assert_eq!(ended.agents[0].hook, Some(HookTurn::Done));
+        assert!(completion.is_some());
+        pane.facts(at(ProgramState::Idle));
+        assert_eq!(pane.status(), Some("done"));
+        assert_eq!(pane.agent.as_ref().unwrap().live.completion, completion);
+    }
+
+    #[test]
+    fn reported_readiness_never_submits_a_start_into_a_visible_blocker() {
+        for reported in [
+            ProgramState::Idle,
+            ProgramState::Working,
+            ProgramState::Done,
+            ProgramState::Error,
+        ] {
+            let mut pane = Pane::new();
+            pane.agent = Some(PaneAgent::started("codex", Some("worker"), None));
+            let blocked = || PaneFacts {
+                foreground: program("codex"),
+                screen: ScreenRead::Read {
+                    state: ScreenState::Blocked,
+                    rule: Some("numbered_choice".to_owned()),
+                },
+                program_status: Some(Box::new(hide_node_link::holders::ProgramStatus {
+                    app: "codex".to_owned(),
+                    state: reported,
+                })),
+                line_editing: Some(false),
+                ..PaneFacts::default()
+            };
+            pane.facts(blocked());
+            pane.agent
+                .as_mut()
+                .unwrap()
+                .typed_at(Instant::now() - START_SETTLE);
+            let applied = pane.facts(blocked());
+            assert_eq!(pane.status(), Some("blocked"), "{reported:?}");
+            let agent = pane.agent.as_ref().unwrap();
+            assert!(agent.launch_pending(Instant::now()), "{reported:?}");
+            assert!(!agent.takes_input(Instant::now()), "{reported:?}");
+            assert_eq!(applied.settled_unread, None);
+        }
     }
 
     #[test]

@@ -398,6 +398,9 @@ pub struct ProgramStatus {
     pub state: ProgramState,
 }
 
+/// States fixed by the `program_status` capability (wire codes 1 through 5;
+/// 0 clears the report). Adding a state requires a new capability so a peer
+/// never receives a code outside the vocabulary it negotiated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgramState {
     Idle,

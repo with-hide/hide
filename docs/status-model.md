@@ -183,8 +183,9 @@ Regression owners: `hide-core/src/runtime/tests/human_turn.rs`, the escalation t
 ## agent_status provenance and background waits
 
 The raw `agent_status` is the core's own engine's; the core derives its axes in `agent_state/axes.rs`.
-A program's OSC 7501 lifecycle report takes priority over screen inference when its `app` matches the pane's recognized agent: `working`, `blocked` and `done` say those states, `idle` says ready without inventing a completion, and `error` says unknown.
-An explicit `done` keeps its completion through a later `idle` until new work begins, since the program acknowledging its result does not mark Hide's result read.
+A program's OSC 7501 lifecycle report takes priority over screen inference when its `app` matches the pane's recognized agent: `working`, `blocked` and `done` say those states, `idle` says ready without inventing a completion, and `error` says a failed turn finished.
+A screen-read blocker takes priority over the report, so a visible setup or selection menu keeps its input gate even if the program reports ready.
+An explicit `done` or `error` keeps its completion through a later `idle` until new work begins, since the program acknowledging its result does not mark Hide's result read.
 Codex reports startup activity as `working` followed by `idle`, which is not a completed user turn.
 The holder sends these reports only on a watch that negotiated `program_status`; older holders, peers and programs retain screen inference.
 Without a matching report, each pane's holder reads its screen with its agent's definition-file rules, and the engine turns a stop after work into `done` and its `completion_seq` ([ARCHITECTURE.md](ARCHITECTURE.md#agents-on-the-cores-own-engine)).
