@@ -371,8 +371,8 @@ Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a 
 
 - A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a general or `direct` node with no pull request is set `done` when its lines all pass.
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
-- A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a cell naming it, once per pull request, reason and commit.
-  A worker at work is told of a conflict too, since its pull request's CI does not run until it is gone: once while the conflict lasts, within the five minutes GitHub is read in, and told again only after GitHub read it gone.
+- A sleeping worker whose pull request fails CI or gets a review asking for changes is woken with a cell naming it, once per pull request, reason and commit.
+  A conflict with the base is told to the worker asleep or at work, since its pull request's CI does not run until it is gone: once while the conflict lasts, whatever it pushes meanwhile, within the five minutes GitHub is read in, and again only after GitHub read it gone.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request is not merged or a `direct` change's branch is not in the destination, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
 - A destination Hide cannot find, locally or as last fetched, counts for nothing: a worker's start is refused with Git's reason, a done `direct` change reads unread (`hide mission show <node>` says `읽지 못함` with the reason, which names the branch), and Hide does not close the mission by itself.
   It happens when the branch was never pushed, was deleted here and on the remote, or was merged into main and deleted; GitHub closes or moves the pull requests whose base went away, which is raised to you as `pr_closed`.

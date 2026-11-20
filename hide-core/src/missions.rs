@@ -2086,11 +2086,12 @@ impl Mission {
         self.nodes.iter().find(|node| node.key == key)
     }
 
-    /// The change nodes change node `key` waits for whole, by their plain
-    /// key, where one of their finish lines (`<node>:<line>`) might start
-    /// it sooner (PRD mission-speed-2 D-07); none for any other node.
+    /// The pull-request changes pull-request change `key` waits for whole,
+    /// by their plain key, where one of their finish lines
+    /// (`<node>:<line>`) might start it sooner, stacked on their branch
+    /// (PRD mission-speed-2 D-07); none for any other node.
     pub(crate) fn whole_node_waits(&self, key: &str) -> Vec<&str> {
-        let Some(node) = self.node(key).filter(|node| node.kind == NodeKind::Change) else {
+        let Some(node) = self.node(key).filter(|node| node.runs_elsewhere()) else {
             return Vec::new();
         };
         node.depends_on
@@ -2098,7 +2099,7 @@ impl Mission {
             .filter(|dependency| dependency.line.is_none())
             .filter(|dependency| {
                 self.node(&dependency.node)
-                    .is_some_and(|other| other.kind == NodeKind::Change)
+                    .is_some_and(MissionNode::runs_elsewhere)
             })
             .map(|dependency| dependency.node.as_str())
             .collect()

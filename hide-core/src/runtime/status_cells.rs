@@ -416,6 +416,18 @@ impl Runtime {
         if !hands_over {
             return None;
         }
+        // A tool use outside every mission's worker and checker cells reads
+        // nothing more.
+        if matches!(take, Take::Tool(_))
+            && !self
+                .missions
+                .book
+                .missions
+                .iter()
+                .any(|mission| mission.wakes.iter().any(PendingWake::mid_turn))
+        {
+            return Some(Vec::new());
+        }
         let ledger = self.delivery_ledger.clone().ok();
         let recipient = recipient_key(ledger.as_deref(), &actor);
         // Asked at every tool use: no cell is built unless a mid-turn one

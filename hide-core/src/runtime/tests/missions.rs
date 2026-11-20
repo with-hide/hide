@@ -19711,3 +19711,65 @@ fn a_round_wake_is_stored_as_news_an_older_build_reads() {
     let read: PendingWake = serde_json::from_value(later).unwrap();
     assert_eq!(read.round, Some(RoundWake::Unknown));
 }
+
+/// PRD mission-speed-2 B11, B12: a conflict told to a worker at work says
+/// its CI does not run and what to do, reaches it mid-turn, and stands in
+/// the facts of its next result while the conflict lasts.
+#[test]
+fn a_conflict_cell_tells_the_worker_its_ci_waits_and_shows_in_its_result() {
+    use crate::missions::{FixReason, Woken};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    let mut wake = crate::runtime::missions::wake_about(
+        "fix".into(),
+        Some(7),
+        WakeEvent::Fix,
+        Some(HEAD.into()),
+        Some("wake:7:conflict".into()),
+    );
+    wake.to = Some("agent-2".into());
+    wake.why = Some(FixReason::Conflict);
+    crate::runtime::missions::record(mission, wake).unwrap();
+    let node = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
+    node.woken.push(Woken {
+        pr: 7,
+        why: FixReason::Conflict,
+        head: Some(HEAD.into()),
+    });
+    let cells = runtime.cells_of("agent-2");
+    assert_eq!(cells.len(), 1, "{cells:?}");
+    assert!(cells[0].mid_turn);
+    assert!(
+        cells[0].line.starts_with("PR #7 conflicts with its base branch")
+            && cells[0]
+                .line
+                .contains("Its CI does not run until the conflict is gone: merge the base branch into your branch (never rebase)"),
+        "{}",
+        cells[0].line
+    );
+    read_cells(&mut runtime, "agent-2");
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD, "pass": false})),
+    )
+    .unwrap();
+    let told = read_cells(&mut runtime, "agent-2");
+    assert!(
+        told.iter()
+            .any(|line| line.contains("review FAIL · round 1 of 3 · conflicts with its base")),
+        "{told:?}"
+    );
+}

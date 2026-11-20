@@ -32,10 +32,6 @@ pub(super) const ATTENTION_LIMIT: usize = 16;
 /// How old a project's pull request read must be before a mission's ask
 /// reads it again (D-09).
 const MISSION_READ_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
-/// Cells for workers and checkers one mission keeps waiting, one per node
-/// and receiver; a new one past it is refused and logged (B28,
-/// `missions::push_wake`).
-pub(super) const WORKER_WAKE_LIMIT: usize = 16;
 /// Mission notices one delivery pass claims (B5); the human notices of the
 /// ledger keep their own cap.
 const MISSION_NOTICE_LIMIT: usize = 8;

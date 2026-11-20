@@ -28,7 +28,9 @@ use crate::missions::{Dependency, Mission, MissionNode, RoundWake, WakeEvent};
 /// base (D-09). Only facts the book holds; a value it does not hold yet is
 /// left out.
 pub(super) struct RoundFacts {
-    pub(super) lines: Vec<(CriterionKind, CriterionState)>,
+    /// Each checker line's kind, its verdict in the round, and whether a
+    /// checker is bound to it at all: a line none checks waits on no one.
+    pub(super) lines: Vec<(CriterionKind, CriterionState, bool)>,
     pub(super) rounds: Option<u32>,
     pub(super) limit: u32,
     pub(super) conflict: bool,
@@ -36,12 +38,20 @@ pub(super) struct RoundFacts {
 
 impl RoundFacts {
     pub(super) fn of(mission: &Mission, node: &MissionNode) -> Self {
-        let since = node.check_signal().map_or(0, |signal| signal.at_unix_ms);
+        let signal = node.check_signal();
+        let since = signal.as_ref().map_or(0, |signal| signal.at_unix_ms);
+        let commit = signal.as_ref().and_then(|signal| signal.commit.as_deref());
         let limit = crate::mission_health::review_limit(mission);
         Self {
             lines: node
                 .checker_lines()
-                .map(|line| (line.kind, line.round_state(since)))
+                .map(|line| {
+                    let bound = line
+                        .checkers
+                        .iter()
+                        .any(|checker| checker.agent_id.is_some());
+                    (line.kind, line.round_state(since, commit), bound)
+                })
                 .collect(),
             rounds: node.review_line(limit).map(|line| line.rounds),
             limit,
@@ -55,14 +65,14 @@ impl RoundFacts {
     pub(super) fn failed(&self) -> bool {
         self.lines
             .iter()
-            .any(|(_, state)| *state == CriterionState::Fail)
+            .any(|(_, state, _)| *state == CriterionState::Fail)
     }
 
     /// Whether a line still waits on its checker in the round.
     pub(super) fn running(&self) -> bool {
         self.lines
             .iter()
-            .any(|(_, state)| *state == CriterionState::Open)
+            .any(|(_, state, bound)| *bound && *state == CriterionState::Open)
     }
 
     /// `review FAIL · verify running · round 2 of 3 · conflicts with its base`.
@@ -70,7 +80,7 @@ impl RoundFacts {
         let mut parts: Vec<String> = self
             .lines
             .iter()
-            .map(|(kind, state)| {
+            .map(|(kind, state, bound)| {
                 let name = match kind {
                     CriterionKind::Verify => "verify",
                     _ => "review",
@@ -79,7 +89,8 @@ impl RoundFacts {
                     CriterionState::Pass => "PASS",
                     CriterionState::Fail => "FAIL",
                     CriterionState::Skipped => "skipped",
-                    CriterionState::Open => "running",
+                    CriterionState::Open if *bound => "running",
+                    CriterionState::Open => "no checker",
                 };
                 format!("{name} {state}")
             })
@@ -125,6 +136,13 @@ pub(super) fn last_answer(node: &MissionNode, agent: &str) -> Option<Option<Stri
         .map(|checker| checker.commit.clone())
 }
 
+/// The line a node worker's brief ends with: on a node with a check
+/// command, then on one without.
+const BRIEF_LINES: [&str; 2] = [
+    "Before you record your `check` line, run the local checks the change touches: recording `check` starts the node's review and verification.",
+    "Recording every one of your lines passed starts the node's review and verification.",
+];
+
 /// A commit as a cell shows it.
 pub(super) fn short(commit: Option<&str>) -> &str {
     commit.map_or("-", |commit| commit.get(..7).unwrap_or(commit))
@@ -163,16 +181,29 @@ impl Runtime {
     }
 
     /// Ends a node worker's brief with what starts its node's checkers (PRD
-    /// mission-speed-2 B15), on a node that has checkers. The same brief
-    /// always gets the same line, so a spawn asked again is the same spawn
-    /// (`AgentRecord::asked_with`); a brief the line would take past the
-    /// letter limit is left as the Conductor wrote it, and logged.
+    /// mission-speed-2 B15), on a node that has checkers. A spawn asked
+    /// again is the spawn it was (`SpawnRecord::asked_with`, engineering
+    /// #11): when an earlier spawn of the intent was asked with the brief as
+    /// written or with either line, its brief stands, whatever the plan
+    /// says now and whichever build reserved it; a brief the line would
+    /// take past the letter limit is left as the Conductor wrote it, and
+    /// logged.
     pub(super) fn brief_round_line(
         &self,
         actor: &crate::delivery::Actor,
         intent: &str,
         brief: &mut String,
+        earlier: Option<&crate::coordination::SpawnRecord>,
     ) {
+        if let Some(earlier) = earlier {
+            let asked = std::iter::once(brief.clone())
+                .chain(BRIEF_LINES.iter().map(|line| format!("{brief}\n\n{line}")))
+                .find(|text| earlier.asked_with(Some(text)));
+            if let Some(asked) = asked {
+                *brief = asked;
+                return;
+            }
+        }
         let Some(mission) = self.missions.book.conducted_open(actor) else {
             return;
         };
@@ -187,9 +218,9 @@ impl Runtime {
             .iter()
             .any(|line| line.kind == CriterionKind::Check)
         {
-            "Before you record your `check` line, run the local checks the change touches: recording `check` starts the node's review and verification."
+            BRIEF_LINES[0]
         } else {
-            "Recording every one of your lines passed starts the node's review and verification."
+            BRIEF_LINES[1]
         };
         if brief.len() + line.len() + 2 > crate::delivery::BODY_LIMIT {
             crate::diagnostic!(json!({
@@ -315,7 +346,7 @@ impl Runtime {
         let states: Vec<&str> = facts
             .lines
             .iter()
-            .map(|(_, state)| state.as_str())
+            .map(|(_, state, _)| state.as_str())
             .collect();
         let head = row.check_signal().and_then(|signal| signal.commit);
         let mut wake = super::missions::wake_about(

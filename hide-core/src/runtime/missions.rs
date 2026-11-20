@@ -1206,8 +1206,15 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 ),
                 _ => read,
             };
+            // A conflict the worker was told of, which this cell replaced
+            // if not read yet.
+            let conflict = if facts.as_ref().is_some_and(|facts| facts.conflict) {
+                "\nIts pull request conflicts with its base, so its CI does not run: merge the base branch into your branch (never rebase) with your fix."
+            } else {
+                ""
+            };
             format!(
-                "Your node {} of mission {} \"{}\": {line}.\n{act}",
+                "Your node {} of mission {} \"{}\": {line}.\n{act}{conflict}",
                 wake.node, mission.id, mission.title
             )
         }
@@ -1223,7 +1230,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                                 line.kind == crate::mission_criteria::CriterionKind::Own
                             })
                         })
-                        .map_or("c1", |line| line.key.as_str());
+                        .map_or("<line>", |line| line.key.as_str());
                     format!("`\"{other}:{line}\"`")
                 })
                 .collect();
@@ -1466,8 +1473,26 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 }
                 _ => "Fix it on your branch and push, then report to your Conductor as before",
             };
+            // The worker's one cell about the node keeps its round's
+            // failure too, which this fact replaced if not read yet.
+            let round = match (wake.to.as_ref(), node) {
+                (Some(_), Some(node)) => {
+                    let facts = super::mission_rounds::RoundFacts::of(mission, node);
+                    if facts.failed() {
+                        format!(
+                            "\nIts review round: {}; read the findings in `hide mission show {} --mission {}`.",
+                            facts.line(),
+                            wake.node,
+                            mission.id
+                        )
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => String::new(),
+            };
             format!(
-                "{pr} {what} (mission {} \"{}\", node {}).\n{act}.",
+                "{pr} {what} (mission {} \"{}\", node {}).\n{act}.{round}",
                 mission.id, mission.title, wake.node
             )
         }
@@ -1682,6 +1707,11 @@ fn start_words(mission: &Mission, node: Option<&MissionNode>) -> String {
     )
 }
 
+/// The receivers one node's cells other than its Conductor's reach at
+/// most: its worker, and a checker in each slot of its review and its
+/// verification (`mission_criteria::CHECKER_LIMIT` each).
+const NODE_RECEIVER_LIMIT: usize = 1 + 2 * crate::mission_criteria::CHECKER_LIMIT;
+
 /// What a Conductor woken about a pull request of its own does.
 const PR_ACT: &str = "move a stacked PR above it onto the change, or answer the review";
 
@@ -1758,8 +1788,8 @@ pub(super) fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<Str
 /// resolves the node's standing CI and review facts. With
 /// `PENDING_WAKE_LIMIT` cells already standing for the Conductor a new
 /// subject is refused and logged, and every cell keeps its place
-/// (engineering #15). A worker's or checker's cells are capped apart
-/// (`WORKER_WAKE_LIMIT`). A wake with no key of its own gets one from what
+/// (engineering #15). A worker's or checker's cells are capped apart, by
+/// the receivers a node has (`NODE_RECEIVER_LIMIT`). A wake with no key of its own gets one from what
 /// it is about.
 pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
     if wake.key.is_none() {
@@ -1797,22 +1827,45 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
             return None;
         }
     }
-    // A worker's or checker's cells are capped apart, one per node and
-    // receiver (engineering #15).
+    // A worker's or checker's cells are one per node and receiver, so a
+    // node holds at most one for its worker and one for each checker its
+    // lines can bind (engineering #15); past that is a receiver no node
+    // has, refused and logged.
+    if wake.to.is_some() {
+        // A cell for an agent the node no longer holds as its worker or a
+        // checker is finished: it goes first.
+        let held: Vec<String> = mission
+            .node(&wake.node)
+            .map(|node| {
+                node.agent_id
+                    .iter()
+                    .map(String::as_str)
+                    .chain(node.checker_agents())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        mission.wakes.retain(|kept| {
+            kept.node != wake.node
+                || kept.to.as_ref().is_none_or(|to| {
+                    Some(to) == wake.to.as_ref() || held.iter().any(|agent| agent == to)
+                })
+        });
+    }
     if fresh && wake.to.is_some() {
-        let cells = mission
+        let receivers = mission
             .wakes
             .iter()
-            .filter(|kept| kept.to.is_some())
-            .map(|kept| (kept.node.as_str(), kept.to.as_deref()))
+            .filter(|kept| kept.node == wake.node && kept.to.is_some())
+            .map(|kept| kept.to.as_deref())
             .collect::<std::collections::BTreeSet<_>>()
             .len();
-        if cells >= super::mission_health::WORKER_WAKE_LIMIT {
+        if receivers >= NODE_RECEIVER_LIMIT {
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission.worker_wake_refused",
                 "mission": mission.id, "node": wake.node, "event": wake.event.as_str(),
                 "round": wake.round.map(RoundWake::as_str),
-                "cap": super::mission_health::WORKER_WAKE_LIMIT,
+                "cap": NODE_RECEIVER_LIMIT,
             }));
             return None;
         }
