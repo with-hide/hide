@@ -364,8 +364,8 @@ mod pulled;
 
 pub(crate) use coordinator::spawn;
 pub(crate) use projection::{
-    NotResumed, ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
-    ProjectionState,
+    NotCarried, NotResumed, ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace,
+    ProjectedWorktree, ProjectionState,
 };
 
 /// A worker's authoritative read uses the same device projection as the replica.

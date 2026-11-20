@@ -658,12 +658,12 @@ fn hook_marker_version(hook: &Value) -> Option<u32> {
 }
 
 /// Whether `hook` is a Hide entry the installation `install` may judge and
-/// replace: one that names that installation, one an earlier build wrote
-/// without naming any, or one whose helper is gone, which no installation
-/// runs any more. Another installation's entry on the same account is that
-/// installation's, and stays (docs/agent-hooks.md, More than one Hide on an
-/// account). With no `install` (a caller that names none), every Hide entry
-/// is.
+/// replace, by the one rule of [`crate::route::owns_entry`]: its own, and
+/// for the account's own Hide one an earlier build wrote without naming any
+/// or one whose helper is gone. Another installation's entry on the same
+/// account is that installation's, and stays (docs/agent-hooks.md, More
+/// than one Hide on an account). With no `install` (a caller that names
+/// none), every Hide entry is.
 pub(crate) fn hook_is_mine(hook: &Value, install: Option<&str>) -> bool {
     if hook_marker_version(hook).is_none() {
         return false;
@@ -674,14 +674,12 @@ pub(crate) fn hook_is_mine(hook: &Value, install: Option<&str>) -> bool {
     let named = hook_texts(hook)
         .map(crate::route::install_in_command)
         .find_map(|found| found.ok().flatten());
-    match named {
-        None => true,
-        Some(named) if named == install => true,
-        Some(_) => hook_texts(hook)
+    crate::route::owns_entry(install, named.as_deref(), || {
+        hook_texts(hook)
             .filter(|text| text.contains('\''))
             .find_map(|text| first_quoted(NATIVE, text))
-            .is_some_and(|helper| !Path::new(&helper).exists()),
-    }
+            .is_some_and(|helper| !Path::new(&helper).exists())
+    })
 }
 
 /// A group can belong to several writers. Only a marked command of the
@@ -978,6 +976,34 @@ pub(crate) fn powershell_commands(guard: &str, helper: &Path) -> Vec<String> {
                 && first != "exit"
         })
         .collect()
+}
+
+#[cfg(test)]
+/// The strings `after` holds beyond those `before` held, every one of which
+/// must still be there, an entry's command among them: what a pass added to
+/// a settings file, and that it rewrote nothing of what was there. Whole
+/// strings are compared and no path is looked for in the file, because a
+/// path is spelled there as its system and shell write it.
+pub(crate) fn strings_added(before: &Value, after: &Value) -> Vec<String> {
+    fn strings(value: &Value, into: &mut Vec<String>) {
+        match value {
+            Value::String(text) => into.push(text.clone()),
+            Value::Array(items) => items.iter().for_each(|item| strings(item, into)),
+            Value::Object(fields) => fields.values().for_each(|field| strings(field, into)),
+            _ => {}
+        }
+    }
+    let (mut kept, mut left) = (Vec::new(), Vec::new());
+    strings(before, &mut kept);
+    strings(after, &mut left);
+    for text in kept {
+        let at = left
+            .iter()
+            .position(|held| *held == text)
+            .unwrap_or_else(|| panic!("the file no longer holds {text}"));
+        left.swap_remove(at);
+    }
+    left
 }
 
 #[cfg(test)]
@@ -1574,6 +1600,53 @@ mod tests {
                 reason: InstallFailure::HelperMissing { .. }
             }
         ));
+    }
+
+    /// A guest's installation owns only the entries that carry its own name
+    /// ([`crate::route::owns_entry`]). One an earlier build of the account's
+    /// own Hide wrote without naming an installation is not the guest's to
+    /// replace or take out, not even with its helper gone: the guest's pass
+    /// adds its own beside it, and its removal takes its own alone.
+    #[test]
+    fn a_guests_installation_leaves_an_entry_that_names_no_installation() {
+        for runtime in [AgentRuntime::ClaudeCode, AgentRuntime::Codex] {
+            let fixture = Fixture::new("guest-nameless");
+            let own = helper(&fixture);
+            install(runtime, fixture.home(), &own).unwrap();
+            assert!(
+                matches_install(runtime, fixture.home(), &own),
+                "{runtime:?}"
+            );
+            let before = fixture.read(runtime);
+
+            let state = fixture.home().join("state");
+            let root = state.join("g").join("0123456789abcdef").join("i");
+            let guest_helper = root.join("current").join(crate::HELPER_BINARY_NAME);
+            fs::create_dir_all(guest_helper.parent().unwrap()).unwrap();
+            fs::write(&guest_helper, "#!/bin/sh\n").unwrap();
+            let name = crate::route::install_of_guest_root(&root);
+            let guest = HookTarget::new(&guest_helper, &state)
+                .unwrap()
+                .of_install(&name)
+                .unwrap();
+            // The account's own Hide would take an entry over once its
+            // helper is gone; a guest does not.
+            fs::remove_file(&own).unwrap();
+
+            install(runtime, fixture.home(), guest).unwrap();
+            // Everything the file held is still there, and the guest's own
+            // entries are beside it.
+            let added = strings_added(&before, &fixture.read(runtime));
+            assert!(!added.is_empty(), "{runtime:?}");
+            assert!(
+                matches_install(runtime, fixture.home(), guest),
+                "{runtime:?}"
+            );
+
+            let removed = remove(runtime, fixture.home(), Some(&name)).unwrap();
+            assert!(removed.removed_entries > 0, "{runtime:?}");
+            assert_eq!(fixture.read(runtime), before, "{runtime:?}");
+        }
     }
 
     /// The command as `/bin/sh -c` runs it, which is how both runtimes run a

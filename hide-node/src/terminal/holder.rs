@@ -1563,6 +1563,13 @@ impl Holders {
         self.panes.live()
     }
 
+    /// The panes [`Self::live_panes`] counts, each by the id its core names
+    /// it by: a record is named by its holder id.
+    pub fn live_pane_ids(&self) -> Result<Vec<String>, String> {
+        let holders = self.panes.live_ids()?;
+        Ok(holders.iter().map(|holder| core_pane(holder)).collect())
+    }
+
     /// Removes the version folders under the home that are not this
     /// build's and that nothing runs from (D-16, B20): a folder a holder or
     /// an OpenConsole still runs from stays, one a start has reserved is

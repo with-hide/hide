@@ -1,8 +1,10 @@
 //! launchd, macOS's login agents. An agent is a job in the account's GUI
 //! session (`gui/<uid>`, whatever HOME says), defined by a property list in
 //! `~/Library/LaunchAgents`: launchd starts it when the session starts and
-//! when it is installed, restarts it when it fails or is killed, at most
-//! every ten seconds, and leaves it stopped after it exits successfully.
+//! when it is installed, and starts it again after any exit, at most every
+//! ten seconds, while its marker file exists (`KeepAlive` `PathState`, which
+//! launchd also watches, so a marker that appears starts a job not
+//! running); with the marker gone it stays stopped.
 //! `pmset` answers the machine's power settings.
 
 use std::io;
@@ -14,8 +16,13 @@ use std::time::{Duration, Instant};
 use super::{Login, LoginAgent};
 
 /// How long one `launchctl` command may take that waits on nothing but
-/// launchd: `print`, `bootstrap`, `kickstart`; and how long `pmset` may take.
+/// launchd: `print`, `bootstrap`; and how long `pmset` may take.
 const COMMAND_WITHIN: Duration = Duration::from_secs(5);
+/// How long a `kickstart` may take: launchd holds a job's start back until
+/// its `ThrottleInterval` (10 s by default) has passed since its last start,
+/// and `kickstart` waits that out, so a start asked for right after the job
+/// exited (`hide stop`, then `hide connect`) takes up to 10 s.
+const STARTED_WITHIN: Duration = Duration::from_secs(15);
 /// How long an unload may take, from its `bootout` until launchd no longer
 /// knows the job: launchd allows a job its default `ExitTimeOut` (20 s)
 /// before it kills it, so a job that takes its time to stop is not reported
@@ -114,16 +121,42 @@ impl Launchd {
     pub(super) fn install(
         &self,
         agent: &LoginAgent<'_>,
+        marker: &Path,
         home: &Path,
         stop: &AtomicBool,
     ) -> io::Result<()> {
         self.unload(agent.label, home, stop)?;
+        self.adopt(agent, marker, home, stop)
+    }
+
+    /// Writes `agent`'s property list under `home` and loads it when launchd
+    /// does not hold its label; a job it holds goes on as it was loaded.
+    pub(super) fn adopt(
+        &self,
+        agent: &LoginAgent<'_>,
+        marker: &Path,
+        home: &Path,
+        stop: &AtomicBool,
+    ) -> io::Result<()> {
         let path = Self::plist(home, agent.label);
         if let Some(folder) = path.parent() {
             std::fs::create_dir_all(folder)?;
         }
-        crate::fs::atomic::write_file(&path, plist(agent).as_bytes(), crate::fs::Access::Private)?;
-        self.bootstrap(&path, home, stop)
+        crate::fs::atomic::write_file(
+            &path,
+            plist(agent, marker).as_bytes(),
+            crate::fs::Access::Private,
+        )?;
+        self.load(agent.label, home, stop)
+    }
+
+    /// Loads the installed property list of `label` when launchd does not
+    /// hold it.
+    pub(super) fn load(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
+        if self.is_loaded(label, home, stop)? {
+            return Ok(());
+        }
+        self.bootstrap(&Self::plist(home, label), home, stop)
     }
 
     /// Loads `agent` into the GUI session from a property list written in
@@ -159,7 +192,7 @@ impl Launchd {
     /// `kickstart`s the loaded agent `label` when it is not running.
     pub(super) fn start(&self, label: &str, home: &Path, stop: &AtomicBool) -> io::Result<()> {
         let name = format!("{}/{label}", self.domain);
-        let result = self.run(&["kickstart", &name], home, stop)?;
+        let result = self.run_within(&["kickstart", &name], home, stop, STARTED_WITHIN)?;
         if result.code != Some(0) {
             return Err(io::Error::other(format!(
                 "kickstart failed (exit {:?}): {}",
@@ -287,14 +320,18 @@ impl Launchd {
 }
 
 /// `agent`'s property list: started at load and at each start of the GUI
-/// session, restarted when it fails or is killed, never after a successful
-/// exit, at most every ten seconds.
-fn plist(agent: &LoginAgent<'_>) -> String {
+/// session, and again after any exit while `marker` exists, at most every
+/// ten seconds.
+fn plist(agent: &LoginAgent<'_>, marker: &Path) -> String {
     property_list(
         agent,
-        concat!(
-            "<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>",
-            "<key>ThrottleInterval</key><integer>10</integer>",
+        &format!(
+            concat!(
+                "<key>KeepAlive</key><dict><key>PathState</key><dict>",
+                "<key>{marker}</key><true/></dict></dict>",
+                "<key>ThrottleInterval</key><integer>10</integer>",
+            ),
+            marker = escape(&marker.to_string_lossy()),
         ),
     )
 }

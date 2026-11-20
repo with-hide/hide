@@ -2246,6 +2246,11 @@ impl Runtime {
         }
         if session_ok {
             changed |= self.request_device_facts(target_id);
+            // A project registered before this session arrived, whose folder
+            // the helper had confirmed already, has no facts answer left to
+            // open its terminal on. At most `REGISTRATION_TERMINAL_LIMIT`
+            // entries are looked at, and none in the usual case.
+            self.open_registration_terminals(target_id);
             changed |= self.node_agent_sleep_visit(target_id);
         }
         changed |= self.refresh_agent_lineage();

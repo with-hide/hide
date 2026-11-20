@@ -11,6 +11,9 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
+import { switchOffered } from "../deviceSwitch";
+import { deviceConnectOffered, ownWindow } from "../pairing";
+import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
@@ -53,6 +56,11 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
   const remote = device.kind === "remote" && device.dials_in !== true;
   // The core's machine seen from a node: its platform, since "local" would name the window's machine.
   const subtitle = device.kind !== "remote" && place.windowIsNode ? (device.host?.platform ?? "") : deviceSubtitle(device, t, place.coreName);
+  // A helper device says it is on the old connection and offers the switch
+  // (B35), from this computer's own window only (B52).
+  const ownScreen = useShellStore((s) => ownWindow(s.pairing));
+  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
+  const switchable = ownScreen && switchOffered(device, deviceConnect);
   return (
     <Row
       data-device-row={device.id}
@@ -76,12 +84,14 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           ) : null}
         </span>
       }
-      detail={<DeviceAttention device={device} actions={actions} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
+      detail={<DeviceAttention device={device} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
     >
       <Status tone={line.tone} data-device-state={`${device.id}:${device.state}`}>
         {line.text}
       </Status>
       {focused ? <Status tone="muted">{t("devices.selected")}</Status> : null}
+      {switchable ? <Status tone="muted" data-device-old-link={device.id}>{t("devices.switch.old")}</Status> : null}
+      {switchable && !device.switch ? <DeviceSwitchButton device={device} actions={actions} /> : null}
       {remote && canRetryDevice(device, status) ? (
         <Button
           variant="secondary"
@@ -182,7 +192,7 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
 }
 
 /** The lines under a device that something needs the operator for; a healthy device has none. */
-function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; actions: Actions; onAct: () => void; onAllow: (device: Device) => void }) {
+function DeviceAttention({ device, actions, switchable, onAct, onAllow }: { device: Device; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t, i18n } = useInterfaceTranslation();
   // SSH trust, sign-in and helper consent belong to a device this core dials, not to a node that dials in.
   const remote = device.kind === "remote" && device.dials_in !== true;
@@ -201,6 +211,7 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
+    switchable && device.switch ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
     deviceLinkShown(device) ? <DeviceLink key="link" device={device} actions={actions} /> : null,
     ownWords ? (
       <p key="message" className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>

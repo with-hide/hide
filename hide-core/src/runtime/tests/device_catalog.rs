@@ -512,6 +512,12 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
+        peer_key: None,
+        switch: None,
+        needs: None,
+        switchable: false,
+        not_carried: None,
+        switch_first: false,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: TARGET.to_owned(),
@@ -1557,6 +1563,12 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
 /// A device whose helper is ready before its engine's session arrives, so its
 /// folders are confirmed by the helper's facts as they are named.
 fn registering_device(runtime: &mut Runtime, sessions: Vec<WorkspaceSnapshot>) {
+    device_before_its_first_session(runtime);
+    runtime.ingest_remote_session(TARGET, Ok(session(sessions)));
+}
+
+/// A device whose helper answers and whose engine has sent no session yet.
+fn device_before_its_first_session(runtime: &mut Runtime) {
     let mut row = runtime.snapshot.navigator.devices[0].clone();
     row.id = TARGET.into();
     row.kind = "remote".into();
@@ -1578,7 +1590,6 @@ fn registering_device(runtime: &mut Runtime, sessions: Vec<WorkspaceSnapshot>) {
             1,
         ),
     );
-    runtime.ingest_remote_session(TARGET, Ok(session(sessions)));
 }
 
 fn register_on_device(runtime: &mut Runtime, root: &str) -> bool {
@@ -1683,6 +1694,50 @@ fn a_registration_terminal_waits_for_the_helper_to_confirm_the_folder() {
         )]
     );
     assert_eq!(runtime.snapshot.status.last_error, None);
+}
+
+/// A project opened the moment a device answers is registered before the
+/// device's first session, which lists its checkouts, has arrived. Its
+/// terminal waits for that session rather than being given up, whether the
+/// helper confirms the folder after the session or had confirmed it before
+/// (with-hide/hide#2688).
+#[test]
+fn a_project_registered_before_the_devices_first_session_opens_its_terminal_once_it_arrives() {
+    let t = tree();
+    for confirmed_before in [false, true] {
+        let mut runtime = runtime();
+        device_before_its_first_session(&mut runtime);
+        recording_device(&mut runtime);
+        if confirmed_before {
+            runtime
+                .device_facts
+                .entry(TARGET.to_owned())
+                .or_default()
+                .facts
+                .insert(
+                    t.other.clone(),
+                    Fact::Known(hide_project::facts(Path::new(&t.other)).unwrap()),
+                );
+        }
+
+        assert!(register_on_device(&mut runtime, &t.other));
+        assert!(
+            diagnostic_messages(&runtime, "registration.terminal_skipped").is_empty(),
+            "a checkout no session has listed yet is not given up (confirmed before: {confirmed_before})"
+        );
+        assert!(
+            diagnostic_messages(&runtime, "remote.control.requested").is_empty(),
+            "nothing is sent before the device's session lists the checkout"
+        );
+
+        runtime.ingest_remote_session(TARGET, Ok(session(Vec::new())));
+        assert_eq!(
+            diagnostic_messages(&runtime, "remote.control.requested"),
+            vec![format!("Sending workspace.create to {TARGET}")],
+            "the terminal is sent once the session arrives (confirmed before: {confirmed_before})"
+        );
+        assert!(diagnostic_messages(&runtime, "registration.terminal_skipped").is_empty());
+    }
 }
 
 /// Principle 13: a registration's terminal that the device refuses is the
@@ -2042,6 +2097,12 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
         kit: Default::default(),
         machine_name: None,
         dials_in: false,
+        peer_key: None,
+        switch: None,
+        needs: None,
+        switchable: false,
+        not_carried: None,
+        switch_first: false,
     });
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: TARGET.to_owned(),

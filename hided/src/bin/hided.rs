@@ -34,6 +34,15 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // The login item names its folder as an argument, since a Task Scheduler
+    // task carries no environment; it becomes the process's own, which the
+    // daemon and the kit it runs read, before any thread runs that could
+    // read the environment.
+    if let Role::CoreLogin(Some(dir)) = &role {
+        // SAFETY: nothing else runs yet in this process: no thread has been
+        // started and nothing reads the environment concurrently.
+        unsafe { std::env::set_var(hided::env::HIDE_STATE_DIR, dir) };
+    }
     // Taken before daemon-role work, as every cooperative child takes it: a
     // starter that passes an owner channel (the web e2e fixture) ends this
     // daemon and what it started by ending itself, even when it is killed.
@@ -94,9 +103,14 @@ fn run(role: Role<'_>) -> Result<(), String> {
                 return Err("--open-helper is the Unix opener supervisor's mode".into());
             }
         }
-        // What the login item of a core moved here runs: its log kept within
-        // its limit first, then the daemon below.
-        Role::CoreLogin => hided::login_item::before_core_at_login(),
+        // What the core's login item runs: nothing once its marker is gone,
+        // a wait while another core holds the folder, its log kept within its
+        // limit, then the daemon below on that folder.
+        Role::CoreLogin(_) => {
+            if hided::login_item::at_login()? == hided::login_item::AtLogin::End {
+                return Ok(());
+            }
+        }
         Role::Daemon => {}
     }
     let mut env = hided::env::load().map_err(|errors| {
@@ -115,7 +129,7 @@ fn run(role: Role<'_>) -> Result<(), String> {
         ));
     }
     env.build = Some(build);
-    if role == Role::CoreLogin {
+    if matches!(role, Role::CoreLogin(_)) {
         env.starter_program = Some(
             std::env::current_exe().map_err(|error| format!("this hided has no path: {error}"))?,
         );

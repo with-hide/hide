@@ -1,12 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { backPath, downPathAround, LAYOUT_TIMEOUT_MS, placeWithin, workerElk, type Box, type Flow, type GraphEdge, type LayerOrder, type NodeBox, type Placement } from "./dependencyLayout";
 import { cn } from "./lib/utils";
 import { useMeasuredPaths } from "./measuredPaths";
 import type { LayeredGraph } from "./projectBoard";
 import { useShellStore } from "./store";
 
-/** How an edge is drawn: its colour class, dashed for a stack's edge, and dimmed while a selection leaves it out. */
-export type EdgeLook = { tone: string; dashed?: boolean; dimmed?: boolean };
+/** How an edge is drawn: its colour class, dashed for a stack's edge, dimmed while a selection leaves it out, and the short words it carries at its middle (a mission edge's finish line). */
+export type EdgeLook = { tone: string; dashed?: boolean; dimmed?: boolean; label?: string };
 
 /** An edge drawn over the graph and kept out of its layout (a defect found later, drawn back up), with its own look. */
 export type OverlayEdge = GraphEdge & { look: EdgeLook };
@@ -90,10 +90,15 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
           </marker>
         ))}
       </defs>
-      {lines.map((arrow) => {
+      {lines.map((arrow, index) => {
         const look = looks.get(arrow.id);
+        const path = `${marker}-edge-${index}`;
+        const tone = cn(look?.tone, look?.dimmed && "opacity-(--opacity-dimmed)");
         return (
-          <path key={arrow.id} d={arrow.d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={look?.dashed ? "4 3" : undefined} className={cn(look?.tone, look?.dimmed && "opacity-(--opacity-dimmed)")} markerEnd={`url(#${marker}-${tones.indexOf(look?.tone ?? "")})`} data-dependency-edge={arrow.id} data-edge-dashed={look?.dashed || undefined} data-edge-dimmed={look?.dimmed || undefined} />
+          <Fragment key={arrow.id}>
+            <path id={path} d={arrow.d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={look?.dashed ? "4 3" : undefined} className={tone} markerEnd={`url(#${marker}-${tones.indexOf(look?.tone ?? "")})`} data-dependency-edge={arrow.id} data-edge-dashed={look?.dashed || undefined} data-edge-dimmed={look?.dimmed || undefined} />
+            {look?.label ? <EdgeLabel path={path} d={arrow.d} label={look.label} id={arrow.id} dimmed={look.dimmed} /> : null}
+          </Fragment>
         );
       })}
     </svg>
@@ -119,6 +124,30 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
       ))}
       {svg}
     </div>
+  );
+}
+
+/** The gap between an edge and the words beside its middle, in px. */
+const LABEL_GAP = 4;
+
+/**
+ * An edge's words, level, just above and right of its middle, clear of a
+ * vertical edge and of a level one alike, in the muted text colour rather than the line's,
+ * which is too faint to read words in. The middle is measured from the drawn
+ * path; until it is (or where the browser cannot measure it), nothing shows.
+ */
+function EdgeLabel({ path, d, label, id, dimmed }: { path: string; d: string; label: string; id: string; dimmed?: boolean }) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    const drawn = document.getElementById(path) as SVGPathElement | null;
+    if (!drawn || typeof drawn.getTotalLength !== "function") return;
+    const middle = drawn.getPointAtLength(drawn.getTotalLength() / 2);
+    setAt({ x: middle.x, y: middle.y });
+  }, [path, d]);
+  return (
+    <text x={(at?.x ?? 0) + LABEL_GAP} y={(at?.y ?? 0) - LABEL_GAP} visibility={at ? undefined : "hidden"} className={cn("fill-current text-micro text-muted-foreground", dimmed && "opacity-(--opacity-dimmed)")} data-edge-label={id}>
+      {label}
+    </text>
   );
 }
 

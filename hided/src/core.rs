@@ -40,10 +40,12 @@ type ReleaseSourceAnswer =
     Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
 
 /// What a hook's answer is read from: Memory's scope or why there is none,
-/// and the open questions' when the hook asks at a prompt.
+/// the open questions' when the hook asks at a prompt, and the Project's
+/// other sessions' when it starts a session.
 pub type HookScope = (
     Result<hide_core::memory_hook::Scope, &'static str>,
     Option<hide_core::links::agent_asks::GiveScope>,
+    Option<hide_core::links::session_brief::BriefScope>,
 );
 
 enum Command {
@@ -64,6 +66,15 @@ enum Command {
         pane_id: String,
         expected: Context,
         hint: Option<String>,
+        command: Box<hide_core::delivery::Command>,
+        reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
+    },
+    /// A letter a guest's node kept while this core was away
+    /// (`crate::peer_inbox`).
+    KeptLetterPrepare {
+        device_id: String,
+        pane_id: String,
+        terminal_id: String,
         command: Box<hide_core::delivery::Command>,
         reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
     },
@@ -256,6 +267,10 @@ enum Command {
         device: String,
         reply: Sender<MoveSourceAnswer>,
     },
+    DeviceSwitchSource {
+        device: String,
+        reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
+    },
     InboundNode {
         node: String,
         label: String,
@@ -285,6 +300,8 @@ enum Command {
         context: Context,
         /// The pane and the prompt's session, when the hook asks at a prompt.
         asks: Option<(String, String)>,
+        /// The pane and the session it starts, when the hook starts one.
+        brief: Option<(String, String)>,
         reply: Sender<HookScope>,
     },
     FoldAsk {
@@ -416,6 +433,30 @@ impl CoreHandle {
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
                 hint,
+                command: Box::new(command),
+                reply,
+            })
+            .map_err(|_| "delivery_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "delivery_unavailable".to_owned())?
+    }
+
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Core::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: hide_core::delivery::Command,
+    ) -> Result<hide_core::delivery::worker::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::KeptLetterPrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                terminal_id: terminal.to_owned(),
                 command: Box::new(command),
                 reply,
             })
@@ -817,7 +858,6 @@ impl CoreHandle {
     /// is over (`project_open_unconfirmed`). The same request id asked
     /// again joins its first receipt; `unheld` says whether a folder no
     /// registered checkout holds may be registered.
-    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
     pub fn project_open(
         &self,
         device: &str,
@@ -825,7 +865,6 @@ impl CoreHandle {
         request_id: &str,
         unheld: hide_core::project_open::Unheld,
     ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
-        use hide_core::project_open::ProjectOpenReceipt;
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::ProjectOpen {
@@ -839,6 +878,41 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "project_open_unavailable".to_owned())??;
+        self.project_receipt(request_id)
+    }
+
+    /// Registers this machine's folder `path` as a project and brings
+    /// nothing forward, as a row of Add a project's importable list does
+    /// (`create_workspace` with a request id), then waits for its receipt
+    /// as [`Self::project_open`] does. The same request id asked again
+    /// joins its first receipt.
+    pub fn project_add(
+        &self,
+        path: &str,
+        label: &str,
+        request_id: &str,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        let event = serde_json::json!({
+            "schema_version": hide_core::SCHEMA_VERSION,
+            "kind": "create_workspace",
+            "payload": {
+                "path": path, "label": label, "initialize_git": false,
+                "request_id": request_id,
+            },
+        });
+        self.dispatch(event.to_string().into_bytes())
+            .map_err(|_| "project_open_unavailable".to_owned())?;
+        self.project_receipt(request_id)
+    }
+
+    /// The receipt of the request `request_id` once it settles, read again
+    /// every `PROJECT_OPEN_POLL` until `PROJECT_OPEN_WAIT` is over.
+    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
+    fn project_receipt(
+        &self,
+        request_id: &str,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        use hide_core::project_open::ProjectOpenReceipt;
         let deadline = std::time::Instant::now() + PROJECT_OPEN_WAIT;
         loop {
             let (reply, result) = mpsc::channel();
@@ -928,6 +1002,7 @@ impl CoreHandle {
     pub fn spawn(
         options: CoreOptions,
         panes: hide_node::ssh::PaneEventsSlot,
+        peers: Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
     ) -> Result<Self, String> {
         let node = options.node_id.clone();
         let state_dir = std::path::Path::new(&options.app_state_path)
@@ -972,7 +1047,7 @@ impl CoreHandle {
                 owner_loop(
                     options,
                     (own_node, core_engine),
-                    panes,
+                    (panes, peers),
                     (routes, terminal_reports),
                     command_rx,
                     ready_tx,
@@ -1141,6 +1216,22 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the release source".to_owned())
     }
 
+    /// What `device`'s switch to its machine's own connection starts from;
+    /// see `Core::device_switch_source`.
+    pub fn device_switch_source(
+        &self,
+        device: &str,
+    ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::DeviceSwitchSource {
+                device: device.to_owned(),
+                reply,
+            })
+            .map_err(|_| "hide_unavailable")?;
+        rx.recv().map_err(|_| "hide_unavailable")?
+    }
+
     pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -1217,21 +1308,24 @@ impl CoreHandle {
     /// caller's blocking task. The owner's answer is waited for until the
     /// hook's `deadline` at most, the one its node call and store read share.
     /// What a hook's answer is read from, in one trip to the owner thread:
-    /// Memory's scope, and at a prompt the session's open questions' (`asks`
-    /// names the pane and the session the hook names).
+    /// Memory's scope, at a prompt the session's open questions' (`asks`
+    /// names the pane and the session the hook names) and at a session start
+    /// the Project's other sessions' (`brief`, the same pair).
     pub fn hook_scope(
         &self,
         context: &Context,
         asks: Option<(String, String)>,
+        brief: Option<(String, String)>,
         deadline: std::time::Instant,
     ) -> HookScope {
         let (reply, rx) = mpsc::channel();
-        let failed = |reason| (Err(reason), None);
+        let failed = |reason| (Err(reason), None, None);
         if self
             .commands
             .send(Command::MemoryScope {
                 context: context.clone(),
                 asks,
+                brief,
                 reply,
             })
             .is_err()
@@ -1514,7 +1608,10 @@ fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
 fn owner_loop(
     options: CoreOptions,
     (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
-    panes: hide_node::ssh::PaneEventsSlot,
+    (panes, peers): (
+        hide_node::ssh::PaneEventsSlot,
+        Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
+    ),
     (terminals, terminal_reports): (Arc<Router>, hide_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
@@ -1555,6 +1652,12 @@ fn owner_loop(
     // holders the device's node runs (PRD
     // engine-bundle-3-core-owns D-22).
     .with_device_home(device_home);
+    // Machines paired with this one are devices too (PRD
+    // device-connect-iroh D-61), reached on the connection the daemon keeps.
+    let devices = match peers {
+        Some(dial) => devices.with_peers(dial),
+        None => devices,
+    };
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
@@ -1777,6 +1880,20 @@ fn owner_loop(
                 let _ = reply.send(core.project_open_receipt(&request_id));
             }
 
+            Command::KeptLetterPrepare {
+                device_id,
+                pane_id,
+                terminal_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_kept_letter(
+                    &device_id,
+                    &pane_id,
+                    &terminal_id,
+                    *command,
+                ));
+            }
             Command::DeliveryPrepare {
                 device_id,
                 pane_id,
@@ -1849,6 +1966,9 @@ fn owner_loop(
             Command::MoveSource { device, reply } => {
                 let _ = reply.send(core.move_source(&device));
             }
+            Command::DeviceSwitchSource { device, reply } => {
+                let _ = reply.send(core.device_switch_source(&device));
+            }
             Command::ReleaseSource { node, reply } => {
                 let _ = reply.send(core.release_source(&node));
             }
@@ -1902,12 +2022,15 @@ fn owner_loop(
             Command::MemoryScope {
                 context,
                 asks,
+                brief,
                 reply,
             } => {
                 let give = asks.and_then(|(pane, session)| {
                     core.asks_give_scope(&context.device_id, &pane, &session)
                 });
-                let _ = reply.send((core.memory_scope(&context), give));
+                let brief =
+                    brief.and_then(|(pane, session)| core.brief_scope(&context, &pane, &session));
+                let _ = reply.send((core.memory_scope(&context), give, brief));
             }
             Command::FoldAsk {
                 device_id,
@@ -1984,6 +2107,7 @@ impl CoreHandle {
                 account_state_folder: false,
             },
             Default::default(),
+            None,
         )
         .unwrap()
     }

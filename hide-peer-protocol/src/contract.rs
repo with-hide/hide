@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::build::{self, BuildFile, FileMessage};
 use crate::event::{self, Acked, Event};
 use crate::hello::{self, GrantState, Hello, HelloFrame, LinkRange};
 use crate::launch::{
@@ -240,6 +241,36 @@ fn manage_messages() -> Vec<Manage> {
     ]
 }
 
+fn sample_build_file() -> BuildFile {
+    BuildFile {
+        path: String::new(),
+        size: 0,
+        sha256: String::new(),
+        executable: false,
+    }
+}
+
+fn file_messages() -> Vec<FileMessage> {
+    fn exhaustive(message: &FileMessage) {
+        match message {
+            FileMessage::Build { .. }
+            | FileMessage::BuildPlaced { .. }
+            | FileMessage::Refused { .. } => {}
+        }
+    }
+    let _ = exhaustive;
+    vec![
+        FileMessage::Build {
+            id: String::new(),
+            files: vec![sample_build_file()],
+        },
+        FileMessage::BuildPlaced { id: String::new() },
+        FileMessage::Refused {
+            reason: String::new(),
+        },
+    ]
+}
+
 fn sample_release() -> Release {
     Release {
         commit: String::new(),
@@ -386,9 +417,19 @@ pub fn shape() -> Value {
         "management": {
             "messages": messages(&Manage::TYPES, &manage_messages()),
             "node_stops": names!(
-                NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, Other
+                NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, HostFull, Other
             ),
             "release_fields": fields(&sample_release()),
+        },
+        "file": {
+            "messages": messages(&FileMessage::TYPES, &file_messages()),
+            "build_file_fields": fields(&sample_build_file()),
+            "build": {
+                "id_chars": build::ID_CHARS,
+                "max_files": build::MAX_FILES,
+                "max_bytes": build::MAX_BYTES,
+                "max_path_bytes": build::MAX_PATH,
+            },
         },
         "event": {
             "version": event::BOX_VERSION,
@@ -409,12 +450,12 @@ pub fn shape() -> Value {
                 "host_side": launch::HOST_SIDE,
                 "node_side": launch::NODE_SIDE,
                 "install_side": launch::INSTALL_SIDE,
-                "holders": launch::HOLDERS_DIR,
                 "builds_kept": launch::BUILDS_KEPT,
                 "panes": panes::FILE,
             },
             "install": {
                 "name_prefix": launch::INSTALL_PREFIX,
+                "hooks_name_prefix": launch::HOOKS_INSTALL_PREFIX,
                 "build_chars": 16,
             },
             "sockets": {
@@ -443,8 +484,10 @@ pub fn shape() -> Value {
                     "host_unreachable": launch::EXIT_HOST_UNREACHABLE,
                     "folder_refused": launch::EXIT_FOLDER_REFUSED,
                     "folder_held": launch::EXIT_FOLDER_HELD,
+                    "restart": launch::EXIT_RESTART,
                 },
                 "limits": {
+                    "guest_nodes": launch::MAX_GUEST_NODES,
                     "idle_end_secs": launch::IDLE_END_SECS,
                     "end_now_waits_secs": launch::END_NOW_WAITS_SECS,
                     "folder_held_retry_secs": launch::FOLDER_HELD_RETRY_SECS,

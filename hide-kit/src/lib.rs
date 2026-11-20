@@ -60,7 +60,7 @@ pub use agents::{
 };
 pub use coordination_retirement::preflight as retirement_preflight;
 pub use current::CURRENT;
-pub use device::device_target;
+pub use device::{device_target, guest_target, remove_guest};
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
@@ -332,6 +332,12 @@ pub struct KitTarget {
     /// once it holds the account's lock. `None` leaves every profile account
     /// as the record has it: a caller with no profile file.
     pub profiles: Option<ProfileSource>,
+    /// The installation of another machine's work on this account (a
+    /// guest's, PRD device-connect-iroh D-77 (4)): it keeps its hook entries
+    /// and the agents' pieces and nothing else here. The account's `hide`
+    /// command, its login agents and the retirement of an old layout are
+    /// the account's own Hide's, and this pass leaves them alone.
+    pub hooks_only: bool,
 }
 
 /// What an apply is allowed to do. The launch or connection pass is the
@@ -480,6 +486,15 @@ pub(crate) enum Observed {
 
 fn observe(id: ComponentId, target: &KitTarget) -> Observed {
     match id {
+        ComponentId::Cli if target.hooks_only => Observed::Absent(Reason::with(
+            PartCause::OtherInstall,
+            cli::link_path(target).display().to_string(),
+            "the hide command of this account is its own Hide's; this installation keeps none"
+                .to_owned(),
+        )),
+        ComponentId::CoordinationRetirement if target.hooks_only => Observed::Absent(
+            Reason::not_changed("the old layout of this account is its own Hide's to retire"),
+        ),
         ComponentId::Cli => cli::observe(target),
         ComponentId::ClaudeCodeHook => hooks::observe(
             target,
@@ -646,9 +661,12 @@ pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal
 /// a re-read never lists parts and agents a pass could not install, and the
 /// operator's Try again is answered by the same check.
 pub fn status(target: &KitTarget) -> KitReport {
-    let mut record = match retirement_preflight(target)
-        .and_then(|()| record::load(&target.home, &target.install))
-    {
+    let preflight = if target.hooks_only {
+        Ok(())
+    } else {
+        retirement_preflight(target)
+    };
+    let mut record = match preflight.and_then(|()| record::load(&target.home, &target.install)) {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
@@ -686,7 +704,10 @@ pub fn status(target: &KitTarget) -> KitReport {
     // accounts the profile report names.
     let read = targets::read_profiles(target);
     let profiles = targets::status(target, &record, &detection, read.as_ref());
-    let store = store::status(target, &record, &detection, read.as_ref());
+    // The store is the account's: an installation that keeps only its hooks
+    // here reads none of it.
+    let store =
+        (!target.hooks_only).then(|| store::status(target, &record, &detection, read.as_ref()));
     let daemon = codex_daemon(target);
     KitReport {
         components,
@@ -700,7 +721,7 @@ pub fn status(target: &KitTarget) -> KitReport {
         held_for_onboarding: held,
         legacy_retirement: Retirement::default(),
         profiles,
-        store: Some(store),
+        store,
         refused: None,
     }
 }
@@ -838,7 +859,9 @@ pub fn apply(target: &KitTarget, scope: &Scope) -> KitReport {
 }
 
 fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> KitReport {
-    if let Err(refusal) = retirement_preflight(target) {
+    if !target.hooks_only
+        && let Err(refusal) = retirement_preflight(target)
+    {
         return KitReport::refused(refusal);
     }
     let _lock = match lock_account(target) {
@@ -857,7 +880,11 @@ fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> Ki
         Ok(lock) => lock,
         Err(refusal) => return KitReport::refused(refusal),
     };
-    let retirement_failure = coordination_retirement::install(target).err();
+    let retirement_failure = if target.hooks_only {
+        None
+    } else {
+        coordination_retirement::install(target).err()
+    };
     let mut legacy_retirement = Retirement::default();
     let mut changed = agent_kit::hold_for_onboarding(&mut record);
     changed |= record.remember_state_route(layout::state_dir_from_process(&target.home));
@@ -968,14 +995,18 @@ fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> Ki
     changed |= profiles_changed;
     // The store's items follow the same switches: an agent switched on, a
     // new profile or a new agent gets every item that is on (D-13, D-31).
-    let store = store::pass(
-        target,
-        scope,
-        &record,
-        &applied.detection,
-        read.as_ref(),
-        fetched,
-    );
+    // An installation that keeps only its hooks here leaves the store to the
+    // account's own Hide.
+    let store = (!target.hooks_only).then(|| {
+        store::pass(
+            target,
+            scope,
+            &record,
+            &applied.detection,
+            read.as_ref(),
+            fetched,
+        )
+    });
     // Whether this pass wrote the entries or found them, Codex trusts Hide's,
     // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
@@ -1038,7 +1069,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> Ki
         held_for_onboarding,
         legacy_retirement,
         profiles,
-        store: Some(store),
+        store,
         refused: None,
     }
 }
@@ -1277,6 +1308,9 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     let mut components = Vec::new();
     for id in ComponentId::ALL {
         let outcome = match id {
+            ComponentId::Cli if target.hooks_only => RemoveOutcome::Kept {
+                reason: "the account's hide command is its own Hide's".to_owned(),
+            },
             ComponentId::Cli => cli::remove(target),
             ComponentId::ClaudeCodeHook => hooks::remove(
                 target,
@@ -1302,7 +1336,14 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     };
     // The store is the account's: another installation of Hide there keeps
     // it and what it applied (PRD skill-mcp-manager B30).
-    let store = if shared {
+    let store = if target.hooks_only {
+        vec![(
+            "store".to_owned(),
+            RemoveOutcome::Kept {
+                reason: "the account's store is its own Hide's".to_owned(),
+            },
+        )]
+    } else if shared {
         vec![(
             "store".to_owned(),
             RemoveOutcome::Kept {

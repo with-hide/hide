@@ -242,6 +242,7 @@ impl Fixture {
             legacy: Vec::new(),
             stop: Arc::default(),
             profiles: None,
+            hooks_only: false,
         };
         Self {
             _dir: dir,

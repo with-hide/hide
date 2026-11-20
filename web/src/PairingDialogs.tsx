@@ -12,6 +12,7 @@ import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTi
 import { Note, Status } from "./components/settings-rows";
 import { useInterfaceTranslation } from "./i18n/client";
 import { joinFailureKey, timeLeft, type PairAsk, type PairJoin } from "./pairing";
+import { askForFirewallOnce } from "./settings/firewall";
 import { PairWords, useNow } from "./settings/PairingRows";
 import { useShellStore } from "./store";
 
@@ -28,7 +29,12 @@ export function PairingDialogs({ actions }: { actions: Actions }) {
 export function AllowDialog({ ask, actions }: { ask: PairAsk; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const now = useNow(true);
-  const answer = (allow: boolean) => actions.pairing("answer", { ask: ask.id, allow });
+  const answer = (allow: boolean) => {
+    actions.pairing("answer", { ask: ask.id, allow });
+    // Allowing a pairing opens this PC to it: Windows is asked once for
+    // the rules that let it come in directly (B32).
+    if (allow) void askForFirewallOnce();
+  };
   return (
     <Dialog open onOpenChange={(next) => { if (!next) answer(false); }}>
       <DialogContent data-pair-allow={ask.kind} data-pair-allow-device={ask.device}>

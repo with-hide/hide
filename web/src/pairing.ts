@@ -47,13 +47,29 @@ export type PairJoin = {
 };
 
 /** What a window asks hided's pairing (`hided/src/pairing.rs` `Ask`). */
-export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh";
+export type PairingVerb = "share" | "end_share" | "join" | "compare" | "dismiss_join" | "answer" | "pause" | "resume" | "remove" | "request" | "dismiss_request" | "retry" | "look_ssh" | "pair_ssh" | "switch";
 
 /** What a machine reached over SSH said about pairing that way (hided `pairing_ssh::Looked`). */
 export type SshLook = { state: "ready" | "absent" | "update_there" | "not_running" | "not_reached"; system?: string };
 
 /** The daemon's answer to one `pairing_*` event, for the window that sent it. */
-export type PairingResult = { verb: string; ok: boolean; reason?: string | null; request_id?: string | null; link?: string; alias?: string; looked?: SshLook };
+export type PairingResult = {
+  verb: string;
+  ok: boolean;
+  reason?: string | null;
+  request_id?: string | null;
+  link?: string;
+  alias?: string;
+  looked?: SshLook;
+  /** `switch`: how the press ended, or what it asks the operator first (hided `Ask::Switch`). */
+  switch?: "done" | "held" | "install_needed";
+  /** `switch`: the helper device the press was for. */
+  device_id?: string;
+  /** `switch` `held`: the computer that switched the device first. */
+  by?: string;
+  /** `switch` `install_needed`: the system of the machine with no Hide. */
+  system?: string;
+};
 
 export type PairRequest = { key: string; state: "waiting" | "declined" | "unanswered" | "unreachable" };
 
@@ -91,6 +107,16 @@ export function ownWindow(pairing: PairingView | null | undefined): boolean {
   return pairing != null;
 }
 
+/**
+ * Whether this build offers connections between two Hides, as hided's
+ * hello (`daemon` frame) says: off in every build until that feature
+ * ships, and then Settings > Devices shows no pairing and adds a machine
+ * the way it did before pairing. The one place the window reads it.
+ */
+export function deviceConnectOffered(daemon: { device_connect?: boolean } | null | undefined): boolean {
+  return daemon?.device_connect === true;
+}
+
 /** Every machine this one is paired with, in either direction. */
 export function pairedMachines(rest: SnapshotRest | null | undefined): readonly Peer[] {
   return rest?.navigator?.peers ?? NONE;
@@ -100,13 +126,35 @@ export function pairedMachines(rest: SnapshotRest | null | undefined): readonly 
 const NONE: readonly Peer[] = [];
 
 /**
- * The paired machines this one opens: the ones that get a tile on the rail
- * (B3). The one place a tile's list is read, so the day a paired machine
- * becomes a device of the core the tiles move there and nothing draws it
- * twice.
+ * The paired machines this one opens that have a tile of their own on the
+ * rail (B3): the ones the core has not made a device of. A machine this one
+ * opens with a confirmed pairing is a device under its own id (hide-core
+ * `runtime/peer_devices.rs`), and that device's tile is the machine's one
+ * tile, which leads to its screen; until then (the other side has not
+ * confirmed yet) its tile here leads to Settings. The one place a tile's list
+ * is read, so one machine is never drawn twice.
  */
 export function openedMachines(rest: SnapshotRest | null | undefined): Peer[] {
-  return pairedMachines(rest).filter((peer) => peer.opens != null);
+  const devices = rest?.navigator?.devices ?? [];
+  return pairedMachines(rest).filter((peer) => peer.opens != null && !devices.some((device) => device.peer_key === peer.key));
+}
+
+/**
+ * The devices Settings lists as rows of their own: every device but a paired
+ * machine's (`Device.peer_key`), whose one row there is its pairing's
+ * (`PeerRow`: directions, pause, remove). That device still serves the rail
+ * and the panes.
+ */
+export function listedDevices<T extends { peer_key?: string | null }>(devices: readonly T[]): T[] {
+  return devices.filter((device) => device.peer_key == null);
+}
+
+/**
+ * How many terminals the machine paired under `key` runs on this computer
+ * (hide-core `guest_panes`): what a removal may end (B26).
+ */
+export function guestPaneCount(rest: SnapshotRest | null | undefined, key: string): number {
+  return rest?.navigator?.guest_panes?.find((guest) => guest.key === key)?.panes.length ?? 0;
 }
 
 /** Who opens whom, in the words of the machine reading it. */

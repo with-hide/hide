@@ -357,6 +357,107 @@ fn another_installations_hide_is_left_until_its_command_is_gone() {
     assert_eq!(std::fs::read_link(&link).unwrap(), package_hide);
 }
 
+/// Another machine's work on this account keeps its hook entries and
+/// nothing else (PRD device-connect-iroh D-77 (4), (5)). Its pass writes
+/// entries under its own installation's name beside the account's own
+/// Hide's, takes no `hide` command and writes no skill; taking it off
+/// removes its entries alone, and the account's own stay as they were.
+#[test]
+fn a_guests_installation_keeps_only_its_hook_entries_and_leaves_with_them() {
+    let fixture = Fixture::new();
+    let link = fixture.home().join(".local/bin/hide");
+    let root = fixture.root.join("state/g/0123456789abcdef/i");
+    kit_program(&root.join("current"), "hide");
+    kit_program(&root.join("current"), "hide-agent-hooks");
+    let guest = KitTarget {
+        install: crate::layout::install_of_root(&root),
+        kit_dir: root.join("current"),
+        owned_roots: vec![root.clone()],
+        hooks_only: true,
+        ..fixture.target.clone()
+    };
+    assert!(
+        hide_agent_hooks::route::is_guest_install(&guest.install),
+        "{}",
+        guest.install
+    );
+    let guest_helper = root.join("current/hide-agent-hooks");
+    let entries_of =
+        |settings: &str, helper: &Path| settings.matches(helper.to_str().unwrap()).count();
+
+    // The guest's work comes to an account whose own Hide never ran its
+    // kit: nothing of the account's is written for it.
+    let report = apply(&guest, &Scope::agents(["claude-code"], []));
+    assert_eq!(
+        state(&report, ComponentId::ClaudeCodeHook),
+        ComponentState::Installed
+    );
+    assert_eq!(state(&report, ComponentId::Cli), ComponentState::Absent);
+    assert!(
+        std::fs::symlink_metadata(&link).is_err(),
+        "a guest takes no hide command"
+    );
+    assert!(
+        !fixture.home().join(".claude/skills").exists(),
+        "a guest writes no skill"
+    );
+    assert!(report.store.is_none(), "a guest reads no store");
+    assert!(entries_of(&fixture.settings(), &guest_helper) > 0);
+
+    // The account's own Hide beside it: each keeps its own entries.
+    apply(&fixture.target, &Scope::agents(["claude-code"], []));
+    let own_helper = fixture.target.kit_dir.join("hide-agent-hooks");
+    let both = fixture.settings();
+    let own_entries = entries_of(&both, &own_helper);
+    assert!(own_entries > 0);
+    assert!(entries_of(&both, &guest_helper) > 0);
+    let own_link = std::fs::read_link(&link).unwrap();
+    let skills = home_tree(&fixture.home().join(".claude/skills"));
+    assert!(!skills.is_empty(), "the account's own Hide wrote its skill");
+
+    // The account's own Hide trusted a worktree it made; the record of that
+    // is the account's one, whoever's entries come and go.
+    use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+    let tree = fixture.root.join("repo-task");
+    std::fs::create_dir_all(tree.join(".git")).unwrap();
+    let tree = hide_platform::fs::identity::canonical(&tree).unwrap();
+    let key = hide_platform::path::to_wire(&tree).unwrap();
+    folder_trust::trust_worktree(Agent::ClaudeCode, fixture.home(), &tree, Tools::none()).unwrap();
+    let trusted = || {
+        let file = Agent::ClaudeCode.settings_path(fixture.home());
+        serde_json::from_slice::<Value>(&std::fs::read(file).unwrap()).unwrap()["projects"]
+            .get(&key)
+            .is_some()
+    };
+    assert!(trusted());
+
+    // The guest is taken off this machine.
+    let removed = remove(&guest);
+    assert!(
+        removed
+            .components
+            .iter()
+            .any(|(id, outcome)| *id == ComponentId::ClaudeCodeHook
+                && *outcome == RemoveOutcome::Removed),
+        "{removed:?}"
+    );
+    assert!(
+        removed.agents.iter().any(|(name, outcome)| name == "store"
+            && matches!(outcome, RemoveOutcome::Kept { .. })),
+        "the account's store stays with its own Hide: {removed:?}"
+    );
+    let after = fixture.settings();
+    assert_eq!(entries_of(&after, &guest_helper), 0);
+    assert_eq!(entries_of(&after, &own_helper), own_entries);
+    assert_eq!(std::fs::read_link(&link).unwrap(), own_link);
+    assert_eq!(home_tree(&fixture.home().join(".claude/skills")), skills);
+    assert_eq!(other_tool_entry(&after), other_tool_entry(OTHER_TOOL));
+    assert!(
+        trusted(),
+        "the folder trust the account's own Hide recorded stays when a guest's entries go"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn the_kit_runs_nothing_from_a_folder_another_account_can_change() {
@@ -2221,9 +2322,18 @@ fn only_a_build_folder_s_hided_is_a_build() {
             version: "0123456789abcdef".to_owned(),
         })
     );
+    // A Windows core's program carries its `.exe` name.
+    assert_eq!(
+        crate::build_of("C:/Users/me/.hide/core/0123456789abcdef/hided.exe"),
+        Ok(crate::BuildPlace {
+            root: "C:/Users/me/.hide/core".to_owned(),
+            version: "0123456789abcdef".to_owned(),
+        })
+    );
     for program in [
         "/h/.hide/host-helper/current/hided",
         "/h/.hide/host-helper/0123456789abcdef/hide",
+        "/h/.hide/host-helper/0123456789abcdef/hide.exe",
         "/usr/local/bin/hided",
         "relative/0123456789abcdef/hided",
     ] {

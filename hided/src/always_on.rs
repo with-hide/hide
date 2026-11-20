@@ -1,0 +1,274 @@
+//! A paired machine's core stays reachable with no window open (PRD
+//! device-connect-iroh D-41, B30): once the machine has finished its first
+//! pairing, either way, the account's login item runs its core from a build
+//! in the install root (`hide_kit::layout::core_root`), and once the last
+//! paired machine is gone the item and its marker go. A machine that never
+//! pairs gets nothing.
+//!
+//! [`reconcile`] is the one decision: it reads the folder's peer records
+//! and puts the item in or takes it out. The daemon runs it once at its
+//! start, and the pairing after every change to the machines this one is
+//! paired with ([`Follower`]); a paired core also never ends for idle
+//! ([`paired`], `server::watch_idle`). Paired means a finished pairing,
+//! never one still waiting (`peer_host::pairing_confirmed`), and never in a
+//! build that does not offer connections between two Hides
+//! (`env::Env::device_connect` off), which keeps no item for them and takes
+//! out one a development build left.
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+
+use hide_platform::user_agents::{Linger, UserAgents};
+use serde::Serialize;
+use serde_json::json;
+
+/// Whether the folder has finished a pairing, the one answer the item
+/// follows (`peer_host::pairing_confirmed`); never while `device_connect`
+/// is off.
+pub fn paired(state_dir: &Path, device_connect: bool) -> Result<bool, String> {
+    crate::peer_host::pairing_confirmed(state_dir, device_connect)
+        .map_err(|error| format!("the peer records: {error}"))
+}
+
+/// What [`reconcile`] found or did.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum Outcome {
+    /// The item was put in and runs `program`. `warning` is what the
+    /// operator can do for it, a line the device's details show (B30).
+    Installed {
+        program: PathBuf,
+        warning: Option<Warning>,
+    },
+    /// Paired, and the item is in place.
+    Kept,
+    /// No longer paired: the item and its marker were taken out.
+    Removed,
+    /// Not paired, and no item.
+    Nothing,
+    /// A move placed this core here, and its own item is the move's.
+    Moved,
+    /// Paired, and no login item is kept: this system has none, or HOME is
+    /// not the account's own home ([`agents_for`]). `reason` says which.
+    Unsupported { reason: String },
+}
+
+/// What stops the item from doing all it should, and the command that fixes
+/// it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Warning {
+    /// `linger`: the core stops with the account's last session (Linux).
+    pub kind: String,
+    pub command: String,
+}
+
+/// The core that asks: the program it runs, and whether its login item
+/// started it, in which case the item is only forgotten on removal, since
+/// unloading it would stop the asking core midway.
+pub struct Asker<'a> {
+    pub program: &'a Path,
+    pub under_item: bool,
+    /// Whether its build offers connections between two Hides
+    /// (`env::Env::device_connect`).
+    pub device_connect: bool,
+}
+
+/// Puts the login item in when the folder is paired and it is not there,
+/// takes it and its marker out when the folder is not paired and it is.
+pub fn reconcile(
+    agents: &UserAgents,
+    home: &Path,
+    state_dir: &Path,
+    asker: &Asker<'_>,
+    install: impl FnOnce(&Path) -> Result<PathBuf, String>,
+) -> Result<Outcome, String> {
+    if crate::core_move::handover::read(state_dir)?.is_some() {
+        return Ok(Outcome::Moved);
+    }
+    let paired = paired(state_dir, asker.device_connect)?;
+    if let Err(error) = agents.supported() {
+        return Ok(if paired {
+            Outcome::Unsupported {
+                reason: error.to_string(),
+            }
+        } else {
+            Outcome::Nothing
+        });
+    }
+    let installed = crate::login_item::installed(agents, home, state_dir)?;
+    match (paired, installed) {
+        (true, true) => {
+            // Kept only while the item can run the core: one the system no
+            // longer holds is loaded again.
+            crate::login_item::hold(agents, home, state_dir)?;
+            Ok(Outcome::Kept)
+        }
+        (false, false) => Ok(Outcome::Nothing),
+        (false, true) => {
+            if asker.under_item {
+                crate::login_item::forget(agents, home, state_dir)?;
+            } else {
+                crate::login_item::remove(agents, home, state_dir)?;
+            }
+            Ok(Outcome::Removed)
+        }
+        (true, false) => {
+            // Asked before a build is copied: a Mac with no one logged in
+            // would copy one on every change only to refuse the item.
+            if agents
+                .login(home, &AtomicBool::new(false))
+                .map_err(|error| format!("the login session: {error}"))?
+                == hide_platform::user_agents::Login::LoggedOut
+            {
+                return Err(
+                    "no GUI session runs for this account: the login item waits for a login"
+                        .to_owned(),
+                );
+            }
+            let program = install(&hide_kit::layout::core_root(home))?;
+            // The asking core goes on; the item's core waits on the
+            // folder's lock until it exits.
+            crate::login_item::adopt(agents, home, state_dir, &program)?;
+            let warning = match agents.linger(home, &AtomicBool::new(false)) {
+                Ok(Linger::On) => None,
+                Ok(Linger::NeedsAdministrator { command }) => Some(Warning {
+                    kind: "linger".to_owned(),
+                    command,
+                }),
+                Err(error) if error.kind() == std::io::ErrorKind::Unsupported => None,
+                Err(error) => return Err(format!("linger: {error}")),
+            };
+            Ok(Outcome::Installed { program, warning })
+        }
+    }
+}
+
+/// The account's login items for `home`: the system's only when `home` is
+/// the account's own home as the system names it, and none for any other
+/// HOME (`UserAgents::of_home`). The system's items are the account's
+/// whatever HOME says, so a test's HOME, or an isolated candidate's, would
+/// otherwise load its core into the account's real ones.
+pub fn agents_for(home: &Path) -> UserAgents {
+    UserAgents::of_home(home)
+}
+
+/// This build, put in a version folder of `root` from the package beside
+/// `program` (`HelperPackages::install_here`), as an update puts its build.
+pub fn install_this_build(program: &Path, root: &Path) -> Result<PathBuf, String> {
+    hide_node::ssh::host::HelperPackages::new(
+        program.parent().map(Path::to_path_buf),
+        crate::cli::RELEASE,
+    )
+    .install_here(root)
+}
+
+/// The daemon's login item kept to its folder's peer records: the daemon
+/// asks at its start, and the pairing after every change to the machines
+/// this one is paired with (`pairing::Pairing::paired_changed`).
+#[derive(Clone)]
+pub struct Follower {
+    home: PathBuf,
+    state_dir: PathBuf,
+    /// Whether the login item started this core ([`Asker::under_item`]).
+    under_item: bool,
+    /// [`Asker::device_connect`].
+    device_connect: bool,
+}
+
+impl Follower {
+    pub fn new(home: PathBuf, state_dir: PathBuf, under_item: bool, device_connect: bool) -> Self {
+        Self {
+            home,
+            state_dir,
+            under_item,
+            device_connect,
+        }
+    }
+
+    /// [`reconcile`] on a thread of its own, since putting a build in place
+    /// copies it, one at a time in this process; the outcome goes to the
+    /// log.
+    pub fn peers_changed(&self) {
+        let Self {
+            home,
+            state_dir,
+            under_item,
+            device_connect,
+        } = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("always-on".to_owned())
+            .spawn(move || {
+                let _one = RECONCILING
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let outcome = std::env::current_exe()
+                    .map_err(|error| format!("this hided has no path: {error}"))
+                    .and_then(|program| {
+                        let asker = Asker {
+                            program: &program,
+                            under_item,
+                            device_connect,
+                        };
+                        reconcile(&agents_for(&home), &home, &state_dir, &asker, |root| {
+                            install_this_build(asker.program, root)
+                        })
+                    });
+                // A failure that holds (no systemd, a Mac with no one logged
+                // in) is logged once, not at every connection change.
+                let mut last = LAST_FAILURE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match outcome {
+                    Ok(Outcome::Kept | Outcome::Nothing) => *last = None,
+                    // Why a paired machine keeps no item holds as a failure
+                    // does, and is logged once.
+                    Ok(Outcome::Unsupported { reason }) => {
+                        if last.as_deref() != Some(reason.as_str()) {
+                            hide_core::diagnostic!(json!({
+                                "component": "always_on",
+                                "kind": "always_on.declined",
+                                "reason": reason,
+                            }));
+                            *last = Some(reason);
+                        }
+                    }
+                    Ok(outcome) => {
+                        *last = None;
+                        hide_core::diagnostic!(json!({
+                            "component": "always_on",
+                            "kind": "always_on.reconciled",
+                            "outcome": outcome,
+                        }));
+                    }
+                    Err(message) => {
+                        if last.as_deref() != Some(message.as_str()) {
+                            hide_core::diagnostic!(json!({
+                                "component": "always_on",
+                                "kind": "always_on.failed",
+                                "message": message,
+                            }));
+                            *last = Some(message);
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            hide_core::diagnostic!(json!({
+                "component": "always_on",
+                "kind": "always_on.failed",
+                "message": error.to_string(),
+            }));
+        }
+    }
+}
+
+/// One reconcile at a time in this process: two would both install.
+static RECONCILING: Mutex<()> = Mutex::new(());
+/// The last failure logged, so one that holds is logged once.
+static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
+pub mod cli;
+
+#[cfg(test)]
+mod tests;

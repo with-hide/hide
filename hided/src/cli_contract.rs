@@ -18,6 +18,30 @@ use serde_json::{Map, Value, json};
 /// The document's own format; a caller that reads another refuses it.
 pub const FORMAT: u32 = 1;
 
+/// The `hide device` verbs that only pair two Hides. The table keeps them,
+/// so a build that offers connections between two Hides takes them
+/// (`env::Env::device_connect`), and the document marks them `hidden` until
+/// that feature ships: `hide --help` lists them only with the switch on,
+/// and a build without it refuses each with `device_connect_unavailable`
+/// (`device_cli`).
+pub const PAIRING_ONLY: &[&str] = &[
+    "share",
+    "allow",
+    "pause",
+    "resume",
+    "request",
+    "address",
+    "switch",
+    "look-ssh",
+    "accept-ssh",
+    "projects-ssh",
+];
+
+/// Whether the document marks `spec` hidden: [`PAIRING_ONLY`].
+fn hidden(spec: &Spec) -> bool {
+    matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
+}
+
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
     "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane", "access",
@@ -1004,6 +1028,45 @@ pub const COMMANDS: &[Spec] = &[
             "device_wait_timeout",
         ],
     },
+    // Switches an SSH device to the connection of the Hide on its machine:
+    // the two are paired over the device's SSH login, and the device keeps
+    // its id, its name and its running terminals. `held` names the machine
+    // that switched it first; `--own-folder` goes on without its terminals.
+    // `install_needed` is a machine that runs no Hide of its own, where
+    // `--install` starts one from this machine's helper build.
+    Spec {
+        words: &["device", "switch"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            switch("--install"),
+            switch("--own-folder"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_switched"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "switch_unsupported",
+            "switch_running",
+            "switch_not_connected",
+            "ssh_core_not_started",
+            "ssh_not_reached",
+            "ssh_busy",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "device_already_connected",
+        ],
+    },
     // What a machine about to pair over SSH runs on its target first: it
     // changes nothing there and answers whether a Hide of that account's
     // own runs. A refusal carries the same `look`, with `core` false on an
@@ -1034,6 +1097,7 @@ pub const COMMANDS: &[Spec] = &[
             required("--device", Key),
             required("--name", Text),
             switch("--wsl"),
+            optional("--helper", Text),
         ],
         rest: None,
         answers: &["device_accepted"],
@@ -1043,6 +1107,21 @@ pub const COMMANDS: &[Spec] = &[
             "device_already_connected",
             "device_limit",
         ],
+    },
+    // What a machine that switched its device here runs once this machine
+    // admitted it: each `--project` is a folder of the account that machine
+    // had registered on its device, which this machine's own Hide then
+    // lists as a project too. It answers how many it lists; a folder that
+    // is gone, outside the account's home or refused is left out.
+    Spec {
+        words: &["device", "projects-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &["--project"],
+        options: &[repeated("--project", Text, hide_core::SWITCHED_PROJECTS)],
+        rest: None,
+        answers: &["device_projects_listed"],
+        refusals: &[],
     },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
@@ -1077,7 +1156,12 @@ pub const COMMANDS: &[Spec] = &[
         ],
         rest: None,
         answers: &["pane_read"],
-        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "pane_unavailable",
+            "guest_pane_read",
+        ],
     },
     Spec {
         words: &["pane", "send"],
@@ -1126,6 +1210,7 @@ pub const COMMANDS: &[Spec] = &[
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_keys",
         ],
     },
     Spec {
@@ -1252,13 +1337,15 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--force", &["--now"]),
         ],
         rest: None,
-        answers: &["letter"],
+        answers: &["letter", "queued"],
         refusals: &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
             "intent_conflict",
             "no_parent",
+            "outbox_full",
+            "outbox_unavailable",
             "participant_registering",
         ],
     },
@@ -1396,6 +1483,9 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_in_progress",
             "mission_dependency_unknown",
             "mission_dependency_cycle",
+            "mission_dependency_line_unknown",
+            "mission_dependency_stack_split",
+            "mission_merge_order_stack",
             "mission_criteria_missing",
             "mission_criteria_too_many",
             "mission_steps_invalid",
@@ -1974,7 +2064,16 @@ fn command_json(spec: &Spec) -> Value {
 fn body() -> Value {
     json!({
         "format": FORMAT,
-        "commands": COMMANDS.iter().map(command_json).collect::<Vec<_>>(),
+        "commands": COMMANDS
+            .iter()
+            .map(|spec| {
+                let mut command = command_json(spec);
+                if hidden(spec) {
+                    command["hidden"] = json!(true);
+                }
+                command
+            })
+            .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
             "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
@@ -2024,6 +2123,19 @@ fn body() -> Value {
                 ))
                 .collect::<Map<String, Value>>(),
         },
+        // A pane of another Hide's work on this machine, while that Hide
+        // is not connected: a letter is kept and answered `queued`, and any
+        // other command above answers `owner_offline` (PRD
+        // device-connect-iroh B12, B13).
+        "away": {
+            "refusals": crate::guest_node::away::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::guest_node::away::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
+        },
         "answers": answers(),
     })
 }
@@ -2042,6 +2154,19 @@ fn answers() -> Value {
         json!({"type": "object", "properties": properties, "required": fields})
     };
     let map = answers.as_object_mut().expect("the answers are an object");
+    // A letter its sender's node keeps until the Hide it belongs to is
+    // back (`away`).
+    map.insert(
+        "queued".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "queued": {"const": true},
+                "intent": {"type": "string"},
+            },
+            "required": ["queued", "intent"],
+        }),
+    );
     map.insert("mission".into(), shape(&["mission"]));
     map.insert("mission_created".into(), shape(&["mission", "settings"]));
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
@@ -2094,17 +2219,23 @@ fn answers() -> Value {
         "access_list".into(),
         shape(&["machine", "limit", "pending", "connections"]),
     );
-    // The SSH devices and, under `peers`, the Hides this machine is paired
-    // with: who opens whom, and whether the two are connected.
-    map.insert("device_list".into(), shape(&["devices", "peers"]));
+    // The SSH devices; under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected; and under
+    // `guest_panes`, the panes other machines' work runs in on this one.
+    map.insert(
+        "device_list".into(),
+        shape(&["devices", "peers", "guest_panes"]),
+    );
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
     map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));
     map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
     map.insert("device_allowed".into(), shape(&["answered"]));
     map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_switched".into(), shape(&["device_id", "switch"]));
     map.insert("device_accepted".into(), shape(&["accepted"]));
     map.insert("device_looked".into(), shape(&["look"]));
+    map.insert("device_projects_listed".into(), shape(&["projects"]));
     map.insert(
         "device_paired".into(),
         shape(&["device_id", "name", "paired"]),
@@ -2412,6 +2543,13 @@ mod tests {
             {
                 base.push(exported_sample(&argument["value"]));
             }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
+            }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();
                 if let Some(option) = options.iter().find(|option| option["name"] == form) {
@@ -2681,6 +2819,43 @@ mod tests {
         );
         assert!(admit(&args(&["inbox", "--hook", "--bell"])).is_err());
         assert!(admit(&args(&["inbox", "--prompt-digest", "d"])).is_err());
+    }
+
+    /// The verbs that only pair two Hides are marked hidden in the document
+    /// until that feature ships, and the CLI still admits them, so a build
+    /// that offers it takes them and one that does not refuses them with
+    /// their reason rather than as unknown words.
+    #[test]
+    fn the_document_marks_the_verbs_that_only_pair_hidden() {
+        let args = |line: &[&str]| {
+            line.iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let document = document();
+        let device: Vec<(&str, bool)> = document["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|command| {
+                let name = command["command"].as_str().unwrap();
+                let verb = name.strip_prefix("device ")?;
+                Some((verb, command["hidden"] == true))
+            })
+            .collect();
+        for verb in PAIRING_ONLY {
+            assert!(
+                device.contains(&(*verb, true)),
+                "device {verb} is not marked hidden"
+            );
+            assert!(admit(&args(&["device", verb])).is_ok(), "device {verb}");
+        }
+        for kept in ["list", "add", "remove", "retry"] {
+            assert!(
+                device.contains(&(kept, false)),
+                "device {kept} is not listed"
+            );
+        }
     }
 
     /// The committed copy is the contract this build exports, so a change to

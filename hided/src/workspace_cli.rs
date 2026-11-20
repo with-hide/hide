@@ -178,6 +178,25 @@ fn reported(reason: String) -> String {
 }
 
 pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
+    bootstrap_pane(env, one_shot).map_err(|reason| {
+        // In a pane of a guest's node whose core is away nothing answers
+        // for the pane, and the node says why (PRD device-connect-iroh
+        // B12): the caller hears that, not that Hide is gone.
+        let unanswered = matches!(
+            reason.as_str(),
+            "hide_unavailable" | "bridge_unavailable" | NOT_LINKED
+        );
+        if unanswered
+            && crate::guest_node::away::ask(&env.state_dir, env.pane_id.as_deref(), None).is_some()
+        {
+            crate::guest_node::away::OWNER_OFFLINE.to_owned()
+        } else {
+            reason
+        }
+    })
+}
+
+fn bootstrap_pane(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     // A caller with no pane id (a daemon first started from a plain terminal)
     // still bootstraps: hided binds it to the registered checkout holding
     // its cwd, or refuses with the reason the caller can act on.
@@ -289,6 +308,12 @@ const PAIRING_ANSWER_LIMIT: u64 = 256 * 1024;
 /// socket. The answer is the daemon's line, a refusal included; an `Err` is
 /// the reason none arrived.
 pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    pairing_ask_within(env, ask, PAIRING_TIMEOUT)
+}
+
+/// [`pairing_ask`] for an ask whose answer is the end of work the daemon
+/// does first, which `within` bounds.
+pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
     let request = serde_json::to_value(PaneRequest {
@@ -305,7 +330,7 @@ pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
     .map_err(|_| "reference_unavailable".to_owned())?;
     let mut stream = connect_bootstrap(&env.state_dir)?;
     stream
-        .set_read_timeout(Some(PAIRING_TIMEOUT))
+        .set_read_timeout(Some(within))
         .map_err(|_| "hide_unavailable".to_owned())?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     let mut line = String::new();
@@ -757,6 +782,26 @@ pub fn request_project_open_with_token(
         json!({"type":"project_open","request_id":request_id,"path":path}),
         &request_id,
         PROJECT_OPEN_TIMEOUT,
+    )
+}
+
+/// Registers this machine's folder `path` as a project of its own Hide and
+/// brings nothing forward, with the daemon's token from the state file this
+/// account owns (`project_open::run_add`), waiting `within` for its answer
+/// and never longer than an open waits.
+pub fn request_project_add_with_token(
+    port: u16,
+    token: &str,
+    path: &str,
+    within: Duration,
+) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"project_add","request_id":request_id,"path":path}),
+        &request_id,
+        within.min(PROJECT_OPEN_TIMEOUT),
     )
 }
 
@@ -2369,6 +2414,7 @@ mod tests {
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
             peer_direct: None,
+            device_connect: false,
             search_path: None,
         }
     }
