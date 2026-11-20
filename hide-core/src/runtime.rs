@@ -1536,11 +1536,11 @@ pub struct Runtime {
     /// A choice waiting for the coordinator to write it to the settings file
     /// off the mutex, the same way an approved hook install waits.
     pending_ai_settings_save: Option<hide_ai::AiSettings>,
-    /// What each machine this core opens last told of its own work, by
-    /// connection id (PRD device-connect-iroh D-50). `navigator.peer_work`
-    /// lists the ones connected now, so a list that arrives before the
-    /// paired machines' list says its connection is up shows when it does;
-    /// a machine that disconnects or is opened no longer is forgotten.
+    /// What each machine last told of its own work, by connection id, from
+    /// when it arrives until that machine tells no more: its stream ended
+    /// (PRD device-connect-iroh D-50). `navigator.peer_work` lists the ones
+    /// of connected machines this core opens, so a list that arrives before
+    /// the paired machines' list says so shows when it does.
     peer_told: BTreeMap<String, crate::peer_work::Told>,
     /// True while the Background AI group is on screen, which is the only
     /// time the provider probe runs.

@@ -124,9 +124,10 @@ pub trait Cores: Send + Sync + 'static {
     fn answered(&self, key: &str, id: &str, outcome: Outcome) -> Result<(), String>;
     /// Runs a read or a start machine `key` asked for.
     fn call(&self, key: &str, from: Party, asked: Asked) -> Result<Value, String>;
-    /// Hands the core what machine `key` told of its own work, whole. The
-    /// core keeps it only for a connected machine this one opens.
-    fn work(&self, key: &str, work: Value) -> Result<(), String>;
+    /// Hands the core what machine `key` told of its own work, whole, or
+    /// that it tells no more: its stream ended. The core lists it only for
+    /// a connected machine this one opens.
+    fn work(&self, key: &str, work: Option<Value>) -> Result<(), String>;
 }
 
 impl Cores for CoreHandle {
@@ -153,7 +154,7 @@ impl Cores for CoreHandle {
         self.prepare_core_call(key, from, asked)?.run(within)
     }
 
-    fn work(&self, key: &str, work: Value) -> Result<(), String> {
+    fn work(&self, key: &str, work: Option<Value>) -> Result<(), String> {
         let event = json!({
             "schema_version": hide_core::SCHEMA_VERSION,
             "kind": "peer_work",
@@ -186,6 +187,12 @@ struct Waiting {
     answer: std::sync::mpsc::SyncSender<Result<Value, String>>,
 }
 
+#[derive(Default)]
+struct Heard {
+    work: HashMap<PeerKey, Value>,
+    unhanded: std::collections::BTreeSet<PeerKey>,
+}
+
 pub struct PeerCore {
     core: Arc<dyn Cores>,
     /// This computer's seat, the seats the others tell, and the notices
@@ -194,6 +201,14 @@ pub struct PeerCore {
     /// What this machine last told of its own work, for a machine that
     /// connects later.
     told: Mutex<Option<Value>>,
+    /// What each machine this one opens last told of its own work, and the
+    /// machines whose latest the core has not been handed yet. Changed only
+    /// under `open`, so a list and the end of the stream it came on cannot
+    /// pass each other; it holds one list per machine with a stream this
+    /// side opened and loses it with that stream.
+    heard: Mutex<Heard>,
+    /// A machine's told work changed, or it tells no more.
+    heard_moved: Notify,
     shutdown: Ending,
     /// How long a letter waits for its answer before it is sent again.
     resend_after: Duration,
@@ -247,6 +262,8 @@ impl PeerCore {
             core,
             desktop: Arc::clone(desktop),
             told: Mutex::new(None),
+            heard: Mutex::new(Heard::default()),
+            heard_moved: Notify::new(),
             shutdown,
             resend_after,
             open: Mutex::new(HashMap::new()),
@@ -269,7 +286,40 @@ impl PeerCore {
         tokio::spawn(Arc::clone(&service).pump());
         tokio::spawn(Arc::clone(&service).tell_work(list));
         tokio::spawn(Arc::clone(&service).tell_seat());
+        tokio::spawn(Arc::clone(&service).hand_work());
         service
+    }
+
+    /// Hands the core what each machine this one opens told of its own
+    /// work, or that it tells no more: the latest only and one machine at
+    /// a time, so the core hears a list and its stream's end in the order
+    /// they happened, and a machine that tells faster than the core takes
+    /// costs one list (D-50).
+    async fn hand_work(self: Arc<Self>) {
+        loop {
+            let next = {
+                let mut heard = lock(&self.heard);
+                heard
+                    .unhanded
+                    .pop_first()
+                    .map(|key| (key, heard.work.get(&key).cloned()))
+            };
+            let Some((key, work)) = next else {
+                tokio::select! {
+                    () = self.shutdown.ended() => return,
+                    () = self.heard_moved.notified() => {}
+                }
+                continue;
+            };
+            let (core, hex) = (Arc::clone(&self.core), key.to_hex());
+            let kept = tokio::task::spawn_blocking(move || core.work(&hex, work))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|kept| kept);
+            if let Err(reason) = kept {
+                record("peer_core.work_not_kept", &key, json!({"reason": reason}));
+            }
+        }
     }
 
     /// Tells the machines that may open this one its own Needs You and
@@ -477,24 +527,37 @@ impl PeerCore {
     /// letters sent to it are sent again on the next one, and the calls
     /// that waited on it are answered that it is away.
     fn closed(&self, key: &PeerKey, id: u64) {
-        let (gone, opens_here) = {
+        let (gone, opens_here, tells_no_more) = {
             let mut open = lock(&self.open);
             let Some(streams) = open.get_mut(key) else {
                 return;
             };
             streams.retain(|stream| stream.id != id);
-            let (gone, opens_here) = (
+            let (gone, opens_here, opened) = (
                 streams.is_empty(),
                 streams.iter().any(|stream| !stream.mine),
+                streams.iter().any(|stream| stream.mine),
             );
             if gone {
                 open.remove(key);
             }
-            (gone, opens_here)
+            // A machine this one opens no longer tells nothing of its work.
+            let tells_no_more = !opened && {
+                let mut heard = lock(&self.heard);
+                let told = heard.work.remove(key).is_some();
+                if told {
+                    heard.unhanded.insert(*key);
+                }
+                told
+            };
+            (gone, opens_here, tells_no_more)
         };
         // A machine that may open this one no longer has no seat here.
         if !opens_here {
             self.desktop.peer_gone(&key.to_hex());
+        }
+        if tells_no_more {
+            self.heard_moved.notify_one();
         }
         if gone {
             lock(&self.sent).retain(|(peer, _), _| peer != key);
@@ -673,17 +736,22 @@ impl PeerCore {
             }
             // Its own work, from a machine this one may open.
             CoreMessage::Work { work } => {
-                if !self.has(&key, true) {
+                let kept = {
+                    let open = lock(&self.open);
+                    let opened = open
+                        .get(&key)
+                        .is_some_and(|streams| streams.iter().any(|stream| stream.mine));
+                    if opened {
+                        let mut heard = lock(&self.heard);
+                        heard.work.insert(key, work);
+                        heard.unhanded.insert(key);
+                    }
+                    opened
+                };
+                if kept {
+                    self.heard_moved.notify_one();
+                } else {
                     record("peer_core.work_refused", &key, Value::Null);
-                    return None;
-                }
-                let core = Arc::clone(&self.core);
-                let kept = tokio::task::spawn_blocking(move || core.work(&hex, work))
-                    .await
-                    .map_err(|error| error.to_string())
-                    .and_then(|kept| kept);
-                if let Err(reason) = kept {
-                    record("peer_core.work_not_kept", &key, json!({"reason": reason}));
                 }
                 None
             }
@@ -895,8 +963,9 @@ mod tests {
         /// test to let it go.
         calls: Mutex<VecDeque<Result<Value, String>>>,
         held: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
-        /// What each machine told of its own work, as it arrived.
-        works: Mutex<Vec<(String, Value)>>,
+        /// What each machine told of its own work, as it arrived; none
+        /// once its stream ended.
+        works: Mutex<Vec<(String, Option<Value>)>>,
         seen: watch::Sender<u64>,
     }
 
@@ -955,7 +1024,7 @@ mod tests {
             })
         }
 
-        fn work(&self, key: &str, work: Value) -> Result<(), String> {
+        fn work(&self, key: &str, work: Option<Value>) -> Result<(), String> {
             lock(&self.works).push((key.to_owned(), work));
             self.moved();
             Ok(())
@@ -1095,14 +1164,14 @@ mod tests {
         pair.pc_list.send_replace(list("needs_you", "question"));
         pair.mac_core
             .until("the PC's Needs You on the Mac", |core| {
-                lock(&core.works)
-                    .last()
-                    .is_some_and(|(_, work)| work["needs_you"] == 1)
+                lock(&core.works).last().is_some_and(|(_, work)| {
+                    work.as_ref().is_some_and(|work| work["needs_you"] == 1)
+                })
             })
             .await;
         let (from, work) = lock(&pair.mac_core.works).last().cloned().unwrap();
         assert_eq!(from, pair.pc_key);
-        assert_eq!(work["rows"][0]["title"], "Fix login");
+        assert_eq!(work.unwrap()["rows"][0]["title"], "Fix login");
 
         assert_eq!(
             pair.pc_desktop.observe(&list("needs_you", "question"), at),
@@ -1159,6 +1228,14 @@ mod tests {
             .until("the Mac's letter", |core| !lock(&core.taken).is_empty())
             .await;
         assert_eq!(*lock(&pair.pc_core.works), []);
+
+        // The connection ends: the Mac's core is told the PC tells no more.
+        pair.pc.shutdown.end();
+        pair.mac_core
+            .until("the PC's work forgotten on the Mac", |core| {
+                lock(&core.works).last() == Some(&(pair.pc_key.clone(), None))
+            })
+            .await;
     }
 
     #[tokio::test]

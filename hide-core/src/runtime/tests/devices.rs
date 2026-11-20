@@ -1141,11 +1141,13 @@ fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
 
 /// B49, D-50: the work a machine this one opens told of stands in the
 /// snapshot under that machine while it is connected, replaced whole each
-/// time; a machine this one does not open is refused, the rows go when
-/// the machine is no longer connected, and a list that arrives before the
-/// paired machines' list says the connection is up shows when it does.
+/// time. It is held from when it arrives until the machine tells no more,
+/// and the paired machines' list only decides whether it shows: a list
+/// that arrives before that list names the machine, confirms it or says it
+/// is connected shows when it does.
 #[test]
-fn a_connected_machines_own_work_is_listed_until_it_is_no_longer_connected() {
+fn a_machines_own_work_is_held_until_it_tells_no_more_and_listed_while_it_is_opened_and_connected()
+{
     let mut runtime = runtime();
     let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
         let event = serde_json::to_vec(&serde_json::json!({
@@ -1172,19 +1174,33 @@ fn a_connected_machines_own_work_is_listed_until_it_is_no_longer_connected() {
             }],
         }})
     };
+    let listed = |runtime: &Runtime| -> Vec<String> {
+        let work = &runtime.snapshot.navigator.peer_work;
+        work.iter()
+            .flat_map(|work| work.told.rows.iter().map(|row| row.title.clone()))
+            .collect()
+    };
 
-    // No machine under that key yet.
+    // The list arrives before the paired machines' list names the machine,
+    // then while that list still waits for the other side's yes, then
+    // while it does not say connected: held each time, shown only once the
+    // machine is opened and connected, as it last arrived.
     assert!(!dispatch(&mut runtime, "peer_work", work("Fix login")));
-    assert!(runtime.snapshot.navigator.peer_work.is_empty());
-
+    assert!(listed(&runtime).is_empty());
+    dispatch(&mut runtime, "peer_machines", machine("confirming", true));
+    assert!(!dispatch(&mut runtime, "peer_work", work("Fix signup")));
+    assert!(listed(&runtime).is_empty());
+    dispatch(&mut runtime, "peer_machines", machine("active", false));
+    assert!(listed(&runtime).is_empty());
     assert!(dispatch(
         &mut runtime,
         "peer_machines",
         machine("active", true)
     ));
-    assert!(dispatch(&mut runtime, "peer_work", work("Fix login")));
+    assert_eq!(listed(&runtime), ["Fix signup"]);
+
     assert!(
-        !dispatch(&mut runtime, "peer_work", work("Fix login")),
+        !dispatch(&mut runtime, "peer_work", work("Fix signup")),
         "what it already holds is no change"
     );
     assert!(dispatch(&mut runtime, "peer_work", work("Fix login again")));
@@ -1207,66 +1223,49 @@ fn a_connected_machines_own_work_is_listed_until_it_is_no_longer_connected() {
     let mut wrong = work("Fix login");
     wrong["work"]["rows"][0]["group"] = serde_json::json!("working");
     dispatch(&mut runtime, "peer_work", wrong);
-    assert_eq!(runtime.snapshot.navigator.peer_work.len(), 1);
-    assert_eq!(
-        runtime.snapshot.navigator.peer_work[0].told.rows[0].group,
-        "needs_you"
-    );
+    assert_eq!(listed(&runtime), ["Fix login again"]);
 
-    // Not connected: its rows leave the list (D-50).
+    // Not connected, or paused: nothing of it is listed (D-50), and it
+    // shows again when the list says it is opened and connected.
     assert!(dispatch(
         &mut runtime,
         "peer_machines",
         machine("active", false)
     ));
-    assert!(runtime.snapshot.navigator.peer_work.is_empty());
-    // It connects again and tells its list first: the list is kept, and
-    // shows once the paired machines' list says it is connected. What it
-    // told before it left is gone.
+    assert!(listed(&runtime).is_empty());
+    dispatch(&mut runtime, "peer_machines", machine("paused", true));
+    assert!(listed(&runtime).is_empty());
     assert!(dispatch(
         &mut runtime,
         "peer_machines",
         machine("active", true)
     ));
-    assert!(runtime.snapshot.navigator.peer_work.is_empty());
-    assert!(dispatch(
-        &mut runtime,
-        "peer_machines",
-        machine("active", false)
-    ));
-    assert!(!dispatch(&mut runtime, "peer_work", work("Fix signup")));
-    assert!(runtime.snapshot.navigator.peer_work.is_empty());
-    assert!(dispatch(
-        &mut runtime,
-        "peer_machines",
-        machine("active", true)
-    ));
-    assert_eq!(
-        runtime.snapshot.navigator.peer_work[0].told.rows[0].title,
-        "Fix signup"
-    );
+    assert_eq!(listed(&runtime), ["Fix login again"]);
 
-    // Connected and paused: not opened now, so nothing of it is listed.
-    assert!(dispatch(
-        &mut runtime,
-        "peer_machines",
-        machine("paused", true)
-    ));
-    assert!(!dispatch(&mut runtime, "peer_work", work("Fix login")));
-
-    // It tells no more.
-    assert!(dispatch(
-        &mut runtime,
-        "peer_machines",
-        machine("active", true)
-    ));
-    assert!(dispatch(&mut runtime, "peer_work", work("Fix login")));
+    // It tells no more, as when its stream ended: forgotten, so the
+    // machine connected again lists nothing until it tells its list.
     assert!(dispatch(
         &mut runtime,
         "peer_work",
         serde_json::json!({ "key": key })
     ));
-    assert!(runtime.snapshot.navigator.peer_work.is_empty());
+    assert!(listed(&runtime).is_empty());
+    dispatch(&mut runtime, "peer_machines", machine("active", false));
+    assert!(!dispatch(
+        &mut runtime,
+        "peer_machines",
+        machine("active", false)
+    ));
+    dispatch(&mut runtime, "peer_machines", machine("active", true));
+    assert!(listed(&runtime).is_empty());
+
+    // Lists are held for sixteen machines at most; one more is refused.
+    for machine in 0..17 {
+        let mut one = work("Fix login");
+        one["key"] = serde_json::json!(format!("{machine:02x}").repeat(32));
+        dispatch(&mut runtime, "peer_work", one);
+    }
+    assert_eq!(runtime.peer_told.len(), 16);
 }
 
 /// PRD device-connect-iroh D-61 over the state folders released builds

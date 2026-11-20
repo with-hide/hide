@@ -23,14 +23,21 @@ fn held(machine: &PeerMachine) -> bool {
     )
 }
 
+/// The machines whose told work is held at once. One more is refused and
+/// recorded.
+const MAX_TOLD: usize = 16;
+
 fn active(machine: &PeerMachine) -> bool {
     machine.opens == Some(PeerOpens::Active)
 }
 
 impl Runtime {
     /// Takes what the machine under `key` told of its own work, or forgets
-    /// it when it tells no more (D-50). Only a machine this one may open is
-    /// kept: what another sends is refused and recorded.
+    /// it: the machine tells no more, since its stream ended (D-50). The
+    /// daemon hands on a list only from a machine it opened a stream to,
+    /// and the list lives as long as that stream; the paired machines' list
+    /// decides only whether it is shown, because it can say a connection
+    /// is up, or confirmed, after that connection's list arrived.
     pub(super) fn take_peer_work(
         &mut self,
         key: &str,
@@ -40,18 +47,12 @@ impl Runtime {
             self.peer_told.remove(key);
             return self.list_peer_work();
         };
-        let opened = self
-            .snapshot
-            .navigator
-            .peers
-            .iter()
-            .any(|machine| machine.key == key && active(machine));
-        if !opened {
+        if !self.peer_told.contains_key(key) && self.peer_told.len() >= MAX_TOLD {
             crate::diagnostic!(serde_json::json!({
                 "component": "peer_work",
                 "kind": "peer_work.refused",
                 "target": key,
-                "reason": "not a machine this one opens",
+                "reason": "too many machines tell their work",
             }));
             return false;
         }
@@ -59,35 +60,15 @@ impl Runtime {
         self.list_peer_work()
     }
 
-    /// The paired machines changed from `before`: a machine that
-    /// disconnected has no rows here until it tells them again, and the
-    /// list follows (D-50).
-    pub(super) fn peer_work_follows_machines(&mut self, before: &[PeerMachine]) {
-        let peers = &self.snapshot.navigator.peers;
-        self.peer_told.retain(|key, _| {
-            let was = before
-                .iter()
-                .any(|machine| machine.key == *key && machine.connected);
-            let is = peers
-                .iter()
-                .any(|machine| machine.key == *key && machine.connected);
-            !was || is
-        });
-        self.list_peer_work();
-    }
-
     /// Lists what the connected machines this one opens told, in the paired
-    /// machines' order, and forgets a machine this one opens no longer. A
-    /// list held for a machine not connected yet shows when it is. True
-    /// when the snapshot's list changed.
-    fn list_peer_work(&mut self) -> bool {
-        let peers = &self.snapshot.navigator.peers;
-        self.peer_told.retain(|key, _| {
-            peers
-                .iter()
-                .any(|machine| machine.key == *key && active(machine))
-        });
-        let listed: Vec<crate::peer_work::PeerWork> = peers
+    /// machines' order: what is held for a machine the list does not name,
+    /// has not confirmed or does not show connected is not listed until it
+    /// does. True when the snapshot's list changed.
+    pub(super) fn list_peer_work(&mut self) -> bool {
+        let listed: Vec<crate::peer_work::PeerWork> = self
+            .snapshot
+            .navigator
+            .peers
             .iter()
             .filter(|machine| active(machine) && machine.connected)
             .filter_map(|machine| {
