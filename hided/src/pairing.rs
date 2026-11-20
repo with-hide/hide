@@ -64,6 +64,25 @@ const RELAY_ANSWER_FOR: Duration = Duration::from_secs(30);
 /// The most addresses kept for one host.
 const MAX_ADDRESSES: usize = 8;
 
+/// Puts the address an operator gave first among a host's, and drops the
+/// last ones past [`MAX_ADDRESSES`]. A distribution's name is not an
+/// address someone gave: it is the only way this PC reaches that Hide, so
+/// it is never the one dropped.
+fn put_first(candidates: &mut Vec<Candidate>, first: Candidate) {
+    candidates.retain(|candidate| *candidate != first);
+    candidates.insert(0, first);
+    let distribution = |candidate: &Candidate| matches!(candidate, Candidate::Wsl(_));
+    let mut room =
+        MAX_ADDRESSES.saturating_sub(candidates.iter().filter(|c| distribution(c)).count());
+    candidates.retain(|candidate| {
+        distribution(candidate) || {
+            let kept = room > 0;
+            room = room.saturating_sub(1);
+            kept
+        }
+    });
+}
+
 /// Which direction of a pair an ask is about.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1287,10 +1306,7 @@ impl Pairing {
                 let address: SocketAddr = address.trim().parse().map_err(|_| "address_invalid")?;
                 let saved = peers.known(|known| {
                     let mut host = known.of(&paired.key).cloned().ok_or(StoreError::Unknown)?;
-                    let first = Candidate::Ip(address);
-                    host.candidates.retain(|candidate| *candidate != first);
-                    host.candidates.insert(0, first);
-                    host.candidates.truncate(MAX_ADDRESSES);
+                    put_first(&mut host.candidates, Candidate::Ip(address));
                     known.put(host)
                 });
                 saved.map_err(store)?;
@@ -2159,6 +2175,28 @@ mod tests {
         for code in switch.refusals {
             assert!(!next_action(code).starts_with("Retry;"), "{code}");
         }
+    }
+
+    /// An address an operator gives goes first and the last ones past the
+    /// cap go, but never a distribution's name: it is the only way this PC
+    /// reaches that Hide, and `hide device address` used often would have
+    /// cut it off.
+    #[test]
+    fn a_given_address_never_pushes_a_distribution_s_name_out() {
+        let address = |last: u8| Candidate::Ip(SocketAddr::from(([10, 0, 0, last], 7000)));
+        let distribution = Candidate::Wsl("Ubuntu".to_owned());
+        let mut candidates = vec![distribution.clone()];
+        for last in 1..=MAX_ADDRESSES as u8 + 2 {
+            put_first(&mut candidates, address(last));
+        }
+        assert_eq!(candidates.len(), MAX_ADDRESSES);
+        assert_eq!(candidates[0], address(MAX_ADDRESSES as u8 + 2));
+        assert_eq!(candidates.last(), Some(&distribution));
+        // The same address again moves to the front and adds nothing.
+        put_first(&mut candidates, address(5));
+        assert_eq!(candidates.len(), MAX_ADDRESSES);
+        assert_eq!(candidates[0], address(5));
+        assert!(candidates.contains(&distribution));
     }
 
     /// B41: a device added for its switch is taken off again only when the
