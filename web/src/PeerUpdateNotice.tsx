@@ -10,14 +10,16 @@ import { useState } from "react";
 import { Button } from "./components/ui/button";
 import { Toast } from "./components/ui/toast";
 import { useInterfaceTranslation } from "./i18n/client";
-import { ownWindow, pairedMachines } from "./pairing";
+import { deviceConnectOffered, ownWindow, pairedMachines } from "./pairing";
 import { useShellStore } from "./store";
 import { updateNow, useAskedUpdate, useUpdateStatus } from "./updates";
 
 export function PeerUpdateNotice() {
   const { t } = useInterfaceTranslation();
   const status = useUpdateStatus();
-  const own = useShellStore((s) => ownWindow(s.pairing));
+  // A build that does not offer connections between two Hides has no paired
+  // computer to wait for, and follows no computer's ask.
+  const own = useShellStore((s) => deviceConnectOffered(s.daemon) && ownWindow(s.pairing));
   const peers = useShellStore((s) => pairedMachines(s.rest));
   // The computer whose notice was closed here; another one shows it again.
   const [closed, setClosed] = useState<string | null>(null);

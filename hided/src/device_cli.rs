@@ -334,6 +334,11 @@ pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     // A carrier's output is the connection's bytes: nothing else is ever
     // printed there, and a refusal is the code this command ends with.
     if cli.verb == Verb::Carry {
+        // A build that does not offer connections between two Hides
+        // carries none (`env::Env::device_connect`).
+        if !env.device_connect {
+            return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
+        }
         return carry(env);
     }
     let (code, message, device) = match answer(env, cli) {
@@ -1366,6 +1371,12 @@ mod tests {
                 _ => panic!("{words:?} was not refused"),
             }
         }
+        // The carrier of a connection to this account's core is refused
+        // with the code alone: its output is the connection's bytes.
+        assert_eq!(
+            run(&env, &parse_words(&["carry"]).unwrap()),
+            Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned())
+        );
     }
 
     /// `projects-ssh` takes each folder the asking machine had registered

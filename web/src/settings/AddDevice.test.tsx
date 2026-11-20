@@ -291,6 +291,16 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   await unmount();
 });
 
+it("asks no distribution about its own Hide in a build that does not offer connections between two Hides, and adds it as before pairing", async () => {
+  const { events, q, unmount } = await mount(hosts([], { wsl: [distro("Ubuntu", { default: true })] }), [], false);
+  await act(async () => { q('[data-wsl-distro="Ubuntu"] [role="radio"]')?.click(); });
+  expect(sent(events, "pairing_look_wsl")).toHaveLength(0);
+  expect(q("[data-ssh-look]")).toBeNull();
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  expect(sent(events, "register_device").map((event) => event.payload)).toEqual([{ wsl_distro: "Ubuntu", host_consent: true }]);
+  await unmount();
+});
+
 // PRD device-connect-iroh D-27, B43: a distribution that runs its own Hide is connected to as a
 // Hide through wsl.exe, and nothing is installed in it.
 it("connects to a distribution whose own Hide runs, and installs nothing there (D-27)", async () => {

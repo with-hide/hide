@@ -639,7 +639,8 @@ XDG_CONFIG_HOME=$HOME/xdg-config
 HIDE_TAILSCALE_BIN=$HOME/no-tailscale
 HIDE_RELAY_URL=ws://127.0.0.1:9/ws
 HIDE_PEER_DIRECT=127.0.0.1:0
-export HOME XDG_CONFIG_HOME HIDE_STATE_DIR HIDE_MACHINE_ID HIDE_TAILSCALE_BIN HIDE_RELAY_URL HIDE_PEER_DIRECT
+HIDE_DEVICE_CONNECT=1
+export HOME XDG_CONFIG_HOME HIDE_STATE_DIR HIDE_MACHINE_ID HIDE_TAILSCALE_BIN HIDE_RELAY_URL HIDE_PEER_DIRECT HIDE_DEVICE_CONNECT
 unset XDG_STATE_HOME
 cd "$HOME" || exit 1
 exec "$@"
@@ -957,6 +958,23 @@ async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_t
     Ran::of(off.output().unwrap()).refused("device_connect_unavailable");
     host.run(&["device", "pause", "studio", "--json"])
         .refused("device_connect_unavailable");
+    // A carrier is refused too, by the terminal's own build and by the
+    // daemon one that offers them asks; nothing is written where a
+    // connection's bytes would go.
+    let mut off = host.command(&["device", "carry"]);
+    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    for refused in [
+        off.output().unwrap(),
+        host.command(&["device", "carry"]).output().unwrap(),
+    ] {
+        assert!(!refused.status.success());
+        assert!(refused.stdout.is_empty(), "{:?}", refused.stdout);
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("device_connect_unavailable"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
 
     // Its help leaves the pairing verbs out; a build that offers them
     // lists them.
