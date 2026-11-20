@@ -98,7 +98,9 @@ fn engine_splits_first_tab_with(runtime: &mut Runtime, directory: &Path, q_agent
         .expect("split session payload");
     agents_in_every_pane(&mut payload);
     if !q_agent {
-        payload.agents.retain(|agent| agent.pane_id != "w-order:t1:q");
+        payload
+            .agents
+            .retain(|agent| agent.pane_id.as_deref() != Some("w-order:t1:q"));
     }
     runtime.ingest_session(Ok(payload));
     runtime.sync_workspace_view();
@@ -117,6 +119,7 @@ fn agents_in_every_pane(payload: &mut SessionSnapshotPayload) {
             .map(|pane| serde_json::json!({
                 "pane_id": pane.pane_id, "agent": "codex", "agent_status": "idle",
                 "state_change_seq": 1, "lineage_session": format!("session-{}", pane.pane_id),
+                "agent_session": {"kind": "id", "value": format!("session-{}", pane.pane_id)},
             }))
             .collect::<Vec<_>>()
     ))
@@ -1954,8 +1957,15 @@ fn a_desk_tab_names_its_agents_pane_and_takes_it_to_the_left_in_pair_view() {
         &directory,
         serde_json::json!({"action": "focus", "display_id": a}),
     );
-    assert_eq!(front_owner(&runtime), ("a.md".into(), Some("w-order:t1:p".into())));
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")), "B24");
+    assert_eq!(
+        front_owner(&runtime),
+        ("a.md".into(), Some("w-order:t1:p".into()))
+    );
+    assert_eq!(
+        pairs(&runtime).0,
+        Some(paired(TABS[0], "w-order:t1:p")),
+        "B24"
+    );
 
     let c = display_id(&runtime, &directory, "c.md");
     view_act(
@@ -1986,11 +1996,19 @@ fn choosing_another_pane_of_a_paired_tab_keeps_one_owner_on_both_sides() {
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
     runtime.sync_workspace_view();
     assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
-    assert_eq!(fronts(&runtime, &directory), ["b.md"], "its own View, brought onto the desk");
+    assert_eq!(
+        fronts(&runtime, &directory),
+        ["b.md"],
+        "its own View, brought onto the desk"
+    );
 
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
     runtime.sync_workspace_view();
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")), "the same pane again changes nothing");
+    assert_eq!(
+        pairs(&runtime).0,
+        Some(paired(TABS[0], "w-order:t1:q")),
+        "the same pane again changes nothing"
+    );
 }
 
 /// B19: the snapshot lists the panes with something to show beside the
