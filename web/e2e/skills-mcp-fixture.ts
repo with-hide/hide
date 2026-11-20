@@ -13,6 +13,7 @@ import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import type { Rest } from "./hided-control.mjs";
 import { copyFixtureShim } from "./shims/build";
+import { fixtureExecutable } from "./platform-fixture";
 import { enterWorkspace } from "./wire";
 
 /** The seven agents the store reaches, by id. */
@@ -62,8 +63,17 @@ function repository(root: string, name: string, files: Record<string, string>, t
  * script and a second skill to pick), pdf-tools (a bare commit, updated later)
  * and a folder skill to follow.
  */
-export async function startStore(label: string): Promise<StoreFixture> {
-  const engine = await startFixture();
+export async function startStore(label: string, { ssh = false, family = false }: { ssh?: boolean; family?: boolean } = {}): Promise<StoreFixture> {
+  // A family fixture's child runs `hide` from its pane as an agent does, for the commands' journey.
+  const engine = await startFixture({ family });
+  // A device's ssh is the fixture's stand-in, so a registered host stays unreachable without a network call.
+  const extraEnv: NodeJS.ProcessEnv = {};
+  if (ssh) {
+    const bin = path.join(engine.root, "ssh-bin");
+    fs.mkdirSync(bin, { recursive: true });
+    copyFixtureShim("ssh-shim", path.join(bin, fixtureExecutable("ssh")));
+    extraEnv.PATH = `${bin}${path.delimiter}${engine.fixturePath}`;
+  }
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(engine.root, "st-")));
   const home = path.join(root, "home");
   for (const folder of [".claude", ".agents", ".codex", ".grok", ".config/opencode", ".pi/agent", ".omp/agent", ".gemini/config", ".local/bin", ".hide/kit"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
@@ -81,7 +91,7 @@ export async function startStore(label: string): Promise<StoreFixture> {
   const folder = path.join(root, "mine", "aside-browser");
   write(path.join(folder, "SKILL.md"), skill("aside-browser", "Does web work in the Aside browser"));
   write(path.join(folder, "scripts", "open.sh"), "#!/bin/sh\necho open\n", 0o755);
-  const daemon = await startHided(engine, label, home, {}, true);
+  const daemon = await startHided(engine, label, home, extraEnv, true);
   return { engine, daemon, home, root, repos: { archify: archify.url, pdf: pdf.url, pdfWork: pdf.work }, folder };
 }
 
@@ -162,14 +172,19 @@ export async function seedStore(fixture: StoreFixture) {
   });
   // A skill Claude and the shared folder hold that Hide did not write (B19).
   for (const folder of [".claude/skills", ".agents/skills"]) write(path.join(home, folder, "ast-grep", "SKILL.md"), skill("ast-grep", "Searches code by its syntax"));
-  // pdf-tools moves on upstream, and the check finds it (B36).
+  await moveUpstream(fixture);
+  return storeWhen(daemon, (report) => report.items.some((item) => item.name === "pdf-tools" && item.update) && report.unmanaged.some((row) => row.name === "ast-grep"), "the update and the hand-made skill");
+}
+
+/** pdf-tools moves on upstream with a new executable, and the check finds it (B36). */
+export async function moveUpstream(fixture: StoreFixture) {
   write(path.join(fixture.repos.pdfWork, "scripts", "merge.py"), "#!/usr/bin/env python3\nprint('merge')\n", 0o755);
   write(path.join(fixture.repos.pdfWork, "SKILL.md"), `${skill("pdf-tools", "Merges and splits PDF files")}\nUse merge.py to merge.\n`);
   git(fixture.repos.pdfWork, "add", ".");
   git(fixture.repos.pdfWork, "commit", "-q", "-m", "Add merge command");
   git(fixture.repos.pdfWork, "push", "-q", "origin", "main");
-  await store(daemon, [{ op: "check_updates" }]);
-  return storeWhen(daemon, (report) => report.items.some((item) => item.name === "pdf-tools" && item.update) && report.unmanaged.some((row) => row.name === "ast-grep"), "the update and the hand-made skill");
+  await store(fixture.daemon, [{ op: "check_updates" }]);
+  await storeWhen(fixture.daemon, (report) => report.items.some((item) => item.name === "pdf-tools" && item.update), "pdf-tools found newer");
 }
 
 /** Settings › 스킬·MCP of this machine, opened on the fixture's workspace. */

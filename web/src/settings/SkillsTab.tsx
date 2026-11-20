@@ -62,7 +62,10 @@ type Page = {
   openFiles: (item: StoreItem) => void;
   openKeys: (item: StoreItem) => void;
   openUpdate: (items: StoreItem[]) => void;
-  deleted: (item: StoreItem) => void;
+  /** Deletes the item; the page keeps the request, since the row goes before its answer lands. */
+  remove: (item: StoreItem) => void;
+  /** The item whose delete is on its way. */
+  removing: string | null;
 };
 
 /**
@@ -125,7 +128,9 @@ function MachineStore({ machine, machines, own, view, onView, onMachine, devices
   const [files, setFiles] = useState<StoreItem | null>(null);
   const [keys, setKeys] = useState<StoreItem | null>(null);
   const [updates, setUpdates] = useState<string[] | null>(null);
-  const [undo, setUndo] = useState<StoreItem | null>(null);
+  const [removed, setRemoved] = useState<StoreItem | null>(null);
+  const [undone, setUndone] = useState(false);
+  const removal = useStoreRequest(device.id, actions);
   const check = useStoreRequest(device.id, actions);
   const page: Page = {
     device,
@@ -137,7 +142,12 @@ function MachineStore({ machine, machines, own, view, onView, onMachine, devices
     openFiles: setFiles,
     openKeys: setKeys,
     openUpdate: (items) => setUpdates(items.map((item) => item.id)),
-    deleted: setUndo,
+    remove: (item) => {
+      setRemoved(item);
+      setUndone(false);
+      removal.send([{ op: "delete", item: item.id }]);
+    },
+    removing: removal.pending ? (removed?.id ?? null) : null,
   };
   const skills = report ? itemsOf(report, "skill") : [];
   const mcps = report ? itemsOf(report, "mcp") : [];
@@ -220,7 +230,8 @@ function MachineStore({ machine, machines, own, view, onView, onMachine, devices
           {view === "table" ? <Legend /> : null}
         </div>
       ) : null}
-      {undo && report ? <UndoToast item={undo} report={report} page={page} onDone={() => setUndo(null)} /> : null}
+      {removed && removal.refusal ? <Note tone="error" data-store-delete-refused={removed.id}>{refusalText(removal.refusal, t)}</Note> : null}
+      {removed && removal.done && !undone && report ? <UndoToast key={removal.sent} item={removed} report={report} page={page} onDone={() => setUndone(true)} /> : null}
       {adding && report ? <AddDialog device={device} name={name} report={report} shown={shown} local={device.id === own} actions={actions} onClose={() => setAdding(false)} /> : null}
       {files ? <FilesDialog item={files} onClose={() => setFiles(null)} /> : null}
       {keys && report ? <KeysDialog device={device} item={keys} report={report} actions={actions} onClose={() => setKeys(null)} /> : null}
@@ -252,7 +263,7 @@ function MachineState({ machine, name, report, actions }: { machine: AgentMachin
   if (machine.blocked === "unreachable" || machine.blocked === "connecting" || machine.blocked === "disabled") {
     return (
       <Group>
-        <Row label={<Note data-store-away={device.id}>{t("store.disconnected", { device: name })}</Note>} controlsEnd>
+        <Row label={<Note data-store-away={device.id} data-store-blocked={machine.blocked}>{t("store.disconnected", { device: name })}</Note>} controlsEnd>
           {machine.blocked === "unreachable" ? (
             <Button variant="secondary" size="sm" onClick={() => actions.retryDevice(device.id)} data-store-reconnect={device.id}>
               {t("store.reconnect")}
@@ -592,7 +603,6 @@ function ColumnSwitch({ item, column, page }: { item: StoreItem; column: ShownCo
 function RowActions({ item, page }: { item: StoreItem; page: Page }) {
   const { t } = useInterfaceTranslation();
   const source = openableSource(item, page.local);
-  const remove = useDelete(item, page);
   return (
     <div className="flex flex-wrap items-center gap-sm">
       {item.update ? (
@@ -612,22 +622,11 @@ function RowActions({ item, page }: { item: StoreItem; page: Page }) {
         </Button>
       ) : null}
       <span className="flex-1" />
-      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={remove.pending} onClick={remove.run} data-store-delete={item.id}>
+      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={page.removing === item.id} onClick={() => page.remove(item)} data-store-delete={item.id}>
         {t("store.action.delete")}
       </Button>
-      {remove.refusal ? <Note tone="error">{refusalText(remove.refusal, t)}</Note> : null}
     </div>
   );
-}
-
-/** Delete, and the undo it offers once the store answered (B18). */
-function useDelete(item: StoreItem, page: Page) {
-  const request = useStoreRequest(page.device.id, page.actions);
-  const { deleted } = page;
-  useEffect(() => {
-    if (request.done) deleted(item);
-  }, [request.done, deleted, item]);
-  return { pending: request.pending, refusal: request.refusal, run: () => request.send([{ op: "delete", item: item.id }]) };
 }
 
 /** A row of the table (scene 1-2 A): a row every agent has, or none, merges its cells into one dim line until hovered. */
@@ -637,7 +636,6 @@ function TableRow({ item, columns, page }: { item: StoreItem; columns: ShownColu
   const summary = rowSummary(item, columns);
   const all = allSwitch(item, columns);
   const merged = summary.kind !== "differs";
-  const remove = useDelete(item, page);
   const source = openableSource(item, page.local);
   return (
     <tr className="group/row" data-store-row={item.id} data-store-summary={summary.kind}>
@@ -646,7 +644,7 @@ function TableRow({ item, columns, page }: { item: StoreItem; columns: ShownColu
           <span className="truncate text-subhead font-medium text-foreground">{item.name}</span>
           <Version item={item} />
         </span>
-        {request.refusal || remove.refusal ? <Note tone="error">{refusalText((request.refusal ?? remove.refusal)!, t)}</Note> : null}
+        {request.refusal ? <Note tone="error">{refusalText(request.refusal, t)}</Note> : null}
       </td>
       <td className="px-xs py-sm text-center">
         <Switch checked={all.checked} disabled={request.pending} onCheckedChange={() => request.send([all.change])} aria-label={t("store.switch.all", { name: item.name })} data-store-all={item.id} />
@@ -682,7 +680,7 @@ function TableRow({ item, columns, page }: { item: StoreItem; columns: ShownColu
                 {t(source.kind === "url" ? "store.action.openSource" : "store.action.openFolder")}
               </DropdownMenuItem>
             ) : null}
-            <DropdownMenuItem className="text-destructive" onSelect={remove.run} data-store-menu-delete={item.id}>
+            <DropdownMenuItem className="text-destructive" onSelect={() => page.remove(item)} data-store-menu-delete={item.id}>
               {t("store.action.delete")}
             </DropdownMenuItem>
           </DropdownMenuContent>
