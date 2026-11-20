@@ -1641,67 +1641,6 @@ mod tests {
     use crate::runtime::delivery::tests::{authority, fixture, show_agents};
     use crate::sidebar::SessionSnapshotPayload;
 
-    #[test]
-    fn human_claims_only_undelivered_letters_once_across_restart() {
-        let parent = Actor {
-            pane_id: "parent".into(),
-            name: "parent".into(),
-            kind: "codex".into(),
-            device_id: crate::node::TEST_NODE.into(),
-            session: Some("parent-session".into()),
-        };
-        let child = Actor {
-            pane_id: "child".into(),
-            name: "child".into(),
-            kind: "codex".into(),
-            device_id: crate::node::TEST_NODE.into(),
-            session: Some("child-session".into()),
-        };
-        let mut ledger = Ledger::default();
-        let letter = mailbox::send(
-            &mut ledger,
-            &child,
-            &parent,
-            "report",
-            "done",
-            "report",
-            None,
-            1,
-        )
-        .unwrap();
-        let (reply, _) = mpsc::sync_channel(1);
-        let request = Request {
-            effect: Effect::HumanClaim,
-            reply,
-        };
-        let none = crate::coordination::Held::default();
-        assert_eq!(apply(&mut ledger, &request, 2, &none).unwrap().0, json!([]));
-        assert!(!ledger.expire(super::super::DELIVERY_EXPIRY_MS));
-        assert!(ledger.expire(1 + super::super::DELIVERY_EXPIRY_MS));
-        let notices = apply(
-            &mut ledger,
-            &request,
-            1 + super::super::DELIVERY_EXPIRY_MS,
-            &none,
-        )
-        .unwrap()
-        .0;
-        assert_eq!(notices[0]["id"], letter.id);
-        assert_eq!(ledger.letters.len(), 1);
-        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
-        assert_eq!(
-            apply(
-                &mut restored,
-                &request,
-                2 + super::super::DELIVERY_EXPIRY_MS,
-                &none,
-            )
-            .unwrap()
-            .0,
-            json!([])
-        );
-    }
-
     struct ActivityPeer(std::sync::atomic::AtomicU64);
     impl crate::node_access::NodeLink for ActivityPeer {
         fn reader_features(&self) -> Option<&hide_node_link::sessions::ReaderFeatures> {
@@ -2617,15 +2556,10 @@ mod tests {
 
     fn upkeep() -> Upkeep {
         Upkeep {
-            asleep: Default::default(),
-            woke: Default::default(),
-            woken: Default::default(),
-            undeliverable: Default::default(),
-            reach: ledger::Reach::new(),
             gone: Default::default(),
             rebinds: Default::default(),
+            successions: Default::default(),
             tools: None,
-            present: Default::default(),
         }
     }
 
@@ -2645,22 +2579,22 @@ mod tests {
         };
         watch::start(&mut ledger, &tool, &target, 1).unwrap();
         assert!(
-            !upkeep().apply(&mut ledger, 2).2,
+            !upkeep().apply(&mut ledger, 2, &crate::coordination::Held::default()).tools,
             "the list is not restored yet"
         );
         let held = Upkeep {
             tools: Some(vec!["00000000000000a1".into()]),
             ..upkeep()
         };
-        assert!(!held.apply(&mut ledger, 3).2);
+        assert!(!held.apply(&mut ledger, 3, &crate::coordination::Held::default()).tools);
         assert_eq!(ledger.watches.len(), 1);
         let gone = Upkeep {
             tools: Some(Vec::new()),
             ..upkeep()
         };
-        assert!(gone.apply(&mut ledger, 4).2);
+        assert!(gone.apply(&mut ledger, 4, &crate::coordination::Held::default()).tools);
         assert!(ledger.watches.is_empty());
-        assert!(!gone.apply(&mut ledger, 5).2, "nothing left to end");
+        assert!(!gone.apply(&mut ledger, 5, &crate::coordination::Held::default()).tools, "nothing left to end");
     }
 
     #[test]

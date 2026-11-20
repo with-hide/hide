@@ -925,53 +925,10 @@ mod tests {
         }
     }
 
-    /// The holds the operator lifts are named once (`held::held_for`): a
-    /// parent pane Hide cannot reach is kept like the others, so its held
-    /// letter does not come and go between passes, and raises nothing on the
-    /// child, while a hold that ends on its own is never kept.
-    #[test]
-    fn an_unreachable_parent_is_kept_and_raises_nothing_and_a_passing_hold_is_not_kept() {
-        let child = child();
-        let mut ledger = Ledger::default();
-        mailbox::send(
-            &mut ledger,
-            &actor("child"),
-            &actor("parent"),
-            "request",
-            "question",
-            "request",
-            None,
-            100,
-        )
-        .unwrap();
-        let id = ledger.letters[0].id.clone();
-        for hold in [Hold::Absent, Hold::Session] {
-            let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert_eq!(
-                retain_raised_holds(&holds, BTreeMap::from([(id.clone(), Hold::Working)])),
-                holds,
-                "{hold:?} is the operator's to lift and stays until the letter rings"
-            );
-            assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
-        }
-        for hold in [Hold::Working, Hold::Quiet, Hold::NotReady] {
-            let holds = BTreeMap::from([(id.clone(), hold)]);
-            assert_eq!(
-                retain_raised_holds(&holds, BTreeMap::from([(id.clone(), Hold::Draft)])),
-                BTreeMap::from([(id.clone(), Hold::Draft)])
-            );
-        }
-    }
-
     #[test]
     fn session_escalation_clears_on_ack_reply_cancel_or_successful_bell() {
         let child = child();
-        for hold in [
-            Hold::Blocked,
-            Hold::AwaitingOperator,
-            Hold::Draft,
-            Hold::Exhausted,
-        ] {
+        for hold in [Hold::Blocked, Hold::AwaitingOperator, Hold::Draft] {
             let mut ledger = Ledger::default();
             mailbox::send(
                 &mut ledger,
@@ -987,14 +944,6 @@ mod tests {
             let id = ledger.letters[0].id.clone();
             let holds = BTreeMap::from([(id.clone(), hold)]);
             assert!(of(&child, Some(&ledger), &holds, LATER).is_some());
-            for waiting in [Hold::Working, Hold::Quiet, Hold::NotReady] {
-                let retained = retain_raised_holds(&holds, BTreeMap::from([(id.clone(), waiting)]));
-                assert_eq!(
-                    of(&child, Some(&ledger), &retained, LATER),
-                    of(&child, Some(&ledger), &holds, LATER)
-                );
-            }
-            assert!(retain_raised_holds(&holds, BTreeMap::new()).is_empty());
             assert!(
                 of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none(),
                 "a successful bell clears the hold"

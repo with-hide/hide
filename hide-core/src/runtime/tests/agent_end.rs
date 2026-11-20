@@ -375,7 +375,6 @@ impl Ending {
             crate::delivery::worker::Authority {
                 context: self.context.clone(),
                 ..authority(&self.actor)
-                registers: Vec::new(),
             },
             self.actor.clone(),
             Command::End {

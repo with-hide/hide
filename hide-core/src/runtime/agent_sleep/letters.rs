@@ -585,6 +585,16 @@ impl Runtime {
             .collect()
     }
 
+    /// The letters a failed wake left waiting, each with its wake's reason.
+    #[cfg(test)]
+    pub(crate) fn letter_wake_failures(&self) -> BTreeMap<String, String> {
+        self.letter_wakes
+            .failed
+            .iter()
+            .map(|(id, failure)| (id.clone(), failure.reason.clone()))
+            .collect()
+    }
+
     /// Keeps the failures and the wakes of letters still pending.
     fn forget_failures(&mut self, ledger: &Ledger) {
         if !self.letter_wakes.woke.is_empty() {

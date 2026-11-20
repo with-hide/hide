@@ -11390,10 +11390,11 @@ fn conductor_letter(runtime: &mut Runtime, ago: u64) -> String {
 
 /// with-hide/hide-private#678: letters to a running mission's Conductor
 /// that the doorbell holds for something only the operator can lift, for
-/// two minutes or more, are counted on the mission with what to do (a pane
-/// it cannot reach named first); a hold that ends on its own and a letter
-/// held for less than two minutes are not, a delivered letter leaves the
-/// count, the line going with the last, and an undelivered one never joins.
+/// two minutes or more, are counted on the mission with what to do (an
+/// approval named first); a hold that ends on its own, a pane Hide cannot
+/// reach (PRD letters-missions-simplify B14) and a letter held for less
+/// than two minutes are not, a delivered letter leaves the count, the line
+/// going with the last, and one that ended with no recipient never joins.
 #[test]
 fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     use crate::delivery::doorbell::Hold;
@@ -11424,8 +11425,17 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         Some((1, HeldFor::Draft))
     );
 
+    let unreachable = conductor_letter(&mut runtime, 3 * MINUTE);
+    runtime
+        .delivery_holds
+        .insert(unreachable, Hold::Absent);
+    assert_eq!(
+        held(&runtime),
+        Some((1, HeldFor::Draft)),
+        "a pane Hide cannot reach is Hide's to settle"
+    );
     let gone = conductor_letter(&mut runtime, 3 * MINUTE);
-    runtime.delivery_holds.insert(gone.clone(), Hold::Absent);
+    runtime.delivery_holds.insert(gone.clone(), Hold::Blocked);
     let shown = runtime
         .mission_view_of("mission-1")
         .unwrap()
@@ -11433,8 +11443,8 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .unwrap();
     assert_eq!(
         (shown.count, shown.reason),
-        (2, HeldFor::Unreachable),
-        "an unreachable pane is named before a draft"
+        (2, HeldFor::Approval),
+        "an approval is named before a draft"
     );
     assert!(shown.since_unix_ms <= crate::delivery::worker::now() - 5 * MINUTE);
 
@@ -11448,11 +11458,9 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     assert_eq!(held(&runtime), None, "delivered letters leave");
     assert!(runtime.delivery_holds.contains_key(&fresh));
 
-    // A letter that ended undelivered asks nothing of the operator: one to
-    // a Conductor still in its pane is not ended by its deadline, and the
-    // rest went to a Conductor that is gone or were told to their sender
-    // (operator decision 2026-11-14; a settings worker's report stood here
-    // for good once that worker had ended).
+    // A letter that ended with no recipient asks nothing of the operator:
+    // it went to a Conductor that is gone, and only its sender sees it
+    // (D-05).
     let lost = conductor_letter(&mut runtime, 0);
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger
@@ -11460,7 +11468,7 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .iter_mut()
         .find(|letter| letter.id == lost)
         .unwrap()
-        .state = crate::delivery::ledger::State::Undelivered;
+        .state = crate::delivery::ledger::State::NoRecipient;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     assert_eq!(held(&runtime), None);
 }
