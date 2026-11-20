@@ -456,11 +456,9 @@ export const PaneView = memo(function PaneView({
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>
-        <PaneDeskReturn paneId={paneId} actions={actions} />
-        {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
-        <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
-        {/* ◧ stands left of the zoom and follows its rule (B20): shown on the pane that holds the keyboard or is pointed at, kept
-            drawn while pressed, and in the pane menu below the narrow breakpoint (`pane-head-narrow`), where the head draws neither.
+        {/* ◧ and the zoom show only on the pane that holds the keyboard or is pointed at, so they lead the right side: the controls
+            always drawn stay at its end, and the place the two keep while hidden reads as the title's own margin (B20).
+            ◧ stays drawn while pressed, and both are in the pane menu below the narrow breakpoint (`pane-head-narrow`), where the head draws neither.
             Its hint carries ⌘. while it can act; `aria-disabled` keeps the hint of an off ◧, which says why. */}
         <Hint label={pairLabel} shortcut={head.pair === "none" ? undefined : pairChord}>
           <Button
@@ -476,6 +474,10 @@ export const PaneView = memo(function PaneView({
             <Columns2Icon aria-hidden="true" />
           </Button>
         </Hint>
+        {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        <PaneDeskReturn paneId={paneId} actions={actions} />
+        {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
+        <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button
@@ -496,7 +498,7 @@ export const PaneView = memo(function PaneView({
               {hidden > 0 ? <span>+{hidden}</span> : null}
             </Button>
           </Hint>
-        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        ) : null}
         <PaneMention paneId={paneId} actions={actions} open={mention} setOpen={setMention} anchor={
         <Hint label={t("panes.actions", { name: title })}>
           <Button
