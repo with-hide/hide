@@ -824,7 +824,6 @@ impl Runtime {
             "mission": id, "question": key, "intent": intent,
         }));
         self.save_missions();
-        self.flush_mission_wakes();
         Ok(true)
     }
 
