@@ -286,6 +286,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A `request` or `block` letter wakes it again with its conversation, so send a reworked node's worker its new work as a letter; `hide agent sleep <id>` puts a resting worker to sleep yourself.
 - When a `hide mission` command answers `mission_unavailable`, Hide could not read its mission record: start no worker and tell the operator, since nothing then counts your workers against the cap.
 - When the usage `hide agent catalog` reports is close to a limit, or the machine cannot take another build, start nothing new, say why and for how long with `hide mission delay --line <why> --for <30m|2h>` (at most 24h; the delay ends by itself then, and you set it again if the reason still holds), and tell the operator in conversation if it holds for long. Clear it when you go on.
+  The map shows a delay, and a node's own `--hold`, as one state on each node it holds, `기다리는 중 · <why> · <time>`, and `hide mission show` says it on the node's line.
 - A node that waits on a pull request outside the mission waits on it as a waiting (`external`) node it depends on, never on a delay: the map shows what it waits for, and Hide wakes you when it is in main.
 
 ## 4. While it runs
@@ -387,19 +388,22 @@ Nothing reaches the operator per node.
 When a raise stands 20 minutes without you settling it, or any raise stands while no Conductor holds the mission, the mission shows the operator one card for all of them, the safety net, which leads them to your terminal (or, with no Conductor, to 지휘 다시 열기); a delay, a node's hold, an open decision and a gate waiting on the operator hold it off, as they hold off a stall; a gate that asks while its node still owes other lines (its own, CI, a review) holds off nothing, and its question holds the mission only while the gate is all its node owes.
 The operator can still settle a raised node from its panel on the map; you then get a letter saying what they did.
 The same cause is raised once.
-CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, is not warned for being quiet, neither by the no-push warning nor by its watch's no-activity letter.
+CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, gets no no-activity letter from its watch, nor does one whose node waits on a delay or a hold.
 A failed CI is its worker's to run again or fix, so it is no wait: put a wait on the operator that is not a merge on the map with `decide --node`, or the quiet worker is warned.
 
-Three signs that a worker is stuck are told to you first: a node whose review or verification round at the strength's limit failed (Verification strength, above, says what to do), a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet), and a node whose worker stopped for 5 minutes.
+Two signs that a worker is stuck are told to you first: a node whose review or verification round at the strength's limit failed (Verification strength, above, says what to do), and a node whose worker stopped for 5 minutes.
+There is no warning about pushes: a stopped worker is told by its stop, and one that goes round in circles by its review's round limit.
+While a node waits on a delay or a hold, no warning of any kind stands or rises on it; once the wait ends each is judged again, and a stop counts its 5 minutes from then.
+A worker asleep is no wait and gets no warning; its card says asleep.
 A worker is stopped when its program runs, its turn ended and it waits on nothing: no question or approval for the operator, no person's turn, child, background task, checks or reply it waits on, no letter of its own waiting for an answer, and no report to you as its last word; and its node waits on no one either (no pull request waiting on CI, a review or the merge, no raise, no question of yours about it, no delay or hold, and no gate that is all it owes).
 Its letter says why the turn ended when the agent said: a usage limit, with the agent's own line and its reset time when it gave one, or an API error; otherwise that it ended with no report.
 Send it on with a letter saying what is left, or give the node a fresh worker (Handing a node to a fresh worker, above); on a usage limit, send it on once the limit resets (hold the mission until then with `hide mission delay`) or give the node a fresh worker on another model.
 The map draws the node `멈춤` with its cause and how long ago from the moment Hide sees it stop, before the letter, and the 5 minutes count from then too, not from the worker's last turn.
-Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, a new push, or the stopped worker at work or waiting again, or its node waiting on someone, takes it off with its letter if not sent yet, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
-While a worker stands stopped, its node's no-push warning goes and none rises, so you get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise the stopped warning becomes after 30 minutes does not take that warning off.
+Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, the stopped worker at work or waiting again, or its node waiting on someone or on a delay or hold, takes it off with its letter if not sent yet, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
+You get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise the stopped warning becomes after 30 minutes does not take that warning off.
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
 The round limit's warning stays yours alone: it stands through any round after the limit and goes only when that line passes or you skip it, so it is never raised as stalled and never reaches the operator.
-The thresholds are fixed: the strength's round limit, 90 minutes with no push, and 5 minutes stopped.
+The thresholds are fixed: the strength's round limit and 5 minutes stopped.
 
 ### A move that did not come
 
@@ -408,7 +412,7 @@ Every node not finished is someone's move, and a move that does not come is rais
 | Whose move | Raised to you |
 | --- | --- |
 | Yours: start a node whose dependencies are all done, or, behind a start gate answered with a fix, make the fix and record its line | 20 minutes after it could start |
-| The worker's, after a no-push or stopped warning above | 30 minutes after the warning's letter, if it still stands |
+| The worker's, after a stopped warning above | 30 minutes after the warning's letter, if it still stands |
 | Others': the pull request waits on CI, a review or the merge | 1 hour after the node's last push |
 
 A stall is a raise like any other: yours to settle, and part of the safety net when it stands 20 minutes more.

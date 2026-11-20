@@ -259,8 +259,7 @@ fn stop_words(node: &Value, now: u64) -> Option<String> {
     ))
 }
 
-/// How long ago `at` was in minutes up to a day, so the quiet that warns
-/// at ninety minutes reads as such.
+/// How long ago `at` was in minutes up to a day.
 fn minutes_ago(now: u64, at: u64) -> String {
     match now.saturating_sub(at) / 60_000 {
         0 => "방금".to_owned(),
@@ -941,9 +940,7 @@ mod tests {
             "since_unix_ms": NOW - MINUTE, "told_unix_ms": NOW - MINUTE, "cause": cause}]);
         let drawn = draw(&value, NOW).unwrap();
         assert!(
-            drawn.contains(
-                "⚠ ci · 작업 중 · ⚠멈춤 6분 전 · 사용 한도 · resets 4pm · #8 대기"
-            ),
+            drawn.contains("⚠ ci · 작업 중 · ⚠멈춤 6분 전 · 사용 한도 · resets 4pm · #8 대기"),
             "{drawn}"
         );
         let answer = json!({"mission_id": "mission-33", "node": value["mission"]["nodes"][1].clone(),

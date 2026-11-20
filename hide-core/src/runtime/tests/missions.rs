@@ -10362,7 +10362,10 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
-    assert_eq!(warnings_of(&runtime), (vec![WarningKind::ReviewFails], vec![]));
+    assert_eq!(
+        warnings_of(&runtime),
+        (vec![WarningKind::ReviewFails], vec![])
+    );
     let fix = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().nodes[0].clone();
     assert_eq!(fix(&runtime).warnings[0].told_unix_ms, None);
     runtime
@@ -11217,7 +11220,11 @@ fn a_delay_takes_a_stop_warning_away_and_the_stop_counts_again_from_its_end() {
     assert!(runtime.stall_missions(until));
     runtime.warn_missions(until);
     runtime.warn_missions(until + 5 * MINUTE - 1);
-    assert_eq!(warnings_of(&runtime).0, [], "timed from the end of the wait");
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [],
+        "timed from the end of the wait"
+    );
     assert!(runtime.warn_missions(until + 5 * MINUTE));
     let (kinds, letters) = warnings_of(&runtime);
     assert_eq!(kinds, [WarningKind::Stopped]);
@@ -11245,7 +11252,10 @@ fn a_delay_and_a_hold_read_as_one_wait_on_each_node_they_hold() {
             .wait
             .map(|wait| (wait.why, wait.until_unix_ms, wait.mission))
     };
-    assert_eq!((wait(&runtime, "fix"), wait(&runtime, "docs")), (None, None));
+    assert_eq!(
+        (wait(&runtime, "fix"), wait(&runtime, "docs")),
+        (None, None)
+    );
     command(
         &mut runtime,
         "sender",

@@ -1773,7 +1773,10 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(quiet_waits(&m, &m.nodes[0], Some(&pulls), &[false]), Some(true));
+        assert_eq!(
+            quiet_waits(&m, &m.nodes[0], Some(&pulls), &[false]),
+            Some(true)
+        );
         // The wait ended: the review warns again at once, the stop only
         // once it stood its own minutes from then.
         m.nodes[0].warnings.clear();
