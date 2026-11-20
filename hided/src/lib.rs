@@ -1,3 +1,4 @@
+pub mod accepting;
 pub mod access;
 pub mod access_cli;
 pub mod agent_cli;
@@ -681,6 +682,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             }
         });
     }
+    let listeners = Arc::new(accepting::CoreListeners::default());
     let app = AppState {
         core: Arc::clone(&core),
         boundary,
@@ -749,6 +751,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),
         pane_sizes: core.outputs.pane_sizes(),
+        listeners: Arc::clone(&listeners),
         window_calls: tokio::sync::broadcast::channel(4).0,
     };
     seat.starting("core.roots");
@@ -773,6 +776,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             port,
             desktop_renderers: Arc::clone(&app.desktop_renderers),
             pairing,
+            health: Arc::clone(&listeners.pane_bootstrap),
         },
         shutdown.clone(),
     ));
@@ -790,6 +794,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             move_gate: Arc::clone(&move_gate),
             moves: Arc::clone(&seat.moves),
         }),
+        Arc::clone(&listeners.node_attach),
         shutdown.clone(),
     ));
     let idle = server::mount(&seat, app);

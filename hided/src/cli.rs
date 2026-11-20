@@ -2709,7 +2709,15 @@ fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
 
 fn status_json(state_dir: &Path) -> Result<(), String> {
     let line = match healthy_daemon_in(state_dir) {
-        Some((state, health)) => attached_json(&state, &health, "running")?,
+        Some((state, health)) => {
+            let mut line = attached_json(&state, &health, "running")?;
+            // The process answers, so a host attaches to it; whether it
+            // takes pane commands is its listeners' answer.
+            if let Some(listeners) = health.get("listeners") {
+                line["listeners"] = listeners.clone();
+            }
+            line
+        }
         None => serde_json::json!({ "running": false }),
     };
     println!("{line}");
@@ -2859,27 +2867,50 @@ fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
 }
 
 fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
-    match healthy_daemon_in(state_dir).map(|(state, _)| state) {
-        Some(state) => {
-            let health = health_json(state.port, HEALTH_REQUEST)?;
-            let clients = health
-                .get("clients")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0);
-            let idle = health
-                .get("idle_remaining_secs")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(idle_secs);
-            println!(
-                "Hide is running  pid {}  port {}  clients {}  idle {}s remaining",
-                state.pid, state.port, clients, idle
-            );
-            Ok(())
-        }
-        None => {
-            println!("Hide is not running");
-            Ok(())
-        }
+    match healthy_daemon_in(state_dir) {
+        Some((state, health)) => println!("{}", status_text(&state, &health, idle_secs)),
+        None => println!("Hide is not running"),
+    }
+    Ok(())
+}
+
+/// What `hide status` says of the daemon `state` names, from its `/health`:
+/// running, or, while a listener it serves takes no connection, what that
+/// refuses. A daemon of a build before `listeners` reports none.
+fn status_text(state: &DaemonState, health: &serde_json::Value, idle_secs: u64) -> String {
+    let clients = health
+        .get("clients")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let idle = health
+        .get("idle_remaining_secs")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(idle_secs);
+    let problems: Vec<String> = [
+        (
+            "pane_bootstrap",
+            "pane commands and agent hooks are refused",
+        ),
+        ("node_attach", "other machines' nodes cannot connect"),
+    ]
+    .into_iter()
+    .filter_map(|(listener, refused)| {
+        let advice = match health["listeners"][listener].as_str()? {
+            "failing" => "Hide tries again; restart Hide if it stays",
+            "stopped" => "restart Hide",
+            _ => return None,
+        };
+        Some(format!("  {refused}: {advice}"))
+    })
+    .collect();
+    let facts = format!(
+        "pid {}  port {}  clients {clients}  idle {idle}s remaining",
+        state.pid, state.port
+    );
+    if problems.is_empty() {
+        format!("Hide is running  {facts}")
+    } else {
+        format!("Hide is not working  {facts}\n{}", problems.join("\n"))
     }
 }
 
@@ -4104,6 +4135,46 @@ mod tests {
         ] {
             assert!(parse(&args).is_err());
         }
+    }
+
+    /// `hide status` says Hide runs only while its listeners take
+    /// connections; a stopped or failing pane bootstrap is named with what
+    /// it refuses and what to do.
+    #[test]
+    fn status_says_what_a_listener_that_takes_no_connection_refuses() {
+        let state = DaemonState {
+            pid: 42,
+            port: 7001,
+            token: "abc".into(),
+            started_at: "now".into(),
+            pid_started: None,
+        };
+        let health = |pane: &str| {
+            serde_json::json!({
+                "clients": 1,
+                "idle_remaining_secs": 30,
+                "listeners": {"pane_bootstrap": pane, "node_attach": "accepting"},
+            })
+        };
+        assert_eq!(
+            status_text(&state, &health("accepting"), 0),
+            "Hide is running  pid 42  port 7001  clients 1  idle 30s remaining"
+        );
+        assert_eq!(
+            status_text(&state, &health("stopped"), 0),
+            "Hide is not working  pid 42  port 7001  clients 1  idle 30s remaining\n  \
+             pane commands and agent hooks are refused: restart Hide"
+        );
+        assert_eq!(
+            status_text(&state, &health("failing"), 0),
+            "Hide is not working  pid 42  port 7001  clients 1  idle 30s remaining\n  \
+             pane commands and agent hooks are refused: Hide tries again; restart Hide if it stays"
+        );
+        // A daemon of a build before `listeners` is read as before.
+        assert_eq!(
+            status_text(&state, &serde_json::json!({}), 9),
+            "Hide is running  pid 42  port 7001  clients 0  idle 9s remaining"
+        );
     }
 
     #[test]

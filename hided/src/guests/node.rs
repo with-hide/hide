@@ -620,6 +620,10 @@ impl GuestNode {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // The node starts the guest's holders, whose programs are the
+        // operator's: it starts with the open-file limit this daemon started
+        // with, raises its own, and gives its holders that one back.
+        hide_platform::process::keep_starting_open_file_limit(&mut command);
         let mut child = match OwnedChild::spawn(&mut command) {
             Ok(child) => child,
             Err(error) => {
