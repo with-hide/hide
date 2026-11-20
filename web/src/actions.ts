@@ -119,7 +119,7 @@ import {
   type ViewWorkspace,
 } from "./viewLayout";
 import { frontCard, workspaceViewOf, type LaneView, type Tool } from "./workspace";
-import { drawnPair, pairOffer } from "./pairView";
+import { drawnPair, pairModeOn, pairOffer } from "./pairView";
 import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
@@ -469,7 +469,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * did once. The core keeps the lane per Workspace, so another Workspace is
    * never touched.
    */
-  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; document_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; document_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string; pair_ratio?: number }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -614,13 +614,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     }
   };
 
-  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. */
-  const closeDocuments = () => setWorkspaceView({ documents: false });
+  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. Pair view draws none, since only its own ways out end it (D-46). */
+  const closeDocuments = () => {
+    if (drawnPair(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
+    setWorkspaceView({ documents: false });
+  };
 
   /** The rail's documents button or its command (B2, B11): the documents fold while they show, else they come in front; with no document nothing happens but a diagnostic. */
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
+    // In pair view the desk is always drawn: the button takes the keyboard to it and folds nothing (D-46).
+    if (drawnPair(view)) return showDocuments(true);
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
     showDocuments(true);
@@ -635,6 +640,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleLane = () => {
     // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
     if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
+    // ⌘E does nothing in pair view: only ⌘., ◧ and the strip's way back end it (D-46).
+    if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_lane: pair view ends only by its own ways out");
     if (laneUp()) return closeLane();
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
@@ -3230,25 +3237,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * ◧ on a pane's head or in its menus (PRD lane-desk-pair-view B18, B20,
-     * B26): the pane beside its tab's desk, or, pressed on the pane already
-     * there, the tab's own layout back. The core decides what the desk puts
-     * in front and refuses a pane with nothing to show.
+     * ◧ on a pane's head or in its menus, and the strip's way back (PRD
+     * lane-desk-pair-view B18, B20, B26, D-46): the pane beside its tab's
+     * desk, or, pressed on the pane already there, pair view off everywhere
+     * (D-45). The core decides what the desk puts in front and refuses a
+     * pane with nothing to show.
      */
     togglePairView(paneId: string) {
-      // Pressed only while drawn: a pair view the closed lane hides is entered again.
       const pair = drawnPair(workspaceViewOf(rest()));
       dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
     },
 
     /**
-     * ⌘. (B18, B26): the tab in pair view goes back to its own layout,
-     * wherever the keyboard is; otherwise the focused pane goes beside its
-     * desk, and a pane with nothing to show changes nothing (B19).
+     * ⌘. (B18, B26, D-45): the mode turns off wherever the keyboard is, even
+     * on a shell pane that draws its tab's own layout; otherwise the focused
+     * pane goes beside its desk, and a pane with nothing to show changes
+     * nothing (B19).
      */
     pairViewKey() {
       const view = workspaceViewOf(rest());
-      if (drawnPair(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      if (pairModeOn(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
       const paneId = useShellStore.getState().focusedPaneId;
       if (!paneId || pairOffer(view, paneId) !== "off") return diagnostic(`pair_view: nothing to show beside ${paneId ?? "no pane"}`);
       dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });

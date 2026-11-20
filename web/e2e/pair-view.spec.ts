@@ -7,13 +7,15 @@ import { closePane, focusPane, focusTab, newTab, splitPane, withControl } from "
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { quietFor } from "./wait";
-import { enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
+import { chooseExpand, enterWorkspace, screenshot, showDocuments, showTool } from "./wire";
 
-// Pair view (PRD lane-desk-pair-view B16-B29): a pane drawn beside its
-// Agent tab's desk, the body split in half under the tab row, told from the
+// Pair view (PRD lane-desk-pair-view B16-B29, D-44..D-47): one mode for the
+// window that draws the pane the operator is on beside its Agent tab's desk,
+// under the tab row, split at a divider the operator drags, told from the
 // usual screen by the strip, the tab mark, the sidebar mark and a pressed ◧;
-// the two sides keep one owner, and leaving it brings the tab's own layout
-// back with every terminal at the size it had.
+// the two sides keep one owner, it goes with the operator to another agent,
+// only its own ways out end it, and leaving it brings the tab's own layout
+// back, with no desk on the right, every terminal at the size it had.
 
 test.describe.configure({ timeout: 240_000 }); // wait-ok: two agents start and report their sessions before the first step
 
@@ -168,27 +170,30 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
   }
 });
 
-test("the desk's pin pairs the tab in front with its agent, pair view stays the tab's through another tab and a restart, and ends when its pane closes", async ({ page }) => {
+test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep it on the agent gone to, a restart keeps it, off stays off, and it ends when its pane closes", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(engine.root, "fixture");
-    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    for (const name of ["a.md", "b.md"]) fs.writeFileSync(path.join(fixture, name), `# ${name}\n`);
     daemon = await startHided(engine, "pair-view-tab");
     const [left, other] = engine.panes;
+    const second = await withControl(daemon, (control) => newTab(control, engine, "second"));
+    // An agent in the second tab that opened a View of its own, which waits in its pane's list.
+    const secondAgent = await agentPane(engine, daemon.stateDir, second.pane);
     const leftAgent = await agentPane(engine, daemon.stateDir, left!);
-    const second = await withControl(daemon, async (control) => {
-      const made = await newTab(control, engine, "second");
+    await withControl(daemon, async (control) => {
       await focusTab(control, engine, engine.tab);
       await focusPane(control, other!);
-      return made;
     });
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     // The watched pane is `other`: `left`'s open waits in its pane's list until the operator puts it on the desk.
-    const answer = await leftAgent(["file", "open", "a.md"]);
-    expect(answer.status, answer.out).toBe(0);
+    for (const [agent, name] of [[leftAgent, "a.md"], [secondAgent, "b.md"]] as const) {
+      const answer = await agent(["file", "open", name]);
+      expect(answer.status, answer.out).toBe(0);
+    }
     await page.locator(`[data-pane-views="${left}"]`).click();
     await page.getByRole("menuitem", { name: /a\.md/ }).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
@@ -197,30 +202,49 @@ test("the desk's pin pairs the tab in front with its agent, pair view stays the 
     await page.locator('[data-desk-pin="off"]').click();
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
     await expect(paneView(page, left!), "the pane on screen takes the keyboard").toHaveAttribute("data-focused", "true");
-    // D-42: the pin is a way in only; pair view draws none.
+    // D-42: the pin is a way in only; pair view draws none, nor the desk's ✕ (D-46).
     await expect(page.locator("[data-desk-pin]")).toHaveCount(0);
+    await expect(page.locator("[data-lane-documents-close]")).toHaveCount(0);
     await expect(strip(page)).toBeVisible();
 
-    // B27: another tab shows its own layout; the strip marks the paired tab still, and coming back finds pair view.
+    // D-45: a tab switch keeps pair view, the new tab's agent on the left and its View on its desk.
     await page.locator(`[data-agent-tab-bar] [data-tab="${second.tab}"]`).click();
-    await expect(strip(page)).toHaveCount(0);
-    await expect(paneView(page, second.pane)).toBeVisible();
-    await expect(page.locator(`[data-pair-tab="${engine.tab}"]`)).toBeVisible();
-    await page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`).click();
-    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await expect(page.locator(`[data-pair-pane="${second.pane}"]`)).toBeVisible();
+    await expect(strip(page)).toBeVisible();
+    await expect(page.locator(`[data-pair-tab="${second.tab}"]`)).toBeVisible();
+    await expect(page.locator(`[data-pair-tab="${engine.tab}"]`), "one mode, one mark").toHaveCount(0);
+    await expect(deskTabs(page)).toHaveCount(1);
+    await screenshot(page, "pair-tab-switch");
 
-    // B27: a restart keeps the same pane beside the same tab.
+    // D-45: ⌃⇥ back to the first agent keeps it too, its own View in front.
+    await page.keyboard.press(chord("recent_area_tab"));
+    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
+
+    // D-45: so does the sidebar, to an agent in another tab.
+    await page.locator(`nav[data-sidebar] [data-agent-open="${second.pane}"]`).first().click();
+    await expect(page.locator(`[data-pair-pane="${second.pane}"]`)).toBeVisible();
+
+    // A restart keeps the mode, drawn on the pane the operator is on.
     daemon = await daemon.restart();
     await page.goto("about:blank");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible({ timeout: 20_000 }); // wait-ok: the restarted daemon reads the saved pair view and the page draws it again
-    await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
+    await expect(page.locator(`[data-pair-pane="${second.pane}"]`)).toBeVisible({ timeout: 20_000 }); // wait-ok: the restarted daemon reads the saved mode and the page draws it again
 
-    // B26: the strip's way back, then the pressed ◧, both bring the tab's own layout back.
+    // D-44, D-45: the strip's way back ends it everywhere, with no desk left on the right; nothing turns it on again on the way back to a tab.
     await page.locator("[data-pair-leave]").click();
     await expect(strip(page)).toHaveCount(0);
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`).click();
     await expect(paneView(page, other!)).toBeVisible();
+    await expect(strip(page)).toHaveCount(0);
+    await page.locator(`[data-agent-tab-bar] [data-tab="${second.tab}"]`).click();
+    await expect(paneView(page, second.pane)).toBeVisible();
+    await expect(strip(page)).toHaveCount(0);
+    await page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`).click();
+
+    // B26: the pressed ◧ toggles it.
     await pairButton(page, left!).click();
     await expect(pairButton(page, left!)).toHaveAttribute("aria-pressed", "true");
     await pairButton(page, left!).click();
@@ -240,8 +264,9 @@ test("the desk's pin pairs the tab in front with its agent, pair view stays the 
   }
 });
 
-test("⌘. puts the focused pane beside its desk, and a shell with nothing to show draws no ◧ and ⌘. on it changes nothing", async ({ page }) => {
+test("⌘. puts the focused pane beside its desk and takes it back, a shell draws no ◧, ⌘E and Escape leave pair view on, and the divider's split is the mode's", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
+  const resizes = countResizes(page);
   const sent = { pair: 0 };
   page.on("websocket", (ws) => ws.on("framesent", (frame) => {
     if (String(frame.payload).includes('"kind":"pair_view"')) sent.pair += 1;
@@ -252,26 +277,34 @@ test("⌘. puts the focused pane beside its desk, and a shell with nothing to sh
     const fixture = path.join(engine.root, "fixture");
     daemon = await startHided(engine, "pair-view-key");
     const [left] = engine.panes;
-    // An agent with its session and nothing opened: pair view shows its record.
-    await agentPane(engine, daemon.stateDir, left!);
+    // An agent with its session and nothing opened yet.
+    const leftAgent = await agentPane(engine, daemon.stateDir, left!);
     const shell = await withControl(daemon, (control) => splitPane(control, engine.tab, fixture, { direction: "down" }));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
 
-    // B19, D-43: a shell with nothing to show draws no views and ◧ button at all; the agent with only its session draws ◧ alone.
-    await expect(paneView(page, shell).locator("[data-pane-split]")).toHaveCount(0);
-    await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
-    await expect(paneView(page, left!).locator("[data-pane-split] [data-pane-views]")).toHaveCount(0);
-
-    // ⌘. on the shell sends nothing and the screen stays as it is.
-    await paneView(page, shell).locator("[data-terminal-host]").click();
-    await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
-    await page.keyboard.press(chord("pair_view"));
+    // B19, D-49: a shell and an agent that opened nothing have nothing to show: no views and ◧ button at all, and ⌘. sends nothing.
+    for (const pane of [shell, left!]) {
+      await expect(paneView(page, pane).locator("[data-pane-split]")).toHaveCount(0);
+      await paneView(page, pane).locator("[data-terminal-host]").click();
+      await expect(paneView(page, pane)).toHaveAttribute("data-focused", "true");
+      await page.keyboard.press(chord("pair_view"));
+    }
     await quietFor(page, 300, "a refused ⌘. would have sent its event by now");
     expect(sent.pair).toBe(0);
     await expect(strip(page)).toHaveCount(0);
 
-    // B18: ⌘. on the agent's pane enters, its record on the desk.
+    // B18: once the agent opened a View, ⌘. on its pane enters with it on the desk.
+    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    const opened = await leftAgent(["file", "open", "a.md"]);
+    expect(opened.status, opened.out).toBe(0);
+    await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
+    // B20, B21, D-43: ◧ stands left of the zoom, and stays drawn on a pane that does not hold the keyboard.
+    const [pairBox, zoomBox] = await Promise.all([pairButton(page, left!).boundingBox(), paneView(page, left!).locator('[data-pane-zoom="false"]').boundingBox()]);
+    expect(pairBox!.x + pairBox!.width).toBeLessThanOrEqual(zoomBox!.x + 1);
+    await paneView(page, shell).locator("[data-terminal-host]").click();
+    await page.mouse.move(1, 1);
+    await expect(pairButton(page, left!)).toHaveCSS("opacity", "1");
     await paneView(page, left!).locator("[data-terminal-host]").click();
     await expect(paneView(page, left!)).toHaveAttribute("data-focused", "true");
     await page.keyboard.press(chord("pair_view"));
@@ -279,13 +312,63 @@ test("⌘. puts the focused pane beside its desk, and a shell with nothing to sh
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
     await expect(deskTabs(page)).toHaveCount(1);
 
-    // ⌘E hides the desk and pair view with it, marks and the pressed ◧ too; one press of ◧ enters again.
+    // D-46: ⌘E does nothing in pair view, and Escape in the desk only moves the keyboard.
     await page.keyboard.press(chord("toggle_lane"));
+    await quietFor(page, 300, "a ⌘E that closed the lane would have redrawn by now");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    await front(page).click();
+    await page.keyboard.press("Escape");
+    await quietFor(page, 300, "an Escape that ended pair view would have redrawn by now");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    await expect(strip(page)).toBeVisible();
+
+    // D-47: the divider drags the split, the left terminal's grid changes once on release, and the ratio is the mode's.
+    const pairPane = page.locator(`[data-pair-pane="${left}"]`);
+    const start = (await pairPane.boundingBox())!;
+    const divider = page.locator('[data-lane-divider="pair"]');
+    const grip = (await divider.boundingBox())!;
+    const resizesBefore = resizes.get(left!) ?? 0;
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down();
+    for (const step of [1, 2, 3, 4]) await page.mouse.move(grip.x + grip.width / 2 + step * 30, grip.y + grip.height / 2);
+    await expect(page.locator("[data-lane-guide]")).toBeVisible();
+    expect(resizes.get(left!) ?? 0, "no resize while dragging").toBe(resizesBefore);
+    await page.mouse.up();
+    // The landing is a ratio in thousandths, so the width lands within a pixel or two of the pointer.
+    await expect.poll(async () => Math.abs((await pairPane.boundingBox())!.width - (start.width + 120))).toBeLessThanOrEqual(2);
+    await expect.poll(() => (resizes.get(left!) ?? 0) - resizesBefore).toBe(1);
+    await quietFor(page, 500, "no second resize follows the landing");
+    expect((resizes.get(left!) ?? 0) - resizesBefore).toBe(1);
+    await screenshot(page, "pair-divider-dragged");
+    const dragged = (await pairPane.boundingBox())!.width;
+
+    // B29: expanding the desk over the pane and back keeps the dragged split and resizes no terminal.
+    const beforeExpand = resizes.get(left!) ?? 0;
+    await chooseExpand(page);
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "expanded");
+    await chooseExpand(page);
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
+    await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
+    expect(resizes.get(left!) ?? 0, "expanding and back resizes no terminal").toBe(beforeExpand);
+
+    // D-44: ⌘. leaves, with no desk on the right; entering again draws the same split.
+    await page.keyboard.press(chord("pair_view"));
     await expect(strip(page)).toHaveCount(0);
-    await expect(page.locator("[data-pair-tab]")).toHaveCount(0);
-    await expect(pairButton(page, left!)).toHaveAttribute("aria-pressed", "false");
-    await pairButton(page, left!).click();
-    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+    await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
+    await page.keyboard.press(chord("pair_view"));
+    await expect(pairPane).toBeVisible();
+    await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
+
+    // Off is off: on the usual screen, ⌘E opening the lane and a desk tab pressed keep the desk floating over the agents, with no pair view.
+    await page.keyboard.press(chord("pair_view"));
+    await expect(strip(page)).toHaveCount(0);
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await front(page).click();
+    await quietFor(page, 300, "a hidden pair view would have been drawn by now");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(strip(page)).toHaveCount(0);
   } finally {
     daemon?.stop();
     engine.stop();

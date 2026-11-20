@@ -17,6 +17,7 @@ import { AgentRecordTitle } from "./components/agent-record-title";
 import { AgentMark } from "./AgentMark";
 import { PaneLetterButton } from "./components/letter-mark";
 import { LookButton, StatusMark } from "./components/status-mark";
+import { Separator } from "./components/ui/separator";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { PaneDeskReturn } from "./DeskScreen";
@@ -578,15 +579,17 @@ function PaneSplit({ paneId, name, agent, actions }: { paneId: string; name: str
   const label = t(pairLabelKey(offer));
   const pressed = offer === "on";
   return (
-    // Below the narrow breakpoint both cells give way, and the border with them.
-    <span data-pane-split={paneId} className="flex shrink-0 items-center overflow-hidden rounded-xs border border-border pane-head-narrow:hidden">
+    // Drawn like the head's other icons, with no box (D-48): two ghost cells and one hairline between them, only the
+    // hovered cell filled and ◧ pressed in the pair view accent. Below the narrow breakpoint both cells give way.
+    <span data-pane-split={paneId} className="flex shrink-0 items-center gap-xxs pane-head-narrow:hidden">
       {views ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={name} actions={actions} /></span> : null}
+      {views && offer !== "none" ? <Separator orientation="vertical" className="data-[orientation=vertical]:h-(--size-icon) pane-head-tight:hidden" data-pane-split-line="true" /> : null}
       {offer !== "none" ? (
         <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
           <Button
             variant="ghost"
             size="icon-sm"
-            className={`shrink-0 rounded-none ${views ? "border-l border-border pane-head-tight:border-l-0" : ""} ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
+            className={`shrink-0 ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view hover:text-primary-foreground" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
             aria-label={label}
             aria-pressed={pressed}
             data-pane-pair={offer}

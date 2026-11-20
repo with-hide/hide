@@ -745,8 +745,7 @@ pub(super) fn map_views(value: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) 
 }
 
 /// Each card's project, checkout and session machine, on a tray or not
-/// (PRD lane-desk-pair-view D-06, D-13); a tray's tab and pair view pane are
-/// `KEYS` rows.
+/// (PRD lane-desk-pair-view D-06, D-13); a tray's tab is a `KEYS` row.
 fn map_trays(view: &mut Value, map: &dyn Fn(Moves, &str) -> Mapped) {
     fn set(value: Option<&mut Value>, kind: Moves, map: &dyn Fn(Moves, &str) -> Mapped) {
         if let Some(value) = value
@@ -1687,7 +1686,7 @@ mod tests {
             json!({"schema_version": 3, "workspaces": [
                 {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "pane_moves": pane_move(0),
                  "tab_views": {tabs[0].clone(): "d1"},
-                 "trays": [{"tab": tabs[0].clone(), "pair": {"pane": panes[0].clone()},
+                 "trays": [{"tab": tabs[0].clone(),
                      "layout": {"root": {"area": {"id": "a9", "displays": [
                          {"id": "d9", "kind": "card", "opener": {"device_id": ALIAS, "terminal_id": "t2"},
                           "card": {"kind": "record", "session": {"device_id": ALIAS, "agent": "claude", "session_id": "s1"}}}]}}}}],
@@ -1696,12 +1695,12 @@ mod tests {
                  "feedback": {"comments": feedback_comments, "waiting": feedback_waiting}},
                 {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]), "pane_moves": pane_move(1),
                  "tab_views": {tabs[1].clone(): "d2"}, "view_layout": {},
-                 "trays": [{"tab": tabs[1].clone(), "pair": {"pane": panes[1].clone()}, "layout": {}}],
+                 "trays": [{"tab": tabs[1].clone(), "layout": {}}],
                  "shelf": {"root": {"area": {"id": "shelf", "displays": [
                      {"id": "d8", "kind": "card", "card": {"kind": "remains", "workspace_id": registrations[1], "checkout_id": checkouts[1]}}]}}}},
                 {"device_id": X, "path": X_ROOT, "agent_layout": layout(&tabs[2]), "pane_moves": pane_move(2),
                  "tab_views": {tabs[2].clone(): "d3"}, "view_layout": {},
-                 "trays": [{"tab": tabs[2].clone(), "pair": {"pane": panes[2].clone()}, "layout": {}}]},
+                 "trays": [{"tab": tabs[2].clone(), "layout": {}}]},
             ]}),
         );
         write(
@@ -1949,12 +1948,11 @@ mod tests {
         // A View's opener on the mini names it by the new owner's node id,
         // wherever in a layout it sits (PRD view-opener-feedback B41).
         let mac_views = &views["workspaces"][0];
-        // A tray names its tab, its pair view's pane and its cards' machines
-        // as the new owner does (PRD lane-desk-pair-view D-06, D-15).
+        // A tray names its tab and its cards' machines as the new owner does
+        // (PRD lane-desk-pair-view D-06).
         let moved = |kind: &str| shapes(kind).into_iter().next().unwrap().1;
         let tray = &mac_views["trays"][0];
         assert_eq!(tray["tab"], json!(moved("tab")));
-        assert_eq!(tray["pair"]["pane"], json!(moved("pane")));
         let card = &tray["layout"]["root"]["area"]["displays"][0];
         assert_eq!(card["opener"]["device_id"], json!(C));
         assert_eq!(card["card"]["session"]["device_id"], json!(C));
@@ -2757,25 +2755,21 @@ mod tests {
                 "active_area": "a1", "next_id": 2, "canvases": {"a1": tab},
             })
         };
-        // Each Workspace's desk of its Agent tab, in pair view with one of
-        // its panes, as the core's own writer saves it.
-        let trays = |tab: &str, pane: &str| {
+        // Each Workspace's desk of its Agent tab, as the core's own writer
+        // saves it.
+        let trays = |tab: &str| {
             let mut views = crate::workspace_views::WorkspaceViews::default();
             let view = views.entry(M, M_ROOT);
             let tray = view.tray_entry(tab);
             tray.shown = true;
-            tray.pair = Some(crate::workspace_views::PairView {
-                pane: pane.to_owned(),
-                before: None,
-            });
             serde_json::to_value(&view.trays).unwrap()
         };
         store_with(
             WORKSPACE_VIEWS,
             &state.join(WORKSPACE_VIEWS),
             json!({"workspaces": [
-                {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "trays": trays(&tabs[0], &panes[0])},
-                {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]), "trays": trays(&tabs[1], &panes[1])},
+                {"device_id": M, "path": M_ROOT, "agent_layout": layout(&tabs[0]), "trays": trays(&tabs[0])},
+                {"device_id": ALIAS, "path": C_ROOT, "agent_layout": layout(&tabs[1]), "trays": trays(&tabs[1])},
             ]}),
         );
         // The ledger's own rule: an agent's actor is on its machine and names
@@ -2825,66 +2819,44 @@ mod tests {
         dir
     }
 
-    /// A desk and its pair view follow their Agent tab and pane to the ids
-    /// the new owner gives them, as the new core's own reader loads them, and
-    /// back again (PRD lane-desk-pair-view D-06, D-15): a desk left on the old
+    /// A desk follows its Agent tab to the id the new owner gives it, as the
+    /// new core's own reader loads it, and back again (PRD
+    /// lane-desk-pair-view D-06): a desk left on the old
     /// tab id would be a tab no engine has, and the operator's Views on it
     /// would be shown nowhere.
     #[test]
-    fn a_desk_and_its_pair_view_follow_their_tab_and_pane_to_the_new_owners_ids() {
+    fn a_desk_follows_its_tab_to_the_new_owners_id() {
         let dir = reader_folder();
         let state = dir.path();
         let tabs: BTreeMap<String, String> = shapes("tab").into_iter().collect();
-        let panes: BTreeMap<String, String> = shapes("pane").into_iter().collect();
-        let desks = |state: &Path| -> Vec<(String, String, String, Option<String>)> {
+        let desks = |state: &Path| -> Vec<(String, String, String)> {
             let (views, _) = crate::workspace_views::load(&state.join(WORKSPACE_VIEWS), 0);
             let mut desks: Vec<_> = views
                 .workspaces
                 .iter()
                 .flat_map(|view| {
-                    view.trays.iter().map(|tray| {
-                        (
-                            view.device_id.clone(),
-                            view.path.clone(),
-                            tray.tab.clone(),
-                            tray.pair.as_ref().map(|pair| pair.pane.clone()),
-                        )
-                    })
+                    view.trays
+                        .iter()
+                        .map(|tray| (view.device_id.clone(), view.path.clone(), tray.tab.clone()))
                 })
                 .collect();
             desks.sort();
             desks
         };
         let start = desks(state);
-        let [mac, mini] =
-            [0, 1].map(|index| (before("tab")[index].clone(), before("pane")[index].clone()));
+        let [mac, mini] = [0, 1].map(|index| before("tab")[index].clone());
         assert_eq!(
             start,
             vec![
-                (M.into(), M_ROOT.into(), mac.0.clone(), Some(mac.1.clone())),
-                (
-                    ALIAS.into(),
-                    C_ROOT.into(),
-                    mini.0.clone(),
-                    Some(mini.1.clone())
-                ),
+                (M.into(), M_ROOT.into(), mac.clone()),
+                (ALIAS.into(), C_ROOT.into(), mini.clone()),
             ]
         );
 
         reown(state, &forward(), &forward_ids()).unwrap();
         let mut expected = vec![
-            (
-                M.to_owned(),
-                M_ROOT.to_owned(),
-                tabs[&mac.0].clone(),
-                Some(panes[&mac.1].clone()),
-            ),
-            (
-                C.to_owned(),
-                C_ROOT.to_owned(),
-                tabs[&mini.0].clone(),
-                Some(panes[&mini.1].clone()),
-            ),
+            (M.to_owned(), M_ROOT.to_owned(), tabs[&mac].clone()),
+            (C.to_owned(), C_ROOT.to_owned(), tabs[&mini].clone()),
         ];
         expected.sort();
         assert_eq!(desks(state), expected);

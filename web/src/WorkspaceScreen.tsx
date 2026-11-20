@@ -22,7 +22,7 @@ import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
 import { PairLayer } from "./PairLayer";
 import { drawnPair } from "./pairView";
-import { laneFrame, laneViewOf, pageLaneWidth, pairPaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
+import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -71,18 +71,21 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   );
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
-  // The viewing column draws the front tab's desk (PRD lane-desk-pair-view D-06).
-  const laneView = laneViewOf(view, hasViews);
+  // The viewing column draws the front tab's desk (PRD lane-desk-pair-view
+  // D-06); pair view draws it whatever the lane's own state, with a tool only
+  // when the lane is open (D-46).
   const pair = drawnPair(view);
+  const laneView = pair !== null ? "documents" : laneViewOf(view, hasViews);
   const input: LaneInput = {
     open: view?.open === true,
     view: laneView,
-    tool: view?.tool ?? null,
+    tool: (pair === null || view?.open === true ? view?.tool : null) ?? null,
     documentWidth: view?.document_width ?? null,
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
     expanded,
     pair: pair !== null,
+    pairRatio: view?.pair_mode?.ratio ?? null,
     front: stackFront,
     body: width,
     sizes,
@@ -246,12 +249,12 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
       <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" inert={frame.mode === "expanded"} data-agent-area="true">
         <AgentArea checkout={checkout} actions={actions} />
       </div>
-      {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.agents > 0 ? pairPaneWidth(frame.agents) : 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
+      {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (
         <div
           // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its
           // outer edge, so the divider is where the landing math puts it; elsewhere the frame draws the line itself.
-          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode !== "overlay" && "border-l border-border", frame.mode !== "pair" && "shadow-overlay", placed)}
+          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode !== "overlay" && frame.mode !== "pair" && "border-l border-border", frame.mode !== "pair" && "shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}
@@ -259,11 +262,14 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
           {/* A lane over the agents is sized from its own left edge; nothing beside it moves (B6). */}
           {frame.mode === "overlay" ? (
             <LaneDivider kind="lane" edge label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
+          ) : frame.mode === "pair" ? (
+            // Pair view's divider between the paired pane and the desk (D-47): it lands the mode's one ratio.
+            <LaneDivider kind="pair" edge label={t("panes.pair.resize")} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
           <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} />
         </div>
       ) : null}
-      {guide !== null ? <DividerGuide left={guide} /> : null}
+      {guide !== null ? <DividerGuide left={guide} pair={frame.mode === "pair"} /> : null}
     </div>
   );
 }

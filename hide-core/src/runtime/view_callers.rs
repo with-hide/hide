@@ -214,47 +214,27 @@ impl Runtime {
         true
     }
 
-    /// Ends the pair view of every tab whose left pane the catalog no longer
-    /// lists in it (PRD lane-desk-pair-view B28, D-22), without a notice.
-    /// Runs once a new catalog is in place, so it reads the panes as they
-    /// are now; a tab the catalog does not list is left to the tab prune,
-    /// which an unanswered catalog does not run. Whether any ended.
+    /// Ends pair view when the pane it drew, as last published, is one the
+    /// catalog no longer lists in its tab (PRD lane-desk-pair-view B28, D-22,
+    /// D-46), without a notice. Runs once a new catalog is in place, so it
+    /// reads the panes as they are now; a tab the catalog does not list is
+    /// left to the tab prune, which an unanswered catalog does not run.
+    /// Whether it ended.
     pub(super) fn end_pairs_of_gone_panes(&mut self) -> bool {
-        let Some(store) = self.workspace_views.as_ref() else {
+        let Some((key, tab, pane)) = self.published_pair() else {
             return false;
         };
-        let paired: Vec<(WorkspaceKey, String, String)> = store
-            .views
-            .workspaces
-            .iter()
-            .flat_map(|view| {
-                view.trays.iter().filter_map(|tray| {
-                    let pair = tray.pair.as_ref()?;
-                    Some((
-                        (view.device_id.clone(), view.path.clone()),
-                        tray.tab.clone(),
-                        pair.pane.clone(),
-                    ))
-                })
-            })
-            .collect();
-        if paired.is_empty() {
-            return false;
+        let listed: Option<Vec<&str>> = self
+            .catalog_workspaces()
+            .filter(|workspace| workspace.device_id == key.0)
+            .flat_map(|workspace| &workspace.checkouts)
+            .filter(|checkout| checkout.path == key.1)
+            .flat_map(|checkout| &checkout.tabs)
+            .find(|held| held.id.as_deref() == Some(tab.as_str()))
+            .map(|held| held.panes.iter().map(|pane| pane.id.as_str()).collect());
+        if listed.is_some_and(|panes| !panes.contains(&pane.as_str())) {
+            return self.end_pair_view(super::pair_view::PairEnd::PaneGone);
         }
-        let mut ended = false;
-        for (key, tab, pane) in paired {
-            let listed: Option<Vec<&str>> = self
-                .catalog_workspaces()
-                .filter(|workspace| workspace.device_id == key.0)
-                .flat_map(|workspace| &workspace.checkouts)
-                .filter(|checkout| checkout.path == key.1)
-                .flat_map(|checkout| &checkout.tabs)
-                .find(|held| held.id.as_deref() == Some(tab.as_str()))
-                .map(|held| held.panes.iter().map(|pane| pane.id.as_str()).collect());
-            if listed.is_some_and(|panes| !panes.contains(&pane.as_str())) {
-                ended |= self.end_pair_view(&key, &tab, super::pair_view::PairEnd::PaneGone);
-            }
-        }
-        ended
+        false
     }
 }

@@ -129,7 +129,7 @@ describe("what the pane head moved into its menus (PRD lane-desk-pair-view B19, 
     expect(paneMenuItems(row, "reviewer", undefined, undefined, false, false, { mention: true, pair: "on" })[1]).toMatchObject({ label: "Back to the usual view", unavailable: null });
     const shell = paneMenuItems(row, "zsh", undefined, undefined, false, false, { mention: false, pair: "none" });
     expect(shell.map((item) => item.id)).toEqual(["pair_view", "copy_reference", "close_pane"]);
-    expect(shell[0]?.unavailable).toBe("Nothing to show beside it yet: no view and no session");
+    expect(shell[0]?.unavailable).toBe("No view opened yet to show beside it");
   });
 
   it("draws pair view with a terminal's layout items, and @ with the pane's own", () => {
