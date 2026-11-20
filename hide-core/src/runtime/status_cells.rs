@@ -327,7 +327,7 @@ impl Runtime {
             .map(|addressed| addressed.cell)
             .collect();
         // Newest first: what moved last is read first.
-        mine.sort_by(|a, b| b.revision.cmp(&a.revision));
+        mine.sort_by_key(|cell| std::cmp::Reverse(cell.revision));
         let standing: BTreeSet<String> = mine.iter().map(|cell| cell.subject.clone()).collect();
         let seen = self.status_seen().entry(recipient.to_owned()).or_default();
         let mut given = Vec::new();
@@ -457,7 +457,7 @@ impl Runtime {
         fresh
             .into_iter()
             .map(|(recipient, (actor, mut cells))| {
-                cells.sort_by(|a, b| b.revision.cmp(&a.revision));
+                cells.sort_by_key(|cell| std::cmp::Reverse(cell.revision));
                 StatusRing {
                     recipient,
                     actor,

@@ -810,10 +810,10 @@ mod tests {
         assert!(summaries(&ledger).is_empty());
         tick(&mut ledger, &[asking(10)], 10 + QUESTION_WINDOW_MS).unwrap();
         let first = format!("Stopped with a question (watch {}).", watch.id);
-        assert_eq!(summaries(&ledger), [first.clone()]);
+        assert_eq!(summaries(&ledger), std::slice::from_ref(&first));
         let second = 10 + QUESTION_WINDOW_MS + SECOND_WARNING_MS;
         tick(&mut ledger, &[asking(10)], second - 1).unwrap();
-        assert_eq!(summaries(&ledger), [first.clone()]);
+        assert_eq!(summaries(&ledger), std::slice::from_ref(&first));
         tick(&mut ledger, &[asking(10)], second).unwrap();
         assert_eq!(
             summaries(&ledger),

@@ -1284,7 +1284,6 @@ impl Runtime {
         if close {
             changed |= self.hide_close(id, now);
         }
-        if changed {}
         changed
     }
 
