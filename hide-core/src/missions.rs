@@ -1816,6 +1816,12 @@ pub struct Mission {
     /// (`Runtime::warn_missions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay_until_unix_ms: Option<u64>,
+    /// When the operator put the mission's 내 차례 row away
+    /// (`mission_put_away`): the mission stays out of its device's Needs You
+    /// until something asks them that was raised after this, so a put-away
+    /// row never hides a newer turn (operator decision 2026-11-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put_away_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
     /// The line about the operator's checkout Hide added to `report` when
@@ -4762,6 +4768,7 @@ pub(crate) mod tests {
             answer_failed: None,
             delay: None,
             delay_until_unix_ms: None,
+            put_away_unix_ms: None,
             report: None,
             folder_line: None,
             created_at_unix_ms: 1,

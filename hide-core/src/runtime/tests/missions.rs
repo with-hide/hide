@@ -15588,6 +15588,38 @@ fn one_cause_on_five_nodes_shows_the_operator_one_card_at_most() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// The operator's 치우기 on a mission's 내 차례 row (operator decision
+/// 2026-11-20): the mission leaves its device's Needs You, stays out while
+/// the same raises stand, and comes back once a node is raised after it.
+#[test]
+fn a_put_away_mission_row_comes_back_only_for_a_newer_raise() {
+    use crate::missions::AttentionReason;
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    five_raised(&mut runtime, AttentionReason::WorkerEnded, false, now - MINUTE);
+    assert!(operator_turn(&mut runtime).mission_item);
+
+    assert!(runtime.mission_put_away_event("mission-1"));
+    let turn = operator_turn(&mut runtime);
+    assert_eq!((turn.mission_item, turn.safety_net), (false, Some(5)), "the map keeps its safety net");
+    // The same raises, read again, keep it away.
+    runtime.drive_mission_health(now);
+    assert!(!operator_turn(&mut runtime).mission_item);
+
+    // A node raised after the put-away asks the operator again.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.nodes.iter_mut().find(|node| node.key == "n1").unwrap().attention = None;
+    let later = crate::runtime::unix_milliseconds() + MINUTE;
+    let raised = crate::runtime::mission_health::raise(mission, "n1", AttentionReason::PrClosed, Some(8), later);
+    assert!(!raised.is_empty());
+    runtime.save_missions();
+    assert!(operator_turn(&mut runtime).mission_item);
+
+    assert!(!runtime.mission_put_away_event("mission-unknown"));
+}
+
 /// The safety net is excused exactly where a stall is (`stall_excused`): a
 /// decision waiting on the operator, a delay, a node's hold, and a node whose
 /// gate waits on the operator's answer, which is the operator's own turn
