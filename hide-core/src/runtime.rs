@@ -133,7 +133,7 @@ pub(crate) mod typed_input;
 pub(crate) use status_cells::Cell as StatusCell;
 pub(crate) use status_cells::{
     child_subject as status_subject_child, letter_subject as status_subject_letter,
-    recipient_key as status_recipient, render as status_text,
+    recipient_key as status_recipient, render as status_text, with_status,
 };
 mod unreadable_letters;
 mod unseen_views;

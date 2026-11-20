@@ -445,6 +445,7 @@ impl Runtime {
             )),
             since_unix_ms: None,
             notified: false,
+            opened_seq: None,
         };
         let mut wakes = vec![gate_wake(None)];
         // The words reach the node's worker themselves, so a gate answered

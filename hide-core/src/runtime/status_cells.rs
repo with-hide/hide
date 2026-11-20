@@ -19,17 +19,21 @@
 //! and both mark what they gave as seen (`take_status`). What each
 //! registration saw is the one thing kept, in the delivery ledger
 //! (`Ledger::status_seen`), written behind the memory copy this module reads.
-//! A resting receiver is rung once when a subject it has never seen appears
-//! (`status_rings_due`, `delivery::doorbell`), never for an update of one.
+//! A resting receiver is rung once for a cell it has neither seen nor been
+//! rung for in its episode (`status_rings_due`, `delivery::doorbell`), never
+//! for an update of one.
 //!
 //! Every revision grows with the fact it stands for: a mission's wake count
 //! for a node's cell, the time the fact was made otherwise, so "changed" is
-//! a revision past the one seen.
+//! a revision past the one seen. A cell's episode is the revision it began
+//! with, kept while facts update it and new once it went and comes back (a
+//! recurrence), so a recurrence rings and is given again whatever was seen
+//! of the episode before, with no pass between the two needed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::delivery::Actor;
@@ -49,6 +53,26 @@ const INBOX_CELLS: usize = 64;
 /// The most cells posted by memory-only passes; the oldest goes first
 /// (engineering #15). Bounded in practice by the panes and open letters.
 const POSTED_LIMIT: usize = 1_024;
+/// The subjects a receiver's seen and rung memory keeps, newest first.
+const SEEN_LIMIT: usize = 256;
+
+/// Keeps the newest `SEEN_LIMIT` of `subjects` by revision; whether any
+/// went.
+fn newest(subjects: &mut BTreeMap<String, u64>) -> bool {
+    if subjects.len() <= SEEN_LIMIT {
+        return false;
+    }
+    let mut revisions: Vec<u64> = subjects.values().copied().collect();
+    revisions.sort_unstable_by(|a, b| b.cmp(a));
+    let floor = revisions[SEEN_LIMIT - 1];
+    let mut kept = 0;
+    subjects.retain(|_, revision| {
+        let keep = *revision >= floor && kept < SEEN_LIMIT;
+        kept += usize::from(keep);
+        keep
+    });
+    true
+}
 
 /// One subject's status for the party responsible for it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -63,7 +87,18 @@ pub struct Cell {
     /// Grows with the fact the cell stands for.
     #[serde(skip)]
     pub revision: u64,
+    /// The revision the cell's episode began with: kept while a new fact
+    /// updates the cell, new when the cell comes back after its cause went.
+    /// A receiver that saw or was rung for an earlier episode is rung again.
+    #[serde(skip)]
+    pub episode: u64,
 }
+
+/// A new cell refused because every cell held in memory is live
+/// (`POSTED_LIMIT`): the producer keeps its fact and posts it again on its
+/// next pass, so the cell lands once there is room.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StatusFull;
 
 /// A cell and the party it is for: the registration id, or the pane of an
 /// agent Hide holds no registration for, and the identity a bell for it
@@ -82,6 +117,8 @@ pub(crate) struct StatusRing {
     pub(crate) recipient: String,
     pub(crate) actor: Actor,
     pub(crate) subjects: Vec<String>,
+    /// Each subject's episode the bell is for, in `subjects`' order.
+    pub(crate) episodes: Vec<u64>,
     /// The newest new cell, which the bell line names.
     pub(crate) line: String,
     pub(crate) others: usize,
@@ -94,8 +131,9 @@ pub(in crate::runtime) struct StatusCells {
     /// What each recipient saw, by subject: read from the ledger once, then
     /// kept here and written behind (`Effect::StatusSeen`).
     seen: Option<BTreeMap<String, BTreeMap<String, u64>>>,
-    /// The subjects each recipient was rung for since this core started.
-    rung: BTreeMap<String, BTreeSet<String>>,
+    /// The episode of each subject each recipient was rung for since this
+    /// core started.
+    rung: BTreeMap<String, BTreeMap<String, u64>>,
     /// The last revision a post took, so two posts in one millisecond differ.
     last_revision: u64,
 }
@@ -164,15 +202,17 @@ impl Runtime {
         subject: String,
         line: String,
         news: bool,
-    ) {
+    ) -> Result<(), StatusFull> {
         let key = recipient_key(self.delivery_ledger.as_deref().ok(), recipient);
         let line = cut(&line);
         let cells = &mut self.status_cells;
+        let mut episode = None;
         if let Some(posted) = cells.posted.get_mut(&(key.clone(), subject.clone())) {
             posted.actor = recipient.clone();
             if posted.cell.line == line && posted.cell.news == news {
-                return;
+                return Ok(());
             }
+            episode = Some(posted.cell.episode);
         }
         let revision = super::unix_milliseconds().max(cells.last_revision + 1);
         cells.last_revision = revision;
@@ -195,7 +235,7 @@ impl Runtime {
                     "component": "status", "kind": "status.posted_refused_full",
                     "recipient": key, "subject": subject, "cap": POSTED_LIMIT,
                 }));
-                return;
+                return Err(StatusFull);
             }
         }
         let cells = &mut self.status_cells;
@@ -208,13 +248,15 @@ impl Runtime {
                     line,
                     news,
                     revision,
+                    episode: episode.unwrap_or(revision),
                 },
             },
         );
+        Ok(())
     }
 
     /// Takes back every posted cell about `subject`: its cause is gone.
-    pub(in crate::runtime) fn retract_status(&mut self, subject: &str) {
+    pub(crate) fn retract_status(&mut self, subject: &str) {
         self.status_cells
             .posted
             .retain(|(_, about), _| about != subject);
@@ -286,6 +328,7 @@ impl Runtime {
                         line: cut(&super::missions::wake_body(mission, wake)),
                         news: !wake.standing(),
                         revision: wake.seq,
+                        episode: wake.opened_seq.unwrap_or(wake.seq),
                     },
                 });
             }
@@ -294,17 +337,15 @@ impl Runtime {
     }
 
     /// What `recipient` saw, read from the ledger the first time.
-    fn status_seen(&mut self) -> &mut BTreeMap<String, BTreeMap<String, u64>> {
-        if self.status_cells.seen.is_none() {
-            let kept = self
-                .delivery_ledger
-                .as_ref()
-                .ok()
-                .map(|ledger| ledger.status_seen.clone())
-                .unwrap_or_default();
-            self.status_cells.seen = Some(kept);
+    /// None until a ledger was read: what was seen before then is on disk,
+    /// and a map begun empty would write over it.
+    fn status_seen(&mut self) -> Option<&mut BTreeMap<String, BTreeMap<String, u64>>> {
+        if self.status_cells.seen.is_none()
+            && let Ok(ledger) = self.delivery_ledger.as_ref()
+        {
+            self.status_cells.seen = Some(ledger.status_seen.clone());
         }
-        self.status_cells.seen.get_or_insert_with(BTreeMap::new)
+        self.status_cells.seen.as_mut()
     }
 
     /// The cells of the agent in `caller`'s pane on `device` that changed
@@ -349,8 +390,11 @@ impl Runtime {
             .collect();
         // Newest first: what moved last is read first.
         mine.sort_by_key(|cell| std::cmp::Reverse(cell.revision));
-        let standing: BTreeSet<String> = mine.iter().map(|cell| cell.subject.clone()).collect();
-        let seen = self.status_seen().entry(recipient.to_owned()).or_default();
+        // With no ledger read, nothing can be marked seen: nothing is given.
+        let Some(seen) = self.status_seen() else {
+            return Vec::new();
+        };
+        let seen = seen.entry(recipient.to_owned()).or_default();
         let mut given = Vec::new();
         // The text's own heading and each cell's marks count too.
         let mut bytes = HEADING.len();
@@ -376,11 +420,12 @@ impl Runtime {
         for cell in &given {
             seen.insert(cell.subject.clone(), cell.revision);
         }
-        // A subject no cell stands for any more keeps nothing seen.
-        seen.retain(|subject, _| standing.contains(subject));
+        newest(seen);
         let kept = seen.clone();
-        if kept.is_empty() {
-            self.status_seen().remove(recipient);
+        if kept.is_empty()
+            && let Some(seen) = self.status_seen()
+        {
+            seen.remove(recipient);
         }
         if !given.is_empty() {
             crate::diagnostic!(json!({
@@ -443,22 +488,29 @@ impl Runtime {
         if self.status_quiet() {
             return Vec::new();
         }
+        self.prune_status();
         let ledger = self.delivery_ledger.clone().ok();
         let cells = self.status_cells(ledger.as_deref());
-        self.prune_status(&cells);
         let mut fresh: BTreeMap<String, (Actor, Vec<Cell>)> = BTreeMap::new();
-        let seen = self.status_seen().clone();
+        let Some(seen) = self.status_seen().cloned() else {
+            return Vec::new();
+        };
         let rung = &self.status_cells.rung;
         for addressed in cells {
             let Some(actor) = addressed.actor else {
                 continue;
             };
+            // Seen or rung for this episode: an update rings nothing, a
+            // recurrence (a later episode) rings again (B10, B12).
+            let episode = addressed.cell.episode;
             let known = seen
                 .get(&addressed.recipient)
-                .is_some_and(|seen| seen.contains_key(&addressed.cell.subject))
+                .and_then(|seen| seen.get(&addressed.cell.subject))
+                .is_some_and(|&looked| looked >= episode)
                 || rung
                     .get(&addressed.recipient)
-                    .is_some_and(|rung| rung.contains(&addressed.cell.subject));
+                    .and_then(|rung| rung.get(&addressed.cell.subject))
+                    .is_some_and(|&rang| rang >= episode);
             if known {
                 continue;
             }
@@ -477,6 +529,7 @@ impl Runtime {
                     actor,
                     line: cells[0].line.clone(),
                     others: cells.len() - 1,
+                    episodes: cells.iter().map(|cell| cell.episode).collect(),
                     subjects: cells.into_iter().map(|cell| cell.subject).collect(),
                 }
             })
@@ -490,7 +543,9 @@ impl Runtime {
     /// (`agent_sleep::letters`), once per revision.
     pub(crate) fn worker_cells_unseen(&mut self) -> Vec<(String, Actor, u64)> {
         let ledger = self.delivery_ledger.clone().ok();
-        let seen = self.status_seen().clone();
+        let Some(seen) = self.status_seen().cloned() else {
+            return Vec::new();
+        };
         let mut newest: BTreeMap<String, (Actor, u64)> = BTreeMap::new();
         for mission in &self.missions.book.missions {
             for wake in &mission.wakes {
@@ -519,14 +574,19 @@ impl Runtime {
             .collect()
     }
 
-    /// The doorbell rang `recipient` for `subjects`: none of them rings it
-    /// again. Subjects no cell stands for any more are forgotten.
-    pub(crate) fn status_rung(&mut self, recipient: &str, subjects: &[String]) {
+    /// The doorbell rang `ring`'s recipient for its subjects: none of them
+    /// rings it again in this episode.
+    pub(crate) fn status_rung(&mut self, ring: &StatusRing) {
         self.status_cells
             .rung
-            .entry(recipient.to_owned())
+            .entry(ring.recipient.clone())
             .or_default()
-            .extend(subjects.iter().cloned());
+            .extend(
+                ring.subjects
+                    .iter()
+                    .cloned()
+                    .zip(ring.episodes.iter().copied()),
+            );
     }
 
     /// Whether no cell can stand and nothing is remembered of one: the
@@ -550,37 +610,41 @@ impl Runtime {
             })
     }
 
-    /// Forgets what was seen of and rung for a subject no cell stands for
-    /// any more, so a cell that resolved and comes back is a new cell that
-    /// rings again, while an update of one still standing is not (B10, B12).
-    /// A receiver with nothing standing keeps nothing, an ended one too, so
-    /// the memory is bounded by the cells standing; what a registration saw
-    /// is written behind to the ledger when it changed.
-    fn prune_status(&mut self, cells: &[Addressed]) {
-        let standing: BTreeSet<(&str, &str)> = cells
-            .iter()
-            .map(|addressed| {
-                (
-                    addressed.recipient.as_str(),
-                    addressed.cell.subject.as_str(),
-                )
-            })
-            .collect();
+    /// Bounds what was seen and rung: a receiver that ended keeps nothing,
+    /// and a live one keeps its newest `SEEN_LIMIT` subjects. A subject whose
+    /// cell went may stay: a cell that comes back is a later episode, which
+    /// rings and is given again however old the entry (B10, B12), so nothing
+    /// here reads which cells stand now, which a pass before the book is read
+    /// would see as none. What a registration saw is written behind to the
+    /// ledger when it changed.
+    fn prune_status(&mut self) {
+        let ledger = self.delivery_ledger.clone().ok();
+        let observations = &self.delivery_observations;
+        let live = |to: &str| receiver_live(ledger.as_deref(), observations, to);
         let rung = &mut self.status_cells.rung;
-        for (to, subjects) in rung.iter_mut() {
-            subjects.retain(|subject| standing.contains(&(to.as_str(), subject.as_str())));
+        rung.retain(|to, subjects| live(to) && !subjects.is_empty());
+        for subjects in rung.values_mut() {
+            newest(subjects);
         }
-        rung.retain(|_, subjects| !subjects.is_empty());
+        if ledger.is_none() {
+            return;
+        }
         let mut changed = Vec::new();
-        let seen = self.status_seen();
+        let Some(seen) = self.status_cells.seen.as_mut() else {
+            return;
+        };
+        seen.retain(|to, subjects| {
+            let keep = live(to) && !subjects.is_empty();
+            if !keep {
+                changed.push((to.clone(), BTreeMap::new()));
+            }
+            keep
+        });
         for (to, subjects) in seen.iter_mut() {
-            let before = subjects.len();
-            subjects.retain(|subject, _| standing.contains(&(to.as_str(), subject.as_str())));
-            if subjects.len() != before {
+            if newest(subjects) {
                 changed.push((to.clone(), subjects.clone()));
             }
         }
-        seen.retain(|_, subjects| !subjects.is_empty());
         for (recipient, kept) in changed {
             self.save_seen(&recipient, kept);
         }
@@ -644,6 +708,41 @@ fn wake_recipient(
         .unwrap_or_else(|| recipient_key(ledger, &mission.conductor.actor))
 }
 
+/// Adds the caller's changed status cells to a delivery answer: for a
+/// prompt, after the letters in its context, in the room the hook's limit
+/// leaves (`take` answers none for an agent whose prompt hook carries no
+/// context, which then reads them with `hide inbox`); for `hide inbox`, as
+/// its `status` list.
+pub(crate) fn with_status(
+    result: &mut Value,
+    inbox: bool,
+    take: impl FnOnce(Option<usize>) -> Option<(String, Value)>,
+) {
+    let Value::Object(fields) = result else {
+        return;
+    };
+    // The hook refuses a context past its limit, letters and all
+    // (`hide_agent_hooks::delivery`), so the cells take what is left.
+    let used = match fields.get("context") {
+        Some(Value::String(context)) => context.len() + 1,
+        _ => 0,
+    };
+    let room = (!inbox).then(|| crate::delivery::HOOK_LIMIT.saturating_sub(used));
+    let Some((text, cells)) = take(room) else {
+        return;
+    };
+    if inbox {
+        fields.insert("status".to_owned(), cells);
+    } else if !text.is_empty()
+        && let Some(Value::String(context)) = fields.get_mut("context")
+    {
+        if !context.is_empty() && !context.ends_with('\n') {
+            context.push('\n');
+        }
+        context.push_str(&text);
+    }
+}
+
 /// Whether the receiver keyed `to` still lives: a registration not ended,
 /// or a pane Hide observes.
 fn receiver_live(
@@ -697,6 +796,7 @@ fn watch_cells(ledger: &Ledger) -> Vec<Addressed> {
                     line: crate::delivery::watch::warning_line(watch, revision),
                     news: false,
                     revision,
+                    episode: first,
                 },
             })
         })

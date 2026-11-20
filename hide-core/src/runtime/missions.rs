@@ -1538,6 +1538,7 @@ fn wake_about(
         key,
         since_unix_ms: None,
         notified: false,
+        opened_seq: None,
     }
 }
 
@@ -1610,6 +1611,15 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
             .or_else(|| Some(super::unix_milliseconds()));
         wake.notified |= before.is_some_and(|kept| kept.notified);
     }
+    // The cell's episode goes on while any fact of it stands; once every
+    // one went, this fact begins the next (a recurrence rings again).
+    wake.opened_seq = mission
+        .wakes
+        .iter()
+        .filter(|kept| kept.same_cell(&wake))
+        .map(|kept| kept.opened_seq.unwrap_or(kept.seq))
+        .min()
+        .or(Some(wake.seq));
     mission.wakes.retain(|kept| {
         if !kept.same_cell(&wake) {
             return true;

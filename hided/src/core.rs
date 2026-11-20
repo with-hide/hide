@@ -123,12 +123,6 @@ enum Command {
         pane_id: String,
         reply: Sender<Option<hide_agent_hooks::plan_record::PlanContext>>,
     },
-    StatusTake {
-        device_id: String,
-        pane_id: String,
-        room: Option<usize>,
-        reply: Sender<Option<(String, serde_json::Value)>>,
-    },
     HookStatus {
         device_id: String,
         pane_id: String,
@@ -642,26 +636,6 @@ impl CoreHandle {
             .send(Command::PlanContext {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
-                reply,
-            })
-            .ok()?;
-        result.recv().ok()?
-    }
-
-    /// The status cells of `pane`'s agent that changed since it last looked,
-    /// marked seen (`Core::status_take`).
-    pub fn status_take(
-        &self,
-        device: &str,
-        pane: &str,
-        room: Option<usize>,
-    ) -> Option<(String, serde_json::Value)> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::StatusTake {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                room,
                 reply,
             })
             .ok()?;
@@ -1796,14 +1770,6 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.plan_context(&device_id, &pane_id));
-            }
-            Command::StatusTake {
-                device_id,
-                pane_id,
-                room,
-                reply,
-            } => {
-                let _ = reply.send(core.status_take(&device_id, &pane_id, room));
             }
             Command::HookStatus {
                 device_id,

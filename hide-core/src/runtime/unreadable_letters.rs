@@ -112,7 +112,10 @@ impl Runtime {
         }
         self.unreadable_letters.noted = held;
         for (sender, subject, body) in notes {
-            self.post_status(&sender, subject, body, false);
+            // Refused for room: the next pass tries again.
+            if self.post_status(&sender, subject, body, false).is_err() {
+                self.unreadable_letters.dirty = true;
+            }
         }
     }
 }

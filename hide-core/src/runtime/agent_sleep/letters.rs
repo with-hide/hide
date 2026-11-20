@@ -784,13 +784,20 @@ impl Runtime {
                 continue;
             };
             notes.push((
+                id.clone(),
                 target.actor,
                 super::super::status_cells::letter_subject(&id),
                 note_body(&letter.recipient.name, &letter.kind, &id, &reason),
             ));
         }
-        for (sender, subject, body) in notes {
-            self.post_status(&sender, subject, body, true);
+        for (id, sender, subject, body) in notes {
+            // Refused for room: the note stays owed and the next pass tries.
+            if self.post_status(&sender, subject, body, true).is_err()
+                && let Some(failure) = self.letter_wakes.failed.get_mut(&id)
+            {
+                failure.noted = false;
+                self.letter_wakes.touch();
+            }
         }
     }
 }

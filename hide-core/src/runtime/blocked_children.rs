@@ -145,14 +145,12 @@ impl Runtime {
         }
         let owed = std::mem::take(&mut self.blocked_children.owed);
         for (pane, owed) in owed {
-            self.blocked_children
-                .told
-                .insert(pane.clone(), owed.key.clone());
             let Some(target) = self.blocked_parent(&owed) else {
                 crate::diagnostic!(json!({
                     "component": "delivery", "kind": "child_blocked.note_unaddressed",
                     "pane_id": pane, "parent_pane_id": owed.parent,
                 }));
+                self.blocked_children.told.insert(pane, owed.key);
                 continue;
             };
             crate::diagnostic!(json!({
@@ -162,13 +160,23 @@ impl Runtime {
             let child = self
                 .delivery_observations
                 .get(&pane)
-                .map_or(owed.label, |observation| observation.actor.name.clone());
-            self.post_status(
+                .map_or(owed.label.clone(), |observation| {
+                    observation.actor.name.clone()
+                });
+            match self.post_status(
                 &target.actor,
                 super::status_cells::child_subject(&pane),
                 note_body(&child, &pane),
                 false,
-            );
+            ) {
+                Ok(()) => {
+                    self.blocked_children.told.insert(pane, owed.key);
+                }
+                // Refused for room: still owed, the next tick tries again.
+                Err(_) => {
+                    self.blocked_children.owed.insert(pane, owed);
+                }
+            }
         }
     }
 

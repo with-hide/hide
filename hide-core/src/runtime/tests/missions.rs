@@ -1864,6 +1864,7 @@ fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
             key: Some(format!("filler:{at}")),
             since_unix_ms: None,
             notified: false,
+            opened_seq: None,
         })
         .collect();
     let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
@@ -9187,6 +9188,7 @@ fn a_full_wake_queue_keeps_what_waits() {
         key: None,
         since_unix_ms: None,
         notified: false,
+        opened_seq: None,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 }
@@ -10264,6 +10266,7 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
             key: Some(format!("filler:{at}")),
             since_unix_ms: None,
             notified: false,
+            opened_seq: None,
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
@@ -17773,6 +17776,7 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
                 key: None,
                 since_unix_ms: None,
                 notified: false,
+                opened_seq: None,
             },
         )
     };
@@ -18645,12 +18649,38 @@ fn what_a_registered_conductor_saw_outlives_a_restart_of_the_core() {
             .delivery_state()
             .is_ok_and(|ledger| ledger.status_seen.contains_key(&agent))
     });
-    let mut guard = runtime.lock().unwrap();
-    // A core started again: its memory is empty, the book read from disk.
-    guard.status_cells = Default::default();
-    let stored: crate::missions::MissionBook =
-        serde_json::from_value(serde_json::to_value(&guard.missions.book).unwrap()).unwrap();
-    guard.missions.book = stored;
+    // The core stops: its store, then its memory, with the book on disk.
+    let encoded = {
+        let guard = runtime.lock().unwrap();
+        crate::missions::encode_mission(&guard.missions.book.missions[0]).unwrap()
+    };
+    drop(_worker);
+    drop(runtime);
+    // A core started again on the same state folder reads the ledger the
+    // store saved, and the book from its file.
+    let (fresh, _, _, path) = fixture(root.path());
+    let (_worker, client) =
+        Worker::spawn(Arc::downgrade(&fresh), ChangeNotifier::noop(), path).unwrap();
+    let older = root.path().join("older");
+    std::fs::create_dir(&older).unwrap();
+    std::fs::write(older.join("missions.json"), &encoded).unwrap();
+    let store = crate::mission_store::MissionStore::new(&older);
+    let restored = store.restore();
+    let mut guard = fresh.lock().unwrap();
+    guard.install_delivery_client(client);
+    let digest = crate::engine::tokens::session_digest(SESSION).unwrap();
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"idle","state_change_seq":1,"lineage_session":digest},
+    ]}))
+    .unwrap();
+    guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+    guard.install_mission_store(store, restored);
+    assert!(
+        guard
+            .delivery_state()
+            .is_ok_and(|ledger| ledger.status_seen.contains_key(&agent)),
+        "the ledger read from disk keeps what it saw"
+    );
     assert!(
         guard.take_conductor_cells("mission-1").is_empty(),
         "what it saw is read back"
@@ -18664,4 +18694,76 @@ fn what_a_registered_conductor_saw_outlives_a_restart_of_the_core() {
         1,
         "the next fact"
     );
+    drop(guard.missions.store.take());
+}
+
+/// B15: a warning that stood and then became a raise is one unresolved
+/// cell: the card it held at 20 minutes stays when the raise takes over at
+/// 30, counted from the warning's start, and the operator is not told again.
+#[test]
+fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
+    use crate::missions::{AttentionReason, PendingWake, WarningKind};
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let now = crate::runtime::unix_milliseconds();
+    let start = now - 30 * MINUTE;
+    runtime.drive_mission_health(start - MINUTE);
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        mission.wake_seq += 1;
+        let wake = PendingWake {
+            seq: mission.wake_seq,
+            node: "fix".into(),
+            pr: None,
+            event: WakeEvent::Warning,
+            head: None,
+            to: None,
+            reason: None,
+            why: None,
+            action: None,
+            warning: Some(WarningKind::NoPush),
+            ci: None,
+            line: None,
+            key: None,
+            since_unix_ms: Some(start),
+            notified: false,
+            opened_seq: None,
+        };
+        crate::runtime::missions::push_wake(mission, wake).unwrap();
+    }
+    let held = |runtime: &Runtime| {
+        runtime
+            .mission_view_of("mission-1")
+            .unwrap()
+            .safety_net
+            .map(|net| (net.since_unix_ms, net.nodes.len()))
+    };
+    assert_eq!(
+        held(&runtime),
+        Some((start, 1)),
+        "the warning holds the card"
+    );
+    assert_eq!(runtime.claim_mission_notices().len(), 1, "told once");
+    // The warning stood: it becomes a raise on the same node.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "fix",
+            AttentionReason::WarningStood,
+            None,
+            now
+        )
+        .is_empty()
+    );
+    runtime.save_missions();
+    assert_eq!(
+        held(&runtime),
+        Some((start, 1)),
+        "the card stays, counted from the warning's start"
+    );
+    assert!(runtime.claim_mission_notices().is_empty(), "not told again");
 }

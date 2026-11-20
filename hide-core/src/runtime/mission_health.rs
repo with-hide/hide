@@ -193,8 +193,11 @@ pub(super) fn raise_for(
                 ci: None,
                 line: None,
                 key: Some(raise_key.clone()),
-                since_unix_ms: Some(now),
+                // A raise that takes over the node's standing cell (a
+                // warning that stood) keeps when that cell began (B15).
+                since_unix_ms: None,
                 notified: false,
+                opened_seq: None,
             },
         );
     }
@@ -293,6 +296,7 @@ pub(super) fn ensure_raise_cells(mission: &mut Mission) -> bool {
                 key: Some(key),
                 since_unix_ms: Some(since),
                 notified: false,
+                opened_seq: None,
             },
         );
     }
@@ -410,6 +414,7 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 key: Some(act_key(target, &fact)),
                 since_unix_ms: None,
                 notified: false,
+                opened_seq: None,
             };
             // A full queue refuses the rest too; it is logged once a pass.
             if super::missions::push_wake(mission, wake).is_none() {
@@ -1501,6 +1506,7 @@ impl Runtime {
                 key: Some(act.clone()),
                 since_unix_ms: None,
                 notified: false,
+                opened_seq: None,
             },
         );
         if pushed.is_none() {
@@ -1583,6 +1589,7 @@ impl Runtime {
                         key: Some(wake_key),
                         since_unix_ms: None,
                         notified: false,
+                        opened_seq: None,
                     },
                 );
                 vec![MissionEvent::new(now, EventKind::HideClosed)]
@@ -1904,6 +1911,7 @@ impl Runtime {
                     key: None,
                     since_unix_ms: None,
                     notified: false,
+                    opened_seq: None,
                 },
             );
         }

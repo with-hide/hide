@@ -841,6 +841,12 @@ pub struct PendingWake {
     /// notice, as a raise's `Attention::notified` says for a raise.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notified: bool,
+    /// The `seq` of the first wake of the node's cell for this recipient
+    /// that still stands with it: the cell's episode, kept while a fact
+    /// updates it, new once every wake of the cell went (a recurrence,
+    /// which rings again). None on a book from before it: its own `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_seq: Option<u64>,
 }
 
 impl PendingWake {

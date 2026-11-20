@@ -202,7 +202,25 @@ impl Prepared {
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
-        let result = if let Some(answer) = self.answered {
+        // Hide's own notices are status cells, not letters (PRD
+        // letters-missions-simplify D-17): a turn's prompt reads the ones
+        // that changed after its letters, and `hide inbox` lists them.
+        let status = match &self.command {
+            Command::Pull {
+                point: hide_node_link::panes::PullPoint::Prompt,
+                ..
+            } => Some(false),
+            Command::Inbox { bundle: true } => Some(true),
+            _ => None,
+        };
+        let caller = status.map(|_| {
+            (
+                self.client.runtime.clone(),
+                self.actor.device_id.clone(),
+                self.actor.pane_id.clone(),
+            )
+        });
+        let mut result = if let Some(answer) = self.answered {
             Ok(answer)
         } else if let Command::Agents { command } = self.command {
             crate::coordination::run(self.client, self.authority, self.actor, command)
@@ -233,6 +251,23 @@ impl Prepared {
                 timeout,
             )
         };
+        if let (Some(inbox), Some((runtime, device, pane)), Ok(value)) =
+            (status, caller, result.as_mut())
+            && let Some(runtime) = runtime.upgrade()
+        {
+            crate::runtime::with_status(value, inbox, |room| {
+                let mut guard = runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let cells = guard.take_status(&device, &pane, room)?;
+                let text = if cells.is_empty() {
+                    String::new()
+                } else {
+                    crate::runtime::status_text(&cells)
+                };
+                Some((text, json!(cells)))
+            });
+        }
         if let Some(after) = self.then {
             after(&result);
         }

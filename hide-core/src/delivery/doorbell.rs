@@ -1071,7 +1071,7 @@ impl Doorbell {
                 .is_some_and(|rung| rung.episode == episode)
             {
                 if let Ok(mut guard) = owner.lock() {
-                    guard.status_rung(&ring.recipient, &ring.subjects);
+                    guard.status_rung(&ring);
                 }
                 continue;
             }
@@ -1088,7 +1088,7 @@ impl Doorbell {
                 Ok(Outcome::Rung(_)) => {
                     self.status_tried.remove(&ring.recipient);
                     if let Ok(mut guard) = owner.lock() {
-                        guard.status_rung(&ring.recipient, &ring.subjects);
+                        guard.status_rung(&ring);
                     }
                 }
                 Ok(Outcome::Held(reason)) => {
@@ -1118,7 +1118,7 @@ impl Doorbell {
                     // A line that may have been typed is not typed again.
                     if typed {
                         if let Ok(mut guard) = owner.lock() {
-                            guard.status_rung(&ring.recipient, &ring.subjects);
+                            guard.status_rung(&ring);
                         }
                         continue;
                     }
@@ -1322,7 +1322,11 @@ fn send_input_notice(
         let mut guard = owner
             .lock()
             .map_err(|_| "delivery_unavailable".to_owned())?;
-        guard.post_status(&notice.target.actor, subject, notice.body.clone(), true);
+        // A cell refused for room is not recorded as sent: the notice is
+        // tried again after its wait, as a failed send is.
+        guard
+            .post_status(&notice.target.actor, subject, notice.body.clone(), true)
+            .map_err(|_| "status_full".to_owned())?;
         guard.hide_delivery(super::typed::INPUT_ROLE)?
     };
     let effect = match key {
@@ -5695,5 +5699,59 @@ mod tests {
                 "{kind}"
             );
         }
+    }
+
+    /// B10, B12 through the doorbell itself: a resting receiver's new cell
+    /// types one bell from Hide; an update types none; a cell taken back and
+    /// posted again before any pass (a blocked child's session swapped in
+    /// one drive) is a new cell and types a second.
+    #[test]
+    fn the_doorbell_rings_a_new_cell_once_and_a_recurrence_again() {
+        use crate::runtime::delivery::tests::observed;
+        let bell = Bell::start(json!({}));
+        bell.runtime
+            .lock()
+            .unwrap()
+            .install_delivery_client(bell.client.clone());
+        // The fixture's letter is answered: only the cell can ring.
+        bell.ack(&bell.letter);
+        let recipient = observed(&bell.runtime.lock().unwrap(), "recipient").actor;
+        let post = |line: &str| {
+            bell.runtime
+                .lock()
+                .unwrap()
+                .post_status(&recipient, "child:w1:p9".into(), line.into(), false)
+                .unwrap();
+        };
+        let mut doorbell = Doorbell::default();
+        let start = now();
+        let typed = |bell: &Bell| -> Vec<String> {
+            bell.typed().iter().map(|call| call.to_string()).collect()
+        };
+        post("child blocked once");
+        bell.pass(&mut doorbell, start);
+        let first = typed(&bell);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(first[0].contains("child blocked once"), "{first:?}");
+        post("child still blocked");
+        bell.pass(&mut doorbell, start + 1_000);
+        assert_eq!(typed(&bell).len(), 1, "an update rings nothing");
+        // Resolved and back within one drive, with no pass between.
+        {
+            let mut guard = bell.runtime.lock().unwrap();
+            guard.retract_status("child:w1:p9");
+            guard
+                .post_status(
+                    &recipient,
+                    "child:w1:p9".into(),
+                    "child blocked again".into(),
+                    false,
+                )
+                .unwrap();
+        }
+        bell.pass(&mut doorbell, start + 2_000);
+        let again = typed(&bell);
+        assert_eq!(again.len(), 2, "the recurrence rings: {again:?}");
+        assert!(again[1].contains("child blocked again"), "{again:?}");
     }
 }

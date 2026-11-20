@@ -222,6 +222,7 @@ impl Runtime {
                 continue;
             };
             notes.push((
+                letter.id.clone(),
                 target.actor,
                 super::status_cells::letter_subject(&letter.id),
                 note_body(
@@ -233,8 +234,13 @@ impl Runtime {
                 ),
             ));
         }
-        for (sender, subject, body) in notes {
-            self.post_status(&sender, subject, body, true);
+        for (id, sender, subject, body) in notes {
+            // Refused for room: the note stays owed and the next pass tries.
+            if self.post_status(&sender, subject, body, true).is_err()
+                && let Some(spent) = self.spent_bells.failed.get_mut(&id)
+            {
+                spent.noted = false;
+            }
         }
     }
 }

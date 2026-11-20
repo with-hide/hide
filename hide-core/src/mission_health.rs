@@ -952,17 +952,25 @@ pub(crate) fn held_of(
     mission: &Mission,
     node: &MissionNode,
 ) -> Option<(HeldReason, u64, Option<u32>)> {
-    if let Some(attention) = &node.attention {
-        return (!attention.reason.operator_first()).then_some((
-            HeldReason::Raise(attention.reason),
-            attention.since_unix_ms,
-            attention.pr,
-        ));
-    }
     let wake = mission
         .wakes
         .iter()
-        .find(|wake| wake.node == node.key && wake.standing())?;
+        .find(|wake| wake.node == node.key && wake.standing());
+    if let Some(attention) = &node.attention {
+        // The raise's cell began when the node's standing cell did, a
+        // warning it took over included: its clock does not start again.
+        let since = wake
+            .and_then(|wake| wake.since_unix_ms)
+            .map_or(attention.since_unix_ms, |since| {
+                since.min(attention.since_unix_ms)
+            });
+        return (!attention.reason.operator_first()).then_some((
+            HeldReason::Raise(attention.reason),
+            since,
+            attention.pr,
+        ));
+    }
+    let wake = wake?;
     use crate::missions::{CiResult, WakeEvent, WarningKind};
     let reason = match wake.event {
         WakeEvent::Ci => match wake.ci.as_ref().map(|ci| ci.result) {
@@ -985,13 +993,13 @@ pub(crate) fn held_of(
 /// Whether the operator was told of what holds `mission`'s node `at`.
 pub(crate) fn held_notified(mission: &Mission, at: usize) -> bool {
     let node = &mission.nodes[at];
-    match &node.attention {
-        Some(attention) => attention.notified,
-        None => mission
+    node.attention
+        .as_ref()
+        .is_some_and(|attention| attention.notified)
+        || mission
             .wakes
             .iter()
-            .any(|wake| wake.node == node.key && wake.standing() && wake.notified),
-    }
+            .any(|wake| wake.node == node.key && wake.standing() && wake.notified)
 }
 
 /// Marks what holds `mission`'s node `at` told to the operator.
@@ -999,7 +1007,6 @@ pub(crate) fn mark_held_notified(mission: &mut Mission, at: usize) {
     let key = mission.nodes[at].key.clone();
     if let Some(attention) = mission.nodes[at].attention.as_mut() {
         attention.notified = true;
-        return;
     }
     for wake in &mut mission.wakes {
         if wake.node == key && wake.standing() {

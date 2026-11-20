@@ -292,71 +292,18 @@ pub(crate) fn delivery(
     command: hide_core::delivery::Command,
     hint: Option<String>,
 ) -> Result<Value, Failure> {
-    // Hide's own notices are status cells, not letters (PRD
-    // letters-missions-simplify D-17): a turn's prompt reads the ones that
-    // changed after its letters, and `hide inbox` lists them.
-    let status = match &command {
-        hide_core::delivery::Command::Pull {
-            point: hide_node_link::panes::PullPoint::Prompt,
-            ..
-        } => Some(false),
-        hide_core::delivery::Command::Inbox { bundle: true } => Some(true),
-        _ => None,
-    };
-    let mut result = core
-        .prepare_delivery(
-            &cap.context.device_id,
-            &cap.pane_id,
-            &cap.context,
-            cap.canonical_hint(hint),
-            command,
-        )
-        .and_then(|prepared| prepared.run(Duration::from_secs(5)))
-        .map_err(|code| {
-            let next = crate::server::delivery_next_action(&code);
-            (code, next)
-        })?;
-    if let Some(inbox) = status {
-        with_status(&mut result, inbox, |room| {
-            core.status_take(&cap.context.device_id, &cap.pane_id, room)
-        });
-    }
-    Ok(result)
-}
-
-/// Adds the caller's changed status cells to a delivery answer: for a
-/// prompt, after the letters in its context, in the room the hook's limit
-/// leaves (`take` answers none for an agent whose prompt hook carries no
-/// context, which then reads them with `hide inbox`); for `hide inbox`, as
-/// its `status` list.
-fn with_status(
-    result: &mut Value,
-    inbox: bool,
-    take: impl FnOnce(Option<usize>) -> Option<(String, Value)>,
-) {
-    let Value::Object(fields) = result else {
-        return;
-    };
-    // The hook refuses a context past its limit, letters and all
-    // (`hide_agent_hooks::delivery`), so the cells take what is left.
-    let used = match fields.get("context") {
-        Some(Value::String(context)) => context.len() + 1,
-        _ => 0,
-    };
-    let room = (!inbox).then(|| hide_core::delivery::HOOK_LIMIT.saturating_sub(used));
-    let Some((text, cells)) = take(room) else {
-        return;
-    };
-    if inbox {
-        fields.insert("status".to_owned(), cells);
-    } else if !text.is_empty()
-        && let Some(Value::String(context)) = fields.get_mut("context")
-    {
-        if !context.is_empty() && !context.ends_with('\n') {
-            context.push('\n');
-        }
-        context.push_str(&text);
-    }
+    core.prepare_delivery(
+        &cap.context.device_id,
+        &cap.pane_id,
+        &cap.context,
+        cap.canonical_hint(hint),
+        command,
+    )
+    .and_then(|prepared| prepared.run(Duration::from_secs(5)))
+    .map_err(|code| {
+        let next = crate::server::delivery_next_action(&code);
+        (code, next)
+    })
 }
 
 pub(crate) fn memory(
@@ -594,42 +541,6 @@ mod tests {
         .unwrap();
         assert_eq!(answer["context"], Value::Null);
         assert_eq!(answer["asks"], "<hide-open-questions>");
-    }
-
-    /// A prompt's changed cells follow its letters in the room the hook's
-    /// limit leaves; an agent whose hook carries no context is given none
-    /// (the core takes nothing for it); `hide inbox` lists them as `status`.
-    #[test]
-    fn a_prompts_status_follows_its_letters_and_the_inbox_lists_it() {
-        let mut prompt = json!({"context": "letter text", "ids": ["letter-1"]});
-        let mut asked = None;
-        with_status(&mut prompt, false, |room| {
-            asked = room;
-            Some((
-                "Hide status, changed since you last looked:\n- CI failed\n".to_owned(),
-                json!([]),
-            ))
-        });
-        assert_eq!(
-            asked,
-            Some(hide_core::delivery::HOOK_LIMIT - "letter text".len() - 1)
-        );
-        assert_eq!(
-            prompt["context"],
-            "letter text\nHide status, changed since you last looked:\n- CI failed\n"
-        );
-        let mut unheard = json!({"context": "letter text"});
-        with_status(&mut unheard, false, |_| None);
-        assert_eq!(
-            unheard["context"], "letter text",
-            "a hook with no context takes nothing"
-        );
-        let mut inbox = json!({"letters": []});
-        with_status(&mut inbox, true, |room| {
-            assert_eq!(room, None, "the inbox lists cells by count, not bytes");
-            Some((String::new(), json!([{"subject": "letter:7"}])))
-        });
-        assert_eq!(inbox["status"][0]["subject"], "letter:7");
     }
 
     /// A session start's other sessions reach the agent whether or not
