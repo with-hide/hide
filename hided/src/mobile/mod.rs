@@ -203,7 +203,29 @@ pub(crate) enum Handoff {
 }
 
 /// One notice for one phone, and its serial (`LiveNotices`).
-type Job = (String, Route, Value, u64);
+struct Job {
+    phone_id: String,
+    route: Route,
+    payload: Value,
+    generation: u64,
+    /// The place rule gave this notice to the phones because no computer
+    /// takes it ([`Judged::placed`]): it goes whatever the rest says.
+    placed: bool,
+}
+
+/// What one follower pass gives the phones ([`judge_pass`]).
+#[derive(Debug, PartialEq)]
+struct Judged {
+    notices: Vec<push::Notice>,
+    /// The roots among `notices` that are the phones' by the place rule
+    /// though a computer is in use: one a computer was handed and did not
+    /// take, or one no computer could be handed (PRD device-connect-iroh
+    /// B71). No computer shows such a notice later, so the phones' rest
+    /// does not hold it back.
+    placed: BTreeSet<AgentKey>,
+    /// The roots whose notices close.
+    seen: BTreeSet<AgentKey>,
+}
 
 /// Withdraws the waiting notices a follower handed out when it ends, on every path (`Mobile::withdraw_waiting`).
 struct WithdrawOnExit(Arc<Mobile>);
@@ -2633,8 +2655,8 @@ impl Mobile {
                     std::time::Instant::now(),
                 )
             };
-            if let Some((notices, seen)) = judged {
-                self.deliver(notices, seen, &current);
+            if let Some(judged) = judged {
+                self.deliver(judged.notices, &judged.placed, judged.seen, &current);
             }
             // A phone notice waiting out its moment, or a notice another
             // computer was handed and has not answered, wakes the follower
@@ -2683,8 +2705,8 @@ impl Mobile {
                                 std::time::Instant::now(),
                             )
                         };
-                        if let Some((notices, seen)) = judged {
-                            self.deliver(notices, seen, &current);
+                        if let Some(judged) = judged {
+                            self.deliver(judged.notices, &judged.placed, judged.seen, &current);
                         }
                     }
                 }
@@ -2694,12 +2716,14 @@ impl Mobile {
 
     /// Sends each notice to every subscribed phone the mode allows, on a
     /// blocking thread: a push service's latency never holds the follower.
-    /// `seen` are the roots whose notices close: they ride as tags to close on
-    /// each phone's next push, and none of their notices is sent or held from
-    /// now on (`LiveNotices`).
+    /// `placed` are the roots among them the place rule gave the phones
+    /// ([`Judged::placed`]). `seen` are the roots whose notices close: they
+    /// ride as tags to close on each phone's next push, and none of their
+    /// notices is sent or held from now on (`LiveNotices`).
     fn deliver(
         self: &Arc<Self>,
         notices: Vec<push::Notice>,
+        placed: &BTreeSet<AgentKey>,
         seen: BTreeSet<AgentKey>,
         projection: &Projection,
     ) {
@@ -2749,7 +2773,13 @@ impl Mobile {
                         if let Some(agent) = projection.find(&notice.key) {
                             push::with_ask(&mut payload, agent);
                         }
-                        jobs.push((phone_id.clone(), route.clone(), payload, generation));
+                        jobs.push(Job {
+                            phone_id: phone_id.clone(),
+                            route: route.clone(),
+                            payload,
+                            generation,
+                            placed: placed.contains(&notice.key),
+                        });
                     }
                     Err(reason) => {
                         hide_core::diagnostic!(json!({
@@ -2771,7 +2801,14 @@ impl Mobile {
     /// `deliver` made it is withdrawn, not sent or held.
     fn send_jobs(&self, jobs: Vec<Job>, subject: &str) -> Vec<Handoff> {
         let mut outcomes = Vec::new();
-        for (phone_id, route, payload, generation) in jobs {
+        for Job {
+            phone_id,
+            route,
+            payload,
+            generation,
+            placed,
+        } in jobs
+        {
             if !self.is_current(&payload, Some(generation)) {
                 hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.withdrawn", "phone_id": phone_id,
@@ -2779,7 +2816,7 @@ impl Mobile {
                 outcomes.push(Handoff::Withdrawn);
                 continue;
             }
-            if self.rests_phone() {
+            if !placed && self.rests_phone() {
                 continue;
             }
             outcomes.push(Handoff::Tried);
@@ -2824,6 +2861,7 @@ impl Mobile {
 
     /// The existing transport gate discards a waiting notice if computer use
     /// resumed after its follower pass. Nothing is retained for a later away.
+    /// A notice the place rule gave the phones is not asked ([`Job::placed`]).
     fn rests_phone(&self) -> bool {
         !push::mode_allows(
             self.lock().settings.push_mode,
@@ -2849,9 +2887,9 @@ fn judge_pass(
     changed: bool,
     read: bool,
     at: std::time::Instant,
-) -> Option<(Vec<push::Notice>, BTreeSet<AgentKey>)> {
+) -> Option<Judged> {
     let phone_on = phone_mode.is_some();
-    let (mut notices, mut seen) = (Vec::new(), BTreeSet::new());
+    let (mut notices, mut seen, mut placed) = (Vec::new(), BTreeSet::new(), BTreeSet::new());
     // What another computer was handed and did not take by now goes to its
     // next place first (B71), so the phones' rest is read as it stands then.
     let mut fallen = desktop.expire(at);
@@ -2875,10 +2913,17 @@ fn judge_pass(
         if resting() {
             notices.clear();
         }
-        // The phones are the place of a notice no computer took.
-        notices.extend(phone.fall(&fallen, current));
+        // The phones are the place of a notice no computer took, or could
+        // be handed: it goes though a computer is in use.
+        let theirs = phone.fall(&fallen, current);
+        placed.extend(theirs.iter().map(|notice| notice.key.clone()));
+        notices.extend(theirs);
     }
-    (!notices.is_empty() || !seen.is_empty()).then_some((notices, seen))
+    (!notices.is_empty() || !seen.is_empty()).then_some(Judged {
+        notices,
+        placed,
+        seen,
+    })
 }
 
 /// A Mobile over a bare core in `directory`, for tests that drive it directly.
@@ -3028,7 +3073,7 @@ mod tests {
                     at,
                 )
             })
-            .map(|(notices, _)| notices.len())
+            .map(|judged| judged.notices.len())
             .sum();
         (phones, frames.try_recv().is_ok())
     }
@@ -3066,7 +3111,7 @@ mod tests {
                 true,
                 at,
             )
-            .map(|(notices, _)| notices.len())
+            .map(|judged| judged.notices.len())
         };
         assert_eq!(judge(&projected("working", "none"), true, at), None);
         let waiting = projected("needs_you", "approval");
@@ -3080,6 +3125,111 @@ mod tests {
         assert_eq!(desktop.next_due(), Some(late));
         assert_eq!(judge(&waiting, false, late), Some(1));
         assert_eq!(judge(&waiting, false, late), None, "sent once");
+    }
+
+    /// `count` root agents of one project, the first `asking` of them
+    /// waiting on the operator.
+    fn roots(count: usize, asking: usize) -> Projection {
+        let agents: Vec<Value> = (0..count)
+            .map(|index| {
+                let asks = index < asking;
+                json!({
+                    "pane_id": format!("w1:p{index}"),
+                    "group": if asks { "needs_you" } else { "working" }, "mark": "going",
+                    "identity_label": format!("Task {index}"), "agent_kind": "claude",
+                    "changed_at_unix_ms": 1_790_000_000_000_u64, "status_code": "idle",
+                    "demand": if asks { "approval" } else { "none" },
+                })
+            })
+            .collect();
+        let panes: Vec<Value> = (0..count)
+            .map(|index| json!({"id": format!("w1:p{index}")}))
+            .collect();
+        project(
+            &json!({
+                "navigator": {
+                    "agents": agents,
+                    "workspaces": [{"label": "my-app", "is_git": true, "checkouts": [
+                        {"label": "main", "branch": "main", "tabs": [{"panes": panes}]},
+                    ]}],
+                    "devices": [{"id": "node", "label": null}],
+                },
+            }),
+            "node",
+        )
+    }
+
+    /// PRD device-connect-iroh B71 at the hand-over's cap: while another
+    /// computer is in use and holds every notice computers may be handed,
+    /// one more wait is the phones' and is sent once though the phones
+    /// rest; a wait of the ordinary kind is still held back there.
+    #[tokio::test]
+    async fn a_wait_no_computer_can_be_handed_reaches_the_phones_though_one_is_in_use() {
+        use crate::desktop_notices::MAX_HANDED;
+        struct Taking;
+        impl crate::desktop_notices::Computers for Taking {
+            fn tell(&self, _: &str, _: hide_peer::protocol::core::CoreMessage) -> bool {
+                true
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = test_mobile(directory.path(), &gate);
+        let desktop = &mobile.config.desktop;
+        desktop.set_computers(Arc::new(Taking));
+        desktop.peer_seat(
+            "macbook",
+            hide_core::notice_place::Seat {
+                input: Some(std::time::Duration::ZERO),
+                shows: true,
+                phone: None,
+            },
+        );
+        let at = std::time::Instant::now();
+        let judge = |current: &Projection| {
+            let mut inner = mobile.lock();
+            judge_pass(
+                &mut inner.phone_notices,
+                Some(PushMode::AppClosed),
+                desktop,
+                current,
+                true,
+                true,
+                at,
+            )
+        };
+        assert_eq!(judge(&roots(MAX_HANDED + 1, 0)), None);
+        assert_eq!(
+            judge(&roots(MAX_HANDED + 1, MAX_HANDED)),
+            None,
+            "the computer has them all"
+        );
+        let over = roots(MAX_HANDED + 1, MAX_HANDED + 1);
+        let judged = judge(&over).expect("one more wait");
+        assert!(desktop.rests_phone(), "the computer is still in use");
+        assert_eq!(judged.notices.len(), 1);
+        let notice = &judged.notices[0];
+        assert_eq!(notice.key.pane_id, format!("w1:p{MAX_HANDED}"));
+        assert_eq!(judged.placed, BTreeSet::from([notice.key.clone()]));
+        assert_eq!(judge(&over), None, "sent once");
+
+        // The send boundary, where the phones' rest is asked again: the
+        // placed notice goes, and one of the ordinary kind does not.
+        let job = |placed| Job {
+            phone_id: "phone".to_owned(),
+            route: Route::App,
+            payload: tagged(&notice.key.tag()),
+            generation: mobile.lock().live.stamp(notice.key.tag()),
+            placed,
+        };
+        assert_eq!(
+            mobile.send_jobs(vec![job(false)], "mailto:hide@localhost"),
+            Vec::<Handoff>::new()
+        );
+        assert_eq!(
+            mobile.send_jobs(vec![job(true)], "mailto:hide@localhost"),
+            [Handoff::Tried]
+        );
     }
 
     /// B38, B33, PRD device-connect-iroh B59: each side judges the shared
@@ -3217,7 +3367,13 @@ mod tests {
         let first = mobile.lock().live.stamp(tag.to_owned());
         Mobile::close_waiting(&mut mobile.lock(), &closed(tag));
         let second = mobile.lock().live.stamp(tag.to_owned());
-        let job = |generation| ("phone".to_owned(), Route::App, tagged(tag), generation);
+        let job = |generation| Job {
+            phone_id: "phone".to_owned(),
+            route: Route::App,
+            payload: tagged(tag),
+            generation,
+            placed: false,
+        };
         assert_eq!(
             mobile.send_jobs(vec![job(first), job(second)], "mailto:hide@localhost"),
             [Handoff::Withdrawn, Handoff::Tried]

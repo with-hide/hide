@@ -37,6 +37,7 @@ fn notice(pane: &str) -> push::Notice {
 fn deliver(mobile: &Arc<Mobile>, notices: Vec<push::Notice>, closed: &[&str]) {
     mobile.deliver(
         notices,
+        &BTreeSet::new(),
         closed.iter().map(|pane| key(pane)).collect(),
         &Projection::default(),
     );
@@ -563,8 +564,8 @@ impl RestFixture {
             at,
         );
         drop(inner);
-        if let Some((notices, closed)) = judged {
-            mobile.deliver(notices, closed, projection);
+        if let Some(judged) = judged {
+            mobile.deliver(judged.notices, &judged.placed, judged.seen, projection);
         }
     }
 

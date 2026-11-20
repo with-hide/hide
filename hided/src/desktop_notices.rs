@@ -54,7 +54,7 @@ const MAX_COMPUTERS: usize = 16;
 /// The notices handed to other computers this machine remembers at once,
 /// waiting for their answer or shown there. Past it a new one is not
 /// handed over and goes to the phones.
-const MAX_HANDED: usize = 256;
+pub(crate) const MAX_HANDED: usize = 256;
 
 /// A seat that reads as it did is told again only after this long: a
 /// computer in use says so when input resumes after a pause and never per
