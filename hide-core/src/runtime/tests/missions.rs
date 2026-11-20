@@ -871,6 +871,7 @@ fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
         runtime.snapshot.navigator.agents[0].session_id = Some("next-session".into());
         observe(&mut runtime, "next-session");
         assert!(runtime.delivery_successions().contains_key(&former));
+        runtime.take_republish_request();
     }
     // The store's next batch hands the registration over.
     client
@@ -879,7 +880,13 @@ fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
             Duration::from_secs(10),
         )
         .unwrap();
-    let runtime = fixture.runtime.lock().unwrap();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    // The machine's session is read again, so the lineage writer writes the
+    // pane's tokens for the successor (PRD letters-missions-simplify D-24).
+    assert!(
+        runtime.take_republish_request(),
+        "the handover asks for a read"
+    );
     let ledger = runtime.delivery_state().unwrap();
     let old = ledger
         .agents
@@ -912,7 +919,7 @@ fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
         Some(&successor),
         "it takes the children"
     );
-    assert_eq!(next.parent, None, "and is the child of no one");
+    assert_eq!(next.parent, None, "and, as the Conductor was, a root");
     drop(runtime);
 
     // A stop after the ledger kept the takeover and before the mission book

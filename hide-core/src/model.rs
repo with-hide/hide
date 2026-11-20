@@ -10853,6 +10853,7 @@ mod wire_enum_tests {
                 NodeWork::Waiting {
                     on: crate::missions::WaitingOn::Review,
                 },
+                NodeWork::Asleep,
                 NodeWork::Stopped {
                     cause: None,
                     since_unix_ms: 0,
@@ -10865,6 +10866,7 @@ mod wire_enum_tests {
                 match variant {
                     NodeWork::Working
                     | NodeWork::Waiting { .. }
+                    | NodeWork::Asleep
                     | NodeWork::Stopped { .. }
                     | NodeWork::NoWorker { .. } => {}
                 }

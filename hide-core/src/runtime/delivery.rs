@@ -869,6 +869,20 @@ impl Runtime {
         }
     }
 
+    /// Asks the coordinator of `machine`, this one's or a connected
+    /// device's, to read its session again and publish it.
+    fn read_machine_again(&mut self, machine: &str) {
+        if machine == self.node.as_str() {
+            self.request_republish();
+        } else if let Some(sync) = self
+            .remote_connections
+            .get(machine)
+            .and_then(|connection| connection.sync.as_ref())
+        {
+            sync.republish_waker().wake();
+        }
+    }
+
     /// The registrations the delivery store has still to hand over to the
     /// next agent in their pane.
     pub(crate) fn delivery_successions(
@@ -2398,11 +2412,15 @@ impl Runtime {
         // roles the first ledger after a start shows handed over, which a
         // stop before the mission book's save left behind.
         let mut succeeded = self.delivery_ledger.is_err();
+        let mut handed_over = std::collections::BTreeSet::new();
         self.registration_successions.retain(|id, _| {
             let Some(record) = ledger.agents.iter().find(|record| &record.id == id) else {
                 return false;
             };
-            succeeded |= record.ended && record.successor.is_some();
+            if record.ended && record.successor.is_some() {
+                succeeded = true;
+                handed_over.insert(record.id.clone());
+            }
             !record.ended
         });
         // Only a change in who waits for a reply, from whom, and whether that
@@ -2448,6 +2466,18 @@ impl Runtime {
         self.delivery_ledger = Ok(ledger);
         if succeeded {
             self.follow_successors();
+        }
+        // The panes' lineage tokens name the agent before the successor
+        // until each machine's lineage writer, which runs on its session
+        // reads, sees the successor with the parent and the children it
+        // took; nothing on the engines moves to read them again, so they are
+        // asked to (PRD letters-missions-simplify D-24), once per machine.
+        if !handed_over.is_empty()
+            && let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone)
+        {
+            for machine in crate::coordination::handover_machines(&ledger, &handed_over) {
+                self.read_machine_again(&machine);
+            }
         }
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();

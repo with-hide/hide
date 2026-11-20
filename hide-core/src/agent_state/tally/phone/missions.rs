@@ -286,7 +286,7 @@ pub struct PhoneWait {
 /// A step's merge as the map reads it (`NodeMerge`), copied field by field:
 /// a field the core adds stays on the Mac until it is named here.
 /// A step's `NodeWork` as the phone frame carries it: `working`,
-/// `waiting`, `stopped` or `no_worker`.
+/// `waiting`, `asleep`, `stopped` or `no_worker`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PhoneWork {
     pub state: String,

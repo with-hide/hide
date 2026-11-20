@@ -341,10 +341,10 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
-  // What its worker does now (hide-private issue 680) and so how the card moves (`nodePace`): a resting worker cuts the ring into dashes and says what it waits on under the title; a stopped or absent one turns the card the stopped colour and says why; a working one needs no words.
+  // What its worker does now (hide-private issue 680) and so how the card moves (`nodePace`): a resting worker cuts the ring into dashes and says what it waits on under the title, a sleeping one that it sleeps (B23); a stopped or absent one turns the card the stopped colour and says why; a working one needs no words.
   const doing = nodeWork(mission, node);
   const pace = nodePace(mission, node);
-  const doingLine = doing?.state === "waiting" ? nodeWorkWords(doing, t) : null;
+  const doingLine = doing?.state === "waiting" || doing?.state === "asleep" ? nodeWorkWords(doing, t) : null;
   const stopLine = useStopWords(doing);
   const wait = nodeWait(node);
   const waitLine = useWaitWords(wait);

@@ -1751,10 +1751,11 @@ export type MissionNode = {
 /** A node's wait as the core decides it (`NodeWait`): the map's and the phone's `기다리는 중 · <why> · <time>`. */
 export type MissionNodeWait = { why: string; until_unix_ms: number; mission: boolean };
 
-/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, asleep while Hide holds its worker asleep (a sleep, not a wait), stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
 export type MissionNodeWork =
   | { state: "working" }
   | { state: "waiting"; on: MissionWaitingOn }
+  | { state: "asleep" }
   | { state: "stopped"; cause: MissionStopCause | null; since_unix_ms: number }
   | { state: "no_worker"; since_unix_ms?: number | null };
 /** Why a node's worker stopped (`StopCause`): the provider refused its turn on a usage limit or with an API error, with the agent's own first line for it. */

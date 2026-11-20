@@ -355,7 +355,8 @@ pub struct NodeView {
 
 /// Whether a node in progress is worked now (with-hide/hide-private#680):
 /// its worker works, its worker rests and the node waits on someone
-/// (`waiting_on`, said beside it), its worker stopped with no one to wait
+/// (`waiting_on`, said beside it), Hide put its worker to sleep (PRD
+/// letters-missions-simplify B23: a sleep, not a wait), its worker stopped with no one to wait
 /// on (`mission_health::stopped_worker`), since when and why, or no worker
 /// stands for it (`mission_health::worker_gone`), since when a warning
 /// judgment first saw it, absent before one did.
@@ -366,6 +367,7 @@ pub enum NodeWork {
     Waiting {
         on: WaitingOn,
     },
+    Asleep,
     Stopped {
         cause: Option<crate::missions::StopCause>,
         since_unix_ms: u64,
@@ -378,7 +380,7 @@ pub enum NodeWork {
 
 /// What `view`, a node of a running mission, is doing now: from its
 /// worker's registration (none or ended is no worker, since `gone_since`;
-/// asleep rests) and, for a running one, its agent row's activity
+/// asleep sleeps) and, for a running one, its agent row's activity
 /// (`working` works, `stopped` rests, or stands stopped when `stopped` says
 /// so); a row Hide cannot see, or whose activity it does not know, says
 /// nothing rather than a guess.
@@ -406,7 +408,7 @@ fn node_work(
     match worker? {
         // Answered above.
         WorkerLife::Ended => None,
-        WorkerLife::Asleep => waiting(),
+        WorkerLife::Asleep => Some(NodeWork::Asleep),
         WorkerLife::Running => match row_activity? {
             "working" => Some(NodeWork::Working),
             "stopped" => match stopped {

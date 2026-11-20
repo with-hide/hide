@@ -1457,6 +1457,56 @@ fn hide_agent_sleep_takes_only_the_agent_or_its_parent() {
     assert_eq!(phase(&runtime, WORKER), None);
 }
 
+/// D-20, PRD letters-missions-simplify D-24: binding an agent to a node
+/// gives the Conductor no say over it: an operator's root it binds as a
+/// worker still refuses the Conductor's sleep.
+#[test]
+fn hide_agent_sleep_refuses_a_conductor_that_only_binds_the_agent() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[1].parent = None;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "parent_authority_required"
+    );
+    assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// D-20, PRD letters-missions-simplify D-24, B2: the agent that took the
+/// worker's pane over answers to the worker's Conductor
+/// (`coordination::succeed` gives it the parent), so the Conductor puts it
+/// to sleep as it would the worker.
+#[test]
+fn hide_agent_sleep_takes_a_workers_successor_from_its_conductor() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    // The worker's pane ran another conversation before this one.
+    let mut next = ledger.agents[1].clone();
+    next.id = String::new();
+    next.parent = None;
+    ledger.agents[1].actor.session = Some("earlier-session".into());
+    ledger.agents[1].session = "earlier-session".into();
+    let successions = std::collections::BTreeMap::from([(
+        "agent-2".to_owned(),
+        crate::coordination::Succession { successor: next },
+    )]);
+    let succeeded = crate::coordination::succeed(
+        &mut ledger,
+        &successions,
+        1,
+        &crate::coordination::Held::default(),
+    );
+    let successor = succeeded[0].1.clone();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        sleep_command(&mut runtime, &successor).unwrap()["state"],
+        "ending"
+    );
+}
+
 /// PRD hide-plan-delegate B6: a `request` that would wake a sleeping plan
 /// child while its main's plans already have three children awake is
 /// refused before the store keeps it; with a place free, or as a `report`
@@ -1788,10 +1838,12 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
 
 /// A mission's node carries its worker's life from the same decision as
 /// `hide agent show`: running, asleep once Hide puts it to sleep with nothing
-/// else moving, and running again once it wakes.
+/// else moving, and running again once it wakes. Asleep, the node's work is
+/// a sleep, not a wait on its worker (PRD letters-missions-simplify B23).
 #[test]
 fn a_mission_node_reads_its_workers_sleep() {
     use crate::delivery::answer::Runtime as Life;
+    use crate::runtime::missions::NodeWork;
     let mut runtime = mission_runtime();
     let life = |runtime: &mut Runtime| {
         runtime.refresh_missions();
@@ -1805,6 +1857,10 @@ fn a_mission_node_reads_its_workers_sleep() {
         .records
         .insert(WORKER.into(), record(WORKER));
     assert_eq!(life(&mut runtime), Some(Life::Asleep));
+    assert_eq!(
+        runtime.snapshot.missions.items[0].nodes[0].work,
+        Some(NodeWork::Asleep)
+    );
     runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
     assert_eq!(life(&mut runtime), Some(Life::Running));
 }

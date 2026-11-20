@@ -903,6 +903,7 @@ describe("how a node in progress moves (operator decision 2026-11-13)", () => {
     expect(pace({ work: { state: "waiting", on: { kind: "review" } } })).toBe("waiting");
     // A worker Hide put to sleep rests; its sleep is the label's.
     expect(pace({ agent_runtime: "asleep" })).toBe("waiting");
+    expect(pace({ agent_runtime: "asleep", work: { state: "asleep" } })).toBe("waiting");
     expect(pace({ work: { state: "stopped", cause: null, since_unix_ms: 1 } })).toBe("stopped");
     expect(pace({ work: { state: "no_worker" } })).toBe("stopped");
     expect(pace({ work: { state: "no_worker", since_unix_ms: 1 } })).toBe("stopped");
@@ -928,8 +929,10 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
     for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
     const states = contract.mission_node_work as string[];
-    expect(states).toEqual(["working", "waiting", "stopped", "no_worker"]);
+    expect(states).toEqual(["working", "waiting", "asleep", "stopped", "no_worker"]);
     expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    // A worker Hide put to sleep is said asleep, never a wait on it (letters-missions-simplify B23).
+    expect(nodeWorkWords({ state: "asleep" }, t)).toBe("Worker asleep");
     // A stopped worker says why: a usage limit with the agent's own line, an API error, or no report (mission-56).
     expect(nodeWorkWords({ state: "stopped", cause: { kind: "limit", line: "resets 4pm" }, since_unix_ms: 1 }, t)).toBe("Stopped · usage limit · resets 4pm");
     expect(nodeWorkWords({ state: "stopped", cause: { kind: "error", line: "API Error: 500" }, since_unix_ms: 1 }, t)).toBe("Stopped · API error");

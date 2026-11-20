@@ -12,7 +12,7 @@ import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, nodePace, openAttention } from "../missions";
+import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, nodePace, openAttention, workerAsleep } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { phoneLineNode, workerOf } from "./missionModel";
@@ -97,6 +97,8 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   const pace = nodePace(mission, node);
   const stopped = pace === "stopped" ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain")) : null;
   const word = stopped ?? t(`mission.look.${look}`);
+  // A worker Hide put to sleep is said asleep, never a wait on it (letters-missions-simplify B23).
+  const asleep = pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep") : null;
   const waitLine = useWaitWords(node.wait);
   const detail = reason?.kind === "attention"
     ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
@@ -107,7 +109,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
       <MissionGraphCard
         node={node} look={look} word={word} yours={mergeDue || turn} pace={pace}
         aria-label={[
-          node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, detail, waitLine?.full ?? null,
+          node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, asleep, detail, waitLine?.full ?? null,
           // The lines are drawn for the eye, so their words and states are said here (B28).
           branch ? `${t("mission.foot.where")}: ${branchLineWords(branch, t)}` : null,
           result ? resultLineWords(result, t) : null,
@@ -130,6 +132,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
           </span>
         ) : null}
         {stopped ? <span className="truncate text-caption text-mission-stopped" data-node-work={node.work?.state}>{stopped}</span> : null}
+        {asleep ? <span className="truncate text-caption text-muted-foreground" data-node-work="asleep">{asleep}</span> : null}
         {node.wait && waitLine ? <NodeWaitLine wait={node.wait} words={waitLine} /> : null}
         {detail ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
         {branch || result || marks ? (

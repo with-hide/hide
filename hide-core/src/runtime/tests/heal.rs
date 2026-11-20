@@ -441,6 +441,100 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
     );
 }
 
+/// B2, B17, B18, PRD letters-missions-simplify D-24: the agent that took a
+/// mission worker's or checker's pane over answers to the Conductor the one
+/// before it answered to (`coordination::succeed` gives it the parent): the
+/// worker at work is told to go on and is counted back in the Conductor's
+/// one cell, and a checker its engine could not bring back is named there.
+#[test]
+fn a_mission_participants_successor_is_healed_as_its_conductors_child() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    started_with(
+        &mut runtime,
+        root.path(),
+        &[("w1:p1", "s-18", true), ("w1:p7", "s-7", true)],
+    );
+    let conductor = actor(&node, "w1:p3", "s-3");
+    let worker = actor(&node, "w1:p1", "s-18");
+    let checker = actor(&node, "w1:p7", "s-7");
+    // A worker and a checker the Conductor started, each followed in its
+    // pane by a new conversation the Conductor never started.
+    let mut ledger = crate::delivery::ledger::Ledger {
+        next_id: 18,
+        agents: vec![
+            record("agent-3", &conductor, None),
+            record("agent-1", &actor(&node, "w1:p1", "s-1"), Some("agent-3")),
+            record("agent-5", &actor(&node, "w1:p7", "s-5"), Some("agent-3")),
+        ],
+        ..Default::default()
+    };
+    let successions = std::collections::BTreeMap::from([
+        (
+            "agent-1".to_owned(),
+            crate::coordination::Succession {
+                successor: record("", &worker, None),
+            },
+        ),
+        (
+            "agent-5".to_owned(),
+            crate::coordination::Succession {
+                successor: record("", &checker, None),
+            },
+        ),
+    ]);
+    assert_eq!(
+        crate::coordination::succeed(
+            &mut ledger,
+            &successions,
+            1,
+            &crate::coordination::Held::default()
+        ),
+        [
+            ("agent-1".to_owned(), "agent-18".to_owned()),
+            ("agent-5".to_owned(), "agent-19".to_owned())
+        ]
+    );
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let mut mission = mission_with_worker("agent-18");
+    mission.conductor.actor = conductor.clone();
+    mission.conductor.agent_id = Some("agent-3".into());
+    mission.nodes[0].criteria[0].checkers.push(
+        serde_json::from_value(
+            serde_json::json!({"worker": {"agent": "codex"}, "agent_id": "agent-19"}),
+        )
+        .unwrap(),
+    );
+    runtime.missions.book.missions.push(mission);
+
+    let healing: Vec<String> = ["w1:p1", "w1:p7"].map(str::to_owned).to_vec();
+    heal(&mut runtime, &node, &healing, 1_000);
+    assert_eq!(
+        runtime.heal_letters_owed(),
+        ["go-on:agent-18:1000", "go-on:agent-19:1000"]
+    );
+    runtime.heal_not_woken(&["agent-19".to_owned()]);
+    for actor in [&conductor, &worker] {
+        observe(&mut runtime, actor);
+    }
+    runtime.hook_after_heal(&node, "w1:p1", true);
+    assert_eq!(
+        admit(&mut runtime),
+        [
+            (
+                "w1:p3".to_owned(),
+                "Resumed: 1 · agent w1:p1\nCould not wake agent w1:p7".to_owned()
+            ),
+            (
+                "w1:p1".to_owned(),
+                "Carry on with the work that was cut off.".to_owned()
+            ),
+        ]
+    );
+    assert!(runtime.heal_letters_owed().is_empty());
+}
+
 /// B17, B18: the resumed agent's reports can reach the core before its
 /// session pass does: whoever comes first takes the engine's resume and
 /// settles it in the same step, so the reports, the second of which says no
