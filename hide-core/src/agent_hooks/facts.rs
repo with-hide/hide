@@ -1416,28 +1416,29 @@ mod tests {
     /// agent shows; a pane that closed is cut no more.
     #[test]
     fn a_device_pane_busy_when_its_link_ended_is_cut_until_it_closes() {
+        let on_mini = |pane: &str| crate::address::scoped_pane_id("mini", pane);
         let mut facts = HookFacts::default();
         for (pane, turn) in [
-            ("mini:w1:p1", HookTurn::Working),
-            ("mini:w1:p2", HookTurn::Working),
-            ("mini:w1:p3", HookTurn::Idle),
-            ("w1:p1", HookTurn::Working),
+            (on_mini("w1:p1"), HookTurn::Working),
+            (on_mini("w1:p2"), HookTurn::Working),
+            (on_mini("w1:p3"), HookTurn::Idle),
+            ("w1:p1".to_owned(), HookTurn::Working),
         ] {
             facts
-                .record(pane, &report(Some("s-1"), Some(turn)), 0)
+                .record(&pane, &report(Some("s-1"), Some(turn)), 0)
                 .unwrap();
         }
         let owns = |pane: &str| crate::address::is_pane_of(pane, "mini");
         facts.engine_ended(owns);
         // The next link's engine lists the first pane, a shell yet.
         let mut listed: SessionSnapshotPayload = serde_json::from_value(json!({
-            "agents": [], "panes": [{"pane_id": "mini:w1:p1"}],
+            "agents": [], "panes": [{"pane_id": on_mini("w1:p1")}],
         }))
         .unwrap();
         facts.lay(&mut listed, str::to_owned, owns);
-        assert!(facts.take_cut("mini:w1:p1"));
-        assert!(!facts.take_cut("mini:w1:p2"), "its pane closed");
-        assert!(!facts.take_cut("mini:w1:p3"), "at rest");
+        assert!(facts.take_cut(&on_mini("w1:p1")));
+        assert!(!facts.take_cut(&on_mini("w1:p2")), "its pane closed");
+        assert!(!facts.take_cut(&on_mini("w1:p3")), "at rest");
         assert!(
             !facts.take_cut("w1:p1"),
             "this machine's engine did not end"
