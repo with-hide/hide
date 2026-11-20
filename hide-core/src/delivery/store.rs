@@ -254,6 +254,20 @@ fn upgraded(ledger: &mut Ledger, from: i64) {
         "no_recipient":addressed.no_recipient,"expired":addressed.expired}));
 }
 
+/// `ledger`, an earlier build's, as an import or an upgrade keeps it: its
+/// letters addressed (`Ledger::address_letters`), each it ended finished at
+/// the time `kept`, the store's, gives it, which the start's clock set.
+#[cfg(test)]
+pub(crate) fn as_upgraded(mut ledger: Ledger, kept: &Ledger) -> Ledger {
+    ledger.address_letters(crate::runtime::hide_notice, 0);
+    for (letter, kept) in ledger.letters.iter_mut().zip(&kept.letters) {
+        if letter.finished_at_unix_ms == Some(0) {
+            letter.finished_at_unix_ms = kept.finished_at_unix_ms;
+        }
+    }
+    ledger
+}
+
 /// `delivery-ledger.json` beside the store at `path`: where builds before it
 /// kept the ledger.
 pub fn legacy_path(path: &Path) -> PathBuf {
@@ -828,9 +842,9 @@ mod tests {
             let expected = ledger::load(&old).unwrap();
             assert!(!expected.letters.is_empty() && !expected.agents.is_empty());
             let path = hide_kit::layout::delivery_store(&state);
-            let ((), records) = crate::diagnostics::capture(|| {
-                assert_eq!(ledger::recover(&path).unwrap(), expected, "{fixture:?}");
-            });
+            let (kept, records) = crate::diagnostics::capture(|| ledger::recover(&path).unwrap());
+            let expected = as_upgraded(expected, &kept);
+            assert_eq!(kept, expected, "{fixture:?}");
             assert!(
                 records
                     .iter()
@@ -880,7 +894,7 @@ mod tests {
         let old = old_file(&state, &bytes);
         let (_, read, opened) = LedgerStore::open(&path).unwrap();
         assert_eq!(opened, Opened::Imported);
-        assert_eq!(read, ledger);
+        assert_eq!(read, as_upgraded(ledger, &read));
         assert_eq!(std::fs::read(&old).unwrap(), bytes);
     }
 

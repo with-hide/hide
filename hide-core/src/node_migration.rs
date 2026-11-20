@@ -2616,9 +2616,13 @@ mod tests {
             before[DELIVERY_LEDGER]
         );
         assert!(!backups[0].join(DELIVERY_LEDGER).exists());
+        let kept = crate::delivery::store::load(&backups[0].join(DELIVERY_STORE)).unwrap();
         assert_eq!(
-            crate::delivery::store::load(&backups[0].join(DELIVERY_STORE)).unwrap(),
-            crate::delivery::ledger::from_bytes(&before[DELIVERY_LEDGER]).unwrap()
+            kept,
+            crate::delivery::store::as_upgraded(
+                crate::delivery::ledger::from_bytes(&before[DELIVERY_LEDGER]).unwrap(),
+                &kept
+            )
         );
         assert!(backups[0].join(PROJECT_MEMORY).is_file());
         let copy = rusqlite::Connection::open(backups[0].join(LINKS)).unwrap();

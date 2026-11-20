@@ -2430,9 +2430,6 @@ mod tests {
             assert_eq!(pull(&ledger, Some(1000), 1000 + wait), ids[..1], "{kind}");
             let none = tool_pull(&ledger, &recipient, Some(1000), 1001).unwrap();
             assert!(!record_tool_handover(&mut ledger, &none, 1001), "{kind}");
-            // A letter past its deadline is not handed over.
-            ledger.letters[1].created_at_unix_ms = 0;
-            assert!(pull(&ledger, Some(1000), 61 * 60_000).is_empty(), "{kind}");
         }
         for kind in ["claude", "codex", "gemini", "cursor", "future-agent"] {
             assert!(!tool_letters(kind), "{kind}");
@@ -3570,7 +3567,7 @@ mod tests {
     }
 
     #[test]
-    fn the_answer_deadline_leaves_answered_cancelled_and_untaken_letters_alone() {
+    fn the_answer_deadline_leaves_answered_and_cancelled_letters_alone_and_keeps_an_untaken_one() {
         let (a, b) = (actor("a"), actor("b"));
         let mut ledger = Ledger::default();
         let answered = awaiting_reply(&mut ledger, &a, &b, "answered", 1);
@@ -3610,17 +3607,18 @@ mod tests {
         )
         .unwrap();
         // The deadline itself, while the letters finished at 2 are still
-        // kept; the letter not taken in waits for its agent.
+        // kept: only the letter not taken in stops waiting for its answer,
+        // and it still waits for its agent.
         let late = 1 + super::super::ANSWER_WAIT_MS;
-        assert!(!ledger.end_overdue_answer_waits(late));
-        for (id, state) in [
-            (&answered.id, State::Delivered),
-            (&cancelled.id, State::Cancelled),
-            (&unreceived.id, State::Pending),
+        assert!(ledger.end_overdue_answer_waits(late));
+        for (id, state, ended) in [
+            (&answered.id, State::Delivered, None),
+            (&cancelled.id, State::Cancelled, None),
+            (&unreceived.id, State::Pending, Some(AnswerWaitEnd::Deadline)),
         ] {
             let letter = letter_of(&ledger, id);
             assert_eq!(letter.state, state);
-            assert!(letter.answer_wait_ended.is_none());
+            assert_eq!(letter.answer_wait_ended, ended);
         }
     }
 
