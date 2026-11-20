@@ -81,6 +81,31 @@ pub fn device_of(id: &str) -> Option<&str> {
         .filter(|device| !device.is_empty())
 }
 
+const GUEST_PREFIX: &str = "guest:";
+const GUEST_PANE: &str = ":pane:";
+
+/// A pane of this machine that belongs to a guest: another machine's work
+/// running here in that machine's own node (PRD device-connect-iroh D-61).
+/// `device` is the guest machine's device id and `pane` its node's own id
+/// for the pane: `guest:<device>:pane:<pane>`.
+///
+/// It is not `remote:<device>:pane:<pane>`, which names a pane on that
+/// machine: two machines that open each other have both, and the two
+/// engines name their panes apart from each other, so the same `<pane>`
+/// can be either.
+pub fn guest_pane_id(device: &str, pane: &str) -> String {
+    format!("{GUEST_PREFIX}{device}{GUEST_PANE}{pane}")
+}
+
+/// The guest's device id and its node's own pane id, when `id` names a
+/// guest's pane on this machine ([`PaneAddress::Guest`]).
+pub fn guest_pane(id: &str) -> Option<(&str, &str)> {
+    match PaneAddress::parse(id) {
+        Ok(PaneAddress::Guest { device, pane }) => Some((device, pane)),
+        _ => None,
+    }
+}
+
 /// An id the core scoped to a device: `remote:<device>:<kind>:<id>`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Scoped<'a> {
@@ -125,16 +150,24 @@ impl fmt::Display for Scoped<'_> {
     }
 }
 
-/// A pane as the core names it: a pane of its own node by the engine's id, or a
-/// pane of a device by that device and the id the device's engine gives it.
+/// A pane as the core names it: a pane of its own node by the engine's id, a
+/// pane of a device by that device and the id the device's engine gives it,
+/// or a guest's pane on this machine by the guest's device and the id the
+/// guest's node gives it ([`guest_pane_id`]).
+///
+/// A guest's pane is none of the core's: its engine runs no such pane, so
+/// wherever an id is taken to the engine a guest's reads as a pane the
+/// engine does not have.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum PaneAddress<'a> {
     Node(&'a str),
     Device { device: &'a str, pane: &'a str },
+    Guest { device: &'a str, pane: &'a str },
 }
 
-/// A pane id spelled as a device's (`remote:`) that names no device's pane:
-/// its device or its own id is missing, or it names another kind.
+/// A pane id spelled as a device's (`remote:`) or a guest's (`guest:`)
+/// that names no such pane: its device or its own id is missing, or it
+/// names another kind.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NotAPane(pub String);
 
@@ -160,6 +193,18 @@ impl<'a> PaneAddress<'a> {
     /// The pane an id names. An id without the device prefix is the core's
     /// own node's; one with it must name a device's pane.
     pub fn parse(id: &'a str) -> Result<Self, NotAPane> {
+        if let Some(rest) = id.strip_prefix(GUEST_PREFIX) {
+            return match rest.split_once(GUEST_PANE) {
+                Some((device, pane))
+                    if !device.is_empty()
+                        && !pane.is_empty()
+                        && device_id_is_unambiguous(device) =>
+                {
+                    Ok(Self::Guest { device, pane })
+                }
+                _ => Err(NotAPane(id.to_owned())),
+            };
+        }
         if !is_device_scoped(id) {
             return Ok(Self::Node(id));
         }
@@ -183,10 +228,11 @@ impl<'a> PaneAddress<'a> {
         }
     }
 
-    /// The device the pane is on, when it is not the core's own node.
+    /// The device the pane is on, when it is not the core's own node. A
+    /// guest's pane runs on this machine.
     pub fn device(self) -> Option<&'a str> {
         match self {
-            Self::Node(_) => None,
+            Self::Node(_) | Self::Guest { .. } => None,
             Self::Device { device, .. } => Some(device),
         }
     }
@@ -194,7 +240,7 @@ impl<'a> PaneAddress<'a> {
     /// The id the pane's own engine gives it (`w1:p2`), on whichever machine.
     pub fn device_pane_id(self) -> &'a str {
         match self {
-            Self::Node(pane) | Self::Device { pane, .. } => pane,
+            Self::Node(pane) | Self::Device { pane, .. } | Self::Guest { pane, .. } => pane,
         }
     }
 
@@ -208,6 +254,7 @@ impl fmt::Display for PaneAddress<'_> {
         match *self {
             Self::Node(pane) => f.write_str(pane),
             Self::Device { device, pane } => Scoped::new(device, Kind::Pane, pane).fmt(f),
+            Self::Guest { device, pane } => f.write_str(&guest_pane_id(device, pane)),
         }
     }
 }
@@ -455,6 +502,33 @@ mod tests {
         );
         assert_eq!(id_on("core", "core", Kind::Tab, "w1:t1"), "w1:t1");
         assert!(!is_device_scoped("w1:p1"));
+    }
+
+    #[test]
+    fn a_guests_pane_here_is_no_pane_of_that_machine() {
+        let here = guest_pane_id("macbook", "w1:p1");
+        assert_eq!(here, "guest:macbook:pane:w1:p1");
+        assert_eq!(guest_pane(&here), Some(("macbook", "w1:p1")));
+        // The same machine's own pane of the same engine id is another
+        // address, and neither reads as the other.
+        let there = scoped_pane_id("macbook", "w1:p1");
+        assert_ne!(here, there);
+        assert_eq!(guest_pane(&there), None);
+        assert_eq!(device_of(&here), None);
+        assert!(!is_device_scoped(&here));
+        // A node id that itself holds `:pane:` stays the node's own id.
+        assert_eq!(
+            guest_pane("guest:macbook:pane:a:pane:b"),
+            Some(("macbook", "a:pane:b"))
+        );
+        for id in [
+            "guest:",
+            "guest::pane:w1:p1",
+            "guest:macbook:pane:",
+            "w1:p1",
+        ] {
+            assert_eq!(guest_pane(id), None, "{id}");
+        }
     }
 
     #[test]

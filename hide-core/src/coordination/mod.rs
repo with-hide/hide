@@ -7,10 +7,10 @@ pub mod human_turn;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
-mod room;
+pub(crate) mod room;
 pub(crate) mod started;
 
-pub(crate) use room::{Held, Holds, dropped};
+pub(crate) use room::{Held, Holds, dropped, shed_finished_briefs};
 
 use crate::delivery::answer::{AgentView, Connection, RegisterCheck, Runtime};
 use crate::delivery::{Actor, ledger::Ledger, watch};
@@ -68,6 +68,10 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_conducted"
             | "mission_criteria_missing"
             | "mission_criteria_too_many"
+            | "mission_dependency_unknown"
+            | "mission_dependency_line_unknown"
+            | "mission_dependency_stack_split"
+            | "mission_merge_order_stack"
             | "mission_steps_invalid"
             | "mission_criteria_unmet"
             | "mission_criteria_protected"
@@ -791,6 +795,12 @@ pub struct SpawnRecord {
     /// text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// The SHA-256 of the brief, in hex, in its place once the spawn is
+    /// completed and its child ended (`SpawnRecord::shed_brief`): what a
+    /// spawn asked again compares, the text no longer kept. A build before
+    /// it reads such a record as one without a brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_sha256: Option<String>,
     /// Whether the brief was submitted to the agent, so a retry after it
     /// never submits it twice (engineering #11).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -895,10 +905,34 @@ impl SpawnRecord {
         (!self.folder).then_some(self.branch.as_str())
     }
 
+    /// Whether the spawn was asked with `brief`: the text it keeps, or,
+    /// once it let the text go, its digest.
+    pub(crate) fn asked_with(&self, brief: Option<&str>) -> bool {
+        match (&self.brief_sha256, brief) {
+            (Some(digest), Some(brief)) => *digest == brief_digest(brief),
+            (Some(_), None) => false,
+            (None, brief) => self.brief.as_deref() == brief,
+        }
+    }
+
+    /// Whether the record still holds its brief's text or launch words.
+    pub(crate) fn carries_brief(&self) -> bool {
+        self.brief.is_some() || !self.launch_words.is_empty()
+    }
+
+    /// Lets the brief's text and launch words go, keeping the brief's
+    /// digest (`room::shed_finished_briefs` says when).
+    pub(crate) fn shed_brief(&mut self) {
+        if let Some(brief) = self.brief.take() {
+            self.brief_sha256 = Some(brief_digest(&brief));
+        }
+        self.launch_words = Vec::new();
+    }
+
     /// What became of the spawn's brief ([`BriefPhase`]).
     pub(crate) fn brief_phase(&self) -> BriefPhase {
         use crate::delivery::typed::SendRoute;
-        if self.brief.is_none() {
+        if self.brief.is_none() && self.brief_sha256.is_none() {
             return BriefPhase::None;
         }
         match &self.brief_input {
@@ -916,6 +950,12 @@ impl SpawnRecord {
             None => BriefPhase::NotTyped,
         }
     }
+}
+
+/// A brief's SHA-256 in lowercase hex, as a spawn record keeps it.
+fn brief_digest(brief: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(brief.as_bytes()))
 }
 
 fn spawn_json(ledger: &Ledger, id: &str) -> Result<Value, String> {
@@ -1710,6 +1750,13 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
             })
             || record.args.len() > 128
             || record.args.iter().map(String::len).sum::<usize>() > 8192
+            || record.brief_sha256.as_deref().is_some_and(|digest| {
+                record.brief.is_some()
+                    || digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            })
             || record.task.as_ref().is_some_and(|task| {
                 record.mode != SpawnMode::Handoff
                     || task.target.as_deref().is_some_and(|target| !key(target))
@@ -1960,7 +2007,7 @@ pub(crate) fn apply_with(
                     || record.args != *args
                     || record.launch != *launch
                     || record.profile != *profile
-                    || record.brief != *brief
+                    || !record.asked_with(brief.as_deref())
                     || record.beside != *beside
                     || !task_agrees
                 {
@@ -2011,6 +2058,7 @@ pub(crate) fn apply_with(
                 mission: mission.as_ref().map(|admission| admission.mission.clone()),
                 plan: plan.as_ref().map(|admission| admission.link.clone()),
                 brief: brief.clone(),
+                brief_sha256: None,
                 briefed: false,
                 brief_input: None,
                 launch_words: Vec::new(),

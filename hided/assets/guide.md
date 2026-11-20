@@ -136,22 +136,14 @@ hide automation edit <id|name> …        hide automation preview --schedule <wh
 
 ```
 hide device list [--json]
-hide device share [--json]
-hide device add <link or ssh alias> [--name <name>] [--json]
-hide device allow [--json]
-hide device pause <device> [--outgoing|--incoming|--both] [--json]
-hide device resume <device> [--outgoing|--incoming|--both] [--json]
-hide device remove <device> [--outgoing|--incoming|--both] [--json]
-hide device request <device> [--json]
-hide device address <device> <ip:port> [--json]
-hide device retry <device> [--wait] [--json]
+hide device add <ssh alias> [--name <name>] [--json]
+hide device remove <device id or ssh alias> [--json]
+hide device retry <device id or ssh alias> [--wait] [--json]
 ```
 
 - Add, connect or remove a device only when the operator asked for it, and only from the machine that runs Hide; on a device these are refused with `machine_not_permitted`.
-- Two Hides are paired by the operator, not by you: `share`, `add <link>`, `allow`, `resume`, `request` and `address` are refused in a Hide pane and to an external tool with `device_from_pane`. Ask the operator to run them in a terminal outside Hide's panes, or to use Settings › Devices on that machine. You may `list`, `pause`, `remove` and `retry` a paired machine.
-- `list` answers the paired machines under `peers`: each one's `id`, `name`, whether this machine opens it (`opens`: `confirming`, `active`, `paused`, `paused_there`, `removing`, `unpaired`) and whether it opens this machine (`opened_by`: `active`, `paused`), whether the two are `connected` and by which `path` (`direct`, `relay`), the `reason` it is not (`relay_unreachable`, `relay_monthly_limit`), and which side must `update`. A machine paired both ways has two directions: `pause`, `resume` and `remove` then need `--outgoing` (this machine opening it), `--incoming` (it opening this machine) or `--both`, and answer `device_direction_needed` without one.
-- `add` with an SSH alias takes a `Host` name from `~/.ssh/config` and registers the device without Hide's helper; tell the operator what its answer says: they open Settings › Devices and choose Allow and install on its row, and until then its files, Git and terminals wait. Run by the operator in a terminal outside Hide's panes, the same command connects to a machine that already runs its own Hide as a Hide instead, with nothing installed there (its answer has `paired: "ssh"`); in a pane it always registers the SSH device.
-- `list` gives each SSH device's id, its machine's own id once it has connected, and its SSH alias; `--machine`, `remove` and `retry` take either, an alias two devices share being refused with their ids. It also gives its `state` (`connected`, `connecting`, `operator_turn`, `failed`), what it `waits_on` from the operator (`allow_and_install`, `sign_in` with its `input`, `host_key`, `browser` with its `url`, or nothing), its `failure` (`action` `sign_in`, `check_host_key`, `reopen_hide` when an update replaced the running Hide and only quitting and opening it again connects, or `retry`, the finer `cause`, and for a retry ssh's last line as `detail`) and its `next_action`.
+- `add` takes a `Host` name from `~/.ssh/config` and registers the device without Hide's helper; tell the operator what its answer says: they open Settings › Devices and choose Allow and install on its row, and until then its files, Git and terminals wait.
+- `list` gives each device's id, its machine's own id once it has connected, and its SSH alias; `--machine`, `remove` and `retry` take either, an alias two devices share being refused with their ids. It also gives its `state` (`connected`, `connecting`, `operator_turn`, `failed`), what it `waits_on` from the operator (`allow_and_install`, `sign_in` with its `input`, `host_key`, `browser` with its `url`, or nothing), its `failure` (`action` `sign_in`, `check_host_key`, `reopen_hide` when an update replaced the running Hide and only quitting and opening it again connects, or `retry`, the finer `cause`, and for a retry ssh's last line as `detail`) and its `next_action`.
 - `retry` starts the attempt the row's Retry starts, which may ask the operator; with `--wait` it answers once the device is connected, it is the operator's turn, the attempt failed, or five minutes passed (`device_wait_timeout`). A device that is connected, connecting or waiting on the operator gets no new attempt; the answer says where it is.
 - When it is the operator's turn, ask them for what `next_action` names. No command answers what ssh asks, trusts a server key or allows the helper: those are the operator's, on the device's row, and you never see what they type.
 - `remove` forgets a device, takes Hide's kit off it when its helper was allowed, and leaves its panes, agents and files running there.

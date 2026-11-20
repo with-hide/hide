@@ -46,7 +46,7 @@ impl CoreStarter {
         if asked == Some(std::ffi::OsStr::new("fixture")) {
             if !fixture {
                 return Err(format!(
-                    "{HIDE_CORE_STARTER}=fixture is refused: {} is not a fixture HOME ({FIXTURE_HOME_MARKER} under /tmp)",
+                    "{HIDE_CORE_STARTER}=fixture is refused: {} is not a fixture HOME ({FIXTURE_HOME_MARKER} in the temporary folder)",
                     home.display()
                 ));
             }
@@ -58,9 +58,11 @@ impl CoreStarter {
                 home.display()
             ));
         }
+        // The system's items only for the account's own home: any other
+        // HOME has none, and its start says so (`UserAgents::of_home`).
         Ok(Self::LoginItem {
             home: home.to_path_buf(),
-            agents: hide_platform::user_agents::UserAgents::current(),
+            agents: hide_platform::user_agents::UserAgents::of_home(home),
         })
     }
 
@@ -79,29 +81,11 @@ impl CoreStarter {
     ) -> Result<u32, String> {
         let deadline = Instant::now() + within;
         let stale = std::fs::read(crate::attach::attach_record(state_dir)).ok();
-        let mut exited: Box<dyn FnMut() -> Option<String>> = match self {
+        let mut exited: Exited = match self {
             Self::Fixture => {
-                let log = log_file(state_dir)?;
-                let mut command = std::process::Command::new(program);
-                // What the login item runs, so a fixture's core is a
-                // starter's core as the login item's is.
-                command.arg("core-login").env("HIDE_STATE_DIR", state_dir);
-                hide_platform::process::detach(&mut command)
-                    .map_err(|error| format!("the core could not be detached: {error}"))?;
-                command
-                    .stdin(std::process::Stdio::null())
-                    .stdout(log.try_clone().map_err(|error| error.to_string())?)
-                    .stderr(log);
-                let mut child = command
-                    .spawn()
-                    .map_err(|error| format!("the core did not start: {error}"))?;
-                Box::new(move || {
-                    child
-                        .try_wait()
-                        .ok()
-                        .flatten()
-                        .map(|status| format!("the core exited at its start: {status}"))
-                })
+                // What the login item has, so its start runs the core.
+                crate::login_item::keep(state_dir)?;
+                fixture_core(state_dir, program)?
             }
             Self::LoginItem { home, agents } => {
                 crate::login_item::start(agents, home, state_dir, program)?;
@@ -143,6 +127,54 @@ impl CoreStarter {
     }
 }
 
+/// Says why the core a start runs ended before it took links, once it has.
+type Exited = Box<dyn FnMut() -> Option<String>>;
+
+/// A fixture's core: `program core-login` on `state_dir`, as the login item
+/// runs it, apart from whatever started this process, so it outlives the
+/// `core-update` that placed it. On Unix a detached process leaves this
+/// one's group, and its output goes to the core's log as launchd's does.
+#[cfg(unix)]
+fn fixture_core(state_dir: &Path, program: &Path) -> Result<Exited, String> {
+    let log = log_file(state_dir)?;
+    let mut command = std::process::Command::new(program);
+    command.arg("core-login").env("HIDE_STATE_DIR", state_dir);
+    hide_platform::process::detach(&mut command)
+        .map_err(|error| format!("the core could not be detached: {error}"))?;
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone().map_err(|error| error.to_string())?)
+        .stderr(log);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("the core did not start: {error}"))?;
+    Ok(Box::new(move || {
+        child
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| format!("the core exited at its start: {status}"))
+    }))
+}
+
+/// On Windows a detached process stays in this one's job, which `hide
+/// connect` ends when `core-update` exits, so the core starts as a resident
+/// child, out of that job; like the login item's, it has no output.
+#[cfg(windows)]
+fn fixture_core(state_dir: &Path, program: &Path) -> Result<Exited, String> {
+    let mut command = hide_platform::process::ResidentCommand::new(program);
+    command.arg("core-login").env("HIDE_STATE_DIR", state_dir);
+    let pid = hide_platform::process::start_resident(&command, &[])
+        .map_err(|error| format!("the core did not start: {error}"))?
+        .pid;
+    let started = hide_platform::process::start_time(pid).ok();
+    Ok(Box::new(move || {
+        let running = hide_platform::process::is_alive(pid)
+            && hide_platform::process::start_time(pid).ok() == started;
+        (!running).then(|| "the core exited at its start".to_owned())
+    }))
+}
+
 /// Stops the core `state_dir`'s state names, when its pid is proven still
 /// that core: a pid another process reused since is never signalled.
 fn stop_running(state_dir: &Path) -> Result<(), String> {
@@ -154,6 +186,7 @@ fn stop_running(state_dir: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(unix)]
 fn log_file(state_dir: &Path) -> Result<std::fs::File, String> {
     let logs = state_dir.join("Logs");
     hide_platform::fs::private::create_dir_all(&logs).map_err(|error| error.to_string())?;
@@ -198,7 +231,7 @@ fn wait_for_core(
 /// Asks `pid` to stop, kills it past [`STOPPED_WITHIN`], and answers once
 /// it is gone.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn stop_pid(pid: u32) -> Result<(), String> {
+pub(crate) fn stop_pid(pid: u32) -> Result<(), String> {
     if !hide_platform::process::is_alive(pid) {
         return Ok(());
     }

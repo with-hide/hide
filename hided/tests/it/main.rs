@@ -5,6 +5,7 @@
 
 mod access;
 mod agent_exec;
+mod always_on_update;
 mod arguments;
 mod automations;
 mod browser_control;
@@ -13,6 +14,8 @@ mod connect_build;
 mod connect_stop;
 mod core_move_checks;
 mod device_own_engine;
+mod fixtures;
+mod guest_node;
 mod handshake;
 mod held_letter_notice;
 mod mobile;

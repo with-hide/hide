@@ -435,6 +435,7 @@ impl Spawner {
             caller: self.actor.pane_id.clone(),
             context,
             also_reads: Vec::new(),
+            proven: crate::delivery::worker::Proven::Now,
         };
         crate::coordination::run(
             self.client.clone(),

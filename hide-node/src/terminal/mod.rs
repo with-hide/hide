@@ -67,6 +67,11 @@ pub trait OutputSink: Send + Sync {
     /// part of the pane's output: a sink never keeps it for a screen that
     /// connects or draws the pane again later.
     fn clipboard(&self, pane: &str, text: &[u8]);
+    /// The grid the pane's output that follows was drawn at, told before a
+    /// frame that starts the pane's picture and whenever it changes. Only a
+    /// sink that draws for a screen with no view of its own listens (a
+    /// guest node's tap).
+    fn grid(&self, _pane: &str, _rows: u16, _cols: u16) {}
 }
 
 pub use hide_node_link::terminal::ReportSink;
@@ -213,6 +218,8 @@ struct Pane {
     recovery: Option<Recovery>,
     need_full: bool,
     foreign_grid: Option<GridSize>,
+    /// The grid the output sink was last told this pane is drawn at.
+    told_grid: Option<GridSize>,
     awaiting_size: bool,
     closing: bool,
     asleep: bool,
@@ -361,6 +368,10 @@ enum Delivery {
     Clipboard {
         pane: String,
         text: Vec<u8>,
+    },
+    Grid {
+        pane: String,
+        size: GridSize,
     },
 }
 
@@ -1033,12 +1044,14 @@ impl Shared {
                 Delivery::Output { pane, bytes, full } => self.outputs.output(pane, bytes, *full),
                 Delivery::Forget { pane } => self.outputs.forget(pane),
                 Delivery::Clipboard { pane, text } => self.outputs.clipboard(pane, text),
+                Delivery::Grid { pane, size } => self.outputs.grid(pane, size.rows, size.cols),
             }));
             if handed.is_err() {
                 let (pane, what) = match &delivery {
                     Delivery::Output { pane, .. } => (pane, "output"),
                     Delivery::Forget { pane } => (pane, "forget"),
                     Delivery::Clipboard { pane, .. } => (pane, "clipboard"),
+                    Delivery::Grid { pane, .. } => (pane, "grid"),
                 };
                 crate::diagnostic!(json!({
                     "component": "terminal_session",
@@ -2726,6 +2739,8 @@ impl Inner {
         // empty canvas is ever shown between the two.
         let reset = std::mem::take(&mut entry.need_full);
         let first = std::mem::take(&mut entry.first_frame_pending);
+        let regrid = reset || entry.told_grid.replace(arrived) != Some(arrived);
+        entry.told_grid = Some(arrived);
         let watched = self.watches.remove(pane).is_some();
         if let Some(recovery) = entry.recovery.take() {
             crate::diagnostic!(json!({
@@ -2739,6 +2754,12 @@ impl Inner {
         entry.lifecycle.message = None;
         entry.lifecycle.retry_decision = "none";
         self.sync(pane);
+        if regrid {
+            self.deliveries.push(Delivery::Grid {
+                pane: pane.to_owned(),
+                size: arrived,
+            });
+        }
         // Only a frame this node began with a reset draws the whole screen
         // for a reader that lost output; a transport's own full frames may
         // not.

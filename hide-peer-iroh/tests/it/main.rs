@@ -35,6 +35,7 @@ fn local() -> Options {
         relay: None,
         mdns: false,
         bind: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
+        port: None,
     }
 }
 
@@ -415,4 +416,29 @@ async fn a_relay_stopped_for_the_month_is_told_apart_from_one_that_is_down() {
         relay_state_with(Some(missing)).await,
         RelayState::Unreachable
     );
+}
+
+/// The product endpoint binds the state folder's port on every interface,
+/// the one port the Windows firewall rule lets in (PRD D-38): while it is
+/// open, nothing else can have that port.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_endpoint_given_a_port_holds_it_on_every_interface() {
+    let free = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let key = MachineKey::generate().unwrap();
+    let options = Options {
+        relay: None,
+        mdns: false,
+        bind: None,
+        port: Some(free),
+    };
+    let transport = within("the endpoint", IrohTransport::open(&key.secret(), options))
+        .await
+        .unwrap();
+    let taken = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, free)).unwrap_err();
+    assert_eq!(taken.kind(), std::io::ErrorKind::AddrInUse);
+    drop(transport);
 }

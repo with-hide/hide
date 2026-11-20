@@ -737,6 +737,9 @@ mod sys {
 }
 
 #[cfg(windows)]
+pub(crate) use sys::{current_user_profile, current_user_sid};
+
+#[cfg(windows)]
 mod sys {
     use std::ffi::c_void;
     use std::fs;
@@ -998,6 +1001,38 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         Ok(Closing(token))
+    }
+
+    /// The account this process acts as, as its SID string (`S-1-5-...`).
+    /// The profile folder of the account this process acts as, from the
+    /// system's record of it, whatever `USERPROFILE` says.
+    pub(crate) fn current_user_profile() -> io::Result<std::path::PathBuf> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::UI::Shell::GetUserProfileDirectoryW;
+        let token = acting_token(TOKEN_QUERY)?;
+        let mut units = 0_u32;
+        // SAFETY: a null buffer asks for the length, written to `units`.
+        unsafe { GetUserProfileDirectoryW(token.0, null_mut(), &mut units) };
+        if units == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buffer = vec![0_u16; units as usize];
+        // SAFETY: `buffer` holds `units` UTF-16 units, the length asked for.
+        if unsafe { GetUserProfileDirectoryW(token.0, buffer.as_mut_ptr(), &mut units) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let length = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
+        Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+            &buffer[..length],
+        )))
+    }
+
+    pub(crate) fn current_user_sid() -> io::Result<String> {
+        let token = acting_token(TOKEN_QUERY)?;
+        token_sid(token.0, TokenUser)?.text()
     }
 
     fn account() -> io::Result<Account> {

@@ -64,6 +64,18 @@ pub fn handle(
             );
             return settled(env, answer);
         }
+        KitPlace::Guest { root, version } => {
+            let home = env.home.clone().ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::Unsupported,
+                    "HOME is not set, so Hide cannot tell where to install",
+                )
+            })?;
+            return settled(
+                env,
+                run_guest(root, version, &home, action, Arc::clone(&env.stop)),
+            );
+        }
         KitPlace::Bundled(kit_dir) => {
             return settled(
                 env,
@@ -143,6 +155,7 @@ pub(crate) fn profile_target(env: &Env) -> HostResult<hide_kit::KitTarget> {
             Ok(hide_kit::device_target(&root, &home, &cli_dir, stop))
         }
         KitPlace::Build { root, .. } => Ok(hide_kit::device_target(root, &home, &cli_dir, stop)),
+        KitPlace::Guest { root, .. } => Ok(hide_kit::guest_target(root, &home, stop)),
         KitPlace::Bundled(kit_dir) => Ok(hide_kit::local_target(kit_dir, &home, stop)),
         KitPlace::Standalone => Err(HostError::new(
             ErrorCode::Unsupported,
@@ -219,6 +232,29 @@ pub fn run_build(
                 return to_value(hide_kit::KitReport::refused(refusal));
             }
             point_current(&placement.root, &placement.version)?;
+            to_value(hide_kit::apply(&target, &scope_of(action)))
+        }
+        KitAction::Status => to_value(hide_kit::status(&target)),
+        KitAction::Remove => Err(not_removed()),
+    }
+}
+
+/// A kit request to a guest's node, which runs from the build `version`
+/// under that guest's install root `root`: the same pass a placed build
+/// runs, over the target that keeps to the installation's hook entries
+/// and agent pieces (`hide_kit::guest_target`). Its entries name
+/// `<root>/current`, pointed at this build first.
+pub fn run_guest(
+    root: &Path,
+    version: &str,
+    home: &Path,
+    action: KitAction,
+    stop: Arc<AtomicBool>,
+) -> HostResult<Value> {
+    let target = hide_kit::guest_target(root, home, stop);
+    match action {
+        KitAction::Apply | KitAction::Reinstall { .. } => {
+            point_current(root, version)?;
             to_value(hide_kit::apply(&target, &scope_of(action)))
         }
         KitAction::Status => to_value(hide_kit::status(&target)),
@@ -322,7 +358,7 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
     }
     let (root, _) = build_layout(executable)?;
     Some(PaneInstall {
-        id: hide_agent_hooks::route::install_of_root(&root),
+        id: hide_kit::layout::install_of_root(&root),
         cli: root.join(hide_kit::CURRENT).join(cli),
         path_first: hide_kit::current::path_folder(&root),
     })

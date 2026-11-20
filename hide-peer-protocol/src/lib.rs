@@ -12,6 +12,7 @@
 //! test fails until the two agree.
 
 pub mod addr;
+pub mod build;
 pub mod close;
 pub mod contract;
 pub mod event;

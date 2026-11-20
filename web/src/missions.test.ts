@@ -436,6 +436,9 @@ describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
     expect(cardLine(m, m.nodes[1]!, null, t)).toEqual({ text: "waiting for #1703", attention: false });
     // The nodes it names are the core's `waiting_on`, never worked out again from `depends_on`.
     expect(cardLine(m, { ...m.nodes[1]!, waiting_on: { kind: "start" } }, null, t)).toBeNull();
+    // mission-82: one waiting on a finish line names it after its node, and once free to start it says where it stacks.
+    expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "nodes", keys: ["core:c1"] } }, null, t)?.text).toBe("waiting for #1703 c1");
+    expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } }, null, t)?.text).toBe("can start · stacked on core");
     const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "planned" });
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
