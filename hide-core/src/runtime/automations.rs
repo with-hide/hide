@@ -1545,11 +1545,7 @@ impl Runtime {
                 );
                 return true;
             }
-            return self.attempt_failed(
-                key,
-                Failure::Agent("stopped_without_answer".into()),
-                now,
-            );
+            return self.attempt_failed(key, Failure::Agent("stopped_without_answer".into()), now);
         }
         if now.saturating_sub(since) > START_DEADLINE_MS {
             return self.attempt_failed(key, Failure::Agent("agent_not_ready".into()), now);
