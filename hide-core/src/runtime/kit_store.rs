@@ -40,6 +40,11 @@ const QUEUED_CHANGES_LIMIT: usize = 256;
 /// A request id is the screen's own short token.
 const REQUEST_ID_LIMIT: usize = 128;
 
+/// The most answers `status.store_answers` holds: past it the oldest
+/// finished one goes first, and a request is refused only when every one
+/// still waits (engineering rule 15).
+pub(crate) const ANSWER_LIMIT: usize = 32;
+
 /// The store work a machine's kit worker runs on one call.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StoreJob {
@@ -97,9 +102,17 @@ struct SessionMark {
 pub(super) struct Stores {
     local_pending: Option<StoreJob>,
     device_pending: BTreeMap<String, StoreJob>,
-    /// The devices waiting for a copy of this Mac's store (B28), read on
-    /// this Mac's kit worker one at a time.
-    exports: BTreeSet<String>,
+    /// Which request each change of a machine's queued job belongs to, in
+    /// the job's order (`None` for the follow and the daily check), so a
+    /// pass's outcomes are split per request (decisions 2026-11-19).
+    tags: BTreeMap<String, Vec<Option<String>>>,
+    /// The same for the pass each machine runs now.
+    running: BTreeMap<String, Vec<Option<String>>>,
+    /// The devices waiting for a copy of this Mac's store (B28), each with
+    /// its request, read on this Mac's kit worker one at a time.
+    exports: BTreeMap<String, String>,
+    /// The copy being read now, by device.
+    exporting: BTreeMap<String, String>,
     due: BTreeMap<String, Due>,
     marks: BTreeMap<String, Vec<SessionMark>>,
 }
@@ -108,7 +121,10 @@ impl Stores {
     /// A device that went takes its queued work, schedule and marks along.
     fn forget(&mut self, device_id: &str) {
         self.device_pending.remove(device_id);
+        self.tags.remove(device_id);
+        self.running.remove(device_id);
         self.exports.remove(device_id);
+        self.exporting.remove(device_id);
         self.due.remove(device_id);
         self.marks.remove(device_id);
     }
@@ -127,6 +143,11 @@ impl Stores {
     }
 }
 
+/// Now, in the store's milliseconds.
+pub(super) fn kit_store_now_ms() -> u64 {
+    now_unix_ms()
+}
+
 fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -136,42 +157,82 @@ fn now_unix_ms() -> u64 {
 }
 
 impl StoreAnswer {
-    fn pending(request_id: String, device_id: &str, changes: Vec<StoreChange>) -> Self {
+    fn pending(request_id: String, device_id: &str) -> Self {
         Self {
             request_id,
             device_id: device_id.to_owned(),
             state: AnswerState::Pending,
             outcomes: Vec::new(),
-            changes,
-            sent: false,
         }
-    }
-
-    fn refused(mut self) -> Self {
-        self.state = AnswerState::Refused;
-        self
     }
 }
 
 impl Runtime {
+    /// The answer to `request_id` on `device_id`, if the list still holds it.
+    fn store_answer_mut(&mut self, request_id: &str) -> Option<&mut StoreAnswer> {
+        self.snapshot
+            .status
+            .store_answers
+            .iter_mut()
+            .find(|answer| answer.request_id == request_id)
+    }
+
+    fn store_answer_known(&self, request_id: &str) -> bool {
+        self.snapshot
+            .status
+            .store_answers
+            .iter()
+            .any(|answer| answer.request_id == request_id)
+    }
+
+    /// Adds an answer to the list: past [`ANSWER_LIMIT`] the oldest finished
+    /// one goes; false when every one still waits, so nothing can go.
+    fn push_store_answer(&mut self, answer: StoreAnswer) -> bool {
+        let answers = &mut self.snapshot.status.store_answers;
+        while answers.len() >= ANSWER_LIMIT {
+            let Some(oldest) = answers
+                .iter()
+                .position(|kept| kept.state != AnswerState::Pending)
+            else {
+                return false;
+            };
+            answers.remove(oldest);
+        }
+        answers.push(answer);
+        true
+    }
+
+    /// A request reached its end: a `hide skill` / `hide mcp` command that
+    /// waits on it hears it.
+    fn store_answer_ended(&mut self, request_id: &str) {
+        let Some(answer) = self
+            .snapshot
+            .status
+            .store_answers
+            .iter()
+            .find(|answer| answer.request_id == request_id)
+            .cloned()
+        else {
+            return;
+        };
+        if answer.state == AnswerState::Pending {
+            return;
+        }
+        self.store_request_ended(&answer.request_id);
+    }
+
     /// The store screen asked for changes on one machine (`kit_store`): a
     /// cell or an item's switch, an install, an update, a delete, an undo, a
-    /// take-over or a check. The answer lands in `status.store_answer` under
-    /// `request_id`; the same request id again is the same intent, already
-    /// queued or answered (engineering rule 11).
+    /// take-over or a check. The answer lands in `status.store_answers`
+    /// under `request_id`; the same request id again is the same intent,
+    /// already queued or answered (engineering rule 11).
     pub(super) fn request_store_change(
         &mut self,
         device_id: &str,
         request_id: String,
         changes: Vec<StoreChange>,
     ) -> bool {
-        if self
-            .snapshot
-            .status
-            .store_answer
-            .as_ref()
-            .is_some_and(|answer| answer.request_id == request_id && answer.device_id == device_id)
-        {
+        if self.store_answer_known(&request_id) {
             return false;
         }
         let refusal = if changes.is_empty() || changes.len() > REQUEST_CHANGES_LIMIT {
@@ -192,17 +253,34 @@ impl Runtime {
         } else {
             self.store_request_refusal(device_id, &request_id, changes.len())
         };
-        let answer = StoreAnswer::pending(
-            request_id,
-            device_id,
-            changes.iter().map(StoreChange::redacted).collect(),
-        );
+        self.start_store_request(device_id, request_id, changes, refusal)
+    }
+
+    /// Answers `request_id` refused for `refusal`, or queues its changes
+    /// with an answer waiting. True: the snapshot changed.
+    pub(super) fn start_store_request(
+        &mut self,
+        device_id: &str,
+        request_id: String,
+        changes: Vec<StoreChange>,
+        refusal: Option<(&'static str, String)>,
+    ) -> bool {
+        let answer = StoreAnswer::pending(request_id.clone(), device_id);
         if let Some(refusal) = refusal {
             self.refuse_store_request(answer, refusal);
             return true;
         }
-        self.snapshot.status.store_answer = Some(answer);
-        self.queue_store(device_id, StoreJob::Pass(changes), true);
+        if !self.push_store_answer(answer.clone()) {
+            self.refuse_store_request(
+                answer,
+                (
+                    "store.busy",
+                    format!("{ANSWER_LIMIT} store requests are waiting already"),
+                ),
+            );
+            return true;
+        }
+        self.queue_store(device_id, StoreJob::Pass(changes), true, Some(&request_id));
         true
     }
 
@@ -211,16 +289,10 @@ impl Runtime {
     /// item, with its files and an MCP server's key values, is handed to the
     /// device as a `Receive` change over the device link. What is read stays
     /// in the core's memory until the device's pass takes it; the answer
-    /// lands in `status.store_answer` like any request, with nothing of a
+    /// lands in `status.store_answers` like any request, with nothing of a
     /// file's bytes or a key's value in it.
     pub(super) fn request_store_copy(&mut self, device_id: &str, request_id: String) -> bool {
-        if self
-            .snapshot
-            .status
-            .store_answer
-            .as_ref()
-            .is_some_and(|answer| answer.request_id == request_id && answer.device_id == device_id)
-        {
+        if self.store_answer_known(&request_id) {
             return false;
         }
         let refusal = if device_id == self.node.as_str() {
@@ -228,21 +300,39 @@ impl Runtime {
                 "store.bad_request",
                 "a copy goes from this Mac to a device".to_owned(),
             ))
+        } else if self.stores.exports.contains_key(device_id)
+            || self.stores.exporting.contains_key(device_id)
+        {
+            Some((
+                "store.busy",
+                format!("a copy to {device_id} is on its way already"),
+            ))
         } else {
             self.store_request_refusal(device_id, &request_id, 0)
         };
-        let answer = StoreAnswer::pending(request_id, device_id, Vec::new());
+        let answer = StoreAnswer::pending(request_id.clone(), device_id);
         if let Some(refusal) = refusal {
             self.refuse_store_request(answer, refusal);
             return true;
         }
-        self.snapshot.status.store_answer = Some(answer);
-        self.stores.exports.insert(device_id.to_owned());
+        if !self.push_store_answer(answer.clone()) {
+            self.refuse_store_request(
+                answer,
+                (
+                    "store.busy",
+                    format!("{ANSWER_LIMIT} store requests are waiting already"),
+                ),
+            );
+            return true;
+        }
+        self.stores
+            .exports
+            .insert(device_id.to_owned(), request_id);
         true
     }
 
     /// Why a store request for `device_id` cannot be queued, if it cannot.
-    fn store_request_refusal(
+    pub(super) fn store_request_refusal(
         &self,
         device_id: &str,
         request_id: &str,
@@ -275,7 +365,9 @@ impl Runtime {
         }
     }
 
-    fn refuse_store_request(&mut self, answer: StoreAnswer, (code, reason): (&str, String)) {
+    /// Lists `answer` refused, with why in the log; a request id the list
+    /// holds already keeps its first answer.
+    fn refuse_store_request(&mut self, mut answer: StoreAnswer, (code, reason): (&str, String)) {
         crate::diagnostic!(serde_json::json!({
             "component": "store",
             "kind": "request.refused",
@@ -284,7 +376,36 @@ impl Runtime {
             "code": code,
             "reason": reason,
         }));
-        self.snapshot.status.store_answer = Some(answer.refused());
+        answer.state = AnswerState::Refused;
+        let request_id = answer.request_id.clone();
+        match self.store_answer_mut(&request_id) {
+            Some(kept) => *kept = answer,
+            None => {
+                // A full list of waiting answers still says this one ended.
+                let answers = &mut self.snapshot.status.store_answers;
+                if answers.len() >= ANSWER_LIMIT {
+                    answers.remove(0);
+                }
+                answers.push(answer);
+            }
+        }
+        self.store_answer_ended(&request_id);
+    }
+
+    /// Ends every request still waiting on `device_id` refused: its link or
+    /// registration went, so no pass will answer them.
+    fn refuse_waiting_on(&mut self, device_id: &str, code: &'static str, reason: &str) {
+        let waiting = self
+            .snapshot
+            .status
+            .store_answers
+            .iter()
+            .filter(|answer| answer.state == AnswerState::Pending && answer.device_id == device_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        for answer in waiting {
+            self.refuse_store_request(answer, (code, reason.to_owned()));
+        }
     }
 
     /// A device whose link or registration went takes its queued store
@@ -292,49 +413,43 @@ impl Runtime {
     /// pass will answer it.
     pub(super) fn forget_store(&mut self, device_id: &str) {
         self.stores.forget(device_id);
-        let waiting = self.snapshot.status.store_answer.take_if(|answer| {
-            answer.state == AnswerState::Pending && answer.device_id == device_id
-        });
-        if let Some(answer) = waiting {
-            self.refuse_store_request(
-                answer,
-                (
-                    "device_gone",
-                    "the machine's link ended before its store answered".to_owned(),
-                ),
-            );
-        }
+        self.forget_store_runs(device_id);
+        self.refuse_waiting_on(
+            device_id,
+            "device_gone",
+            "the machine's link ended before its store answered",
+        );
     }
 
     /// The next device waiting for a copy of this Mac's store, once this
     /// Mac's kit worker has nothing else to run.
     pub(crate) fn take_store_export(&mut self) -> Option<String> {
-        self.stores.exports.pop_first()
+        let (device_id, request_id) = self.stores.exports.pop_first()?;
+        self.stores
+            .exporting
+            .insert(device_id.clone(), request_id);
+        Some(device_id)
     }
 
     /// What this Mac's store answered for a copy to `device_id`: each item
-    /// goes to the device as a `Receive` change, and the request waits for
-    /// the device's pass; a store that could not be read, or a copy past
-    /// what the device may hold queued, ends the request refused. True when
-    /// the snapshot changed.
+    /// goes to the device as a `Receive` change of the copy's request, and
+    /// the request waits for the device's pass; a store that could not be
+    /// read, or a copy past what the device may hold queued, ends the
+    /// request refused. True when the snapshot changed.
     pub(crate) fn ingest_store_export(
         &mut self,
         device_id: &str,
         exported: Result<hide_kit::store::StoreExport, String>,
     ) -> bool {
-        let waiting = |runtime: &Runtime| {
-            runtime
-                .snapshot
-                .status
-                .store_answer
-                .as_ref()
-                .is_some_and(|answer| {
-                    answer.state == AnswerState::Pending
-                        && answer.device_id == device_id
-                        && !answer.sent
-                        && answer.changes.is_empty()
-                })
+        let Some(request_id) = self.stores.exporting.remove(device_id) else {
+            return false;
         };
+        let waiting = self
+            .snapshot
+            .status
+            .store_answers
+            .iter()
+            .any(|answer| answer.request_id == request_id && answer.state == AnswerState::Pending);
         let reason = match exported {
             Err(reason) => reason,
             Ok(export) => match export.refused {
@@ -349,6 +464,14 @@ impl Runtime {
                 None if !self.device_registration_exists(device_id) => {
                     format!("Device {device_id} is not registered")
                 }
+                None if !waiting => return false,
+                None if export.items.is_empty() => {
+                    if let Some(answer) = self.store_answer_mut(&request_id) {
+                        answer.state = AnswerState::Done;
+                    }
+                    self.store_answer_ended(&request_id);
+                    return true;
+                }
                 None => {
                     let changes = export
                         .items
@@ -357,24 +480,8 @@ impl Runtime {
                             item: Box::new(item),
                         })
                         .collect::<Vec<_>>();
-                    let answered = waiting(self);
-                    if let Some(answer) = self
-                        .snapshot
-                        .status
-                        .store_answer
-                        .as_mut()
-                        .filter(|_| answered)
-                    {
-                        if changes.is_empty() {
-                            answer.state = AnswerState::Done;
-                            return true;
-                        }
-                        answer.changes = changes.iter().map(StoreChange::redacted).collect();
-                    }
-                    if !changes.is_empty() {
-                        self.queue_store(device_id, StoreJob::Pass(changes), true);
-                    }
-                    return answered;
+                    self.queue_store(device_id, StoreJob::Pass(changes), true, Some(&request_id));
+                    return true;
                 }
             },
         };
@@ -382,21 +489,35 @@ impl Runtime {
             "component": "store",
             "kind": "copy.refused",
             "device_id": device_id,
+            "request_id": request_id,
             "reason": reason,
         }));
-        if !waiting(self) {
+        if !waiting {
             return false;
         }
-        if let Some(answer) = self.snapshot.status.store_answer.as_mut() {
+        if let Some(answer) = self.store_answer_mut(&request_id) {
             answer.state = AnswerState::Refused;
         }
+        self.store_answer_ended(&request_id);
         true
     }
 
-    /// Queues store work for a machine. A device that is not connected is
-    /// asked to connect only for the operator's own request; the follow and
-    /// the daily check wait for a link that is there.
-    fn queue_store(&mut self, device_id: &str, job: StoreJob, connect: bool) {
+    /// Queues store work for a machine, its changes tagged with `request`.
+    /// A device that is not connected is asked to connect only for the
+    /// operator's own request; the follow and the daily check wait for a
+    /// link that is there.
+    fn queue_store(
+        &mut self,
+        device_id: &str,
+        job: StoreJob,
+        connect: bool,
+        request: Option<&str>,
+    ) {
+        let tags = self.stores.tags.entry(device_id.to_owned()).or_default();
+        tags.extend(std::iter::repeat_n(
+            request.map(str::to_owned),
+            job.changes().len(),
+        ));
         if device_id == self.node.as_str() {
             let merged = match self.stores.local_pending.take() {
                 Some(before) => before.merge(job),
@@ -426,33 +547,21 @@ impl Runtime {
     pub(crate) fn take_local_store_job(&mut self) -> Option<StoreJob> {
         let job = self.stores.local_pending.take()?;
         let node = self.node.clone();
-        self.store_job_taken(node.as_str(), &job);
+        self.store_job_taken(node.as_str());
         Some(job)
     }
 
     /// A device's store work, once no kit job waits for it.
     pub(super) fn take_device_store_job(&mut self, device_id: &str) -> Option<StoreJob> {
         let job = self.stores.device_pending.remove(device_id)?;
-        self.store_job_taken(device_id, &job);
+        self.store_job_taken(device_id);
         Some(job)
     }
 
-    /// The screen's request is on its way when the pass ends with its
-    /// changes: a request queued after it ends a later pass.
-    fn store_job_taken(&mut self, device_id: &str, job: &StoreJob) {
-        if let Some(answer) = self.snapshot.status.store_answer.as_mut()
-            && answer.state == AnswerState::Pending
-            && answer.device_id == device_id
-            && !answer.changes.is_empty()
-            && job
-                .changes()
-                .iter()
-                .map(StoreChange::redacted)
-                .collect::<Vec<_>>()
-                .ends_with(&answer.changes)
-        {
-            answer.sent = true;
-        }
+    /// The requests a taken job carries are the ones its pass answers.
+    fn store_job_taken(&mut self, device_id: &str) {
+        let tags = self.stores.tags.remove(device_id).unwrap_or_default();
+        self.stores.running.insert(device_id.to_owned(), tags);
     }
 
     /// Queues the follow of each machine whose store follows a folder, and
@@ -505,18 +614,18 @@ impl Runtime {
                 job = Some(StoreJob::Follow);
             }
             if let Some(job) = job {
-                self.queue_store(&machine, job, false);
+                self.queue_store(&machine, job, false, None);
             }
         }
     }
 
     /// What a machine's store answered. A report replaces the last one and
-    /// answers the screen's request that its pass carried; nothing changed
-    /// keeps the last; a call that did not run keeps the last report and
-    /// ends the request it carried. True when the snapshot changed.
+    /// answers the requests its pass carried; nothing changed keeps the
+    /// last; a call that did not run keeps the last report and ends the
+    /// requests it carried. True when the snapshot changed.
     pub(crate) fn ingest_store_answer(&mut self, device_id: &str, answered: StoreAnswered) -> bool {
         match answered {
-            Ok(None) => false,
+            Ok(None) => self.end_running_store(device_id, None),
             Ok(Some(report)) => self.ingest_store_report(device_id, report),
             Err(reason) => {
                 crate::diagnostic!(serde_json::json!({
@@ -525,7 +634,7 @@ impl Runtime {
                     "device_id": device_id,
                     "reason": reason,
                 }));
-                self.end_sent_store_answer(device_id, None)
+                self.end_running_store(device_id, None)
             }
         }
     }
@@ -539,9 +648,9 @@ impl Runtime {
                 "device_id": device_id,
                 "reason": reason,
             }));
-            self.end_sent_store_answer(device_id, None)
+            self.end_running_store(device_id, None)
         } else {
-            self.end_sent_store_answer(device_id, Some(outcomes))
+            self.end_running_store(device_id, Some(outcomes))
         };
         let mut state = self.kit_state(device_id);
         let last = state.store.take();
@@ -550,6 +659,7 @@ impl Runtime {
         let next = match (report.refused.is_some(), last.clone()) {
             (true, Some(mut kept)) => {
                 kept.refused = report.refused;
+                kept.refusal = report.refusal;
                 kept
             }
             (_, _) => report,
@@ -558,6 +668,7 @@ impl Runtime {
         state.store = Some(next);
         state.store_new_session = self.store_new_session(device_id);
         changed |= self.set_kit_state(device_id, state);
+        changed |= self.store_report_landed(device_id);
         changed
     }
 
@@ -575,36 +686,62 @@ impl Runtime {
         now.store_new_session = self.store_new_session(device_id);
     }
 
-    /// Ends the screen's request a pass carried: with the pass's outcomes,
-    /// the last of which are the request's, or refused when the call or the
-    /// pass did not run.
-    fn end_sent_store_answer(
+    /// Ends the requests the machine's running pass carried: each with its
+    /// own changes' outcomes, in order, or refused when the call or the pass
+    /// did not run (`None`), or when the outcomes do not line up with the
+    /// changes sent. True when an answer changed.
+    fn end_running_store(
         &mut self,
         device_id: &str,
         outcomes: Option<Vec<hide_kit::store::ChangeOutcome>>,
     ) -> bool {
-        let Some(answer) = self.snapshot.status.store_answer.as_mut() else {
-            return false;
-        };
-        if answer.state != AnswerState::Pending || answer.device_id != device_id || !answer.sent {
+        let tags = self.stores.running.remove(device_id).unwrap_or_default();
+        let mut requests: Vec<&str> = Vec::new();
+        for tag in tags.iter().flatten() {
+            if !requests.contains(&tag.as_str()) {
+                requests.push(tag);
+            }
+        }
+        if requests.is_empty() {
             return false;
         }
-        match outcomes {
-            Some(outcomes) if outcomes.len() >= answer.changes.len() => {
-                let mine = outcomes[outcomes.len() - answer.changes.len()..].to_vec();
-                if mine
-                    .iter()
-                    .zip(&answer.changes)
-                    .any(|(outcome, change)| &outcome.change != change)
-                {
-                    // Not the pass that carried it: a later one answers.
-                    return false;
-                }
-                answer.outcomes = mine;
-                answer.state = AnswerState::Done;
+        let outcomes = match outcomes {
+            Some(outcomes) if outcomes.len() == tags.len() => Some(outcomes),
+            Some(outcomes) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "store",
+                    "kind": "pass.outcomes_mismatch",
+                    "device_id": device_id,
+                    "changes": tags.len(),
+                    "outcomes": outcomes.len(),
+                }));
+                None
             }
-            Some(_) => return false,
-            None => answer.state = AnswerState::Refused,
+            None => None,
+        };
+        let requests = requests.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        for request in &requests {
+            let mine = outcomes.as_ref().map(|outcomes| {
+                tags.iter()
+                    .zip(outcomes)
+                    .filter(|(tag, _)| tag.as_deref() == Some(request.as_str()))
+                    .map(|(_, outcome)| outcome.clone())
+                    .collect::<Vec<_>>()
+            });
+            let Some(answer) = self.store_answer_mut(request) else {
+                continue;
+            };
+            if answer.state != AnswerState::Pending {
+                continue;
+            }
+            match mine {
+                Some(mine) => {
+                    answer.outcomes = mine;
+                    answer.state = AnswerState::Done;
+                }
+                None => answer.state = AnswerState::Refused,
+            }
+            self.store_answer_ended(request);
         }
         true
     }

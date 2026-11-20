@@ -51,6 +51,7 @@ pub mod pane_cli;
 pub mod pane_install;
 pub mod plan_cli;
 pub mod profile_cli;
+pub mod store_cli;
 mod project_open;
 
 pub mod guest_node;

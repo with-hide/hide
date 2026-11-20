@@ -58,6 +58,7 @@ pub mod links;
 pub mod live;
 pub mod local_issues;
 pub mod memory_command;
+pub mod store_command;
 pub mod memory_hook;
 mod memory_pressure;
 pub mod mission_criteria;

@@ -62,7 +62,9 @@ fn store_report(outcomes: Vec<ChangeOutcome>, checked_at_unix_ms: Option<u64>) -
             version: Version::Tag("v1.0".to_owned()),
             update: Some(Version::Tag("v1.1".to_owned())),
             on: true,
+            off_for: Default::default(),
             folder_missing: false,
+            description: None,
             files: Vec::new(),
             server: None,
             cells: vec![
@@ -83,8 +85,9 @@ fn answer(shared: &Mutex<Runtime>) -> Option<crate::model::StoreAnswer> {
         .unwrap()
         .snapshot()
         .status
-        .store_answer
-        .clone()
+        .store_answers
+        .last()
+        .cloned()
 }
 
 fn store_calls(helper: &KitDevice) -> Vec<KitAction> {
@@ -535,7 +538,7 @@ fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
     .unwrap();
     assert!(wire.contains("github"), "the snapshot carries the request");
     assert!(!wire.contains(KEY), "{wire}");
-    let answered = runtime.snapshot.status.store_answer.clone().unwrap();
+    let answered = runtime.snapshot.status.store_answers.last().cloned().unwrap();
     assert!(!format!("{answered:?}").contains(KEY));
     assert!(!format!("{change:?}").contains(KEY));
     assert!(!records.is_empty());

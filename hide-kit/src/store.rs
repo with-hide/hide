@@ -752,8 +752,17 @@ pub struct ItemReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<Version>,
     pub on: bool,
+    /// The columns switched off while the item is on ([`StoreItem::off_for`]),
+    /// so the screen sends a column's own switch, or tries a failed cell
+    /// again, with what the operator last set there (B16, B26).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub off_for: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub folder_missing: bool,
+    /// A skill's description, as its `SKILL.md` gives it, for the unfolded
+    /// row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The skill's files, for the confirm screens.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<FileEntry>,
@@ -836,6 +845,23 @@ pub struct StoreReport {
     /// changed; the sentence says why.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// What kind of refusal `refused` is, for the screen to word: the log
+    /// keeps the sentence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<StorePassRefusal>,
+}
+
+/// Why a whole pass did not run (`StoreReport::refused`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StorePassRefusal {
+    /// The store's key secret its record needs is gone: every pass is
+    /// refused and nothing is taken out, until the operator takes Hide's
+    /// MCP servers out of the agents' files and starts the store over
+    /// (docs/agent-hooks.md).
+    KeysSecretGone,
+    /// The store's folder, record or secret could not be read or saved.
+    Unreadable,
 }
 
 // --- Places and the per-kind seam ------------------------------------------------
@@ -1194,7 +1220,7 @@ fn run(
     let before = store.clone();
     let secret = match store_secret(&dir, &store, mode == Mode::Apply && dir.is_dir()) {
         Ok(secret) => secret,
-        Err(reason) => return refused(reason),
+        Err((reason, cause)) => return StoreReport::refused_as(reason, cause),
     };
     let ctx = Ctx {
         target,
@@ -1243,6 +1269,7 @@ fn run(
         log("store.save_failed", None, &reason);
         return StoreReport {
             refused: Some(format!("the store's changes were made, but {reason}")),
+            refusal: Some(StorePassRefusal::Unreadable),
             ..report
         };
     }
@@ -1256,9 +1283,14 @@ fn refused(reason: String) -> StoreReport {
 impl StoreReport {
     /// The report of a pass that could not read or lock the store.
     pub(crate) fn refused(reason: String) -> Self {
+        Self::refused_as(reason, StorePassRefusal::Unreadable)
+    }
+
+    pub(crate) fn refused_as(reason: String, cause: StorePassRefusal) -> Self {
         log("store.refused", None, &reason);
         Self {
             refused: Some(reason),
+            refusal: Some(cause),
             ..Self::default()
         }
     }
@@ -1301,18 +1333,21 @@ fn store_secret(
     dir: &Path,
     store: &StoreRecord,
     make: bool,
-) -> Result<Option<crate::mcp_keys::KeysSecret>, String> {
+) -> Result<Option<crate::mcp_keys::KeysSecret>, (String, StorePassRefusal)> {
     let keyed = store
         .written
         .values()
         .any(|place| place.entries.values().any(|written| written.keys.is_some()));
     match crate::mcp_keys::secret(dir, make && !keyed) {
-        Ok(None) if keyed => Err(format!(
-            "{} is gone, so Hide cannot tell the MCP servers it wrote from ones changed by hand; the store is left as it is",
-            dir.join(crate::mcp_keys::SECRET_FILE).display()
+        Ok(None) if keyed => Err((
+            format!(
+                "{} is gone, so Hide cannot tell the MCP servers it wrote from ones changed by hand; the store is left as it is",
+                dir.join(crate::mcp_keys::SECRET_FILE).display()
+            ),
+            StorePassRefusal::KeysSecretGone,
         )),
         Ok(secret) => Ok(secret),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err((error.to_string(), StorePassRefusal::Unreadable)),
     }
 }
 
@@ -1337,7 +1372,7 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, crate::RemoveOutcome)> 
     // so the store stays rather than leave them in the agents' files.
     let secret = match store_secret(&dir, &store, false) {
         Ok(secret) => secret,
-        Err(reason) => {
+        Err((reason, _)) => {
             log("store.secret_unreadable", None, &reason);
             return vec![("store".to_owned(), RemoveOutcome::Failed { reason })];
         }
@@ -2519,6 +2554,7 @@ fn report(
             .any(|item| matches!(item.source, Source::Folder { .. })),
         outcomes,
         refused: None,
+        refusal: None,
     }
 }
 
@@ -2573,7 +2609,12 @@ fn item_report(
         version: item.version(),
         update: item.update(),
         on: item.on,
+        off_for: item.off_for.clone(),
         folder_missing: item.folder_missing,
+        description: match &item.body {
+            ItemBody::Skill(body) => body.description.clone(),
+            ItemBody::Mcp(_) => None,
+        },
         files: match &item.body {
             ItemBody::Skill(body) => body.files.clone(),
             ItemBody::Mcp(_) => Vec::new(),

@@ -89,7 +89,7 @@
   "request_verb": ["answer", "blocked", "fix", "review", "stopped", "result", "working", "waiting", "idle"],
   "user_turn_kind": ["plan_approval", "question"],
   "ask_subject_cause": ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"],
-  "human_kind": ["auth", "permission"],
+  "human_kind": ["auth", "permission", "install"],
   "review_decision": ["review_required", "changes_requested", "approved"],
   "pr_reviewer_state": ["changes_requested", "approved", "requested", "commented", "dismissed"],
   "session_group": ["needs_you", "working", "done", "idle", "resolved"],
@@ -170,5 +170,6 @@
   "store_item_kind": ["skill", "mcp"],
   "store_cell_state": ["on", "off", "waiting", "hand_written", "failed", "unsupported", "agent_off"],
   "store_refusal_cause": ["not_found", "no_skills", "no_access", "unreachable", "no_git", "too_large", "name_taken", "differs", "too_many", "unsupported", "failed"],
-  "store_file_change": ["added", "removed", "modified"]
+  "store_file_change": ["added", "removed", "modified"],
+  "store_pass_refusal": ["keys_secret_gone", "unreadable"]
 }

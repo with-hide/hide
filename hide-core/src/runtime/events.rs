@@ -1389,7 +1389,7 @@ pub(super) struct KitAgentSetPayload {
 
 /// The store screen asked for changes to one machine's store of skills and
 /// MCP items (PRD skill-mcp-manager), in order; the answer lands in
-/// `status.store_answer` under `request_id`.
+/// `status.store_answers` under `request_id`.
 #[derive(Debug, Deserialize)]
 pub(super) struct KitStorePayload {
     pub(super) device_id: String,
@@ -1399,7 +1399,7 @@ pub(super) struct KitStorePayload {
 
 /// The store screen's [이 Mac에서 복사] for one device (PRD skill-mcp-manager
 /// B28): this Mac's store goes to that device's; the answer lands in
-/// `status.store_answer` under `request_id`.
+/// `status.store_answers` under `request_id`.
 #[derive(Debug, Deserialize)]
 pub(super) struct KitStoreCopyPayload {
     pub(super) device_id: String,
@@ -1857,6 +1857,7 @@ pub(super) enum Event {
     KitAgentSet(KitAgentSetPayload),
     KitStore(KitStorePayload),
     KitStoreCopy(KitStoreCopyPayload),
+    StoreAskAnswer(super::store_cli::StoreAskAnswerPayload),
     AgentPermissionSet(super::agent_permission::AgentPermissionSetPayload),
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
@@ -2220,6 +2221,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "kit_agent_set" => decode!(KitAgentSetPayload, KitAgentSet),
         "kit_store" => decode!(KitStorePayload, KitStore),
         "kit_store_copy" => decode!(KitStoreCopyPayload, KitStoreCopy),
+        "store_ask_answer" => decode!(super::store_cli::StoreAskAnswerPayload, StoreAskAnswer),
         "agent_permission_set" => decode!(
             super::agent_permission::AgentPermissionSetPayload,
             AgentPermissionSet
@@ -2635,6 +2637,7 @@ impl Runtime {
             Event::KitStoreCopy(payload) => {
                 self.request_store_copy(&payload.device_id, payload.request_id)
             }
+            Event::StoreAskAnswer(payload) => self.answer_store_ask(payload),
             Event::CodexDaemonDisable(payload) => {
                 self.request_codex_daemon_disable(&payload.device_id)
             }
