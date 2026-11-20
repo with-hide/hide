@@ -2361,6 +2361,7 @@ impl Runtime {
                     answer_failed: None,
                     delay: None,
                     delay_until_unix_ms: None,
+                    put_away_unix_ms: None,
                     report: None,
                     folder_line: None,
                     created_at_unix_ms: now,
@@ -5465,7 +5466,20 @@ impl Runtime {
             let Some(since) = oldest else { continue };
             let owner = match mission.tool.as_ref().filter(|tool| tool.owns) {
                 Some(tool) => kept.entry(tool.connection.clone()),
-                None => waiting.entry(mission.device_id.clone()),
+                None => {
+                    // A row the operator put away stays out until a newer raise asks them.
+                    let put_away = self
+                        .missions
+                        .book
+                        .get(&mission.id)
+                        .and_then(|record| record.put_away_unix_ms);
+                    if put_away.is_some_and(|at| {
+                        newest_ask_since(mission).is_some_and(|newest| newest <= at)
+                    }) {
+                        continue;
+                    }
+                    waiting.entry(mission.device_id.clone())
+                }
             };
             owner.or_default().push((since, mission.id.clone()));
         }
@@ -5501,6 +5515,28 @@ impl Runtime {
 /// Since when `node`'s merge has been the operator's turn: from its finish,
 /// which a ready pull request the operator merges makes (`MergeStep::Due`);
 /// none for a node whose merge is not due.
+/// The newest of what a mission asks the operator now, by when each was
+/// raised: a node's own card, a merge due, a node its safety net holds (the
+/// net's own time while it holds none). None while it asks nothing; the
+/// operator's 치우기 holds the row out until this passes it.
+pub(super) fn newest_ask_since(mission: &MissionView) -> Option<u64> {
+    mission
+        .nodes
+        .iter()
+        .filter_map(|node| node.attention.as_ref())
+        .filter(|attention| attention.item)
+        .map(|attention| attention.since_unix_ms)
+        .chain(mission.nodes.iter().filter_map(merge_due_since))
+        .chain(mission.safety_net.iter().map(|net| {
+            net.nodes
+                .iter()
+                .map(|node| node.since_unix_ms)
+                .max()
+                .unwrap_or(net.since_unix_ms)
+        }))
+        .max()
+}
+
 fn merge_due_since(node: &NodeView) -> Option<u64> {
     node.merge
         .as_ref()

@@ -1900,6 +1900,7 @@ pub(super) enum Event {
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
     MissionHandover(MissionHandoverPayload),
+    MissionPutAway(MissionEndPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2286,6 +2287,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
+        "mission_put_away" => decode!(MissionEndPayload, MissionPutAway),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -4281,6 +4283,7 @@ impl Runtime {
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)
             }
+            Event::MissionPutAway(payload) => self.mission_put_away_event(&payload.mission),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),
