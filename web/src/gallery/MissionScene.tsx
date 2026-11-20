@@ -579,6 +579,9 @@ function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest
   const node = mission.nodes.find((one) => one.status === "planned") ?? mission.nodes[mission.nodes.length - 1]!;
   if (shown === "hold") {
     node.wait = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE, mission: false };
+    // A node at work whose worker Hide put to sleep beside it: a sleep, not a wait (letters-missions-simplify B23).
+    const sleeping = mission.nodes.find((one) => one.status === "working" && one !== node);
+    if (sleeping) Object.assign(sleeping, { agent_runtime: "asleep", work: { state: "asleep" } });
     return { mission, rest };
   }
   // The raise is the Conductor's; standing 31 minutes unsettled, it is the mission's safety net.

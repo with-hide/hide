@@ -516,7 +516,7 @@ export function nodePace(mission: Pick<Mission, "status">, node: Pick<MissionNod
   if (nodeLook(mission, node) !== "working") return null;
   const state = node.work?.state;
   if (state === "stopped" || state === "no_worker") return "stopped";
-  if (state === "waiting" || workerAsleep(node)) return "waiting";
+  if (state === "waiting" || state === "asleep" || workerAsleep(node)) return "waiting";
   return "working";
 }
 
@@ -865,7 +865,7 @@ export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork |
   return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
 }
 
-/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 잠듦`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
 export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
   switch (work.state) {
     case "working":
@@ -874,6 +874,8 @@ export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">
       return t("mission.work.stopped", { why: t("mission.work.stop.noWorker") });
     case "waiting":
       return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+    case "asleep":
+      return t("mission.worker.asleep");
     case "stopped":
       return t("mission.work.stopped", { why: stopCauseWords(work.cause, t) });
   }
