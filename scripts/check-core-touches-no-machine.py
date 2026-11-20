@@ -142,11 +142,12 @@ STORES = {
         "core's state file (`hide_ai::settings`)",
     ),
     "hide-core/src/node_migration.rs": (
-        17,
+        18,
         "converts the core's own stores to node ids once, where they were "
         "written, before any link exists (PRD core-host-node D-10), including "
         "listing the split mission folder's bodies and index for rewriting, "
-        "and leaves the old delivery ledger file alone beside its store",
+        "and looks for the delivery ledger's store and its old file, which "
+        "it imports first and never writes",
     ),
     "hide-core/src/node_migration/copy.rs": (
         62,

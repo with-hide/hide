@@ -1259,11 +1259,12 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
     // check needs none of the pairs found below.
     for (file, version_key, versions, convert) in JSON_STORES {
         let limit = stored_limit(file);
-        let path = state_dir.join(file);
-        if limit == usize::MAX || over_limit(&path, limit) || superseded(state_dir, file) {
+        if limit == usize::MAX {
             continue;
         }
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let Some((path, mut value)) = convertible(state_dir, file, false)
+            .map_err(|reason| refuse(&state_dir.join(file), reason))?
+        else {
             continue;
         };
         if !current(&value, version_key, versions) {
@@ -1335,25 +1336,23 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
     let project_ids: BTreeMap<String, String> = project_pairs.iter().cloned().collect();
 
     for (file, version_key, versions, convert) in JSON_STORES {
-        let path = state_dir.join(file);
-        // A store its own loader already refuses is left to that loader,
-        // as a store of an unknown version is.
-        if over_limit(&path, stored_limit(file)) || superseded(state_dir, file) {
-            continue;
-        }
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let Some((path, mut value)) = convertible(state_dir, file, true)
+            .map_err(|reason| refuse(&state_dir.join(file), reason))?
+        else {
             continue;
         };
         if !current(&value, version_key, versions) {
             continue;
         }
         if convert(&mut value, node.as_str(), &project_ids) {
-            let bytes =
-                serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
+            let kept_as = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| (*file).to_owned());
             backup
-                .copy(&path, file)
+                .copy(&path, &kept_as)
                 .map_err(|reason| refuse(&path, reason))?;
-            write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
+            write_store(&path, &value).map_err(|reason| refuse(&path, reason))?;
             outcome.files.push(path.display().to_string());
         }
     }
@@ -1385,11 +1384,37 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
     Ok(outcome)
 }
 
-/// Whether `file` is the old delivery ledger beside the store that replaced
-/// it: no start reads it again, and nothing writes it (D-20). A folder of
-/// `local` keys is converted before its first start imports the file.
-fn superseded(state_dir: &Path, file: &str) -> bool {
-    file == DELIVERY_LEDGER && state_dir.join(DELIVERY_STORE).exists()
+/// The JSON store `file` of `state_dir` a conversion rewrites, where it is
+/// kept and its value; `None` when there is none, or when its own loader is
+/// left to refuse it, as a store of an unknown version is.
+///
+/// The delivery ledger is converted in its store and its old file is only
+/// ever read (D-20, B27): with `import`, a folder an older build wrote is
+/// imported into the store first, as the core's start would import it;
+/// without, the check before anything is written reads the old file in
+/// place. A ledger the import refuses is left to the core's start, which
+/// refuses it again and keeps both files.
+fn convertible(
+    state_dir: &Path,
+    file: &str,
+    import: bool,
+) -> Result<Option<(PathBuf, Value)>, String> {
+    let limit = stored_limit(file);
+    let path = state_dir.join(file);
+    let store = store_path(state_dir, file);
+    if store == path || !(import || store.exists()) {
+        if over_limit(&path, limit) {
+            return Ok(None);
+        }
+        return Ok(read_json(&path)?.map(|value| (path, value)));
+    }
+    if !store.exists() && (!path.exists() || over_limit(&path, limit)) {
+        return Ok(None);
+    }
+    Ok(read_store(&store)
+        .ok()
+        .flatten()
+        .map(|value| (store, value)))
 }
 
 type JsonConverter = fn(&mut Value, &str, &BTreeMap<String, String>) -> bool;
@@ -2117,25 +2142,59 @@ mod tests {
             HOOK_FACTS,
             json!({"schema_version": 1, "panes": {"w1:p1": {"sessions": [], "seen_agent": true}}}),
         );
-        let actor = |device: &str| json!({"pane_id": "w1:p1", "name": "a", "kind": "claude", "device_id": device});
-        write(
-            DELIVERY_LEDGER,
-            json!({
-                "version": 1, "next_id": 9,
-                "letters": [{"sender": actor("local"), "recipient": actor("mini"),
-                             "watch_warning": {"target": actor("local")}}],
-                "watches": [{"parent": actor("local"), "target": actor("local")}],
-                "agents": [{"machine": "local", "native_machine": "local", "actor": actor("local"), "pane": "w1:p1", "host_scope": "/tmp/herdr.sock",
-                            "project": root, "session": "s1", "instance": "term_1"}],
-                "spawns": [{"repo": root, "path": root, "requested_path": root, "pane": "w1:p2", "machine": "mini",
-                            "task": {"kind": "memory_promote", "target": "m1"},
-                            "plan": {"plan": "1000", "step": "a", "attempt": 1,
-                                     "parent_session": {"device_id": NODE, "agent": "claude", "session_id": "s"}}}],
-                "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
-                                    "owed": {"for": "fork", "origin": "agent-1"}}],
-                "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
-            }),
-        );
+        // A ledger the core loads, so its first start imports it into its
+        // store: records of a released ledger's shape, given a value at every
+        // key `KEYS` names.
+        let released: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/release-state/v1.2.10/delivery-ledger.json"
+        ))
+        .unwrap();
+        let template = |list: &str, at: usize| released[list][at].clone();
+        let digest = crate::engine::tokens::session_digest("s1");
+        let actor = |device: &str| {
+            json!({"pane_id": "w1:p1", "name": "a", "kind": "claude", "device_id": device,
+                   "session": digest})
+        };
+        let with = |mut record: Value, fields: Value| {
+            for (key, value) in fields.as_object().unwrap() {
+                record[key] = value.clone();
+            }
+            record
+        };
+        let ledger = json!({
+            "version": 1, "next_id": 9,
+            "letters": [
+                // Delivered to a device's agent, as a letter on its clock is.
+                with(template("letters", 2), json!({"id": "letter-2", "intent": "to-mini",
+                    "sender": actor("local"), "recipient": actor("mini")})),
+                with(template("letters", 0), json!({"id": "letter-3", "intent": "watch-1",
+                    "kind": "watch", "sender": actor("local"), "recipient": actor("local"),
+                    "watch_warning": {"target": actor("local"), "activity_at_unix_ms": 1, "ordinal": 1}})),
+            ],
+            "watches": [with(template("watches", 0), json!({"id": "watch-4",
+                "parent": actor("local"), "target": actor("local")}))],
+            "agents": [with(template("agents", 0), json!({"id": "agent-1", "name": "a",
+                "machine": "local", "native_machine": "local", "actor": actor("local"),
+                "pane": "w1:p1", "terminal_id": "w1:p1", "host_scope": "/tmp/herdr.sock",
+                "project": root, "session": "s1", "instance": "term_1"}))],
+            "spawns": [with(template("spawns", 1), json!({"id": "spawn-5", "parent": "agent-1",
+                "mode": "handoff", "repo": root, "path": root, "requested_path": root,
+                "pane": "w1:p2", "machine": "mini", "child": null, "completed": false,
+                "auto_watch_id": null, "task": {"kind": "memory_promote", "target": "m1"},
+                "plan": {"plan": "1000", "step": "a", "attempt": 1,
+                         "parent_session": {"device_id": NODE, "agent": "claude", "session_id": "s"}}}))],
+            "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
+                                "owed": {"for": "fork", "origin": "agent-1"}}],
+            "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
+        });
+        crate::delivery::ledger::from_bytes(&serde_json::to_vec(&ledger).unwrap())
+            .expect("the legacy ledger is one the core loads");
+        // The core wrote its ledger private.
+        std::io::Write::write_all(
+            &mut hide_platform::fs::private::create_new_file(&state.join(DELIVERY_LEDGER)).unwrap(),
+            &serde_json::to_vec(&ledger).unwrap(),
+        )
+        .unwrap();
         write(
             "github-snapshot.json",
             json!({"projects": [{"root_path": root}]}),
@@ -2218,6 +2277,12 @@ mod tests {
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
     }
 
+    /// The JSON store `file` of `state` as a conversion left it: the
+    /// delivery ledger's from its store.
+    fn converted(state: &Path, file: &str) -> Value {
+        read_store(&store_path(state, file)).unwrap().unwrap()
+    }
+
     /// Every value a pointer pattern reaches; `*` is each array element or
     /// object value, `{key}` each object key, a number an array's element.
     pub(super) fn reach(value: &Value, pattern: &str) -> Vec<Value> {
@@ -2264,6 +2329,7 @@ mod tests {
     #[test]
     fn every_machine_bound_key_is_either_rewritten_to_the_node_or_owned_through_node_json() {
         let legacy = legacy();
+        let old_ledger = std::fs::read(legacy.state.join(DELIVERY_LEDGER)).unwrap();
         let before: BTreeMap<String, Value> = KEYS
             .iter()
             .filter(|(file, ..)| file.ends_with(".json"))
@@ -2284,7 +2350,7 @@ mod tests {
         for (file, pattern, mechanism, _) in
             KEYS.iter().filter(|(file, ..)| file.ends_with(".json"))
         {
-            let after = reach(&read(&legacy.state.join(file)), pattern);
+            let after = reach(&converted(&legacy.state, file), pattern);
             match mechanism {
                 Mechanism::Rewritten => {
                     assert!(
@@ -2301,9 +2367,15 @@ mod tests {
         }
         // No converted store names the legacy machine anywhere.
         for file in [CORE_STATE, WORKSPACE_VIEWS, LABELS, DELIVERY_LEDGER] {
-            let text = std::fs::read_to_string(legacy.state.join(file)).unwrap();
+            let text = converted(&legacy.state, file).to_string();
             assert!(!text.contains("\"local\""), "{file}: {text}");
         }
+        // The ledger was converted in its store; its old file is as the
+        // build before node ids left it, for that build to read (D-20).
+        assert_eq!(
+            std::fs::read(legacy.state.join(DELIVERY_LEDGER)).unwrap(),
+            old_ledger
+        );
         let core_state = read(&legacy.state.join(CORE_STATE));
         assert_eq!(core_state["workspace_registrations"][1]["device_id"], NODE);
         assert_eq!(
@@ -2316,7 +2388,7 @@ mod tests {
             read(&legacy.state.join(LABELS))["targets"][NODE]["w1:p1"]["owner"],
             "v1:a"
         );
-        let ledger = read(&legacy.state.join(DELIVERY_LEDGER));
+        let ledger = converted(&legacy.state, DELIVERY_LEDGER);
         assert_eq!(ledger["letters"][0]["recipient"]["device_id"], "mini");
         assert_eq!(ledger["agents"][0]["machine"], NODE);
         assert_eq!(ledger["agents"][0]["actor"]["device_id"], NODE);
@@ -2501,15 +2573,22 @@ mod tests {
     fn every_file_a_state_folder_holds_is_listed_with_how_its_machine_keys_are_kept() {
         let legacy = legacy();
         convert(&legacy.state, &node()).unwrap();
-        let listed: Vec<&str> = KEYS
+        // A file `KEYS` names is listed with the file that holds it: the
+        // delivery ledger's store.
+        let listed: Vec<String> = KEYS
             .iter()
-            .map(|(file, ..)| *file)
-            .chain(UNBOUND.iter().copied())
+            .flat_map(|(file, ..)| {
+                [
+                    (*file).to_owned(),
+                    store_path(Path::new(""), file).display().to_string(),
+                ]
+            })
+            .chain(UNBOUND.iter().map(|file| (*file).to_owned()))
             .collect();
         for entry in std::fs::read_dir(&legacy.state).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().into_owned();
             assert!(
-                listed.contains(&name.as_str()),
+                listed.contains(&name),
                 "{name} is in the state folder but neither KEYS nor UNBOUND names it"
             );
         }
@@ -2528,13 +2607,25 @@ mod tests {
             .map(|entry| entry.unwrap().path())
             .collect();
         assert_eq!(backups.len(), 1);
-        for file in [CORE_STATE, WORKSPACE_VIEWS, LABELS, DELIVERY_LEDGER] {
+        for file in [CORE_STATE, WORKSPACE_VIEWS, LABELS] {
             assert_eq!(
                 std::fs::read(backups[0].join(file)).unwrap(),
                 before[file],
                 "{file}"
             );
         }
+        // The ledger's original is its old file, which stays where it was;
+        // the backup keeps the store as the import made it, before its keys
+        // were rewritten.
+        assert_eq!(
+            std::fs::read(legacy.state.join(DELIVERY_LEDGER)).unwrap(),
+            before[DELIVERY_LEDGER]
+        );
+        assert!(!backups[0].join(DELIVERY_LEDGER).exists());
+        assert_eq!(
+            crate::delivery::store::load(&backups[0].join(DELIVERY_STORE)).unwrap(),
+            crate::delivery::ledger::from_bytes(&before[DELIVERY_LEDGER]).unwrap()
+        );
         assert!(backups[0].join(PROJECT_MEMORY).is_file());
         let copy = rusqlite::Connection::open(backups[0].join(LINKS)).unwrap();
         let legacy_rows: i64 = copy
@@ -2807,30 +2898,6 @@ mod tests {
             read(&dir.path().join(MARKER_FILE)),
             json!({"version": 1, "node": NODE})
         );
-    }
-
-    /// D-20: once the store holds the ledger, the old file beside it is
-    /// never written again, not even by a conversion of `local` keys an
-    /// older build wrote into it after the update.
-    #[test]
-    fn the_old_ledger_file_beside_its_store_is_never_converted() {
-        let dir = tempfile::tempdir().unwrap();
-        let actor = json!({"device_id": "local", "pane_id": "p"});
-        let bytes = serde_json::to_vec(&json!({
-            "version": 1,
-            "letters": [{"sender": actor, "recipient": actor}],
-        }))
-        .unwrap();
-        std::fs::write(dir.path().join(DELIVERY_LEDGER), &bytes).unwrap();
-        hide_platform::fs::private::create_new_file(&dir.path().join(DELIVERY_STORE)).unwrap();
-
-        let outcome = convert(dir.path(), &node()).unwrap();
-        assert!(outcome.files.is_empty(), "{outcome:?}");
-        assert_eq!(
-            std::fs::read(dir.path().join(DELIVERY_LEDGER)).unwrap(),
-            bytes
-        );
-        assert!(!dir.path().join(BACKUP_DIR).exists());
     }
 
     #[test]
