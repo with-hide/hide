@@ -132,27 +132,30 @@ const HELD_MAX_AGE: Duration = Duration::from_secs(60);
 /// this the notice is dropped. At most one waits per agent tag (a newer notice for the tag replaces it, as it replaces
 /// the older one on the phone), and the link's coming up sends each once.
 struct Held {
+    notice: Outgoing,
+    at: std::time::Instant,
+}
+
+/// One notice on its way to one phone, whole from the follower's pass to its send: a job's (`send_jobs`), and the
+/// same value through a hold for the relay link (`Held`, `flush_held`). It carries what is sent and what decides,
+/// each time it is about to go, whether it still does: its serial says whether its root still waits
+/// (`LiveNotices`), and `placed` whether the phones' rest holds it back (`Mobile::rested`).
+#[derive(Clone, Debug)]
+struct Outgoing {
     payload: Value,
     /// A waiting root's notice's serial (`LiveNotices`); `None` for a human delivery notice.
     generation: Option<u64>,
-    at: std::time::Instant,
+    /// The place rule gave this notice to the phones because no computer takes it (`Judged::placed`): no computer
+    /// shows it later, so it goes whatever the phones' rest says, at its first send and after a hold alike.
+    placed: bool,
 }
 
 /// Puts a notice at the end of a phone's held queue: it replaces the one held for the same agent tag, and the oldest
 /// go past `HELD_PER_PHONE`.
-fn hold_in(
-    held: &mut VecDeque<Held>,
-    payload: Value,
-    generation: Option<u64>,
-    at: std::time::Instant,
-) {
-    let tag = payload.get("tag").cloned();
-    held.retain(|older| older.payload.get("tag") != tag.as_ref());
-    held.push_back(Held {
-        payload,
-        generation,
-        at,
-    });
+fn hold_in(held: &mut VecDeque<Held>, notice: Outgoing, at: std::time::Instant) {
+    let tag = notice.payload.get("tag").cloned();
+    held.retain(|older| older.notice.payload.get("tag") != tag.as_ref());
+    held.push_back(Held { notice, at });
     while held.len() > HELD_PER_PHONE {
         held.pop_front();
     }
@@ -202,15 +205,11 @@ pub(crate) enum Handoff {
     Tried,
 }
 
-/// One notice for one phone, and its serial (`LiveNotices`).
+/// One notice for one phone.
 struct Job {
     phone_id: String,
     route: Route,
-    payload: Value,
-    generation: u64,
-    /// The place rule gave this notice to the phones because no computer
-    /// takes it ([`Judged::placed`]): it goes whatever the rest says.
-    placed: bool,
+    notice: Outgoing,
 }
 
 /// What one follower pass gives the phones ([`judge_pass`]).
@@ -2254,19 +2253,33 @@ impl Mobile {
 
     /// Sends one notice to an iOS app phone, or keeps it when the relay link is not up yet. Blocking, like
     /// `push_to_app`; the outcome is a diagnostic naming the reason, never the notice. `generation` is a waiting
-    /// root's notice's serial (`LiveNotices`), which a hold checks; `None` is a notice no close withdraws.
+    /// root's notice's serial (`LiveNotices`), which a hold checks; `None` is a notice no close withdraws. A notice
+    /// handed in here is none the place rule gave the phones; a follower's job goes through `send_or_hold` whole.
     pub fn push_or_hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) {
-        match self.push_to_app(phone_id, &payload) {
+        self.send_or_hold(
+            phone_id,
+            Outgoing {
+                payload,
+                generation,
+                placed: false,
+            },
+        );
+    }
+
+    /// [`Mobile::push_or_hold`] of a notice on its way, kept whole when it is held, so the send after the hold
+    /// decides as this one did.
+    fn send_or_hold(&self, phone_id: &str, notice: Outgoing) {
+        match self.push_to_app(phone_id, &notice.payload) {
             Ok(()) => {
                 // A live send is newer than anything held for the tag.
-                self.forget_held(phone_id, &payload);
+                self.forget_held(phone_id, &notice.payload);
                 hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
-                    "route": "app", "tag": payload.get("tag"),
+                    "route": "app", "tag": notice.payload.get("tag"),
                 }));
             }
             Err("relay_unavailable") => {
-                let kind = if self.hold(phone_id, payload, generation) {
+                let kind = if self.hold(phone_id, notice) {
                     "push.held"
                 } else {
                     "push.withdrawn"
@@ -2286,20 +2299,29 @@ impl Mobile {
 
     /// Keeps a notice for `phone_id` until the relay link is up, replacing the one held for the same agent tag and
     /// dropping the oldest past `HELD_PER_PHONE`; a waiting notice whose root stopped waiting is not kept (`false`).
-    fn hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) -> bool {
+    fn hold(&self, phone_id: &str, notice: Outgoing) -> bool {
         let mut inner = self.lock();
-        if !inner.live.is_current(&payload, generation) {
+        if !inner.live.is_current(&notice.payload, notice.generation) {
             return false;
         }
         let held = inner.held.entry(phone_id.to_owned()).or_default();
-        hold_in(held, payload, generation, std::time::Instant::now());
+        hold_in(held, notice, std::time::Instant::now());
         true
     }
 
     /// Whether a notice is still worth sending: always for a human delivery notice, and for a waiting root's only
     /// while its serial is current. Asked right before each send, under the lock a close takes.
-    fn is_current(&self, payload: &Value, generation: Option<u64>) -> bool {
-        self.lock().live.is_current(payload, generation)
+    fn is_current(&self, notice: &Outgoing) -> bool {
+        self.lock()
+            .live
+            .is_current(&notice.payload, notice.generation)
+    }
+
+    /// Whether the phones' rest holds `notice` back now: a waiting root's notice while a computer is in use
+    /// (`rests_phone`), unless the place rule gave it to the phones. The one answer for a notice about to go,
+    /// at its first send and after a hold; one held back is dropped, since nothing is retained for a later away.
+    fn rested(&self, notice: &Outgoing) -> bool {
+        notice.generation.is_some() && !notice.placed && self.rests_phone()
     }
 
     /// Closes waiting roots' notices: none of them is sent or held from now on, and what is held for them goes.
@@ -2309,7 +2331,7 @@ impl Mobile {
         }
         let Inner { live, held, .. } = inner;
         for queue in held.values_mut() {
-            queue.retain(|held| live.is_current(&held.payload, held.generation));
+            queue.retain(|held| live.is_current(&held.notice.payload, held.notice.generation));
         }
     }
 
@@ -2320,7 +2342,7 @@ impl Mobile {
         inner.live.current.clear();
         inner.phone_notices.reset();
         for queue in inner.held.values_mut() {
-            queue.retain(|held| held.generation.is_none());
+            queue.retain(|held| held.notice.generation.is_none());
         }
     }
 
@@ -2328,7 +2350,7 @@ impl Mobile {
     fn forget_held(&self, phone_id: &str, payload: &Value) {
         let tag = payload.get("tag");
         if let Some(held) = self.lock().held.get_mut(phone_id) {
-            held.retain(|older| older.payload.get("tag") != tag);
+            held.retain(|older| older.notice.payload.get("tag") != tag);
         }
     }
 
@@ -2349,18 +2371,18 @@ impl Mobile {
         let mobile = Arc::clone(self);
         Some(tokio::task::spawn_blocking(move || {
             let mut outcomes = Vec::new();
-            for (phone_id, held) in waiting {
+            for (phone_id, Held { notice, at }) in waiting {
                 if *mobile.stopping.borrow() {
                     break;
                 }
-                if held_expired(held.at, std::time::Instant::now()) {
+                if held_expired(at, std::time::Instant::now()) {
                     hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.expired", "phone_id": phone_id,
                     }));
                     outcomes.push(Handoff::Expired);
                     continue;
                 }
-                if !mobile.is_current(&held.payload, held.generation) {
+                if !mobile.is_current(&notice) {
                     hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.withdrawn", "phone_id": phone_id,
                         "route": "app", "after": "held",
@@ -2368,15 +2390,15 @@ impl Mobile {
                     outcomes.push(Handoff::Withdrawn);
                     continue;
                 }
-                if held.generation.is_some() && mobile.rests_phone() {
+                if mobile.rested(&notice) {
                     continue;
                 }
                 outcomes.push(Handoff::Tried);
-                let outcome = mobile.push_to_app(&phone_id, &held.payload);
+                let outcome = mobile.push_to_app(&phone_id, &notice.payload);
                 match outcome {
                     Ok(()) => hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
-                        "route": "app", "after": "held", "tag": held.payload.get("tag"),
+                        "route": "app", "after": "held", "tag": notice.payload.get("tag"),
                     })),
                     Err(reason) => hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
@@ -2776,9 +2798,11 @@ impl Mobile {
                         jobs.push(Job {
                             phone_id: phone_id.clone(),
                             route: route.clone(),
-                            payload,
-                            generation,
-                            placed: placed.contains(&notice.key),
+                            notice: Outgoing {
+                                payload,
+                                generation: Some(generation),
+                                placed: placed.contains(&notice.key),
+                            },
                         });
                     }
                     Err(reason) => {
@@ -2804,29 +2828,28 @@ impl Mobile {
         for Job {
             phone_id,
             route,
-            payload,
-            generation,
-            placed,
+            notice,
         } in jobs
         {
-            if !self.is_current(&payload, Some(generation)) {
+            if !self.is_current(&notice) {
                 hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.withdrawn", "phone_id": phone_id,
                 }));
                 outcomes.push(Handoff::Withdrawn);
                 continue;
             }
-            if !placed && self.rests_phone() {
+            if self.rested(&notice) {
                 continue;
             }
             outcomes.push(Handoff::Tried);
             let subscription = match route {
                 Route::Web(subscription) => subscription,
                 Route::App => {
-                    self.push_or_hold(&phone_id, payload, Some(generation));
+                    self.send_or_hold(&phone_id, notice);
                     continue;
                 }
             };
+            let payload = notice.payload;
             let Some(vapid) = self.vapid.as_ref() else {
                 hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
@@ -2861,7 +2884,7 @@ impl Mobile {
 
     /// The existing transport gate discards a waiting notice if computer use
     /// resumed after its follower pass. Nothing is retained for a later away.
-    /// A notice the place rule gave the phones is not asked ([`Job::placed`]).
+    /// A notice the place rule gave the phones is not asked ([`Mobile::rested`]).
     fn rests_phone(&self) -> bool {
         !push::mode_allows(
             self.lock().settings.push_mode,
@@ -2970,16 +2993,16 @@ mod tests {
     #[test]
     fn a_phones_held_queue_keeps_one_per_agent_and_at_most_eight() {
         let at = std::time::Instant::now();
-        let notice = |tag: &str, title: &str| json!({"tag": tag, "title": title});
+        let notice = |tag: &str, title: &str| outgoing(json!({"tag": tag, "title": title}), None);
         let titles = |held: &VecDeque<Held>| -> Vec<String> {
             held.iter()
-                .map(|held| held.payload["title"].as_str().unwrap().to_owned())
+                .map(|held| held.notice.payload["title"].as_str().unwrap().to_owned())
                 .collect()
         };
         let mut held = VecDeque::new();
-        hold_in(&mut held, notice("a", "first"), None, at);
-        hold_in(&mut held, notice("b", "other"), None, at);
-        hold_in(&mut held, notice("a", "newer"), None, at);
+        hold_in(&mut held, notice("a", "first"), at);
+        hold_in(&mut held, notice("b", "other"), at);
+        hold_in(&mut held, notice("a", "newer"), at);
         assert_eq!(
             titles(&held),
             ["other", "newer"],
@@ -2989,7 +3012,6 @@ mod tests {
             hold_in(
                 &mut held,
                 notice(&format!("t{number}"), &format!("n{number}")),
-                None,
                 at,
             );
         }
@@ -3218,9 +3240,11 @@ mod tests {
         let job = |placed| Job {
             phone_id: "phone".to_owned(),
             route: Route::App,
-            payload: tagged(&notice.key.tag()),
-            generation: mobile.lock().live.stamp(notice.key.tag()),
-            placed,
+            notice: Outgoing {
+                payload: tagged(&notice.key.tag()),
+                generation: Some(mobile.lock().live.stamp(notice.key.tag())),
+                placed,
+            },
         };
         assert_eq!(
             mobile.send_jobs(vec![job(false)], "mailto:hide@localhost"),
@@ -3347,6 +3371,15 @@ mod tests {
         json!({"tag": tag, "state": "needs_you", "title": tag})
     }
 
+    /// A notice on its way that the place rule did not give the phones.
+    fn outgoing(payload: Value, generation: Option<u64>) -> Outgoing {
+        Outgoing {
+            payload,
+            generation,
+            placed: false,
+        }
+    }
+
     fn closed(tag: &str) -> BTreeSet<AgentKey> {
         let (device_id, pane_id) = tag.split_once('|').unwrap();
         BTreeSet::from([AgentKey {
@@ -3370,9 +3403,7 @@ mod tests {
         let job = |generation| Job {
             phone_id: "phone".to_owned(),
             route: Route::App,
-            payload: tagged(tag),
-            generation,
-            placed: false,
+            notice: outgoing(tagged(tag), Some(generation)),
         };
         assert_eq!(
             mobile.send_jobs(vec![job(first), job(second)], "mailto:hide@localhost"),
@@ -3392,10 +3423,10 @@ mod tests {
         let (kept, gone) = ("node|w1:p1", "node|w1:p2");
         let kept_serial = mobile.lock().live.stamp(kept.to_owned());
         let gone_serial = mobile.lock().live.stamp(gone.to_owned());
-        assert!(mobile.hold("phone", tagged(kept), Some(kept_serial)));
-        assert!(mobile.hold("phone", tagged(gone), Some(gone_serial)));
+        assert!(mobile.hold("phone", outgoing(tagged(kept), Some(kept_serial))));
+        assert!(mobile.hold("phone", outgoing(tagged(gone), Some(gone_serial))));
         assert!(
-            mobile.hold("other", tagged(gone), None),
+            mobile.hold("other", outgoing(tagged(gone), None)),
             "a delivery notice"
         );
         // The flush has taken what is held when the root stops waiting.
@@ -3408,11 +3439,11 @@ mod tests {
             "the waiting notice and the delivery notice tried, the closed one withdrawn"
         );
         // Closed before the hold: not kept.
-        assert!(!mobile.hold("phone", tagged(gone), Some(gone_serial)));
+        assert!(!mobile.hold("phone", outgoing(tagged(gone), Some(gone_serial))));
         // Closed while held: what is held for it goes, the delivery notice stays.
         let again = mobile.lock().live.stamp(gone.to_owned());
-        assert!(mobile.hold("phone", tagged(gone), Some(again)));
-        assert!(mobile.hold("other", tagged(gone), None));
+        assert!(mobile.hold("phone", outgoing(tagged(gone), Some(again))));
+        assert!(mobile.hold("other", outgoing(tagged(gone), None)));
         Mobile::close_waiting(&mut mobile.lock(), &closed(gone));
         let held = |phone: &str| -> Vec<Option<u64>> {
             mobile
@@ -3420,13 +3451,13 @@ mod tests {
                 .held
                 .get(phone)
                 .map_or_else(Vec::new, |queue| {
-                    queue.iter().map(|held| held.generation).collect()
+                    queue.iter().map(|held| held.notice.generation).collect()
                 })
         };
         assert_eq!((held("phone"), held("other")), (vec![], vec![None]));
         // The follower ends: every waiting notice goes, a delivery notice stays.
         let third = mobile.lock().live.stamp(kept.to_owned());
-        assert!(mobile.hold("phone", tagged(kept), Some(third)));
+        assert!(mobile.hold("phone", outgoing(tagged(kept), Some(third))));
         mobile.withdraw_waiting();
         assert_eq!((held("phone"), held("other")), (vec![], vec![None]));
     }

@@ -3322,6 +3322,7 @@ When the operator has seen the work, `notice_clear` closes the notice on the com
 A machine that may open this one no longer, or left, loses its seat here and what it had not answered goes on at once.
 At most 16 computers' seats are held (`MAX_COMPUTERS`, one more is refused and recorded) and 256 handed notices remembered (`MAX_HANDED`, past it a new one goes to the phones).
 A notice the place rule gave the phones this way, not taken by a computer or past that cap, is named by the follower's pass (`mobile::Judged::placed`) and sent though a computer is in use, since no computer shows it later; any other waiting notice is still dropped at the send when use of a computer resumed.
+That placement travels with the notice (`mobile::Outgoing`: payload, serial, placed) from its job through a hold for the relay link to the flush, and both sends ask the one rule (`Mobile::rested`), so a placed notice held while the link was down is sent once when it comes up, and a close still withdraws it by its serial.
 Every refusal and every notice that went elsewhere is a diagnostic (`desktop_notice.not_here` with its place, `desktop_notice.not_taken`, `peer_core.work_refused`).
 A machine that keeps its own Settings is `LinkOrigin::keeps_own_settings`, a paired machine: this core's Hide AI reads none of its agents, refuses to be placed on it (`ai_settings.device_keeps_its_own`), and takes a saved placement off a device that became one, where the settings are read and where the machine is paired, writing the file to say so (Settings per machine).
 
