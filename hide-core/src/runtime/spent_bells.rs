@@ -31,7 +31,6 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::Runtime;
-use super::hide_notes::{Note, NoteKind};
 use super::typed_input::Reread;
 use crate::agent_state::AgentActivity;
 use crate::delivery::ledger::{BELLS, Letter, State};
@@ -42,8 +41,6 @@ pub(in crate::runtime) struct SpentBells {
     /// Letters judged undeliverable, with why and the pane they were rung
     /// in, until the store ended them and their sender was told.
     failed: BTreeMap<String, Spent>,
-    /// A thread is telling senders; it is the only one.
-    noting: bool,
 }
 
 struct Spent {
@@ -189,9 +186,6 @@ impl Runtime {
     /// did not get it and why, once. A sender that is Hide's or the
     /// operator's own reads no letters.
     fn note_spent_bells(&mut self, ledger: &crate::delivery::ledger::Ledger) {
-        if self.spent_bells.noting {
-            return;
-        }
         let mut notes = Vec::new();
         let due = self
             .spent_bells
@@ -227,32 +221,30 @@ impl Runtime {
                 }));
                 continue;
             };
-            notes.push(Note {
-                body: note_body(
+            notes.push((
+                letter.id.clone(),
+                target.actor,
+                super::status_cells::letter_subject(&letter.id),
+                note_body(
                     &letter.recipient.name,
                     &pane,
                     &letter.kind,
                     &letter.id,
                     &reason,
                 ),
-                letter: letter.id.clone(),
-                target,
-            });
+            ));
         }
-        if notes.is_empty() {
-            return;
+        let now = crate::runtime::unix_milliseconds();
+        for (id, sender, subject, body) in notes {
+            // Refused for room: the note stays owed and the next pass tries.
+            // News, posted once (its record says it went) and gone once
+            // given: the moment it was found is the fact.
+            if self.post_status(&sender, subject, body, true, now).is_err()
+                && let Some(spent) = self.spent_bells.failed.get_mut(&id)
+            {
+                spent.noted = false;
+            }
         }
-        let kind = NoteKind {
-            role: typed::INPUT_ROLE,
-            thread: "hide-spent-bell-notes",
-            intent: "letter-undelivered",
-            component: "delivery",
-            unsent: "doorbell.spent_note_unsent",
-            now: true,
-        };
-        self.spent_bells.noting = self.send_hide_notes(kind, notes, |runtime, _| {
-            runtime.spent_bells.noting = false;
-        });
     }
 }
 
