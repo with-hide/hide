@@ -19,7 +19,7 @@ const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
 /// How long a hook keeps a confirmation it owes the core ([`crate::owed`])
 /// before it drops it: a letter whose confirmation was dropped stays its
 /// recipient's until its agent ends, which ends it delivered.
-pub const DELIVERY_EXPIRY_MS: u64 = 60 * 60 * 1_000;
+pub const OWED_KEPT_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Deserialize)]
 struct PromptInput {
