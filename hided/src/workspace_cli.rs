@@ -377,7 +377,7 @@ fn bootstrap_local(env: &Env, request: &Value, install: Option<&str>) -> Result<
         && let Some(guest) = handed_install(&answer)
     {
         let arguments: Vec<std::ffi::OsString> = std::env::args_os().collect();
-        match crate::pane_install::hand_to_guest(&env.state_dir, guest, &arguments) {
+        match crate::pane_install::hand_to_guest(&env.state_dir, &env.home, guest, &arguments) {
             Ok(code) => std::process::exit(code),
             Err(reason) => return Err(reason.to_owned()),
         }
