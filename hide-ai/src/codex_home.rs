@@ -286,6 +286,16 @@ fn create_private_dir(dir: &Path) -> Result<(), std::io::ErrorKind> {
 mod create_tests {
     use super::*;
 
+    /// Held by every test here that makes a home: one test counts this
+    /// process's homes before and after its call, so a home another test
+    /// makes on a parallel thread of the same process (`cargo test`) would
+    /// read as one its call left behind.
+    static HOMES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn homes_alone() -> std::sync::MutexGuard<'static, ()> {
+        HOMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// An account folder signed in: `auth.json` is a file, so a link to it
     /// is a link to a file on Windows.
     fn account() -> tempfile::TempDir {
@@ -313,6 +323,7 @@ mod create_tests {
 
     #[test]
     fn an_account_that_may_link_gets_a_private_home_else_its_own_folder() {
+        let _alone = homes_alone();
         let account = account();
         let codex_home = account.path().as_os_str().to_owned();
         let home = CodexHome::create(&|name| (name == "CODEX_HOME").then(|| codex_home.clone()))
@@ -365,6 +376,7 @@ mod create_tests {
             .join("a".repeat(250))
             .join("b".repeat(250));
         let too_long = (0..20).fold(long, |path, _| path.join("c".repeat(250)));
+        let _alone = homes_alone();
         let before = private_homes_of_this_process();
         let refused = CodexHome::create(&|name| {
             (name == "CODEX_HOME").then(|| too_long.as_os_str().to_owned())
