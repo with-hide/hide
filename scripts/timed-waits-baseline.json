@@ -241,7 +241,6 @@
     "hided/tests/it/mobile.rs": 4,
     "hided/tests/it/node_contract.rs": 3,
     "hided/tests/it/node_session_activity.rs": 2,
-    "hided/tests/it/old_state_folder.rs": 1,
     "hided/tests/it/opener_lifecycle.rs": 10,
     "hided/tests/it/seat.rs": 3,
     "hided/tests/it/support/fake_tailscale.rs": 2,

@@ -120,7 +120,7 @@ async fn imported(state: &Path) -> Value {
             Instant::now() < deadline,
             "no ledger.imported record: {text}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the daemon's ledger.imported record in its log
     }
 }
 
