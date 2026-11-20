@@ -48,8 +48,9 @@ async function mount(next: ReturnType<typeof state>) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    // This computer's own window: hided sent it the `pairing` frame.
-    useShellStore.setState({ pairing: NOTHING_UNDER_WAY, ...next } as never);
+    // This computer's own window of a build that offers pairing: hided
+    // said so in its hello and sent it the `pairing` frame.
+    useShellStore.setState({ daemon: { device_connect: true }, pairing: NOTHING_UNDER_WAY, ...next } as never);
     root.render(<TooltipProvider><DevicesTab actions={actions} /></TooltipProvider>);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
@@ -245,6 +246,23 @@ it("offers no Add device on a screen that is not this computer's own window (PRD
   const { q, unmount } = await mount({ ...state([remote("mini")]), pairing: null } as never);
   expect(q('[data-device-row="mini"]')).not.toBeNull();
   expect(q("[data-device-add-open]")).toBeNull();
+  await unmount();
+});
+
+it("shows no pairing in a build that does not offer connections between two Hides, and adds a device as before pairing", async () => {
+  const peer = { key: "ab".repeat(32), device_id: "windows-pc", name: "Windows PC", opens: "active", opened_by: "active", connected: true, path: "direct", reason: null, update: null };
+  const next = state([remote("mini")]);
+  const { q, unmount } = await mount({ ...next, daemon: { device_connect: false }, pairing: null, rest: { ...next.rest, navigator: { ...next.rest.navigator, peers: [peer] } } } as never);
+  expect(q('[data-device-row="mini"]')).not.toBeNull();
+  expect(q("[data-pair-share]")).toBeNull();
+  expect(q("[data-peer-row]")).toBeNull();
+  expect(q("[data-pair-firewall]")).toBeNull();
+  // Any screen adds a device, as before pairing, and only by its SSH Host.
+  await act(async () => { q("[data-device-add-open]")?.click(); });
+  const dialog = document.body.querySelector("[data-add-device-dialog]");
+  expect(dialog).not.toBeNull();
+  expect(dialog?.querySelector("[data-add-by-link]")).toBeNull();
+  expect(dialog?.querySelector("[data-add-link-input]")).toBeNull();
   await unmount();
 });
 
