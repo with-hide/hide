@@ -67,6 +67,10 @@ impl Login for Wsl<'_> {
         Ok("linux".to_owned())
     }
 
+    fn on(&self) -> Result<bool, String> {
+        self.access.runs(self.distro)
+    }
+
     fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, String> {
         self.access.run(self.distro, argv, cap, within)
     }
@@ -77,26 +81,14 @@ impl Login for Wsl<'_> {
         vec![Candidate::Wsl(self.distro.to_owned())]
     }
 
-    /// A distribution that is off is not started for it: nobody pressed
-    /// anything (B43).
     fn install(
         &self,
         packages: &hide_node::ssh::host::HelperPackages,
         root: &str,
     ) -> Result<String, pairing_ssh::NotInstalled> {
-        use pairing_ssh::NotInstalled;
-        match self.access.runs(self.distro) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(NotInstalled::NotReached(
-                    "the distribution is off".to_owned(),
-                ));
-            }
-            Err(error) => return Err(NotInstalled::NotReached(error)),
-        }
         self.access
             .install_build(self.distro, packages, root)
-            .map_err(NotInstalled::Failed)
+            .map_err(pairing_ssh::NotInstalled::Failed)
     }
 }
 

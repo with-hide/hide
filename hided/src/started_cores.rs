@@ -81,6 +81,14 @@ pub(crate) fn raise_on(login: &dyn Login, packages: &HelperPackages) -> Result<R
         );
         failure
     };
+    // A raise runs with nobody at the row, and may have waited its turn
+    // behind another: a distribution turned off meanwhile is not started
+    // for it, by this question or by anything below (B43).
+    match login.on() {
+        Ok(true) => {}
+        Ok(false) => return Err(failed(Failure::NotReached, "the target is off".to_owned())),
+        Err(reason) => return Err(failed(Failure::NotReached, reason)),
+    }
     // Said before a build is copied there, which this one would refuse.
     if login.channel() == Channel::Wsl && !crate::pairing_ssh::runs_systemd(login) {
         log("raise.not_kept", json!({"read": "no_systemd"}));
@@ -148,10 +156,13 @@ mod tests {
 
     /// A login that takes the build or says why not, and answers the
     /// command it is given with `said`; asked whether systemd started the
-    /// target, it answers `systemd`.
+    /// target, it answers `systemd`, and counts that question, which
+    /// would start a target that is not `on`.
     struct Account {
         channel: Channel,
+        on: bool,
         systemd: bool,
+        probed: std::cell::Cell<u32>,
         install: Result<String, fn(String) -> NotInstalled>,
         installs: std::cell::Cell<u32>,
         said: Result<&'static str, &'static str>,
@@ -171,8 +182,13 @@ mod tests {
             Ok("linux".to_owned())
         }
 
+        fn on(&self) -> Result<bool, String> {
+            Ok(self.on)
+        }
+
         fn run(&self, argv: &[String], _: usize, _: Duration) -> Result<Ran, String> {
             if argv[0] == "test" {
+                self.probed.set(self.probed.get() + 1);
                 return Ok(Ran {
                     status: i32::from(!self.systemd),
                     stdout: Vec::new(),
@@ -203,7 +219,9 @@ mod tests {
     fn account(said: Result<&'static str, &'static str>) -> Account {
         Account {
             channel: Channel::Ssh,
+            on: true,
             systemd: true,
+            probed: Default::default(),
             install: Ok("/home/me/.hide/host-helper/aaaaaaaaaaaaaaaa/hided".to_owned()),
             installs: Default::default(),
             said,
@@ -280,6 +298,22 @@ mod tests {
         let with = distribution(true);
         assert_eq!(raise(&with), Ok(Raised::Current));
         assert_eq!(with.installs.get(), 1);
+    }
+
+    // B43: a raise that waited its turn finds its distribution turned off.
+    // Nothing is run there, the question about systemd included, since any
+    // command would start it; the row says it was not reached.
+    #[test]
+    fn a_distribution_that_is_off_is_not_started_for_a_raise() {
+        let off = Account {
+            channel: Channel::Wsl,
+            on: false,
+            ..account(Ok(r#"{"kind":"current"}"#))
+        };
+        assert_eq!(raise(&off), Err(Failure::NotReached));
+        assert_eq!(off.probed.get(), 0);
+        assert_eq!(off.installs.get(), 0);
+        assert!(off.ran.borrow().is_empty());
     }
 
     // B23: a login that does not reach the account, at the copy or at the

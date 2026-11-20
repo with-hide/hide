@@ -126,6 +126,12 @@ pub trait Login {
     /// The system the account runs on, as `std::env::consts::OS` spells it.
     fn system(&self) -> Result<String, String>;
 
+    /// Whether the target is on, asked without starting it. A command run
+    /// in a WSL distribution that is off starts it, so work nobody pressed
+    /// for asks this first (B43); a machine reached over SSH is on whenever
+    /// it is reached.
+    fn on(&self) -> Result<bool, String>;
+
     /// Runs `argv` there to its end and answers its exit code and at most
     /// `cap` bytes of what it printed.
     fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, String>;
@@ -155,6 +161,10 @@ struct Ssh<'a>(&'a Upstream);
 impl Login for Ssh<'_> {
     fn channel(&self) -> Channel {
         Channel::Ssh
+    }
+
+    fn on(&self) -> Result<bool, String> {
+        Ok(true)
     }
 
     fn name(&self) -> &str {
