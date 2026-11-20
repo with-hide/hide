@@ -21,6 +21,8 @@ export type CoreLink = {
   alias: string;
   problem?: DeviceProblem | null;
   sign_in?: DeviceSignIn | null;
+  /** Whether this machine becomes a Hide of its own once it reaches its core (PRD device-connect-iroh B45): only in a build that offers connections between two Hides. */
+  splits?: boolean;
 };
 
 /**

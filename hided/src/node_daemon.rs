@@ -120,6 +120,10 @@ pub struct NodeState {
     /// frame, phase `live`) for its device tile (PRD device-connect-iroh
     /// B45).
     pub split_failed: Arc<dyn Fn() -> Option<&'static str> + Send + Sync>,
+    /// Whether this machine becomes a Hide of its own once it reaches its
+    /// core (`NodeRole::splits`), which a held screen is told so it says
+    /// what the wait is for.
+    pub splits: bool,
     /// What the dial a held window's Retry started asks, and that window,
     /// which alone is told (PRD system-ssh-device-link B33).
     pub sign_ins: watch::Receiver<Option<Shown>>,
@@ -258,6 +262,7 @@ impl NodeDaemon {
                 Ok(())
             }) as Arc<dyn Fn(LinkAction, u64) -> Result<(), String> + Send + Sync>
         };
+        let splits = role.splits();
         let split_failed = {
             let role = Arc::downgrade(&role);
             Arc::new(move || role.upgrade().and_then(|role| role.split_failed()))
@@ -309,6 +314,7 @@ impl NodeDaemon {
                 connect_again,
                 link_control,
                 split_failed,
+                splits,
                 sign_ins,
                 answer_sign_in,
                 release_sign_in,

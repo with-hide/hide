@@ -89,7 +89,8 @@ export function windowStrip(
       case "disconnected":
         return { kind: "disconnected", text: t("coreLink.strip.disconnected", { machine }), mark: "warn", action: "reconnect" };
       case "waiting":
-        return { kind: "unreachable", text: t("coreLink.strip.unreachable", { machine }), mark: "warn" };
+        // A machine that is split from its core once it reaches it waits for that; any other only reconnects.
+        return { kind: "unreachable", text: t(link.splits ? "coreLink.strip.splitWaits" : "coreLink.strip.unreachable", { machine }), mark: "warn" };
       case "stopped": {
         // A changed server key is checked in a terminal and a Hide an update replaced is opened again; neither offers
         // a Retry, as on the device row: a retry would meet the same key, or start the same replaced program.

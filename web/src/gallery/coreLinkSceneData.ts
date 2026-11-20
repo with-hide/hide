@@ -54,7 +54,7 @@ export function coreLinkRest(side: CoreLinkSide, content: SceneContent, nowMs: n
 /** The window states: where the node's link stands. */
 export const WINDOW_STATES: Partial<Record<CoreLinkState, { connection: "connecting" | "reconnecting"; link: CoreLink }>> = {
   "window-updating": { connection: "connecting", link: { phase: "updating", machine: "Mac mini", alias: "mini" } },
-  "window-unreachable": { connection: "reconnecting", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } },
+  "window-unreachable": { connection: "reconnecting", link: { phase: "waiting", machine: "Mac mini", alias: "mini", splits: true } },
   "window-sign-in": { connection: "reconnecting", link: { phase: "stopped", machine: null, alias: "mini", problem: "sign_in_needed" } },
   "window-disconnected": { connection: "reconnecting", link: { phase: "disconnected", machine: null, alias: "mini" } },
   // PRD system-ssh-device-link B33: what ssh asks the dial the operator's Retry started, under the strip.

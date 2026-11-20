@@ -115,9 +115,11 @@ async fn hold(socket: &mut WebSocket, state: &NodeState, connection: u64) -> Opt
             .clone()
             .filter(|shown| shown.owner == connection)
             .map(|shown| shown.sign_in);
-        let frame = phases
-            .borrow_and_update()
-            .link_frame(&state.core_alias, sign_in.as_ref());
+        let frame = phases.borrow_and_update().link_frame(
+            &state.core_alias,
+            sign_in.as_ref(),
+            state.splits,
+        );
         if let Some(frame) = frame
             && told.as_ref() != Some(&frame)
         {

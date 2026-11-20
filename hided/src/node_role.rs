@@ -208,10 +208,14 @@ impl Phase {
     /// screen to offer the row's action.
     /// `sign_in` is what the dial their Retry or connect started asks them
     /// now (PRD system-ssh-device-link B33), which the strip shows.
+    /// `splits` is whether this machine becomes a Hide of its own once it
+    /// reaches its core (`NodeRole::splits`), so the screen says what the
+    /// wait is for (PRD device-connect-iroh B45).
     pub fn link_frame(
         &self,
         alias: &str,
         sign_in: Option<&ShownSignIn>,
+        splits: bool,
     ) -> Option<serde_json::Value> {
         let (phase, machine, problem) = match self {
             Self::Live(_) => return None,
@@ -244,6 +248,7 @@ impl Phase {
                 "alias": alias,
                 "problem": problem,
                 "sign_in": sign_in,
+                "splits": splits,
             },
         }))
     }
@@ -566,6 +571,13 @@ impl NodeRole {
     /// link thread has ended, and the process runs a core of its own next.
     pub fn became_core(&self) -> watch::Receiver<bool> {
         self.shared.became_core.subscribe()
+    }
+
+    /// Whether this machine becomes a Hide of its own once it reaches its
+    /// core: its build offers connections between two Hides
+    /// (`env::Env::device_connect`), so each connection tries the split.
+    pub fn splits(&self) -> bool {
+        splits(self.shared.updates.as_ref())
     }
 
     /// Why this connection's split from the core did not happen, as the
@@ -1146,9 +1158,18 @@ fn try_link(
 }
 
 /// Whether this connection still owes its one try at the split: a node
-/// that knows its state folder, which every node a window starts does.
+/// that knows its state folder, which every node a window starts does, in a
+/// build that offers connections between two Hides
+/// (`env::Env::device_connect`). In one that does not, the machine stays the
+/// node it is and asks its core nothing.
 fn split_due(shared: &Shared) -> bool {
-    shared.updates.is_some() && lock(&shared.state).split_failed.is_none()
+    splits(shared.updates.as_ref()) && lock(&shared.state).split_failed.is_none()
+}
+
+/// Whether a node with these `updates` is split from its core at all
+/// (`NodeRole::splits`).
+fn splits(updates: Option<&Updates>) -> bool {
+    updates.is_some_and(|updates| updates.peer.device_connect)
 }
 
 /// The words that run the `hide` beside the core's program on its machine,
@@ -1755,13 +1776,14 @@ mod tests {
         let frame = Phase::Waiting {
             reason: LinkFailure::Unreachable("connection refused".to_owned()),
         }
-        .link_frame("mini", None)
+        .link_frame("mini", None, true)
         .unwrap();
         assert_eq!(
             frame["payload"],
-            json!({"phase": "waiting", "machine": null, "alias": "mini", "problem": null, "sign_in": null})
+            json!({"phase": "waiting", "machine": null, "alias": "mini", "problem": null, "sign_in": null, "splits": true})
         );
-        let frame = Phase::Disconnected.link_frame("mini", None).unwrap();
+        let frame = Phase::Disconnected.link_frame("mini", None, false).unwrap();
+        assert_eq!(frame["payload"]["splits"], false);
         assert_eq!(frame["payload"]["alias"], "mini");
     }
 
@@ -1785,7 +1807,9 @@ mod tests {
                 detail: "detail".to_owned(),
             }));
             assert!(reason.waits_for_operator(), "{problem:?}");
-            let frame = Phase::Waiting { reason }.link_frame("mini", None).unwrap();
+            let frame = Phase::Waiting { reason }
+                .link_frame("mini", None, false)
+                .unwrap();
             assert_eq!(frame["payload"]["phase"], "stopped");
             assert_eq!(
                 frame["payload"]["problem"],
@@ -1857,6 +1881,28 @@ mod tests {
         // The attach after the update dials with no press of its own.
         let (press, owed) = state.next_attempt();
         assert!(press.is_none() && owed.is_none());
+    }
+
+    /// A node is split from its core only by a build that offers connections
+    /// between two Hides; in any other it stays the node it is.
+    #[test]
+    fn only_a_build_that_offers_connections_between_hides_splits_a_node() {
+        let updates = |device_connect| Updates {
+            packages: PathBuf::from("/packages"),
+            state_dir: PathBuf::from("/state"),
+            peer: crate::peer_host::Settings {
+                state_dir: PathBuf::from("/state"),
+                build: "1.3.0-test".to_owned(),
+                device: "macbook".to_owned(),
+                release: false,
+                direct: None,
+                device_connect,
+            },
+        };
+        assert!(splits(Some(&updates(true))));
+        assert!(!splits(Some(&updates(false))));
+        // A node no window started knows no state folder to be a core on.
+        assert!(!splits(None));
     }
 
     /// A split that failed is tried again only by a window's own Retry,
