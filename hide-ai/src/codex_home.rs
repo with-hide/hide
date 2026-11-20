@@ -293,7 +293,9 @@ mod create_tests {
     static HOMES: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn homes_alone() -> std::sync::MutexGuard<'static, ()> {
-        HOMES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        HOMES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// An account folder signed in: `auth.json` is a file, so a link to it
