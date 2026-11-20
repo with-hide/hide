@@ -787,11 +787,7 @@ fn a_line_stays_owed_until_its_cell_is_posted() {
     let ledger = runtime.delivery_state().ok();
     let heal_cells = |runtime: &mut Runtime| -> Vec<(String, u64)> {
         runtime
-            .take_status_of(
-                "agent-1",
-                ledger.as_deref(),
-                crate::runtime::StatusTake::Inbox,
-            )
+            .take_status_of("agent-1", ledger.as_deref(), None)
             .into_iter()
             .filter(|cell| cell.subject.starts_with("heal:"))
             .map(|cell| (cell.subject, cell.revision))
@@ -848,11 +844,7 @@ fn a_parent_hears_each_batch_of_lost_children_as_a_cell() {
         assert!(runtime.heal_letters_owed().is_empty(), "batch {n} posted");
     }
     let ledger = runtime.delivery_state().ok();
-    let given = runtime.take_status_of(
-        "agent-9",
-        ledger.as_deref(),
-        crate::runtime::StatusTake::Inbox,
-    );
+    let given = runtime.take_status_of("agent-9", ledger.as_deref(), None);
     assert_eq!(given.len(), 2, "{given:?}");
     assert_ne!(
         given[0].subject, given[1].subject,

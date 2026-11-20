@@ -11,11 +11,11 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::delivery::Actor;
-use crate::mission_criteria::{CheckKind, CriterionKind, Recorded, Role};
+use crate::mission_criteria::{CheckKind, CriterionKind, CriterionState, Recorded, Role};
 use crate::mission_events::{EventKind, MissionEvent};
 use crate::missions::{
     DECIDED_LIMIT, Decided, Mission, MissionEnd, MissionNode, MissionStatus, NodeKind, NodePatch,
-    NodeStatus,
+    NodeStatus, RoundWake, WakeEvent,
 };
 use crate::model::{
     CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestSnapshot,
@@ -773,7 +773,19 @@ impl Runtime {
             "component": "missions", "kind": "mission.criterion_recorded",
             "mission": id, "node": node, "line": key, "pass": pass,
         }));
-        self.mission_round_moved(&id, node, kind, signal_before);
+        let signalled = kind.worker_answers()
+            && self
+                .missions
+                .book
+                .get(&id)
+                .and_then(|mission| mission.node(node))
+                .and_then(MissionNode::check_signal)
+                .is_some_and(|signal| Some(&signal) != signal_before.as_ref());
+        if signalled {
+            self.ask_checkers(&id, node);
+        } else if kind.checker_judges() {
+            self.tell_worker(&id, node);
+        }
         self.record_mission_events(&id, events);
         Ok((
             json!({"mission": self.mission_view_for(&id, &caller)}),
@@ -1175,4 +1187,190 @@ fn read_node_ci(
         out.spent = effect.spent;
     }
     out
+}
+
+/// The line a node worker's brief ends with (PRD mission-speed-2 B15): on a
+/// node with a check command, then on one without.
+const BRIEF_LINES: [&str; 2] = [
+    "Before you record your `check` line, run the local checks the change touches: recording `check` starts the node's review and verification.",
+    "Recording every one of your lines passed starts the node's review and verification.",
+];
+
+impl Runtime {
+    /// A new check signal on `node` (`MissionNode::check_signal`, PRD
+    /// mission-speed-2 D-01, D-05) asks each live checker bound to it to
+    /// check, and its Conductor for a checker line with none alive. A push
+    /// alone, or the same record again, signals nothing (B3, B17).
+    fn ask_checkers(&mut self, id: &str, node: &str) {
+        let ledger = self.delivery_state().ok();
+        let records = ledger.as_deref().map(|ledger| &ledger.agents);
+        let sleeping =
+            self.sleeping_registrations(records.into_iter().flatten().filter(|row| !row.ended));
+        let live = |agent: &str| {
+            records
+                .into_iter()
+                .flatten()
+                .find(|row| row.id == agent && !row.ended)
+                .is_some_and(|row| {
+                    super::missions::worker_life(row, &sleeping)
+                        != crate::delivery::answer::Runtime::Ended
+                })
+        };
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return;
+        };
+        let Some(row) = mission.node(node) else {
+            return;
+        };
+        let Some(signal) = row.check_signal() else {
+            return;
+        };
+        let (mut asked, mut needed) = (Vec::<String>::new(), Vec::new());
+        for line in row
+            .checker_lines()
+            .filter(|line| line.state != CriterionState::Skipped)
+        {
+            let bound: Vec<&str> = line
+                .checkers
+                .iter()
+                .filter_map(|c| c.agent_id.as_deref())
+                .collect();
+            let alive: Vec<&str> = bound.iter().copied().filter(|agent| live(agent)).collect();
+            if alive.is_empty() || alive.len() < bound.len() {
+                needed.push(line.key.clone());
+            }
+            asked.extend(
+                alive
+                    .into_iter()
+                    .filter(|a| !asked.iter().any(|kept| kept == a))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let fact = signal
+            .commit
+            .clone()
+            .unwrap_or_else(|| signal.at_unix_ms.to_string());
+        let wake = |round, to: Option<String>, key: String| {
+            let mut wake = super::missions::wake_about(
+                node.to_owned(),
+                None,
+                WakeEvent::NewHead,
+                signal.commit.clone(),
+                Some(key),
+            );
+            wake.to = to;
+            wake.round = Some(round);
+            wake
+        };
+        for agent in &asked {
+            super::missions::record(
+                mission,
+                wake(
+                    RoundWake::CheckAsked,
+                    Some(agent.clone()),
+                    format!("check_asked:{node}:{fact}"),
+                ),
+            );
+        }
+        if !needed.is_empty() {
+            let mut asking = wake(
+                RoundWake::CheckerNeeded,
+                None,
+                format!("checker_needed:{node}:{fact}:{}", needed.join("+")),
+            );
+            // One line names it; both of the node's, none.
+            if let [line] = needed.as_slice() {
+                asking.line = Some(crate::missions::Dependency {
+                    node: node.to_owned(),
+                    line: Some(line.clone()),
+                });
+            }
+            super::missions::record(mission, asking);
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.round_opened",
+            "mission": id, "node": node, "checkers": asked.len(), "lines_without_checker": needed,
+        }));
+        // A cell wakes a sleeping checker (`agent_sleep::letters`).
+        self.letter_wakes.touch();
+    }
+
+    /// A checker's answer that fails a line in the round goes to `node`'s
+    /// worker (D-02, D-04, B6, B8); a round with no failure tells it
+    /// nothing, and the Conductor is told no result (B9, B16).
+    fn tell_worker(&mut self, id: &str, node: &str) {
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return;
+        };
+        let Some(row) = mission.node(node) else {
+            return;
+        };
+        let Some(worker) = row.agent_id.clone() else {
+            return;
+        };
+        let (line, failed, _) = super::missions::round_facts(mission, row);
+        if !failed {
+            return;
+        }
+        let signal = row.check_signal();
+        let at = signal.as_ref().map_or(0, |signal| signal.at_unix_ms);
+        let mut wake = super::missions::wake_about(
+            node.to_owned(),
+            row.current_pr(),
+            WakeEvent::NewHead,
+            signal.and_then(|signal| signal.commit),
+            Some(format!("checked:{node}:{at}:{line}")),
+        );
+        wake.to = Some(worker);
+        wake.round = Some(RoundWake::Checked);
+        super::missions::record(mission, wake);
+        self.letter_wakes.touch();
+    }
+
+    /// Ends a node worker's brief with what starts its checkers (B15), on a
+    /// node that has checkers. A spawn asked again is the spawn it was
+    /// (engineering #11): an earlier spawn of the intent asked with the
+    /// brief as written or with either line keeps its brief, whatever the
+    /// plan or the build says now. A brief the line would take past the
+    /// letter limit stays as written, logged.
+    pub(super) fn brief_round_line(
+        &self,
+        actor: &Actor,
+        intent: &str,
+        brief: &mut String,
+        earlier: Option<&crate::coordination::SpawnRecord>,
+    ) {
+        if let Some(asked) = earlier.and_then(|earlier| {
+            std::iter::once(brief.clone())
+                .chain(BRIEF_LINES.iter().map(|line| format!("{brief}\n\n{line}")))
+                .find(|text| earlier.asked_with(Some(text)))
+        }) {
+            *brief = asked;
+            return;
+        }
+        let Some(mission) = self.missions.book.conducted_open(actor) else {
+            return;
+        };
+        let Some(node) = mission
+            .intent_node(intent)
+            .filter(|node| node.checker_lines().next().is_some())
+        else {
+            return;
+        };
+        let checked = node
+            .criteria
+            .iter()
+            .any(|line| line.kind == CriterionKind::Check);
+        let line = BRIEF_LINES[usize::from(!checked)];
+        if brief.len() + line.len() + 2 > crate::delivery::BODY_LIMIT {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.brief_line_skipped",
+                "mission": mission.id, "node": node.key, "cause": "brief_limit",
+            }));
+            return;
+        }
+        brief.push_str("\n\n");
+        brief.push_str(line);
+    }
 }

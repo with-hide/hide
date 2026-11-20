@@ -1117,151 +1117,8 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
     };
     // A wake about a node's review round or the plan rides `new_head`,
     // which a build before it words as news (`RoundWake`).
-    let round = match wake.round {
-        Some(RoundWake::CheckAsked) => {
-            let Some(node) = node else {
-                return news(
-                    format!("Node {} is ready for its checkers", wake.node),
-                    PR_ACT,
-                );
-            };
-            let agent = wake.to.as_deref().unwrap_or("-");
-            let lines = super::mission_rounds::lines_of(node, agent);
-            let new = super::mission_rounds::short(wake.head.as_deref());
-            let signal = match wake.head {
-                Some(_) => format!("its worker recorded its check on commit {new}"),
-                None => "its worker recorded every one of its lines passed".to_owned(),
-            };
-            let record = format!(
-                "Record your result with `hide mission record {} {} --pass|--fail{} --evidence <one line> --mission {}`.",
-                wake.node,
-                lines.split(" and ").next().unwrap_or("review"),
-                if wake.head.is_some() {
-                    " --commit <sha>"
-                } else {
-                    ""
-                },
-                mission.id
-            );
-            // The worker confirms its plan for a serious finding with the
-            // checker that raised it (D-04).
-            let confirm = "When the worker asks you to confirm its plan for a serious finding, answer only OK or what to change.";
-            match super::mission_rounds::last_answer(node, agent) {
-                None => format!(
-                    "Node {} of mission {} \"{}\" is ready for your {lines}: {signal}.\nRead it with `hide mission show {} --mission {}` and check it. {record}\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {confirm}",
-                    wake.node, mission.id, mission.title, wake.node, mission.id
-                ),
-                Some(last) => {
-                    let since = match &last {
-                        Some(commit) => format!(
-                            "you last checked commit {}",
-                            super::mission_rounds::short(Some(commit))
-                        ),
-                        None => "after your last answer".to_owned(),
-                    };
-                    format!(
-                        "Node {} of mission {} \"{}\" is ready for your {lines} again: {since}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {record}\n{confirm}",
-                        wake.node, mission.id, mission.title
-                    )
-                }
-            }
-        }
-        Some(RoundWake::CheckerNeeded) => {
-            let what = match wake.line.as_ref().and_then(|line| line.line.as_deref()) {
-                Some("verify") => "verification",
-                Some(_) => "review",
-                None => "review and verification",
-            };
-            let flag = match what {
-                "verification" => "--verifier <agent-id>",
-                "review" => "--reviewer <agent-id>",
-                _ => "--reviewer <agent-id> --verifier <agent-id>",
-            };
-            news(
-                format!(
-                    "Node {} is ready for its {what}, and no live checker holds it",
-                    wake.node
-                ),
-                &format!(
-                    "start a checker for it and bind it with `hide mission node {} {flag}`, which takes an ended checker's place; its brief names the commit to check, and the worker's next check wakes it",
-                    wake.node
-                ),
-            )
-        }
-        Some(RoundWake::Checked) => {
-            let facts = node.map(|node| super::mission_rounds::RoundFacts::of(mission, node));
-            let line = facts
-                .as_ref()
-                .map_or_else(|| "-".to_owned(), |facts| facts.line());
-            let read = format!(
-                "Read the findings in `hide mission show {} --mission {}` and the checker's letter.",
-                wake.node, mission.id
-            );
-            let act = match &facts {
-                Some(facts) if facts.failed() && facts.running() => format!(
-                    "{read}\nStart fixing now; record your next check once both results are in (after 30 minutes without the other, go on)."
-                ),
-                Some(facts) if facts.failed() => format!(
-                    "{read}\nConfirm your plan for each serious finding with the checker that raised it (go on with the plan if it does not answer in 10 minutes, or with the changes it asks for), and fix the rest at once. Look for the same kind of problem elsewhere and fix it together."
-                ),
-                _ => read,
-            };
-            // A conflict the worker was told of, which this cell replaced
-            // if not read yet.
-            let conflict = if facts.as_ref().is_some_and(|facts| facts.conflict) {
-                "\nIts pull request conflicts with its base, so its CI does not run: merge the base branch into your branch (never rebase) with your fix."
-            } else {
-                ""
-            };
-            format!(
-                "Your node {} of mission {} \"{}\": {line}.\n{act}{conflict}",
-                wake.node, mission.id, mission.title
-            )
-        }
-        Some(RoundWake::WholeNodeWait) => {
-            let waits = mission.whole_node_waits(&wake.node);
-            let suggest: Vec<String> = waits
-                .iter()
-                .map(|other| {
-                    let line = mission
-                        .node(other)
-                        .and_then(|other| {
-                            other.criteria.iter().find(|line| {
-                                line.kind == crate::mission_criteria::CriterionKind::Own
-                            })
-                        })
-                        .map_or("<line>", |line| line.key.as_str());
-                    format!("`\"{other}:{line}\"`")
-                })
-                .collect();
-            news(
-                format!(
-                    "Node {} waits for the whole of node {}",
-                    wake.node,
-                    if waits.is_empty() {
-                        "-".to_owned()
-                    } else {
-                        waits.join(", ")
-                    }
-                ),
-                &format!(
-                    "if it needs only that node's contract, wait on one of its lines instead ({} in `depends_on`) and it starts as soon as that line passes",
-                    if suggest.is_empty() {
-                        "`\"<node>:<line>\"`".to_owned()
-                    } else {
-                        suggest.join(", ")
-                    }
-                ),
-            )
-        }
-        Some(RoundWake::Unknown) => news(
-            format!("Node {} moved", wake.node),
-            "read what changed in it",
-        ),
-        None => String::new(),
-    };
-    if wake.round.is_some() {
-        return round;
+    if let Some(round) = wake.round {
+        return round_body(mission, wake, node, round, &news);
     }
     match wake.event {
         WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
@@ -1473,22 +1330,13 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 }
                 _ => "Fix it on your branch and push, then report to your Conductor as before",
             };
-            // The worker's one cell about the node keeps its round's
-            // failure too, which this fact replaced if not read yet.
-            let round = match (wake.to.as_ref(), node) {
-                (Some(_), Some(node)) => {
-                    let facts = super::mission_rounds::RoundFacts::of(mission, node);
-                    if facts.failed() {
-                        format!(
-                            "\nIts review round: {}; read the findings in `hide mission show {} --mission {}`.",
-                            facts.line(),
-                            wake.node,
-                            mission.id
-                        )
-                    } else {
-                        String::new()
-                    }
-                }
+            // The worker's one cell about the node keeps a round failure
+            // this fact replaced unread.
+            let round = match (
+                wake.to.as_ref(),
+                node.map(|node| round_facts(mission, node)),
+            ) {
+                (Some(_), Some((line, true, _))) => format!("\nIts review round: {line}."),
                 _ => String::new(),
             };
             format!(
@@ -1705,6 +1553,188 @@ fn start_words(mission: &Mission, node: Option<&MissionNode>) -> String {
         stack.on,
         node.map_or("-", |node| node.key.as_str()),
     )
+}
+
+/// The cell of a wake about a node's review round or its place in the
+/// plan (PRD mission-speed-2), each ending with the line its receiver acts
+/// on at that moment (D-06).
+fn round_body(
+    mission: &Mission,
+    wake: &PendingWake,
+    node: Option<&MissionNode>,
+    round: RoundWake,
+    news: &dyn Fn(String, &str) -> String,
+) -> String {
+    let short = |commit: &str| commit.get(..7).unwrap_or(commit).to_owned();
+    let place = format!(
+        "Node {} of mission {} \"{}\"",
+        wake.node, mission.id, mission.title
+    );
+    let show = format!("`hide mission show {} --mission {}`", wake.node, mission.id);
+    match (round, node) {
+        (RoundWake::CheckAsked, Some(node)) => {
+            let agent = wake.to.as_deref().unwrap_or("-");
+            let mine = |line: &&Criterion| {
+                line.checkers
+                    .iter()
+                    .any(|checker| checker.agent_id.as_deref() == Some(agent))
+            };
+            let lines: Vec<&str> = node
+                .checker_lines()
+                .filter(mine)
+                .map(|line| line.key.as_str())
+                .collect();
+            let lines = lines.join(" and ");
+            let signal = wake.head.as_deref().map_or_else(
+                || "its worker recorded every one of its lines passed".to_owned(),
+                |head| format!("its worker recorded its check on commit {}", short(head)),
+            );
+            // The commit this checker last answered on, if it answered.
+            let last = node
+                .checker_lines()
+                .flat_map(|line| &line.checkers)
+                .filter(|checker| checker.agent_id.as_deref() == Some(agent))
+                .filter(|checker| checker.at_unix_ms.is_some())
+                .max_by_key(|checker| checker.at_unix_ms)
+                .map(|checker| checker.commit.as_deref());
+            let confirm = "When the worker asks you to confirm its plan for a serious finding, answer only OK or what to change.";
+            match last {
+                None => format!(
+                    "{place} is ready for your {lines}: {signal}.\nRead it with {show}, check it and record your result with `hide mission record`.\nGive every finding in this one round, each graded serious, ordinary or minor (docs/CODE_REVIEW.md). {confirm}"
+                ),
+                Some(last) => format!(
+                    "{place} is ready for your {lines} again: {}, and {signal}.\nRead only your earlier findings and what changed since then; raise a new finding only when it is serious. {confirm}",
+                    last.map_or_else(
+                        || "after your last answer".to_owned(),
+                        |commit| format!("you last checked commit {}", short(commit))
+                    )
+                ),
+            }
+        }
+        (RoundWake::CheckerNeeded, _) => {
+            let (what, flag) = match wake.line.as_ref().and_then(|line| line.line.as_deref()) {
+                Some("verify") => ("verification", "--verifier <agent-id>"),
+                Some(_) => ("review", "--reviewer <agent-id>"),
+                None => (
+                    "review and verification",
+                    "--reviewer <agent-id> --verifier <agent-id>",
+                ),
+            };
+            news(
+                format!(
+                    "Node {} is ready for its {what}, and no live checker holds it",
+                    wake.node
+                ),
+                &format!(
+                    "start a checker for it and bind it with `hide mission node {} {flag}`, which takes an ended checker's place",
+                    wake.node
+                ),
+            )
+        }
+        (RoundWake::Checked, Some(node)) => {
+            let (line, failed, running) = round_facts(mission, node);
+            let act = match (failed, running) {
+                (true, true) => {
+                    "Start fixing now; record your next check once both results are in (after 30 minutes without the other, go on)."
+                }
+                (true, false) => {
+                    "Confirm your plan for each serious finding with the checker that raised it (go on with it if no answer comes in 10 minutes, or with the changes it asks for), and fix the rest at once. Look for the same kind of problem elsewhere and fix it together."
+                }
+                _ => "",
+            };
+            format!(
+                "Your node {} of mission {} \"{}\": {line}.\nRead the findings in {show}. {act}",
+                wake.node, mission.id, mission.title
+            )
+        }
+        (RoundWake::WholeNodeWait, _) => {
+            let waits = mission.whole_node_waits(&wake.node);
+            let suggest: Vec<String> = waits
+                .iter()
+                .map(|other| {
+                    let line = mission
+                        .node(other)
+                        .and_then(|other| {
+                            other
+                                .criteria
+                                .iter()
+                                .find(|line| line.kind == CriterionKind::Own)
+                        })
+                        .map_or("<line>", |line| line.key.as_str());
+                    format!("`\"{other}:{line}\"`")
+                })
+                .collect();
+            news(
+                format!(
+                    "Node {} waits for the whole of node {}",
+                    wake.node,
+                    waits.join(", ")
+                ),
+                &format!(
+                    "if it needs only that node's contract, wait on one of its lines instead ({} in `depends_on`) and it starts as soon as that line passes",
+                    suggest.join(", ")
+                ),
+            )
+        }
+        _ => news(
+            format!("Node {} moved", wake.node),
+            "read what changed in it",
+        ),
+    }
+}
+
+/// What a node's worker reads of its round (D-09), from the lines the book
+/// holds: `review FAIL · verify running · round 2 of 3 · conflicts with its
+/// base`, whether a line failed in the round and whether one still runs. A
+/// line's state counts once a checker bound to it answered since the
+/// node's last check (`MissionNode::check_signal`), on its commit when both
+/// name one; before that it runs.
+pub(super) fn round_facts(mission: &Mission, node: &MissionNode) -> (String, bool, bool) {
+    let signal = node.check_signal();
+    let in_round = |checker: &crate::mission_criteria::Checker| {
+        signal.as_ref().is_none_or(|signal| {
+            checker.at_unix_ms.is_some_and(|at| at >= signal.at_unix_ms)
+                && match (&signal.commit, &checker.commit) {
+                    (Some(round), Some(read)) => crate::mission_criteria::same_commit(round, read),
+                    _ => true,
+                }
+        })
+    };
+    let (mut failed, mut running) = (false, false);
+    let mut parts = Vec::new();
+    for line in node.checker_lines() {
+        let bound: Vec<_> = line
+            .checkers
+            .iter()
+            .filter(|checker| checker.agent_id.is_some())
+            .collect();
+        let state = match line.state {
+            CriterionState::Skipped => "skipped",
+            _ if bound.is_empty() => "no checker",
+            _ if !bound.iter().any(|checker| in_round(checker)) => "running",
+            CriterionState::Fail => "FAIL",
+            CriterionState::Pass => "PASS",
+            CriterionState::Open => "running",
+        };
+        failed |= state == "FAIL";
+        running |= state == "running";
+        parts.push(format!("{} {state}", line.key));
+    }
+    let limit = crate::mission_health::review_limit(mission);
+    if let Some(line) = node.review_line(limit) {
+        parts.push(format!("round {} of {limit}", line.rounds));
+    }
+    if node
+        .woken
+        .iter()
+        .any(|woken| woken.why == crate::missions::FixReason::Conflict)
+    {
+        parts.push(
+            "conflicts with its base: merge the base branch into your branch (never rebase)"
+                .to_owned(),
+        );
+    }
+    (parts.join(" · "), failed, running)
 }
 
 /// The receivers one node's cells other than its Conductor's reach at

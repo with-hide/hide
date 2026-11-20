@@ -81,7 +81,6 @@ mod mission_health;
 pub(crate) mod mission_landing;
 mod mission_outside;
 mod mission_pull;
-mod mission_rounds;
 pub(crate) mod mission_views;
 pub(crate) mod missions;
 mod op_timing;
@@ -134,9 +133,8 @@ pub(crate) mod typed_input;
 #[cfg(test)]
 pub(crate) use status_cells::Cell as StatusCell;
 pub(crate) use status_cells::{
-    Point as StatusPoint, Take as StatusTake, child_subject as status_subject_child,
-    letter_subject as status_subject_letter, recipient_key as status_recipient,
-    render as status_text, with_status,
+    child_subject as status_subject_child, letter_subject as status_subject_letter,
+    recipient_key as status_recipient, render as status_text, with_status,
 };
 mod unreadable_letters;
 mod unseen_views;

@@ -289,20 +289,12 @@ fn a_parent_is_rung_once_for_a_new_cell_and_given_only_what_changed() {
     );
 
     // The turn takes the changed cell once; the next turn gets nothing.
-    let taken = runtime.take_status_of(
-        &parent,
-        ledger.as_deref(),
-        crate::runtime::StatusTake::Prompt(4_096),
-    );
+    let taken = runtime.take_status_of(&parent, ledger.as_deref(), Some(4_096));
     assert_eq!(taken.len(), 1, "{taken:?}");
     assert_eq!(taken[0].line, "still blocked");
     assert!(
         runtime
-            .take_status_of(
-                &parent,
-                ledger.as_deref(),
-                crate::runtime::StatusTake::Prompt(4_096)
-            )
+            .take_status_of(&parent, ledger.as_deref(), Some(4_096))
             .is_empty()
     );
 
@@ -322,11 +314,7 @@ fn a_parent_is_rung_once_for_a_new_cell_and_given_only_what_changed() {
     // News read once is gone.
     assert_eq!(
         runtime
-            .take_status_of(
-                &parent,
-                ledger.as_deref(),
-                crate::runtime::StatusTake::Prompt(4_096)
-            )
+            .take_status_of(&parent, ledger.as_deref(), Some(4_096))
             .len(),
         1
     );
@@ -387,11 +375,7 @@ fn a_cell_that_resolves_and_comes_back_rings_again() {
     // Read, resolved and back once more: it rings again too.
     assert_eq!(
         runtime
-            .take_status_of(
-                &parent,
-                ledger.as_deref(),
-                crate::runtime::StatusTake::Inbox
-            )
+            .take_status_of(&parent, ledger.as_deref(), None)
             .len(),
         1
     );
@@ -434,17 +418,15 @@ fn a_prompt_hook_that_carries_no_context_takes_no_cells() {
     let node = crate::node::TEST_NODE;
     assert!(
         runtime
-            .take_status(node, "w1:p1", crate::runtime::StatusTake::Prompt(4_096))
+            .take_status(node, "w1:p1", Some(4_096), false)
             .is_none(),
         "the prompt takes nothing"
     );
-    let inbox = runtime
-        .take_status(node, "w1:p1", crate::runtime::StatusTake::Inbox)
-        .unwrap();
+    let inbox = runtime.take_status(node, "w1:p1", None, false).unwrap();
     assert_eq!(inbox.len(), 1, "the inbox gives it");
     assert!(
         runtime
-            .take_status(node, "w1:p1", crate::runtime::StatusTake::Inbox)
+            .take_status(node, "w1:p1", None, false)
             .unwrap()
             .is_empty(),
         "once"
@@ -616,11 +598,7 @@ fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
         )
         .unwrap();
     let ledger = runtime.delivery_state().ok();
-    let given = runtime.take_status_of(
-        &recipient,
-        ledger.as_deref(),
-        crate::runtime::StatusTake::Inbox,
-    );
+    let given = runtime.take_status_of(&recipient, ledger.as_deref(), None);
     assert_eq!(
         given
             .iter()
@@ -639,22 +617,14 @@ fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
             )
             .unwrap();
         let ledger = runtime.delivery_state().ok();
-        let given = runtime.take_status_of(
-            &recipient,
-            ledger.as_deref(),
-            crate::runtime::StatusTake::Inbox,
-        );
+        let given = runtime.take_status_of(&recipient, ledger.as_deref(), None);
         assert_eq!(given.len(), 1, "only the news, at {index}");
     }
     for _ in 0..2 {
         let ledger = runtime.delivery_state().ok();
         assert!(
             runtime
-                .take_status_of(
-                    &recipient,
-                    ledger.as_deref(),
-                    crate::runtime::StatusTake::Inbox
-                )
+                .take_status_of(&recipient, ledger.as_deref(), None)
                 .is_empty(),
             "the standing cell is not handed again"
         );

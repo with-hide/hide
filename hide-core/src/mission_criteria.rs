@@ -342,19 +342,6 @@ pub struct Criterion {
     pub when: GateWhen,
 }
 
-/// A review's or verification's verdict from how many of its `total`
-/// deciding checkers passed and failed, under `rule` (D-07).
-fn decide(rule: Rule, passed: usize, failed: usize, total: usize) -> CriterionState {
-    match rule {
-        _ if total == 0 => CriterionState::Open,
-        Rule::All if failed > 0 => CriterionState::Fail,
-        Rule::All if passed == total => CriterionState::Pass,
-        Rule::Majority if passed * 2 > total => CriterionState::Pass,
-        Rule::Majority if failed * 2 >= total => CriterionState::Fail,
-        _ => CriterionState::Open,
-    }
-}
-
 fn is_zero(value: &u8) -> bool {
     *value == 0
 }
@@ -504,44 +491,14 @@ impl Criterion {
         }
         let (passed, total) = self.deciding();
         let failed = self.deciding_failed();
-        self.state = decide(self.rule.unwrap_or_default(), passed, failed, total);
-    }
-
-    /// The line's verdict in the round its node's last check opened
-    /// (`MissionNode::check_signal`, PRD mission-speed-2 D-02): of the
-    /// checkers bound to it, only the answers given since `since` count,
-    /// and of those, when both name a commit, only the ones on the round's
-    /// `commit`: an answer from before, or a late one on the commit before,
-    /// is the round before's. Open while the rule waits on a checker that
-    /// has not answered in the round. A skipped line is skipped.
-    pub(crate) fn round_state(&self, since: u64, commit: Option<&str>) -> CriterionState {
-        if self.skip.is_some() {
-            return CriterionState::Skipped;
-        }
-        let bound: Vec<&Checker> = self
-            .checkers
-            .iter()
-            .filter(|checker| checker.agent_id.is_some())
-            .collect();
-        let answered = |state: CriterionState| {
-            bound
-                .iter()
-                .filter(|checker| {
-                    checker.state == state
-                        && checker.at_unix_ms.is_some_and(|at| at >= since)
-                        && match (commit, checker.commit.as_deref()) {
-                            (Some(round), Some(read)) => same_commit(round, read),
-                            _ => true,
-                        }
-                })
-                .count()
+        self.state = match self.rule.unwrap_or_default() {
+            _ if total == 0 => CriterionState::Open,
+            Rule::All if failed > 0 => CriterionState::Fail,
+            Rule::All if passed == total => CriterionState::Pass,
+            Rule::Majority if passed * 2 > total => CriterionState::Pass,
+            Rule::Majority if failed * 2 >= total => CriterionState::Fail,
+            _ => CriterionState::Open,
         };
-        decide(
-            self.rule.unwrap_or_default(),
-            answered(CriterionState::Pass),
-            answered(CriterionState::Fail),
-            bound.len(),
-        )
     }
 
     /// The checkers whose answers decide the line now: the bound ones, on
@@ -1446,50 +1403,6 @@ mod tests {
     /// answer again, or a slow checker's answer on a head another moved past
     /// adds none; a checker's answer on another head than its last opens the
     /// next round, whatever it says, and a skip keeps the count (mission-82).
-    /// PRD mission-speed-2 D-02: a round's verdict counts only the answers
-    /// given since its check and, when both name one, on its commit; a late
-    /// answer on the commit before is the round before's, and the rule
-    /// waits on a checker that has not answered in the round.
-    #[test]
-    fn a_rounds_verdict_counts_only_its_own_answers() {
-        let input = CheckInput {
-            kind: CheckKind::Review,
-            rule: Rule::All,
-            by: vec![worker("codex"), worker("claude")],
-        };
-        let lines = plan_lines(&[], &["works".into()], &[input], false, true);
-        let mut line = bound(lines[1].clone());
-        let answer = |line: &mut Criterion, slot: usize, pass: bool, head: &str, at| {
-            line.record_checker(
-                slot,
-                pass,
-                Answer {
-                    evidence: Some("read".into()),
-                    commit: Some(head.to_owned()),
-                    ..Answer::default()
-                },
-                at,
-            )
-            .unwrap();
-        };
-        let (old, new) = ("a1b2c3d4e5f6", "b2c3d4e5f6a1");
-        answer(&mut line, 0, false, old, 5);
-        assert_eq!(line.round_state(10, Some(new)), CriterionState::Open);
-        // A late answer on the commit before, after the new check.
-        answer(&mut line, 1, false, old, 12);
-        assert_eq!(line.round_state(10, Some(new)), CriterionState::Open);
-        answer(&mut line, 0, false, &new[..7], 13);
-        assert_eq!(line.round_state(10, Some(new)), CriterionState::Fail);
-        answer(&mut line, 0, true, new, 14);
-        assert_eq!(line.round_state(10, Some(new)), CriterionState::Open);
-        answer(&mut line, 1, true, new, 15);
-        assert_eq!(line.round_state(10, Some(new)), CriterionState::Pass);
-        // With no commit on either side, time alone decides.
-        assert_eq!(line.round_state(16, None), CriterionState::Open);
-        line.skip("issues #1".into(), None, by(Role::Conductor));
-        assert_eq!(line.round_state(16, None), CriterionState::Skipped);
-    }
-
     #[test]
     fn a_check_by_others_counts_one_round_for_each_head_its_checkers_answer() {
         for kind in [CheckKind::Review, CheckKind::Verify] {
