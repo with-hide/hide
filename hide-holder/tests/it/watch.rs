@@ -103,6 +103,78 @@ fn read(state: ScreenState, rule: Option<&str>) -> ScreenRead {
     }
 }
 
+/// The actual PTY, holder and negotiated watch preserve lifecycle reports
+/// independently of screen rules. An older watcher still gets its original
+/// frame shape. ConPTY's OSC forwarding is covered by the Windows lane.
+#[test]
+fn a_watch_reports_explicit_program_status_only_when_negotiated() {
+    use hide_holder_protocol::ProgramState;
+    let home = Home::new();
+    let script = Script::new(
+        &home,
+        vec![
+            b"\x1b]7501;state=working:app=codex\x1b\\".to_vec(),
+            b"\x1b]7501;state=idle:app=codex\x1b\\".to_vec(),
+            b"\x1b]7501;state=done:app=codex\x1b\\".to_vec(),
+            b"\x1b]7501;state=clear\x1b\\\x1b]2;cleared\x07".to_vec(),
+        ],
+    );
+    let holder = script.start(&home);
+    let _connection = holder.open();
+    let mut watch = Watch::accepting(
+        &holder.socket,
+        vec![Capability::Facts, Capability::ProgramStatus],
+    );
+    for (step, expected) in [
+        ProgramState::Working,
+        ProgramState::Idle,
+        ProgramState::Done,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if step > 0 {
+            script.go(step);
+        }
+        let facts = watch.wait("the lifecycle report", |facts| {
+            facts
+                .program_status
+                .as_ref()
+                .and_then(Option::as_ref)
+                .is_some_and(|status| status.state == expected)
+        });
+        assert_eq!(facts.program_status.unwrap().unwrap().app, "codex");
+    }
+    watch.rules(Some(BUSY));
+    let retained = watch.wait("the first screen rules", |facts| {
+        matches!(facts.screen, ScreenRead::Read { .. })
+    });
+    assert_eq!(
+        retained
+            .program_status
+            .as_ref()
+            .and_then(Option::as_ref)
+            .unwrap()
+            .state,
+        ProgramState::Done
+    );
+    watch.rules(None);
+    let retired = watch.wait("the retired agent report", |facts| {
+        facts.screen == ScreenRead::NoRules
+    });
+    assert_eq!(retired.program_status, Some(None));
+    script.go(3);
+    let cleared = watch.wait("the cleared report", |facts| {
+        facts.title.as_deref() == Some("cleared")
+    });
+    assert_eq!(cleared.program_status, Some(None));
+    let mut older = Watch::open(&holder.socket);
+    assert_eq!(
+        older.wait("old-format facts", |_| true).program_status,
+        None
+    );
+}
+
 #[test]
 fn a_watch_follows_the_panes_facts_and_hands_them_to_a_newer_watch() {
     let home = Home::new();

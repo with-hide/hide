@@ -10,7 +10,9 @@
 //! engine never reads a screen on a timer. The agent ends when its program
 //! leaves the foreground.
 //!
-//! The state is what the screen rules read: working, waiting on the operator
+//! An explicit program lifecycle report naming the recognized agent takes
+//! priority over screen inference: idle after startup work is not done.
+//! Without one, the state is what the screen rules read: working, waiting on the operator
 //! (blocked), or at rest, and at rest after working is a finished turn
 //! (`done`, with the sequence it finished at). A screen no rule matches is
 //! at rest. The core lays the agent's
@@ -24,7 +26,7 @@ use std::time::Instant;
 use hide_agent_adapter::definition::{Catalog, Definition, Source};
 use hide_agent_hooks::hook_request::ExecProcess;
 use hide_node_link::holders::{
-    ForegroundProgram, PaneFacts, RuleSet, ScreenRead, ScreenRules, ScreenState,
+    ForegroundProgram, PaneFacts, ProgramState, RuleSet, ScreenRead, ScreenRules, ScreenState,
 };
 
 use super::shell_line::stripped_title;
@@ -808,7 +810,8 @@ pub(super) fn apply(
             current.live.line_editing = facts.line_editing;
             applied.changed |= current.live.started.is_some();
         }
-        let mut status = status_of(&facts.screen, current.live.status);
+        let mut status = reported_status(facts, &current.kind, current.live.status)
+            .unwrap_or_else(|| status_of(&facts.screen, current.live.status));
         // A screen no rules read never says the agent rests, so once its
         // program takes input it reads idle, and its integration's turns say
         // when it works (they outrank this, `agent_state::axes`). Read unknown,
@@ -847,8 +850,27 @@ pub(super) fn stripped(facts: &PaneFacts) -> Option<String> {
     facts.title.as_deref().and_then(stripped_title)
 }
 
-/// The state `screen` reads for an agent that was `before`: at rest after
-/// working is a finished turn, which stays one until the agent works again.
+/// An explicit lifecycle report for this agent, independent of screen activity.
+fn reported_status(facts: &PaneFacts, kind: &str, before: Status) -> Option<Status> {
+    let report = facts
+        .program_status
+        .as_ref()
+        .filter(|report| report.app == kind)?;
+    Some(match report.state {
+        // Startup and other background work also report working. Only an
+        // explicit done finishes a turn; idle cannot invent a completion.
+        // Once done, keep Hide's completion until the next work begins:
+        // the program acknowledging its own result does not mark ours read.
+        ProgramState::Idle if before == Status::Done => Status::Done,
+        ProgramState::Idle => Status::Idle,
+        ProgramState::Working => Status::Working,
+        ProgramState::Blocked => Status::Blocked,
+        ProgramState::Done => Status::Done,
+        ProgramState::Error => Status::Unknown,
+    })
+}
+
+/// The fallback screen state: at rest after work is inferred completion.
 fn status_of(screen: &ScreenRead, before: Status) -> Status {
     let read = match screen {
         ScreenRead::Read {
@@ -1091,6 +1113,78 @@ mod tests {
         // The same reading again moves nothing.
         assert_eq!(at(ScreenState::Idle), (Status::Done, Some(3), 3));
         assert_eq!(at(ScreenState::Blocked), (Status::Blocked, None, 4));
+    }
+
+    #[test]
+    fn startup_activity_does_not_finish_a_turn_but_explicit_done_does() {
+        use hide_node_link::holders::ProgramStatus;
+        let mut pane = Pane::new();
+        let mut at = |reported, screen| {
+            pane.facts(PaneFacts {
+                foreground: program("codex"),
+                screen: read(screen),
+                program_status: Some(Box::new(ProgramStatus {
+                    app: "codex".to_owned(),
+                    state: reported,
+                })),
+                ..PaneFacts::default()
+            });
+            let agent = pane.agent.as_ref().unwrap();
+            (agent.live.status, agent.live.completion)
+        };
+        // Codex's MCP startup animates its title, then reports idle without
+        // a user turn. A lingering spinner must not outrank explicit idle.
+        assert_eq!(
+            at(ProgramState::Idle, ScreenState::Working),
+            (Status::Idle, None)
+        );
+        assert_eq!(
+            at(ProgramState::Working, ScreenState::Working),
+            (Status::Working, None)
+        );
+        assert_eq!(
+            at(ProgramState::Idle, ScreenState::Idle),
+            (Status::Idle, None)
+        );
+        assert_eq!(
+            at(ProgramState::Working, ScreenState::Working),
+            (Status::Working, None)
+        );
+        let done = at(ProgramState::Done, ScreenState::Idle);
+        assert_eq!(done.0, Status::Done);
+        assert!(done.1.is_some());
+        assert_eq!(at(ProgramState::Idle, ScreenState::Idle), done);
+        assert_eq!(
+            at(ProgramState::Working, ScreenState::Idle),
+            (Status::Working, None)
+        );
+        assert_eq!(
+            at(ProgramState::Blocked, ScreenState::Idle),
+            (Status::Blocked, None)
+        );
+        assert_eq!(
+            at(ProgramState::Idle, ScreenState::Idle),
+            (Status::Idle, None)
+        );
+        assert_eq!(
+            at(ProgramState::Error, ScreenState::Idle),
+            (Status::Unknown, None)
+        );
+    }
+
+    #[test]
+    fn another_programs_report_does_not_override_the_agent() {
+        let mut pane = Pane::new();
+        pane.facts(PaneFacts {
+            foreground: program("claude"),
+            screen: read(ScreenState::Working),
+            program_status: Some(Box::new(hide_node_link::holders::ProgramStatus {
+                app: "codex".to_owned(),
+                state: ProgramState::Idle,
+            })),
+            ..PaneFacts::default()
+        });
+        assert_eq!(pane.agent.as_ref().unwrap().live.status, Status::Working);
     }
 
     #[test]

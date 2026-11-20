@@ -16,6 +16,8 @@
 
 use std::path::PathBuf;
 
+use hide_holder_protocol::{ProgramState, ProgramStatus};
+
 /// The longest OSC body the collector keeps; a longer one is dropped whole.
 const MAX_BODY_BYTES: usize = 4096;
 
@@ -173,6 +175,7 @@ pub struct OscState {
     progress: Option<String>,
     /// OSC 133;A marks since the pane began.
     prompts: u64,
+    program_status: Option<ProgramStatus>,
 }
 
 impl OscState {
@@ -183,6 +186,7 @@ impl OscState {
             rules_title,
             progress,
             prompts,
+            program_status,
         } = self;
         collector.observe(bytes, |body| {
             let Some((command, payload)) = split_body(body) else {
@@ -198,7 +202,9 @@ impl OscState {
                 b"9" => *progress = Some(sanitize(payload, MAX_CHARS)),
                 b"133" if payload == b"A" || payload.starts_with(b"A;") => {
                     *prompts = prompts.saturating_add(1);
+                    *program_status = None;
                 }
+                b"7501" => *program_status = parse_program_status(payload),
                 _ => {}
             }
         });
@@ -223,13 +229,57 @@ impl OscState {
         self.prompts
     }
 
-    /// Drops the title and progress the screen rules read, as is done
+    pub fn program_status(&self) -> Option<&ProgramStatus> {
+        self.program_status.as_ref()
+    }
+
+    /// Drops the prior agent's title, progress and lifecycle report, as is done
     /// when a pane's agent changes; a sequence in flight still finishes and
     /// counts for the new one.
     pub fn clear_retained(&mut self) {
         self.rules_title = None;
         self.progress = None;
+        self.program_status = None;
     }
+}
+
+/// OSC 7501 fields are colon-separated key/value pairs. Unknown fields are
+/// forward compatible; duplicate required fields and malformed reports are
+/// not evidence of a lifecycle state. `state=clear` releases the report.
+fn parse_program_status(payload: &[u8]) -> Option<ProgramStatus> {
+    let payload = std::str::from_utf8(payload).ok()?;
+    let mut state = None;
+    let mut app = None;
+    for field in payload.split(':') {
+        let (key, value) = field.split_once('=')?;
+        match key {
+            "state" if state.is_none() => state = Some(value),
+            "app" if app.is_none() => app = Some(value),
+            "state" | "app" => return None,
+            _ => {}
+        }
+    }
+    let state = match state? {
+        "idle" => ProgramState::Idle,
+        "working" => ProgramState::Working,
+        "blocked" => ProgramState::Blocked,
+        "done" => ProgramState::Done,
+        "error" => ProgramState::Error,
+        _ => return None,
+    };
+    let app = app?;
+    if app.is_empty()
+        || app.len() > 64
+        || !app
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
+        return None;
+    }
+    Some(ProgramStatus {
+        app: app.to_owned(),
+        state,
+    })
 }
 
 /// Splits an OSC body at the first `;`, returning `(command, payload)`.
@@ -361,6 +411,42 @@ mod tests {
             b"A\x07",
         ]);
         assert_eq!(state.prompts(), 3);
+    }
+
+    #[test]
+    fn program_status_is_framed_bounded_and_cleared_without_a_title_change() {
+        let mut state = observed(&[b"\x1b]7501;state=working:app=codex\x1b", b"\\"]);
+        assert_eq!(state.program_status().unwrap().state, ProgramState::Working);
+        // An agent change must not pass its report to the next process.
+        state.clear_retained();
+        assert_eq!(state.program_status(), None);
+        state.observe(b"\x1b]7501;state=idle:app=codex\x07");
+        assert_eq!(state.program_status().unwrap().state, ProgramState::Idle);
+        state.observe(b"\x1b]7501;state=blocked:app=codex:kind=question\x1b\\");
+        assert_eq!(state.program_status().unwrap().state, ProgramState::Blocked);
+        state.observe(b"\x1b]7501;state=done:app=codex\x1b\\");
+        assert_eq!(state.program_status().unwrap().state, ProgramState::Done);
+        state.observe(b"\x1b]7501;state=clear\x1b\\");
+        assert_eq!(state.program_status(), None);
+        for invalid in [
+            "state=done",
+            "state=unknown:app=codex",
+            "state=done:app=",
+            "state=done:app=codex:state=idle",
+            "state=done:app=codex:app=other",
+            "state=done:app=bad app",
+        ] {
+            state.observe(format!("\x1b]7501;{invalid}\x07").as_bytes());
+            assert_eq!(state.program_status(), None, "{invalid}");
+        }
+        state.observe(b"\x1b]7501;state=done:app=codex\x07\x1b]133;A\x07");
+        assert_eq!(
+            state.program_status(),
+            None,
+            "a shell prompt ends the report's ownership"
+        );
+        state.observe(format!("\x1b]7501;state=done:app={}\x07", "x".repeat(65)).as_bytes());
+        assert_eq!(state.program_status(), None);
     }
 
     #[test]
