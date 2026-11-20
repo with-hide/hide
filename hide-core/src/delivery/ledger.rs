@@ -339,6 +339,19 @@ impl Letter {
                 .is_none_or(|finished| now.saturating_sub(finished) < RETENTION_MS)
     }
 
+    /// Whether the letter is a first inactivity warning to a pane observer
+    /// whose escalation to the operator (`human::claim`) may still be owed:
+    /// not yet notified, and neither acknowledged nor cancelled. A letter
+    /// that finished so stays when a full ledger drops finished letters, as
+    /// the escalation reads it; the one-day cleanup still takes it.
+    pub(crate) fn escalation_owed(&self) -> bool {
+        self.watch_warning
+            .as_ref()
+            .is_some_and(|warning| warning.ordinal == 1 && !warning.parent_notified)
+            && !self.recipient.code_owned()
+            && !matches!(self.state, State::Acknowledged | State::Cancelled)
+    }
+
     pub(crate) fn intake_confirmed(&self) -> bool {
         // Only legacy Delivered proves a hook confirmation. A legacy Ack
         // may have preceded intake, so its missing receipt remains unknown,

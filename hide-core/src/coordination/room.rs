@@ -7,10 +7,10 @@
 //!
 //! The file holds at most [`FILE_LIMIT`] bytes, which finished spawn records
 //! reached long before their count did while each kept its brief. Any change
-//! that would take the file past it, whatever it adds, drops the oldest
-//! finished spawn records nothing keeps, then the finished letters that
-//! finished first (`mailbox::finished_oldest_first`, the rule of the letter
-//! total), then the oldest ended registrations nothing names, until the file
+//! that would take the file past it, whatever it adds, drops the finished
+//! letters that finished first (`mailbox::finished_oldest_first`, the rule
+//! of the letter total), then the oldest finished spawn records nothing
+//! keeps, then the oldest ended registrations nothing names, until the file
 //! fits; it is refused with `capacity` only when what is left still does not
 //! ([`for_size`]). A completed spawn whose child ended lets its brief and
 //! launch words go ([`shed_finished_briefs`]), so its record stays small.
@@ -29,8 +29,9 @@
 //! A spawn record has finished once nothing can move it on: its child has
 //! ended, or it has no child and its parent has ended, since every step of
 //! a spawn is its parent's. It is kept while an identity wait or a plan
-//! step still handed names it, or while its child is held, whose brief the
-//! mission panel reads from it. A finished spawn names nothing of its own:
+//! step still handed names it, or while its child is held, so the mission
+//! or plan that holds the child still finds the spawn that made it. A
+//! finished spawn names nothing of its own:
 //! it goes with the registration it made or, childless, with its parent.
 //!
 //! Anything else that names a registration (Desk's job cards, sleep and
@@ -169,47 +170,52 @@ pub(super) fn for_spawn(ledger: &mut Ledger, holds: &dyn Holds) -> Result<(), St
 }
 
 /// Keeps `ledger` within [`FILE_LIMIT`] after a change: a ledger past it
-/// drops its oldest finished spawn records nothing keeps, then its finished
-/// letters, the one that finished first first, then its oldest ended
+/// drops its finished letters, the one that finished first first, then its
+/// oldest finished spawn records nothing keeps, then its oldest ended
 /// registrations nothing names, until it fits, and answers what it dropped.
+/// Letters go first: a finished letter only keeps history and a retried
+/// send's answer for minutes, and weighs more than a finished spawn record
+/// without its brief, whose loss makes a retried spawn start a new agent.
 /// It is refused with `capacity`, unchanged, only when dropping all of them
-/// would not be enough. The core's books are read only once the ledger is
-/// past the limit, and a ledger within it is left as it is.
+/// would not be enough. The core's books are read only once the finished
+/// letters are not enough, and a ledger within the limit is left as it is.
 pub(crate) fn for_size(ledger: &mut Ledger, holds: &dyn Holds) -> Result<Option<Made>, String> {
     let size = ledger.size()?;
     let over = size.saturating_sub(FILE_LIMIT);
     if over == 0 {
         return Ok(None);
     }
-    let held = holds.held()?;
-    let named = Named::of(ledger, held);
-    let mut spawns = Room::of(ledger.spawns.len());
-    for spawn in &ledger.spawns {
-        if spawns.freed >= over {
-            break;
-        }
-        if !named.spawns.contains(spawn.id.as_str()) {
-            spawns.take(&spawn.id, spawn)?;
-        }
-    }
     // A finished letter names no one, so letting it go keeps every record.
     let mut letters = Room::of(ledger.letters.len());
     for index in crate::delivery::mailbox::finished_oldest_first(ledger) {
-        if spawns.freed + letters.freed >= over {
+        if letters.freed >= over {
             break;
         }
         let letter = &ledger.letters[index];
         letters.take(&letter.id, letter)?;
     }
-    // A registration goes only once every spawn record that can has gone:
-    // one naming it is either kept, and so names it, or gone above.
+    let mut spawns = Room::of(ledger.spawns.len());
     let mut agents = Room::of(ledger.agents.len());
-    for agent in &ledger.agents {
-        if spawns.freed + letters.freed + agents.freed >= over {
-            break;
+    // The core's books are read only when the letters are not enough.
+    if letters.freed < over {
+        let named = Named::of(ledger, holds.held()?);
+        for spawn in &ledger.spawns {
+            if letters.freed + spawns.freed >= over {
+                break;
+            }
+            if !named.spawns.contains(spawn.id.as_str()) {
+                spawns.take(&spawn.id, spawn)?;
+            }
         }
-        if agent.ended && !named.agents.contains(agent.id.as_str()) {
-            agents.take(&agent.id, agent)?;
+        // A registration goes only once every spawn record that can has
+        // gone: one naming it is either kept, and so names it, or gone above.
+        for agent in &ledger.agents {
+            if letters.freed + spawns.freed + agents.freed >= over {
+                break;
+            }
+            if agent.ended && !named.agents.contains(agent.id.as_str()) {
+                agents.take(&agent.id, agent)?;
+            }
         }
     }
     let freed = spawns.freed + letters.freed + agents.freed;
@@ -447,7 +453,7 @@ pub(crate) mod tests {
 
     const NOW: u64 = 1_000;
 
-    fn actor(n: u64) -> Actor {
+    pub(crate) fn actor(n: u64) -> Actor {
         Actor {
             pane_id: format!("w1:p{n}"),
             name: format!("a{n}"),
@@ -457,7 +463,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn agent(n: u64, ended: bool) -> AgentRecord {
+    pub(crate) fn agent(n: u64, ended: bool) -> AgentRecord {
         let actor = actor(n);
         AgentRecord {
             id: format!("agent-{n}"),
@@ -479,7 +485,7 @@ pub(crate) mod tests {
     }
 
     /// A spawn record `spawn-{n}` of `parent`, with `child` bound when given.
-    fn spawn(n: u64, parent: u64, child: Option<u64>) -> SpawnRecord {
+    pub(crate) fn spawn(n: u64, parent: u64, child: Option<u64>) -> SpawnRecord {
         serde_json::from_value(json!({
             "id": format!("spawn-{n}"), "parent": format!("agent-{parent}"),
             "intent": format!("intent-{n}"), "name": "worker", "kind": "codex",
@@ -1050,12 +1056,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_ledger_past_its_file_limit_drops_finished_letters_after_spawn_records_and_before_registrations()
-     {
-        // agent-2 runs, so its spawn records stay; agents 3 to 8 ended and
-        // nothing names them.
+    fn a_ledger_past_its_file_limit_drops_finished_letters_before_spawn_records_and_registrations()
+    {
+        // agent-2 made every spawn record and ended, so they have finished;
+        // agents 3 to 8 ended and nothing names them.
         let mut ledger = Ledger {
-            agents: (1..=8).map(|n| agent(n, n > 2)).collect(),
+            agents: (1..=8).map(|n| agent(n, n > 1)).collect(),
             next_id: 100_000,
             ..Ledger::default()
         };
@@ -1087,6 +1093,62 @@ pub(crate) mod tests {
         assert_eq!(ledger.spawns.len(), spawns);
         assert!((1..=8).all(|n| holds_agent(&ledger, n)));
         assert_eq!((made.spawns, made.letters, made.agents), (0, 2, 0));
+    }
+
+    #[test]
+    fn a_first_watch_warning_whose_escalation_is_owed_stays_when_a_full_ledger_drops_letters() {
+        // Every spawn record is live, so only finished letters can go: a
+        // first warning to the lead about agent-2, finished first, then two
+        // ordinary letters.
+        let full = |notified: bool| {
+            let mut ledger = Ledger {
+                agents: vec![agent(1, false), agent(2, false)],
+                next_id: 100_000,
+                ..Ledger::default()
+            };
+            let warning = crate::delivery::mailbox::send(
+                &mut ledger,
+                &actor(3),
+                &actor(1),
+                "warning",
+                &"w".repeat(9_000),
+                "watch",
+                None,
+                NOW,
+            )
+            .unwrap()
+            .id;
+            let letter = ledger
+                .letters
+                .iter_mut()
+                .find(|letter| letter.id == warning)
+                .unwrap();
+            letter.watch_warning = Some(crate::delivery::watch::WarningReceipt {
+                target: actor(2),
+                activity_at_unix_ms: NOW,
+                ordinal: 1,
+                parent_notified: notified,
+            });
+            letter.state = State::Delivered;
+            letter.hook_confirmed = Some(true);
+            letter.finished_at_unix_ms = Some(NOW);
+            let first = finished_letter(&mut ledger, 5, 9_000);
+            let second = finished_letter(&mut ledger, 9, 9_000);
+            fill_with_briefs(&mut ledger, "agent-2", 100);
+            long_letter(&mut ledger);
+            (ledger, warning, first, second)
+        };
+        // The operator may still be told the lead did not answer it.
+        let (mut ledger, warning, first, second) = full(false);
+        for_size(&mut ledger, &Held::default()).unwrap();
+        let kept = |ledger: &Ledger, id: &str| ledger.letters.iter().any(|letter| letter.id == id);
+        assert!(kept(&ledger, &warning));
+        assert!(!kept(&ledger, &first) && !kept(&ledger, &second));
+        // Once the operator was told, it goes first like any other.
+        let (mut ledger, warning, first, second) = full(true);
+        for_size(&mut ledger, &Held::default()).unwrap();
+        assert!(!kept(&ledger, &warning) && !kept(&ledger, &first));
+        assert!(kept(&ledger, &second));
     }
 
     #[test]

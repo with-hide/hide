@@ -188,21 +188,24 @@ fn oldest_finished(ledger: &Ledger) -> Option<usize> {
 }
 
 /// Where every finished letter stands, the one that finished first first:
-/// the order a ledger past its file's limit drops them in (`Ledger::fit`).
+/// the order a ledger past its file's limit drops them in
+/// (`coordination::room::for_size`).
 pub(crate) fn finished_oldest_first(ledger: &Ledger) -> Vec<usize> {
     let mut order: Vec<_> = finished(ledger).collect();
     order.sort_unstable();
     order.into_iter().map(|(_, index)| index).collect()
 }
 
-/// Each finished letter as `(when it finished, where it stands)`, which
-/// orders them by when they finished, ties by the earlier sent.
+/// Each finished letter a full ledger may drop as `(when it finished, where
+/// it stands)`, which orders them by when they finished, ties by the
+/// earlier sent: one whose escalation may still be owed stays
+/// (`Letter::escalation_owed`).
 fn finished(ledger: &Ledger) -> impl Iterator<Item = (u64, usize)> + '_ {
     ledger
         .letters
         .iter()
         .enumerate()
-        .filter(|(_, letter)| !letter.open())
+        .filter(|(_, letter)| !letter.open() && !letter.escalation_owed())
         .map(|(index, letter)| {
             (
                 letter

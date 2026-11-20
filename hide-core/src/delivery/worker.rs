@@ -1572,6 +1572,8 @@ fn rebuild(
                 Err(code) => {
                     accepted[index] = false;
                     results[index] = Err(code.clone());
+                    // A refused request made no room.
+                    rooms[index] = None;
                     crate::diagnostic!(json!({"component":"delivery",
                         "kind":"ledger.replay_refused","code":code}));
                     continue 'again;
@@ -2997,6 +2999,51 @@ mod tests {
         assert_eq!(settled.results[0], Err("capacity".into()));
         assert_eq!(settled.ledger, *state);
         assert!(settled.bytes.is_none());
+    }
+
+    #[test]
+    fn a_batch_lets_a_finished_spawns_brief_go_and_keeps_a_running_ones() {
+        use crate::coordination::room::tests::{agent, spawn};
+        use crate::coordination::{AgentRecord, SpawnRecord};
+        use sha2::Digest;
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, ..) = fixture(root.path());
+        let brief = "Fix the flaky test, then report.";
+        let child = |n, ended| AgentRecord {
+            parent: Some("agent-1".into()),
+            ..agent(n, ended)
+        };
+        // The lead's spawn-3000 made agent-2, which ended; spawn-3001 made
+        // agent-3, which runs.
+        let mut installed = Ledger {
+            agents: vec![agent(1, false), child(2, true), child(3, false)],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        for (n, made) in [(3000, 2), (3001, 3)] {
+            installed.spawns.push(SpawnRecord {
+                brief: Some(brief.into()),
+                launch_words: vec!["--prompt".into(), brief.into()],
+                ..spawn(n, 1, Some(made))
+            });
+        }
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(installed), false);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let settled = settle(&runtime, &state, &upkeep(), &[], now());
+        let saved = ledger::from_bytes(&settled.bytes.unwrap().unwrap()).unwrap();
+        let (ended, running) = (&saved.spawns[0], &saved.spawns[1]);
+        assert_eq!(ended.brief, None);
+        assert!(ended.launch_words.is_empty());
+        assert_eq!(
+            ended.brief_sha256.as_deref(),
+            Some(format!("{:x}", sha2::Sha256::digest(brief.as_bytes())).as_str())
+        );
+        assert_eq!(running.brief.as_deref(), Some(brief));
+        assert_eq!(running.launch_words, ["--prompt", brief]);
+        assert_eq!(running.brief_sha256, None);
     }
 
     /// The intent and letter id each request at `indexes` was answered.
