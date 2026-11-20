@@ -547,7 +547,10 @@ pub(crate) fn mutation_failure(operation: &str) -> impl FnOnce(EngineError) -> C
 /// at a question, not at its prompt, or not reading its line yet) is refused
 /// as `agent_start::SHELL_STARTING` with the screen's last line when there
 /// is one, so the spawn that asked can say what the shell waits for.
-#[allow(clippy::too_many_arguments)] // the start identity and the pane's node
+/// `check` is asked once the shell is ready, before each typed attempt; a
+/// folder it reads as gone (`coordination::FOLDER_GONE`) leaves the pane
+/// unused.
+#[allow(clippy::too_many_arguments)] // the start identity, the pane's node and its admission
 pub(crate) fn start_agent(
     engine: &dyn Engine,
     node: Option<&dyn crate::node_access::NodeLink>,
@@ -560,6 +563,7 @@ pub(crate) fn start_agent(
     args: Vec<String>,
     codex_daemon: crate::codex_launch::CodexDaemon,
     program: Option<crate::engine::StartProgram>,
+    check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Started, NotStarted> {
     start_agent_checked(
         engine,
@@ -573,12 +577,18 @@ pub(crate) fn start_agent(
         args,
         codex_daemon,
         program,
-        &|| Ok(()),
+        check,
     )
     .map_err(|error| {
         let unused = match &error {
             crate::agent_start::StartError::ShellStarting { .. } => {
                 Some(crate::agent_start::SHELL_STARTING)
+            }
+            // The check refused before anything was typed.
+            crate::agent_start::StartError::NotStarted { reason, .. }
+                if reason == crate::coordination::FOLDER_GONE =>
+            {
+                Some(crate::coordination::FOLDER_GONE)
             }
             crate::agent_start::StartError::Engine(EngineError::Refused { code, .. })
                 if code == crate::launch::PROFILE_REFUSED =>

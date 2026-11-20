@@ -17,7 +17,10 @@ function printedReset(at: Date, now: Date): string {
  * prints a `/usage` result frame: 62% of the week with a 6% Fable bucket,
  * both resetting on the whole hour five days and five hours from now. The
  * usage child only receives the account's login variables (`hide-platform`'s
- * `LOGIN_CHILD_VARIABLES`), so the script carries its paths itself.
+ * `LOGIN_CHILD_VARIABLES`), so the script carries its paths itself. A `codex`
+ * beside it answers nothing: it is there so a Codex CLI login that cannot be
+ * read reads as signed out on every machine, never as not installed on one
+ * whose own folders hold no `codex`.
  */
 export function usageShim() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hide-e2e-usage-"));
@@ -45,6 +48,7 @@ while (!fs.existsSync(${JSON.stringify(gate)})) Atomics.wait(new Int32Array(new 
 process.stdout.write(fs.readFileSync(${JSON.stringify(frame)}));
 `,
   );
+  fixtureProgram(bin, "codex", "process.exit(1);\n");
   return {
     path: fixtureToolPath(bin),
     /** When both weekly windows reset, on the whole hour the CLI prints. */

@@ -1026,6 +1026,30 @@ fn register_code_owned(
 /// How long the device's node may take to answer one of the spawn's checks.
 const TARGET_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Whether `folder` is a folder on the machine `node` runs, asked of that
+/// machine now and off the runtime lock: one that is gone is refused as
+/// [`super::FOLDER_GONE`], and a machine that cannot answer refuses the
+/// start as unanswered, since an unattended start never runs in a folder
+/// no one confirmed.
+fn folder_there(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    folder: &str,
+) -> Result<(), String> {
+    use crate::node_access::{call_as, link_failure_code};
+    let node = node.ok_or("machine_unavailable")?;
+    match call_as::<Option<String>>(
+        node,
+        hide_node_link::protocol::Call::Directory {
+            path: folder.to_owned(),
+        },
+        TARGET_CHECK_TIMEOUT,
+    ) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(super::FOLDER_GONE.to_owned()),
+        Err(error) => Err(link_failure_code(&error)),
+    }
+}
+
 /// The destination a mission's spawn starts a new branch from, judged
 /// before anything is made (PRD mission-destination D-04): the mission's
 /// destination when the spawn's repository is the mission's project, read
@@ -1439,6 +1463,28 @@ fn spawn(
         )?;
         // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
         answer_by += hook_started.elapsed();
+    }
+    // An automation's run works unattended, so its folder is read as its
+    // machine has it now, not as the catalog read it up to a minute ago: a
+    // pane asked for a folder that is gone opens in the home folder
+    // instead, and the run would work there. It is asked before anything is
+    // reserved, so one that is gone leaves nothing behind; a retry whose pane
+    // exists is judged before its start is typed.
+    let unattended = task
+        .as_ref()
+        .is_some_and(|task| task.kind == super::TaskKind::Automation);
+    if unattended && earlier.as_ref().is_none_or(|record| record.pane.is_none()) {
+        let device = machine.as_deref().unwrap_or(&actor.device_id);
+        let node = context(client, device)
+            .map_err(|reason| {
+                if machine.is_some() {
+                    "machine_unavailable".to_owned()
+                } else {
+                    reason
+                }
+            })?
+            .node;
+        folder_there(node.as_deref(), repo)?;
     }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
@@ -1886,6 +1932,18 @@ fn spawn(
                     "pane_id": pane,
                 }));
             }
+            // The pane's shell opened where its machine put it: an unattended
+            // start is typed only while its folder is there, so a folder gone
+            // before the pane was made, its shell left in the home folder,
+            // starts no agent.
+            let folder = reserved.path.as_deref().unwrap_or(repo);
+            let check = || {
+                if unattended {
+                    folder_there(node.as_deref(), folder)
+                } else {
+                    Ok(())
+                }
+            };
             let started = crate::live::start_agent(
                 engine.as_ref(),
                 node.as_deref(),
@@ -1899,6 +1957,7 @@ fn spawn(
                 codex_daemon,
                 form.as_ref()
                     .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+                &check,
             )
             .map_err(|not| {
                 // A pane nothing of this start is left in closes, so the

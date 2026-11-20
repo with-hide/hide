@@ -1465,6 +1465,38 @@ fn a_start_refused_for_an_agent_not_set_up_stops_the_automation() {
     assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
 }
 
+/// B23: a start refused because its folder is gone on its machine, as the
+/// spawn finds it right before the pane and again before the start is typed,
+/// stops the automation as folder missing with its Needs You line, and is not
+/// tried again: a run started anywhere else would work where nobody set it.
+#[test]
+fn a_start_refused_for_a_folder_gone_stops_the_automation() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.answer(
+        &intent(&id, 1, 1),
+        &[Answer::Refused(crate::coordination::FOLDER_GONE)],
+    );
+    harness.tick(1);
+    harness.tick(1);
+    assert_eq!(
+        harness.run(&id),
+        (
+            json!("failed"),
+            json!(1),
+            json!("automation_folder_missing")
+        )
+    );
+    assert_eq!(harness.asked().len(), 1);
+    let mut runtime = harness.runtime.lock().unwrap();
+    assert_eq!(
+        show(&mut runtime, &id)["paused"]["reason"],
+        "folder_missing"
+    );
+    assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
+}
+
 /// B23: an agent whose program this machine does not find stops the
 /// automation for a person before anything is typed, rather than leaving a
 /// shell that never starts an agent and reads as a start that stopped
@@ -2175,6 +2207,94 @@ fn the_window_never_opens_on_an_automations_own_folder() {
     assert_eq!(
         runtime.snapshot.navigator.focused_checkout_id.as_deref(),
         Some("c-project")
+    );
+}
+
+/// Together F2: the operator came to a run's terminal in an automation's
+/// own folder, which no list shows. While it is open the Workspace and
+/// Changes name that folder; once the engine has no pane there they go back
+/// to the project last in front that a list shows, else to the first one
+/// listed.
+#[test]
+fn the_focus_leaves_an_automations_own_folder_once_its_last_pane_closes() {
+    let state = tempfile::tempdir().unwrap();
+    let mut runtime = automations_runtime(&state);
+    let (id, _) = add(&mut runtime, "Issues");
+    let folder = show(&mut runtime, &id)["folder"]["path"]
+        .as_str()
+        .expect("its own folder")
+        .to_owned();
+    let folder = folder.as_str();
+    let mut own = workspace(
+        "w-auto",
+        "Issues",
+        folder,
+        vec![checkout(
+            "w-auto",
+            "c-auto",
+            folder,
+            Some(super::pane("w-auto:p1", folder)),
+        )],
+    );
+    own.unlisted = true;
+    let listed = |id: &str| {
+        let path = format!("/srv/{id}");
+        workspace(
+            &format!("w-{id}"),
+            id,
+            &path,
+            vec![checkout(
+                &format!("w-{id}"),
+                &format!("c-{id}"),
+                &path,
+                None,
+            )],
+        )
+    };
+    runtime.snapshot.navigator.workspaces = vec![listed("first"), listed("project"), own];
+    let look_at = |runtime: &mut Runtime, checkout: &str| {
+        runtime.snapshot.navigator.focused_checkout_id = Some(checkout.into());
+        runtime.resync_navigator_focus();
+        runtime.track_recent_checkouts();
+    };
+    let front = |runtime: &Runtime| {
+        (
+            runtime.snapshot.navigator.focused_checkout_id.clone(),
+            runtime.snapshot.navigator.root_path.clone(),
+        )
+    };
+    look_at(&mut runtime, "c-project");
+    look_at(&mut runtime, "c-auto");
+    assert_eq!(
+        front(&runtime),
+        (Some("c-auto".into()), Some(folder.into())),
+        "the run's terminal is open"
+    );
+    let close = |runtime: &mut Runtime| {
+        let own = runtime
+            .snapshot
+            .navigator
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.id == "w-auto")
+            .expect("the automation's folder");
+        own.checkouts[0].tabs.clear();
+        own.checkouts[0].has_panes = false;
+        runtime.resync_navigator_focus();
+    };
+    close(&mut runtime);
+    assert_eq!(
+        front(&runtime),
+        (Some("c-project".into()), Some("/srv/project".into()))
+    );
+
+    // No project a list shows was in front: the first one listed.
+    runtime.snapshot.ui_state.recent_checkouts.clear();
+    runtime.snapshot.navigator.focused_checkout_id = Some("c-auto".into());
+    runtime.resync_navigator_focus();
+    assert_eq!(
+        front(&runtime),
+        (Some("c-first".into()), Some("/srv/first".into()))
     );
 }
 
