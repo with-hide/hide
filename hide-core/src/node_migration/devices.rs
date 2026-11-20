@@ -39,7 +39,7 @@ use super::reown::{self, Change, IdTable};
 use super::{
     BACKUP_DIR, Backup, COMPOSER_MARKS, CORE_STATE, DELIVERY_LEDGER, HOOK_FACTS, KEYS, LABELS,
     LINKS, LOCAL_ISSUES, MISSIONS, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH, WORKSPACE_VIEWS,
-    mission_files, read_json, write,
+    mission_files, read_json, read_store, store_path, write, write_store,
 };
 use crate::address::{Kind, Scoped};
 use crate::node::NodeId;
@@ -311,8 +311,8 @@ impl Stores {
     fn read(state_dir: &Path, json: bool) -> Result<Self, Refusal> {
         let mut stores = BTreeMap::new();
         for file in STORES.iter().chain([&CORE_STATE]).filter(|_| json) {
-            let path = state_dir.join(file);
-            if let Some(value) = read_json(&path).map_err(|reason| refuse(&path, reason))? {
+            let path = store_path(state_dir, file);
+            if let Some(value) = read_store(&path).map_err(|reason| refuse(&path, reason))? {
                 stores.insert(*file, value);
             }
         }
@@ -501,7 +501,7 @@ fn check(
                 .len();
             if size > crate::delivery::FILE_LIMIT {
                 return Err(format!(
-                    "{file} would be {size} bytes, over the {} its loader reads",
+                    "{file} would be {size} bytes, over the {} the ledger is kept within",
                     crate::delivery::FILE_LIMIT
                 ));
             }
@@ -734,8 +734,8 @@ fn apply_steps(
         if !next() {
             return Ok(());
         }
-        let path = state_dir.join(file);
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let path = store_path(state_dir, file);
+        let Some(mut value) = read_store(&path).map_err(|reason| refuse(&path, reason))? else {
             continue;
         };
         let before = value.clone();
@@ -744,11 +744,12 @@ fn apply_steps(
         if value == before {
             continue;
         }
-        let bytes = serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
+        // The original is kept under the name of the file that held it.
+        let kept_as = path.file_name().map(|name| name.to_string_lossy().into_owned());
         backup
-            .copy(&path, file)
+            .copy(&path, kept_as.as_deref().unwrap_or(file))
             .map_err(|reason| refuse(&path, reason))?;
-        write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
+        write_store(&path, &value).map_err(|reason| refuse(&path, reason))?;
         outcome.files.push((*file).to_owned());
     }
     Ok(())
@@ -966,12 +967,27 @@ mod tests {
         serde_json::to_value(mission).unwrap()
     }
 
+    /// Writes the store `KEYS` names `file` as a core keeps it: the
+    /// delivery ledger in its store.
     fn write_json(state: &Path, file: &str, value: Value) {
-        std::fs::write(state.join(file), serde_json::to_vec(&value).unwrap()).unwrap();
+        super::super::write_store(&super::super::store_path(state, file), &value).unwrap();
     }
 
     fn read(state: &Path, file: &str) -> Value {
-        serde_json::from_slice(&std::fs::read(state.join(file)).unwrap()).unwrap()
+        super::super::read_store(&super::super::store_path(state, file))
+            .unwrap()
+            .unwrap()
+    }
+
+    /// What the store `KEYS` names `file` in `dir` holds, to compare: a
+    /// JSON store's bytes, the delivery ledger's rows as its rewrites read
+    /// them.
+    fn held(dir: &Path, file: &str) -> Vec<u8> {
+        if file == DELIVERY_LEDGER {
+            serde_json::to_vec(&read(dir, file)).unwrap()
+        } else {
+            std::fs::read(dir.join(file)).unwrap()
+        }
     }
 
     /// A folder an earlier build wrote for a core on `NODE` with the device
@@ -1030,7 +1046,7 @@ mod tests {
                     {"id": "agent-0", "machine": NODE, "actor": actor(NODE, "w9:p1"), "host_scope": "/tmp/engine.sock"},
                     {"id": "agent-1", "machine": ALIAS, "actor": actor(ALIAS, &pane(ALIAS)), "host_scope": ALIAS, "pane": "w1:p1"},
                 ],
-                "spawns": [{"parent": "agent-0", "machine": ALIAS, "pane": "w1:p1"}],
+                "spawns": [{"id": "spawn-2", "parent": "agent-0", "machine": ALIAS, "pane": "w1:p1"}],
                 "node_clocks": {ALIAS: {"connected_ms": 60_000, "since": null}},
             }),
         );
@@ -1244,7 +1260,7 @@ mod tests {
         let originals: BTreeMap<&str, Vec<u8>> = STORES
             .iter()
             .chain([&CORE_STATE])
-            .map(|file| (*file, std::fs::read(state.join(file)).unwrap()))
+            .map(|file| (*file, held(state, file)))
             .collect();
 
         let outcome = name_devices(state, &node()).unwrap();
@@ -1417,7 +1433,7 @@ mod tests {
         );
         for (file, bytes) in &originals {
             assert_eq!(
-                &std::fs::read(backups[0].join(file)).unwrap(),
+                &held(&backups[0], file),
                 bytes,
                 "{file}"
             );
@@ -1567,14 +1583,14 @@ mod tests {
         let mut core = read(state, CORE_STATE);
         core["device_registrations"][0]["id"] = json!(MACHINE);
         write_json(state, CORE_STATE, core.clone());
-        let ledger = std::fs::read(state.join(DELIVERY_LEDGER)).unwrap();
+        let ledger = held(state, DELIVERY_LEDGER);
 
         let outcome = name_devices(state, &node()).unwrap();
         assert_eq!(outcome.named, vec![MACHINE.to_owned()]);
         assert!(outcome.renamed.is_empty());
         core["device_registrations"][0]["naming"] = json!("named");
         assert_eq!(read(state, CORE_STATE), core);
-        assert_eq!(std::fs::read(state.join(DELIVERY_LEDGER)).unwrap(), ledger);
+        assert_eq!(held(state, DELIVERY_LEDGER), ledger);
         assert!(!state.join(JOURNAL).exists());
     }
 
@@ -1584,7 +1600,7 @@ mod tests {
         let before: BTreeMap<String, Vec<u8>> = STORES
             .iter()
             .chain([&CORE_STATE])
-            .map(|file| ((*file).to_owned(), std::fs::read(state.join(file)).unwrap()))
+            .map(|file| ((*file).to_owned(), held(state, file)))
             .collect();
         let outcome = name_devices(state, &node()).unwrap();
         assert!(outcome.renamed.is_empty(), "{outcome:?}");
@@ -1596,7 +1612,7 @@ mod tests {
             "{outcome:?}"
         );
         for (file, bytes) in before {
-            assert_eq!(std::fs::read(state.join(&file)).unwrap(), bytes, "{file}");
+            assert_eq!(held(state, &file), bytes, "{file}");
         }
         assert_eq!(cards(state, ALIAS).len(), 2);
         assert!(!state.join(JOURNAL).exists());

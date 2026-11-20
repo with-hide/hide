@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::coordination::{AgentRecord, Command};
-use crate::delivery::{Actor, ledger, worker::Worker};
+use crate::delivery::{Actor, ledger, store, worker::Worker};
 use crate::device_catalog::Fact;
 use crate::handle::ChangeNotifier;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
@@ -353,11 +353,11 @@ fn spawner() -> Spawner {
         1,
     )
     .unwrap();
-    ledger::save(&path, &state).unwrap();
+    store::save(&path, &state).unwrap();
     runtime
         .lock()
         .unwrap()
-        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+        .publish_delivery(Arc::new(store::load(&path).unwrap()), false);
     let (worker, client) = Worker::spawn(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -446,7 +446,7 @@ impl Spawner {
     }
 
     pub(super) fn ledger(&self) -> ledger::Ledger {
-        ledger::load(&self.path).unwrap()
+        store::load(&self.path).unwrap()
     }
 
     /// What the engine says of the started agent from now on
@@ -681,11 +681,11 @@ pub(super) fn local_spawner() -> Spawner {
         1,
     )
     .unwrap();
-    ledger::save(&path, &state).unwrap();
+    store::save(&path, &state).unwrap();
     runtime
         .lock()
         .unwrap()
-        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+        .publish_delivery(Arc::new(store::load(&path).unwrap()), false);
     let (worker, client) = Worker::spawn(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -961,11 +961,11 @@ fn caller_here_with_device() -> Spawner {
         2,
     )
     .unwrap();
-    ledger::save(&spawner.path, &state).unwrap();
+    store::save(&spawner.path, &state).unwrap();
     {
         let mut runtime = spawner.runtime.lock().unwrap();
         runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
-        runtime.publish_delivery(Arc::new(ledger::load(&spawner.path).unwrap()), false);
+        runtime.publish_delivery(Arc::new(store::load(&spawner.path).unwrap()), false);
     }
     spawner.actor = actor;
     spawner.checkout = LOCAL_CHECKOUT;

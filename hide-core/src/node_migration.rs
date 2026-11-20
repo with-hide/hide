@@ -52,7 +52,13 @@ pub(crate) const MARKER_VERSION: u32 = 1;
 pub const CORE_STATE: &str = "core-state.json";
 pub(crate) const WORKSPACE_VIEWS: &str = "workspace-views.json";
 const LABELS: &str = "labels.json";
+/// The delivery ledger's name in `KEYS` and its rewrites, which address it in
+/// the shape of the JSON file builds before the store kept it in; the store
+/// itself is [`DELIVERY_STORE`], read and written through [`read_store`] and
+/// [`write_store`].
 const DELIVERY_LEDGER: &str = "delivery-ledger.json";
+/// The delivery ledger's file (`delivery::store`).
+const DELIVERY_STORE: &str = hide_kit::layout::DELIVERY_STORE;
 const PROJECT_MEMORY: &str = hide_memory::DATABASE_FILE;
 pub(crate) const SESSION_SEARCH: &str = "session-search.sqlite3";
 const LINKS: &str = "links.sqlite3";
@@ -87,7 +93,10 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     CORE_STATE,
     WORKSPACE_VIEWS,
     LABELS,
+    // The old file goes with the store, which replaced it, so a machine the
+    // core left never imports it again.
     DELIVERY_LEDGER,
+    DELIVERY_STORE,
     LINKS,
     hide_kit::layout::USAGE_STORE,
     hide_kit::layout::SUGGESTIONS_STORE,
@@ -1251,7 +1260,7 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
     for (file, version_key, versions, convert) in JSON_STORES {
         let limit = stored_limit(file);
         let path = state_dir.join(file);
-        if limit == usize::MAX || over_limit(&path, limit) {
+        if limit == usize::MAX || over_limit(&path, limit) || superseded(state_dir, file) {
             continue;
         }
         let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
@@ -1329,7 +1338,7 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
         let path = state_dir.join(file);
         // A store its own loader already refuses is left to that loader,
         // as a store of an unknown version is.
-        if over_limit(&path, stored_limit(file)) {
+        if over_limit(&path, stored_limit(file)) || superseded(state_dir, file) {
             continue;
         }
         let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
@@ -1374,6 +1383,13 @@ pub fn convert(state_dir: &Path, node: &NodeId) -> Result<Outcome, Refusal> {
         write(&marker_path, &marker).map_err(|reason| refuse(&marker_path, reason))?;
     }
     Ok(outcome)
+}
+
+/// Whether `file` is the old delivery ledger beside the store that replaced
+/// it: no start reads it again, and nothing writes it (D-20). A folder of
+/// `local` keys is converted before its first start imports the file.
+fn superseded(state_dir: &Path, file: &str) -> bool {
+    file == DELIVERY_LEDGER && state_dir.join(DELIVERY_STORE).exists()
 }
 
 type JsonConverter = fn(&mut Value, &str, &BTreeMap<String, String>) -> bool;
@@ -1462,6 +1478,58 @@ pub(crate) fn mission_files(state_dir: &Path) -> Result<Vec<(String, PathBuf)>, 
     }
     files.sort();
     Ok(files)
+}
+
+/// The file that holds the JSON store `KEYS` names `file` in `dir`: the
+/// delivery ledger's is its store.
+pub(crate) fn store_path(dir: &Path, file: &str) -> PathBuf {
+    if file == DELIVERY_LEDGER {
+        dir.join(DELIVERY_STORE)
+    } else {
+        dir.join(file)
+    }
+}
+
+fn holds_delivery_store(path: &Path) -> bool {
+    path.file_name() == Some(std::ffi::OsStr::new(DELIVERY_STORE))
+}
+
+/// A store at `path` ([`store_path`]) as its rewrites read it: the delivery
+/// ledger in its JSON file's shape (`delivery::store::read_value`), any other
+/// as [`read_json`] reads it.
+pub(crate) fn read_store(path: &Path) -> Result<Option<Value>, String> {
+    if holds_delivery_store(path) {
+        crate::delivery::store::read_value(path)
+            .map_err(|code| format!("the delivery ledger does not open: {code}"))
+    } else {
+        read_json(path)
+    }
+}
+
+/// Keeps `value`, a rewrite of what [`read_store`] read, at `path`.
+pub(crate) fn write_store(path: &Path, value: &Value) -> Result<(), String> {
+    if holds_delivery_store(path) {
+        crate::delivery::store::write_value(path, value)
+            .map_err(|code| format!("the delivery ledger was not kept: {code}"))
+    } else {
+        write(
+            path,
+            &serde_json::to_vec(value).map_err(|error| error.to_string())?,
+        )
+    }
+}
+
+/// Copies the store at `path` to `destination` as it stands: the delivery
+/// ledger's with every committed row, any other file as it is.
+fn copy_store(path: &Path, destination: &Path) -> Result<(), String> {
+    if holds_delivery_store(path) {
+        crate::delivery::store::copy(path, destination)
+            .map_err(|code| format!("the delivery ledger was not copied: {code}"))
+    } else {
+        std::fs::copy(path, destination)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -1827,11 +1895,7 @@ impl Backup {
     }
 
     fn copy(&self, path: &Path, kept_as: &str) -> Result<(), String> {
-        self.copy_with(kept_as, |destination| {
-            std::fs::copy(path, destination)
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        })
+        self.copy_with(kept_as, |destination| copy_store(path, destination))
     }
 
     /// Keeps the original as `kept_as`, written under a temporary name and
@@ -2743,6 +2807,30 @@ mod tests {
             read(&dir.path().join(MARKER_FILE)),
             json!({"version": 1, "node": NODE})
         );
+    }
+
+    /// D-20: once the store holds the ledger, the old file beside it is
+    /// never written again, not even by a conversion of `local` keys an
+    /// older build wrote into it after the update.
+    #[test]
+    fn the_old_ledger_file_beside_its_store_is_never_converted() {
+        let dir = tempfile::tempdir().unwrap();
+        let actor = json!({"device_id": "local", "pane_id": "p"});
+        let bytes = serde_json::to_vec(&json!({
+            "version": 1,
+            "letters": [{"sender": actor, "recipient": actor}],
+        }))
+        .unwrap();
+        std::fs::write(dir.path().join(DELIVERY_LEDGER), &bytes).unwrap();
+        hide_platform::fs::private::create_new_file(&dir.path().join(DELIVERY_STORE)).unwrap();
+
+        let outcome = convert(dir.path(), &node()).unwrap();
+        assert!(outcome.files.is_empty(), "{outcome:?}");
+        assert_eq!(
+            std::fs::read(dir.path().join(DELIVERY_LEDGER)).unwrap(),
+            bytes
+        );
+        assert!(!dir.path().join(BACKUP_DIR).exists());
     }
 
     #[test]

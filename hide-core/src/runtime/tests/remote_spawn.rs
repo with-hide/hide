@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::coordination::{AgentRecord, Command, split_refusal};
-use crate::delivery::{Actor, ledger, worker::Worker};
+use crate::delivery::{Actor, ledger, store, worker::Worker};
 use crate::handle::ChangeNotifier;
 use crate::node_access::{LinkAnswer, LinkError, NodeLink};
 use crate::runtime::delivery::tests::{authority, fixture};
@@ -434,11 +434,11 @@ fn spawner() -> Spawner {
         1,
     )
     .unwrap();
-    ledger::save(&path, &state).unwrap();
+    store::save(&path, &state).unwrap();
     runtime
         .lock()
         .unwrap()
-        .publish_delivery(Arc::new(ledger::load(&path).unwrap()), false);
+        .publish_delivery(Arc::new(store::load(&path).unwrap()), false);
     let (worker, client) = Worker::spawn(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
@@ -555,7 +555,7 @@ impl Spawner {
     }
 
     fn ledger(&self) -> ledger::Ledger {
-        ledger::load(&self.path).unwrap()
+        store::load(&self.path).unwrap()
     }
 
     /// The ledger the store last published, read while its worker may be

@@ -415,7 +415,7 @@ impl Core {
                 None
             }
         };
-        let delivery_path = hide_kit::layout::delivery_ledger(
+        let delivery_path = hide_kit::layout::delivery_store(
             std::path::Path::new(&options.app_state_path)
                 .parent()
                 .unwrap_or(std::path::Path::new(".")),

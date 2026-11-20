@@ -17,6 +17,7 @@ use crate::runtime::delivery::Observation;
 use crate::workspace_control::{Context, Query};
 
 use super::ledger::{self, Ledger};
+use super::store::{Changes, LedgerStore};
 use super::{Actor, Command, mailbox, watch};
 
 const QUEUE_LIMIT: usize = 64;
@@ -697,7 +698,7 @@ impl Worker {
                     path,
                     receiver,
                     stopped,
-                    ledger::write,
+                    |store: &mut LedgerStore, changes: &Changes<'_>| store.apply(changes),
                 )
             })
             .map_err(|_| "delivery_unavailable".to_owned())?;
@@ -711,14 +712,17 @@ impl Worker {
     }
 
     /// A store whose first request is queued before it starts. The supplied
-    /// durable write lets a test bind a mission after settlement and before
-    /// publication, in a fixed order with no timed producers or sleeps.
+    /// write lets a test bind a mission after settlement and before
+    /// publication, in a fixed order with no timed producers or sleeps, or
+    /// make the write fail.
     #[cfg(test)]
     pub(crate) fn store_queued(
         runtime: Weak<Mutex<Runtime>>,
         path: PathBuf,
         effect: Effect,
-        write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError> + Send + 'static,
+        write: impl FnMut(&mut LedgerStore, &Changes<'_>) -> Result<(), ledger::SaveError>
+        + Send
+        + 'static,
     ) -> (Self, Receiver<Result<Value, String>>) {
         let (requests, receiver) = mpsc::sync_channel(QUEUE_LIMIT);
         let (reply, result) = mpsc::sync_channel(1);
@@ -1009,14 +1013,27 @@ fn apply(
     ))
 }
 
+/// The store thread: applies each batch of requests to the published ledger
+/// and keeps the rows it changed in the file at `path` before it publishes
+/// the result and answers (D-31). `write` keeps them; the core passes the
+/// store's own.
 fn run(
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
     path: PathBuf,
     requests: Receiver<Request>,
     stop: Arc<AtomicBool>,
-    write: impl Fn(&std::path::Path, &[u8]) -> Result<(), ledger::SaveError>,
+    mut write: impl FnMut(&mut LedgerStore, &Changes<'_>) -> Result<(), ledger::SaveError>,
 ) {
+    // The file and the ledger it holds, which each write is the difference
+    // from: what this thread last kept, never what the runtime shows, so the
+    // file follows every write whoever published last. A file that does not
+    // open leaves every change refused, as an unwritable one did.
+    let mut store = LedgerStore::open(&path).map(|(store, ledger, _)| (store, Arc::new(ledger)));
+    if let Err(code) = &store {
+        crate::diagnostic!(json!({"component":"delivery","kind":"ledger.store_unavailable",
+            "code":code}));
+    }
     let mut maintenance_at = 0;
     // The recipients asleep at the last saved pass, so the pass after one
     // wakes takes its sleep out of its letters' waits once.
@@ -1107,7 +1124,7 @@ fn run(
         };
         let Settled {
             ledger: candidate,
-            bytes,
+            fits,
             results,
             mut transitions,
             moved,
@@ -1116,11 +1133,13 @@ fn run(
             rooms,
         } = settle(&runtime, &state, &upkeep, &batch, now);
         transitions |= !ended.is_empty() || !moved.is_empty();
-        let changed = bytes.is_some();
-        let mut saved = match bytes {
-            None => Ok(()),
-            Some(Ok(bytes)) => write(&path, &bytes),
-            Some(Err(code)) => Err(ledger::SaveError::Validation(code)),
+        let changed = fits.is_some();
+        let candidate = Arc::new(candidate);
+        let mut saved = match (fits, &mut store) {
+            (None, _) => Ok(()),
+            (Some(Err(code)), _) => Err(ledger::SaveError::Validation(code)),
+            (Some(Ok(())), Err(code)) => Err(ledger::SaveError::Validation(code.clone())),
+            (Some(Ok(())), Ok((file, kept))) => keep(file, kept, &candidate, &mut write),
         };
         if let Err(error) = &saved {
             if error.uncertain() {
@@ -1130,7 +1149,8 @@ fn run(
                 }
             }
             crate::diagnostic!(json!({"component":"delivery","kind":"ledger.save_failed",
-                    "code":error.code(),"persistence":error.diagnostic()}));
+                    "code":error.code(),"persistence":error.diagnostic(),
+                    "requests":batch.len()}));
         }
         if saved.is_ok() {
             asleep_before = upkeep.asleep.clone();
@@ -1183,8 +1203,7 @@ fn run(
             let index = Arc::new(super::correspondence::Correspondence::of(&candidate));
             match runtime.lock() {
                 Ok(mut guard) => {
-                    let published =
-                        guard.publish_delivery_indexed(Arc::new(candidate), index, transitions);
+                    let published = guard.publish_delivery_indexed(candidate, index, transitions);
                     drop(guard);
                     if published {
                         notifier.notify();
@@ -1216,12 +1235,34 @@ fn run(
     }
 }
 
+/// Keeps `candidate` in the store's file in place of `kept`, the ledger the
+/// file holds: only the rows that differ (D-31). A failed write leaves `kept`
+/// as it was and logs what it was to keep, by id (B29).
+fn keep(
+    file: &mut LedgerStore,
+    kept: &mut Arc<Ledger>,
+    candidate: &Arc<Ledger>,
+    write: &mut impl FnMut(&mut LedgerStore, &Changes<'_>) -> Result<(), ledger::SaveError>,
+) -> Result<(), ledger::SaveError> {
+    let changes = Changes::between(kept, candidate);
+    let written = write(file, &changes);
+    match &written {
+        Ok(()) => *kept = Arc::clone(candidate),
+        Err(error) => {
+            crate::diagnostic!(json!({"component":"delivery","kind":"ledger.write_failed",
+                "code":error.code(),"persistence":error.diagnostic(),
+                "records":changes.diagnostic()}));
+        }
+    }
+    written
+}
+
 /// What one batch made of the published ledger.
 struct Settled {
     ledger: Ledger,
-    /// The file's new bytes, once the batch changed the ledger: the batch's
-    /// one encoding, or why the ledger cannot be written.
-    bytes: Option<Result<Vec<u8>, String>>,
+    /// Once the batch changed the ledger, whether it can be kept: within the
+    /// size limit after making room, or why not.
+    fits: Option<Result<(), String>>,
     results: Vec<Result<Value, String>>,
     transitions: bool,
     moved: Moved,
@@ -1283,14 +1324,14 @@ fn settle(
     }
     // A letter this batch sent to a machine without a clock gets one.
     candidate.observe_reach(&upkeep.reach, now);
-    // The upkeep alone can take a full ledger past the file's limit.
-    let bytes = (candidate != *state).then(|| {
+    // The upkeep alone can take a full ledger past the size limit.
+    let fits = (candidate != *state).then(|| {
         rooms.push(crate::coordination::room::for_size(&mut candidate, &holds)?);
-        candidate.bytes()
+        Ok(())
     });
     Settled {
         ledger: candidate,
-        bytes,
+        fits,
         results,
         transitions,
         moved,
@@ -1606,6 +1647,7 @@ fn answer_waits_ended<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delivery::store;
     use crate::runtime::delivery::tests::{authority, fixture, show_agents};
     use crate::sidebar::SessionSnapshotPayload;
 
@@ -2070,8 +2112,8 @@ mod tests {
             now(),
         )
         .unwrap();
-        ledger::save(&path, &installed).unwrap();
-        let original = std::fs::read(&path).unwrap();
+        store::save(&path, &installed).unwrap();
+        let original = store::read_value(&path).unwrap();
         {
             let mut guard = runtime.lock().unwrap();
             guard.publish_delivery(Arc::new(installed), false);
@@ -2131,7 +2173,7 @@ mod tests {
                 .unwrap_err(),
             "ledger_unavailable"
         );
-        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(store::read_value(&path).unwrap(), original);
         drop(worker);
         let (recovered, _, _, _) = fixture(root.path());
         assert_eq!(
@@ -2193,7 +2235,7 @@ mod tests {
                     .letters
                     .is_empty()
             );
-            assert!(ledger::load(&path).unwrap().letters.is_empty());
+            assert!(store::load(&path).unwrap().letters.is_empty());
 
             let present: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[sender.clone(),
                 {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"}
@@ -2237,7 +2279,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(first["id"], replay["id"]);
-            let persisted = ledger::load(&path).unwrap();
+            let persisted = store::load(&path).unwrap();
             assert_eq!(persisted.letters.len(), 1);
             assert_eq!(persisted.letters[0].id, first["id"].as_str().unwrap());
             drop(worker);
@@ -2279,7 +2321,7 @@ mod tests {
             );
             if writable {
                 let id = result.unwrap()["id"].as_str().unwrap().to_owned();
-                let persisted = ledger::load(&path).unwrap();
+                let persisted = store::load(&path).unwrap();
                 assert_eq!(persisted.letters[0].id, id);
                 assert_eq!(
                     runtime
@@ -2359,7 +2401,7 @@ mod tests {
         };
         let old = report("old", day + 60_000);
         let recent = report("recent", day - 60_000);
-        ledger::save(&path, &installed).unwrap();
+        store::save(&path, &installed).unwrap();
         runtime
             .lock()
             .unwrap()
@@ -2382,7 +2424,7 @@ mod tests {
         };
         wait_for_ledger("the old finished letter to be dropped", || !kept(&old));
         assert!(kept(&recent));
-        let saved = ledger::load(&path).unwrap();
+        let saved = store::load(&path).unwrap();
         assert!(saved.letters.iter().all(|letter| letter.id != old));
         assert!(saved.letters.iter().any(|letter| letter.id == recent));
     }
@@ -2420,7 +2462,7 @@ mod tests {
         };
         let old = ask("old", 25 * hour);
         let recent = ask("recent", 23 * hour);
-        ledger::save(&path, &installed).unwrap();
+        store::save(&path, &installed).unwrap();
         runtime
             .lock()
             .unwrap()
@@ -2449,7 +2491,7 @@ mod tests {
             (false, Some(super::super::ledger::AnswerWaitEnd::Deadline))
         );
         assert!(waiting(&recent).0);
-        let persisted = ledger::load(&path).unwrap();
+        let persisted = store::load(&path).unwrap();
         let saved = persisted.letters.iter().find(|l| l.id == old).unwrap();
         assert_eq!(saved.answer_wait_ended, waiting(&old).1);
     }
@@ -2524,7 +2566,7 @@ mod tests {
         let watch = watch::start(&mut installed, &actor, &target.actor, now()).unwrap();
         // The count an earlier build kept raising every tick.
         installed.watches[0].activity_failures = 9622;
-        ledger::save(&path, &installed).unwrap();
+        store::save(&path, &installed).unwrap();
         runtime
             .lock()
             .unwrap()
@@ -2548,7 +2590,7 @@ mod tests {
         let reported = json!([[watch.id, watch::READ_FAILURES_REPORTED]]);
         assert_eq!(tick()["failures"], reported);
         assert_eq!(
-            ledger::load(&path).unwrap().watches[0].activity_failures,
+            store::load(&path).unwrap().watches[0].activity_failures,
             watch::READ_FAILURES_REPORTED
         );
         let written = hide_platform::fs::identity::file_id(&path).unwrap();
@@ -2674,7 +2716,7 @@ mod tests {
         assert_eq!(together.results[4], together.results[0]);
         assert_eq!(together.ledger, alone);
         assert_eq!(together.ledger.letters.len(), 2);
-        assert_eq!(together.bytes, Some(Ok(together.ledger.bytes().unwrap())));
+        assert_eq!(together.fits, Some(Ok(())));
     }
 
     #[test]
@@ -2700,9 +2742,8 @@ mod tests {
         ];
         assert_eq!(answered(&settled, &[0, 2]), expected);
         assert_eq!(stored(&settled.ledger, &state), expected);
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
-        assert_eq!(bytes, settled.ledger.bytes().unwrap());
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
     }
 
     #[test]
@@ -2836,6 +2877,130 @@ mod tests {
             .publish_delivery(Arc::new(installed), false);
     }
 
+    /// Keeps the published ledger in the store, as a running core has it.
+    fn keep_published(runtime: &Mutex<Runtime>, path: &std::path::Path) -> Arc<Ledger> {
+        let published = runtime.lock().unwrap().delivery_state().unwrap();
+        store::save(path, &published).unwrap();
+        published
+    }
+
+    fn submit_send(client: &Client, actor: &Actor, target: &Observation, intent: &str, body: &str) -> Result<Value, String> {
+        client.submit(send(actor, target, intent, body).effect, Duration::from_secs(10))
+    }
+
+    /// B26: a full ledger takes a new letter by letting the finished letters
+    /// that finished first go, and the store keeps exactly what the core
+    /// then holds, without them.
+    #[test]
+    fn a_send_to_a_full_ledger_lands_and_the_store_lets_the_oldest_finished_letters_go() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, path) = fixture(root.path());
+        near_limit(&runtime, &actor, &target, 10, 1_100);
+        let installed = keep_published(&runtime, &path);
+        let first_finished = installed.letters[10].id.clone();
+        let last_finished = installed.letters.last().unwrap().id.clone();
+        let (worker, client) =
+            Worker::store(Arc::downgrade(&runtime), ChangeNotifier::noop(), path.clone()).unwrap();
+        let sent = submit_send(&client, &actor, &target, "too-big", &"y".repeat(super::super::BODY_LIMIT))
+            .unwrap();
+        drop(worker);
+        let kept = store::load(&path).unwrap();
+        assert_eq!(kept, *runtime.lock().unwrap().delivery_state().unwrap());
+        let held = |id: &str| kept.letters.iter().any(|letter| letter.id == id);
+        assert!(held(sent["id"].as_str().unwrap()));
+        assert!(installed.letters[..10].iter().all(|letter| held(&letter.id)));
+        assert!(!held(&first_finished));
+        assert!(held(&last_finished));
+        assert!(kept.size().unwrap() <= super::super::FILE_LIMIT);
+    }
+
+    /// B26: only when live letters alone fill the ledger is a send refused,
+    /// as `capacity`, and the store keeps what it held.
+    #[test]
+    fn a_send_that_only_live_letters_leave_no_room_for_is_refused_and_the_store_is_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, path) = fixture(root.path());
+        near_limit(&runtime, &actor, &target, 1_000, 0);
+        let installed = keep_published(&runtime, &path);
+        let (worker, client) =
+            Worker::store(Arc::downgrade(&runtime), ChangeNotifier::noop(), path.clone()).unwrap();
+        assert_eq!(
+            submit_send(&client, &actor, &target, "too-big", &"y".repeat(super::super::BODY_LIMIT)),
+            Err("capacity".into())
+        );
+        drop(worker);
+        assert_eq!(store::load(&path).unwrap(), *installed);
+        assert_eq!(*runtime.lock().unwrap().delivery_state().unwrap(), *installed);
+    }
+
+    /// B29: a write that fails is logged with the ids of what it was to
+    /// keep, and the store's record of what its file holds stays as it was,
+    /// so the next write is the difference from the file.
+    #[test]
+    fn a_failed_write_is_logged_with_the_ids_it_was_to_keep_and_leaves_the_kept_ledger() {
+        let root = tempfile::tempdir().unwrap();
+        let (_runtime, actor, target, path) = fixture(root.path());
+        let (mut file, held, _) = LedgerStore::open(&path).unwrap();
+        let held = Arc::new(held);
+        let mut kept = Arc::clone(&held);
+        let mut candidate = (*held).clone();
+        let letter = mailbox::send(&mut candidate, &actor, &target.actor, "lost", "private", "request", None, now())
+            .unwrap();
+        let candidate = Arc::new(candidate);
+        let mut refuse = |_: &mut LedgerStore, _: &Changes<'_>| {
+            Err(ledger::SaveError::Refused(ledger::StoreFailure { kind: "io", extended: Some(10) }))
+        };
+        let (written, records) =
+            crate::diagnostics::capture(|| keep(&mut file, &mut kept, &candidate, &mut refuse));
+        assert_eq!(written.unwrap_err().code(), "ledger_unavailable");
+        assert!(Arc::ptr_eq(&kept, &held));
+        let logged = records
+            .iter()
+            .find(|record| record["kind"] == "ledger.write_failed")
+            .unwrap();
+        assert_eq!(logged["records"]["letters"]["ids"], json!([letter.id]));
+        assert_eq!(logged["persistence"]["sqlite"], "io");
+        assert!(!logged.to_string().contains("private"));
+        // The next write keeps the letter through the real file.
+        keep(&mut file, &mut kept, &candidate, &mut |file, changes| file.apply(changes)).unwrap();
+        drop(file);
+        assert_eq!(store::load(&path).unwrap(), *candidate);
+    }
+
+    /// B29: a send whose write fails is answered as a failure and is never
+    /// published; a commit that may or may not have kept it stops the core
+    /// answering from memory until a start reads the file again.
+    #[test]
+    fn a_send_whose_write_fails_is_answered_as_a_failure_and_never_published() {
+        for uncertain in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, actor, target, path) = fixture(root.path());
+            let failure = ledger::StoreFailure { kind: "io", extended: Some(10) };
+            let (worker, answer) = Worker::store_queued(
+                Arc::downgrade(&runtime),
+                path.clone(),
+                send(&actor, &target, "unsaved", "private").effect,
+                move |_, _| {
+                    Err(if uncertain {
+                        ledger::SaveError::Uncertain(failure)
+                    } else {
+                        ledger::SaveError::Refused(failure)
+                    })
+                },
+            );
+            let result = answer.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert_eq!(result.unwrap_err(), "ledger_unavailable");
+            drop(worker);
+            let published = runtime.lock().unwrap().delivery_state();
+            if uncertain {
+                assert!(published.is_err());
+            } else {
+                assert!(published.unwrap().letters.is_empty());
+            }
+            assert!(store::load(&path).unwrap().letters.is_empty());
+        }
+    }
+
     #[test]
     fn a_letter_past_the_files_limit_drops_the_finished_letters_that_finished_first() {
         let root = tempfile::tempdir().unwrap();
@@ -2862,8 +3027,8 @@ mod tests {
         assert!(open.iter().all(|id| kept(id)));
         assert!(!kept(&first_finished));
         assert!(kept(&last_finished));
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
         assert_eq!(settled.rooms.len(), 1);
         assert!(settled.rooms[0].letters > 0);
         assert_eq!(settled.rooms[0].spawns, 0);
@@ -2892,8 +3057,8 @@ mod tests {
         let expected = vec![("after".to_owned(), format!("letter-{}", state.next_id))];
         assert_eq!(answered(&settled, &[1]), expected);
         assert_eq!(stored(&settled.ledger, &state), expected);
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
     }
 
     /// The fixture's sender, registered as `agent-1` under its native
@@ -2983,9 +3148,8 @@ mod tests {
         assert!(agents.is_empty());
         let spawns: Vec<&str> = spawns.iter().map(|spawn| spawn.id.as_str()).collect();
         assert_eq!(spawns, ["spawn-3000", "spawn-3001"]);
-        let bytes = settled.bytes.unwrap().unwrap();
-        assert!(bytes.len() <= super::super::FILE_LIMIT);
-        assert_eq!(bytes, settled.ledger.bytes().unwrap());
+        settled.fits.unwrap().unwrap();
+        assert!(settled.ledger.size().unwrap() <= super::super::FILE_LIMIT);
     }
 
     #[test]
@@ -2998,7 +3162,7 @@ mod tests {
         let settled = settle(&runtime, &state, &upkeep(), &[reserve(&lead)], now());
         assert_eq!(settled.results[0], Err("capacity".into()));
         assert_eq!(settled.ledger, *state);
-        assert!(settled.bytes.is_none());
+        assert!(settled.fits.is_none());
     }
 
     #[test]
@@ -3033,7 +3197,8 @@ mod tests {
             .publish_delivery(Arc::new(installed), false);
         let state = runtime.lock().unwrap().delivery_state().unwrap();
         let settled = settle(&runtime, &state, &upkeep(), &[], now());
-        let saved = ledger::from_bytes(&settled.bytes.unwrap().unwrap()).unwrap();
+        settled.fits.unwrap().unwrap();
+        let saved = settled.ledger;
         let (ended, running) = (&saved.spawns[0], &saved.spawns[1]);
         assert_eq!(ended.brief, None);
         assert!(ended.launch_words.is_empty());

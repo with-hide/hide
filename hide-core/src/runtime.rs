@@ -2167,7 +2167,7 @@ impl Runtime {
     ) -> Self {
         let state_path = PathBuf::from(&options.app_state_path);
         let delivery_path =
-            hide_kit::layout::delivery_ledger(state_path.parent().unwrap_or(Path::new(".")));
+            hide_kit::layout::delivery_store(state_path.parent().unwrap_or(Path::new(".")));
         let delivery_ledger = crate::delivery::ledger::recover(&delivery_path)
             .map(Arc::new)
             .map_err(|error| {
