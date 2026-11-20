@@ -1807,15 +1807,6 @@ impl Runtime {
         let dropped = before - self.plans.book.len();
         if dropped > 0 {
             self.plans.edit += 1;
-            // A slot item of a session that is gone would draw nothing.
-            self.drop_detail_items(|item| match item {
-                crate::model::DetailItem::Plan { session } => {
-                    !sessions.iter().any(|(machine, id)| {
-                        session.device_id == *machine && session.session_id == *id
-                    })
-                }
-                _ => true,
-            });
         }
         dropped > 0
     }

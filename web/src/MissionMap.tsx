@@ -71,7 +71,7 @@ import type { Mission, MissionEvent, MissionNode, MissionNodeWork } from "./snap
 import { useShellStore } from "./store";
 import { ToolMark } from "./components/tool-mark";
 
-// A mission's page in the lane's 보기 slot (PRD mission-map-git-criteria
+// A mission's page as a card tab on a desk (PRD mission-map-git-criteria
 // D-01-D-06, B24-B35; PRD mission-tool B12-B25): the head (state, time, a
 // cell per node, `n / m`); a finished mission's results, its pull requests
 // and its report's line; the Conductor row; what only the operator can do

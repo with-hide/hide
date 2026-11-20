@@ -88,6 +88,7 @@ mod operations;
 pub(crate) mod output_language;
 mod overview_graph;
 mod own_devices;
+mod pair_view;
 mod pane_command;
 pub(crate) mod pane_move;
 mod pane_move_preview;

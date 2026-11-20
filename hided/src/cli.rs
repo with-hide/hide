@@ -168,7 +168,7 @@ const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
 /// active View area, and only the operator splits the areas.
-const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area";
+const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area of your tab's Views";
 
 const FILE_USAGE: &str = "usage: hide file open <path> [--repo <folder>] [--request-id <id>]";
 

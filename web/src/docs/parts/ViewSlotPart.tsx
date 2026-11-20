@@ -30,7 +30,7 @@ function fixture() {
   rest.navigator!.focused_workspace_id = project.id;
   rest.navigator!.focused_checkout_id = checkout.id;
   rest.workspace_view = {
-    device_id: "local", path: root, open: true, documents: true, tool: null, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+    device_id: "local", path: root, open: true, tray: { tab_id: "t1", shown: true, count: displays.length }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
     layout: { root: { area: { id: "a1", active: "d1", displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
   };
   return { rest, tab, document };

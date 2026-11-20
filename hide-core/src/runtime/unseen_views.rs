@@ -41,12 +41,11 @@ impl Runtime {
     /// View to look at, unless it is the one in front of them now, which is
     /// decided here, in the same event, so it never shows (B5, B14).
     pub(super) fn mark_view_unseen(&mut self, key: &WorkspaceKey, view_id: &str) {
-        self.settle_view_sessions();
         if self.looked_at_view().as_ref() == Some(&(key.clone(), view_id.to_owned())) {
             return;
         }
         let now = unix_milliseconds();
-        let marked = self.change_view_layout(key, |layout, _| {
+        let marked = self.change_view(key, view_id, |layout, _| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
@@ -73,13 +72,12 @@ impl Runtime {
     /// changes nothing.
     pub(super) fn mark_view_seen(&mut self, key: &WorkspaceKey, view_id: &str) -> bool {
         let unseen = self
-            .view_layout_of(key)
-            .and_then(|layout| layout.display(view_id))
+            .view_display(key, view_id)
             .is_some_and(|display| display.unseen.is_some());
         if !unseen {
             return false;
         }
-        let seen = self.change_view_layout(key, |layout, _| {
+        let seen = self.change_view(key, view_id, |layout, _| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
@@ -126,37 +124,29 @@ impl Runtime {
             )
             .any(|agent| !agent.unseen_views.is_empty());
         let views = self
-            .every_view_layout()
-            .any(|(_, layout)| layout.displays().any(|display| display.unseen.is_some()));
+            .every_view()
+            .any(|(_, display)| display.unseen.is_some());
         if rows || views {
             self.refresh_unseen_rows();
         }
     }
 
     /// The View in front of the operator now, if a window with the keyboard
-    /// shows one (D-07).
+    /// shows one (D-07): the tab in front of the active area of the tray the
+    /// front Workspace draws, in the lane or in pair view (PRD
+    /// lane-desk-pair-view B2).
     fn looked_at_view(&self) -> Option<(WorkspaceKey, String)> {
-        if !self.window_focused || self.snapshot.ui_state.detail.shown {
+        if !self.window_focused {
             return None;
         }
         let key = self.front_workspace_key()?;
-        let view = self.workspace_views.as_ref()?.views.get(&key.0, &key.1)?;
-        if !view.open || !view.documents {
-            return None;
-        }
-        let area = view.layout.active_area();
-        let display = area
-            .active
-            .as_deref()
-            .and_then(|id| area.displays.iter().find(|display| display.id == id))?;
-        display
-            .shown_to(self.strip_session(&key))
-            .then(|| (key, display.id.clone()))
+        let layout = self.drawn_tray_layout(&key)?;
+        let id = layout.active_area().active.clone()?;
+        Some((key, id))
     }
 
     /// Records the View in front of the operator as seen. Runs before every
-    /// snapshot read, after the strip is settled, and costs one lookup when
-    /// nothing is unseen there.
+    /// snapshot read and costs one lookup when nothing is unseen there.
     pub(super) fn settle_seen_views(&mut self) -> bool {
         let Some((key, view_id)) = self.looked_at_view() else {
             return false;
@@ -169,8 +159,7 @@ impl Runtime {
     /// unseen for the operator (D-23). Anyone else's read changes nothing.
     pub(super) fn note_ancestor_read(&mut self, key: &WorkspaceKey, view_id: &str, caller: &str) {
         let Some(opener) = self
-            .view_layout_of(key)
-            .and_then(|layout| layout.display(view_id))
+            .view_display(key, view_id)
             .filter(|display| display.unseen.as_ref().is_some_and(|u| !u.ancestors_read))
             .and_then(|display| display.opener.clone())
         else {
@@ -192,7 +181,7 @@ impl Runtime {
         if !ancestor {
             return;
         }
-        let read = self.change_view_layout(key, |layout, _| {
+        let read = self.change_view(key, view_id, |layout, _| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
@@ -232,13 +221,8 @@ impl Runtime {
             agent.unseen_views.clear();
         }
         let unseen = self
-            .every_view_layout()
-            .flat_map(|(key, layout)| {
-                layout
-                    .displays()
-                    .filter(|display| display.unseen.is_some() && display.opener.is_some())
-                    .map(move |display| (key.clone(), display))
-            })
+            .every_view()
+            .filter(|(_, display)| display.unseen.is_some() && display.opener.is_some())
             .collect::<Vec<_>>();
         if unseen.is_empty() {
             return;
@@ -290,9 +274,7 @@ impl Runtime {
 
     /// Every open View, for callers that look through them for many sessions.
     pub(super) fn open_displays(&self) -> Vec<&crate::view_layout::Display> {
-        self.every_view_layout()
-            .flat_map(|(_, layout)| layout.displays())
-            .collect()
+        self.every_view().map(|(_, display)| display).collect()
     }
 
     /// The Views among `displays` the session of `pane_id` opened.

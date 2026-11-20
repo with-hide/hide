@@ -1079,7 +1079,8 @@ impl KeptView {
         let address = match display.kind {
             DisplayKind::File | DisplayKind::Diff => display.path.clone(),
             DisplayKind::Browser => display.url.clone()?,
-            DisplayKind::External => return None,
+            // A card names no View to open again: the mission's own map does.
+            DisplayKind::External | DisplayKind::Card => return None,
         };
         if address.is_empty() || address.len() > SHOW_LIMIT {
             return None;
@@ -1105,7 +1106,7 @@ impl KeptView {
             DisplayKind::File | DisplayKind::Diff => {
                 display.shows(&self.address, self.kind, Some(self.committed))
             }
-            DisplayKind::External => false,
+            DisplayKind::External | DisplayKind::Card => false,
         }
     }
 }

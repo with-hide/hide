@@ -215,20 +215,26 @@ fn the_first_plan_and_a_replan_open_nothing_in_the_lane() {
         created["mission"]["cap"], 4,
         "the settings' concurrency is the default cap"
     );
-    assert!(
-        runtime.snapshot.ui_state.detail.items.is_empty(),
-        "an empty mission opens nothing"
-    );
-    let detail = runtime.snapshot.ui_state.detail.clone();
+    let views = |runtime: &Runtime| {
+        runtime.workspace_views.as_ref().map_or(0, |store| {
+            store
+                .views
+                .workspaces
+                .iter()
+                .map(|view| view.view_count())
+                .sum::<usize>()
+        })
+    };
+    assert_eq!(views(&runtime), 0, "an empty mission opens nothing");
 
     // The first plan shows on the Conductor pane's chip, which the shell
-    // draws; the lane's 보기 slot stays as it was (mission-pane-chip B11).
+    // draws; no card opens on any desk (mission-pane-chip B11).
     let (planned, _) = command(&mut runtime, "sender", plan()).unwrap();
     assert_eq!(planned["mission"]["nodes"].as_array().unwrap().len(), 2);
-    assert_eq!(runtime.snapshot.ui_state.detail, detail);
+    assert_eq!(views(&runtime), 0);
 
     command(&mut runtime, "sender", plan()).unwrap();
-    assert_eq!(runtime.snapshot.ui_state.detail, detail);
+    assert_eq!(views(&runtime), 0);
 
     runtime.refresh_missions();
     let view = &runtime.snapshot.missions.items[0];
@@ -4723,29 +4729,46 @@ fn only_the_mission_the_screen_shows_sends_its_events() {
     assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's card on top of the front pane's
-/// 보기 slot sends its events while the slot is drawn; the mission
-/// screen's detail, when the page names one, wins; the card goes with its
-/// mission.
+/// The fixture's checkout in front, as the operator chose it.
+fn fixture_in_front(runtime: &mut Runtime) -> crate::runtime::workspace_view::WorkspaceKey {
+    runtime.snapshot.navigator.focused_workspace_id = Some("workspace".into());
+    runtime.snapshot.navigator.focused_checkout_id = Some("checkout".into());
+    runtime.sync_workspace_view();
+    runtime
+        .front_workspace_key()
+        .expect("the fixture's checkout")
+}
+
+/// PRD lane-desk-pair-view D-13, conductor decision 3: a mission's card in
+/// front of the desk the front Workspace draws sends its events; a lane
+/// closed over it sends nothing; the mission screen's detail, when the page
+/// names one, wins; another card in front sends no mission's; and the card
+/// keeps its tab when its mission goes, with no events to send.
 #[test]
-fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
+fn the_mission_card_in_front_sends_its_events_and_keeps_its_tab_when_its_mission_goes() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     running(&mut runtime);
-    runtime.open_detail(DetailItem::Mission {
+    let key = fixture_in_front(&mut runtime);
+    let map = DetailItem::Mission {
         mission: "mission-1".into(),
-    });
+    };
+    assert!(runtime.open_card_in_front(map.clone()));
     runtime.refresh_mission_events();
     assert_eq!(
         runtime.snapshot.mission_events.mission.as_deref(),
         Some("mission-1")
     );
     assert_eq!(runtime.snapshot.mission_events.events.len(), 1);
-    // The slot folded behind the documents sends nothing; shown again, it does.
-    runtime.snapshot.ui_state.detail.shown = false;
+    // A lane closed over the desk sends nothing; opened again, it does.
+    let lane = |runtime: &mut Runtime, open: bool| {
+        let store = runtime.workspace_views.as_mut().unwrap();
+        store.views.entry(&key.0, &key.1).open = open;
+    };
+    lane(&mut runtime, false);
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);
-    runtime.snapshot.ui_state.detail.shown = true;
+    lane(&mut runtime, true);
     // The mission screen's detail wins over the card while the page names it.
     runtime.missions.shown = Some("mission-404".into());
     runtime.refresh_mission_events();
@@ -4759,36 +4782,47 @@ fn the_mission_card_in_the_slot_sends_its_events_and_goes_with_its_mission() {
         runtime.snapshot.mission_events.mission.as_deref(),
         Some("mission-1")
     );
-    // Another card on top sends no mission's events; ← brings the map back.
-    runtime.open_detail(DetailItem::Cost {
+    // Another card in front sends no mission's events; pressing the
+    // mission's card again brings its own tab forward, not a second one.
+    runtime.open_card_in_front(DetailItem::Cost {
         workspace_id: "w".into(),
     });
     runtime.refresh_mission_events();
     assert_eq!(runtime.snapshot.mission_events.mission, None);
-    runtime.detail_back();
+    runtime.open_card_in_front(map.clone());
     runtime.refresh_mission_events();
     assert_eq!(
         runtime.snapshot.mission_events.mission.as_deref(),
         Some("mission-1")
     );
-    // The mission deleted with its Conductor's session takes its card along.
+    let cards = |runtime: &Runtime| {
+        runtime
+            .front_tray_layout(&key)
+            .unwrap()
+            .displays()
+            .filter_map(|display| display.card.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(cards(&runtime).len(), 2);
+    // The mission deleted with its Conductor's session leaves its tab.
     let session = runtime.missions.book.missions[0]
         .conductor
         .session
         .clone()
         .unwrap();
     assert!(runtime.drop_missions_of(&[(session.device_id, session.session_id)]));
-    assert_eq!(
-        runtime.snapshot.ui_state.detail,
-        crate::model::DetailSlot::default()
+    assert!(
+        cards(&runtime).contains(&map),
+        "a gone subject keeps its tab"
     );
     runtime.refresh_mission_events();
-    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    assert!(runtime.snapshot.mission_events.events.is_empty());
 }
 
-/// Operator decision 2026-11-09: a mission's row opens its map in the slot
-/// of its Conductor's pane, which comes forward with it, and leaves the focus
-/// where it was while no Conductor holds it.
+/// Operator decision 2026-11-09, PRD lane-desk-pair-view B6: a mission's row
+/// opens its map on the desk of its Conductor's tab, the Conductor's pane
+/// coming forward with it, and leaves the focus where it was while no
+/// Conductor holds it.
 #[test]
 fn a_mission_opens_in_its_conductors_slot() {
     let fixture = conducting();
@@ -4804,10 +4838,18 @@ fn a_mission_opens_in_its_conductors_slot() {
     let map = DetailItem::Mission {
         mission: "mission-1".into(),
     };
+    let key = fixture_in_front(&mut runtime);
     assert!(runtime.dispatch_json(&operator_focus_event("recipient")));
     open(&mut runtime);
     assert_eq!(runtime.snapshot.focused.pane_id.as_deref(), Some("sender"));
-    assert_eq!(runtime.snapshot.ui_state.detail.items.last(), Some(&map));
+    let shows_map = |runtime: &Runtime| {
+        runtime.front_tray_layout(&key).is_some_and(|layout| {
+            layout
+                .displays()
+                .any(|display| display.card.as_ref() == Some(&map))
+        })
+    };
+    assert!(shows_map(&runtime), "on the desk of the Conductor's tab");
 
     // Its Conductor's pane is gone: the pane in front stays.
     runtime.missions.book.missions[0].conductor.actor.pane_id = "gone".into();
@@ -12429,7 +12471,7 @@ fn view_in(
     path: &str,
 ) -> String {
     runtime
-        .change_view_layout(key, |layout, stamp| {
+        .change_front_layout(key, |layout, stamp| {
             let display =
                 layout.new_display(path, crate::view_layout::DisplayKind::File, None, false);
             let id = display.id.clone();
@@ -12494,7 +12536,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     };
     let url = "https://example.test/screens";
     let page = runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_browser_display(url, 1);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12504,7 +12546,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
         .unwrap();
     let diff_path = "/checkouts/fixture/src/main.rs";
     let diff = runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_display(diff_path, DisplayKind::Diff, Some(false), false);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12536,7 +12578,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     };
     let close = |runtime: &mut Runtime, view: &str| {
         runtime
-            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
             .unwrap();
     };
     let press = |runtime: &mut Runtime, key: u64, view: &str, request: &str| {
@@ -12550,7 +12592,7 @@ fn a_decisions_closed_view_opens_again_as_its_agents_and_a_press_ends_on_what_op
     };
     let shown = |runtime: &Runtime, kind: DisplayKind, address: &str| -> Vec<Display> {
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .map(|layout| {
                 layout
                     .displays()
@@ -12749,7 +12791,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     let key = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
     let close = |runtime: &mut Runtime, view: &str| {
         runtime
-            .change_view_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
+            .change_front_layout(&key, |layout, _| Ok(((), layout.remove(view).is_some())))
             .unwrap();
     };
 
@@ -12759,7 +12801,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
     runtime.link_mission_view(&key, &page, "sender", 10);
     let unseen = |runtime: &Runtime, view: &str| {
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .and_then(|layout| layout.display(view))
             .map(|display| display.unseen.is_some())
     };
@@ -12933,7 +12975,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
     runtime.link_mission_view(&key, &results, "recipient", 10);
     let url = "https://example.test/spec";
     let spec = runtime
-        .change_view_layout(&key, |layout, stamp| {
+        .change_front_layout(&key, |layout, stamp| {
             let display = layout.new_browser_display(url, 1);
             let id = display.id.clone();
             let area = layout.active_area().id.clone();
@@ -12975,7 +13017,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
 
     // Closed, the page stays listed under the name it had.
     runtime
-        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
+        .change_front_layout(&key, |layout, _| Ok(((), layout.remove(&spec).is_some())))
         .unwrap();
     assert_eq!(rows(&mut runtime)[1], (label.clone(), true, page.clone()));
     let press = |runtime: &mut Runtime, key: Option<u64>, node: Option<&str>| {
@@ -12989,7 +13031,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
     };
     let pages = |runtime: &Runtime| {
         runtime
-            .view_layout_of(&key)
+            .front_tray_layout(&key)
             .map(|layout| {
                 layout
                     .displays()
@@ -13146,7 +13188,7 @@ fn a_decisions_views_moving_tell_the_operator_nothing_new() {
     let later = project_view(&mut runtime, "/checkouts/fixture/later.md");
     runtime.link_mission_view(&key, &later, "sender", 20);
     runtime
-        .change_view_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
+        .change_front_layout(&key, |layout, _| Ok(((), layout.remove(&page).is_some())))
         .unwrap();
     let moved = conductor_shown(&mut runtime);
     assert_eq!(told(&moved), told(&asked));

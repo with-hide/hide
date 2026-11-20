@@ -79,7 +79,8 @@ impl Shown {
         match view.kind {
             DisplayKind::Diff => Self::Changes,
             DisplayKind::Browser => Self::Page,
-            DisplayKind::External => Self::NameOnly,
+            // A card has no opener, so no agent's list holds one.
+            DisplayKind::External | DisplayKind::Card => Self::NameOnly,
             // The table of outputs decides: an image is drawn, a PDF, a video
             // and a board are named (reading a movie to find that out would
             // cost the day's relay budget), anything else is read as text.
@@ -111,7 +112,7 @@ fn html_path(view: &LookView) -> Option<String> {
     let path = match view.kind {
         DisplayKind::File => view.path.clone(),
         DisplayKind::Browser => crate::file_url::file_path(view.url.as_deref()?)?.0,
-        DisplayKind::Diff | DisplayKind::External => return None,
+        DisplayKind::Diff | DisplayKind::External | DisplayKind::Card => return None,
     };
     let name = std::path::Path::new(hide_platform::path::wire_name(&path));
     let html = hide_host::document::language_for(name).as_deref() == Some("html");

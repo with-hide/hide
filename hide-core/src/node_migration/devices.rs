@@ -1644,13 +1644,14 @@ mod tests {
         let state = dir.path();
         let mut views = crate::workspace_views::WorkspaceViews::default();
         let view = views.entry_at(ALIAS, ROOT, 1);
+        let shelf = &mut view.shelf;
         let mut display =
-            view.layout
-                .new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
+            shelf.new_display("/srv/p/00-title.png", crate::DisplayKind::File, None, false);
         display.opened_by(opener(ALIAS, "t1"), 0);
         display.opened_by(opener(NODE, "t2"), 0);
         display.opened_by(opener(ALIAS, "t3"), 0);
-        view.layout.insert("a1", display, 0).unwrap();
+        let area = shelf.active_area().id.clone();
+        shelf.insert(&area, display, 0).unwrap();
         crate::workspace_views::save(&state.join(WORKSPACE_VIEWS), &views).unwrap();
 
         let outcome = name_devices(state, &node()).unwrap();
@@ -1665,8 +1666,7 @@ mod tests {
         let display = loaded
             .get(MACHINE, ROOT)
             .unwrap()
-            .layout
-            .displays()
+            .views()
             .next()
             .unwrap()
             .clone();

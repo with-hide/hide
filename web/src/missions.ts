@@ -939,7 +939,7 @@ export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps
   return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan" })), now: null };
 }
 
-/** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */
+/** The events the core sends for `missionId`, which it does only for the mission open as a card tab on a desk (D-22). */
 export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId: string): MissionEventsSnapshot | null {
   const events = rest?.mission_events;
   return events && events.mission === missionId ? events : null;

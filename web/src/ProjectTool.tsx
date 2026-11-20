@@ -1,6 +1,5 @@
 import { ArrowUpIcon, ChevronRightIcon, CircleXIcon, FileDiffIcon, LoaderCircleIcon, SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ProjectLanePin } from "./ProjectLanePin";
 import type { Actions } from "./actions";
 import type { ProjectStatus, ProjectStray } from "./agentScope";
 import { agentProductName } from "./agentAdapters";
@@ -25,6 +24,7 @@ import { projectRepository, settingsTarget } from "./projectSettings";
 import { COSTLY_SHOWN, costPrefix, dayHeights, durationWords, frontProject, missedCount, pricedUsd, projectCost, removableDisk, strayParts, strayView, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
 import { machineName } from "./screenMachine";
 import { catalogWorkspaces, localDeviceId, sameDetailItem, type DetailItem, type Workspace } from "./snapshot";
+import { frontCard, workspaceViewOf } from "./workspace";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -35,13 +35,10 @@ import { useUiStore } from "./ui";
 // Every row and number is the core's (`agent_scope.status`, the usage
 // frame's `projects`); a press goes where the list or the detail lives.
 
-/** Whether the viewing column draws `item` now, so its control reads pressed. */
+/** Whether the drawn desk shows `item` in front now, so its control reads pressed. */
 function useDetailOpen(item: DetailItem): boolean {
-  const drawn = useUiStore((s) => s.drawnLane.view === "detail" && s.drawnLane.mode !== "closed");
-  const top = useShellStore((s) => {
-    const detail = s.rest?.ui_state?.detail;
-    return detail?.shown ? (detail.items.at(-1) ?? null) : null;
-  });
+  const drawn = useUiStore((s) => s.drawnLane.view === "documents" && s.drawnLane.mode !== "closed");
+  const top = useShellStore((s) => frontCard(workspaceViewOf(s.rest)));
   return drawn && sameDetailItem(top, item);
 }
 
@@ -77,7 +74,6 @@ function Header({ project, actions }: { project: Workspace; actions: Actions }) 
           <SettingsIcon />
         </Button>
       </Hint>
-      <ProjectLanePin column="tool" actions={actions} />
       <Hint label={t("panes.lane.closeTool")}>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={t("panes.lane.closeTool")} data-lane-tool-close="project" onClick={() => actions.closeTool()}>
           <XIcon />

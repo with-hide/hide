@@ -26,7 +26,7 @@ use crate::missions::{
     MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT,
     PendingWake, PrSeen, Question, Verdict, WaitingOn, WakeEvent, WarningKind, Worker,
 };
-use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
+use crate::model::{PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
 
 /// The role Hide wakes a mission's Conductor as (D-39). Like the memory
@@ -2184,10 +2184,6 @@ impl Runtime {
             .iter()
             .map(|mission| mission.id.clone())
             .collect();
-        self.drop_detail_items(|item| match item {
-            DetailItem::Mission { mission } => known.contains(mission),
-            _ => true,
-        });
         if self
             .missions
             .shown
@@ -4318,19 +4314,9 @@ impl Runtime {
         crate::diagnostic!(json!({
             "component": "missions", "kind": "missions.deleted_with_session", "count": dropped,
         }));
-        // A slot card of a mission that is gone would draw nothing, and the
-        // mission screen's detail of it sends nothing.
-        let known: Vec<String> = self
-            .missions
-            .book
-            .missions
-            .iter()
-            .map(|mission| mission.id.clone())
-            .collect();
-        self.drop_detail_items(|item| match item {
-            DetailItem::Mission { mission } => known.contains(mission),
-            _ => true,
-        });
+        // The mission screen's detail of a mission that is gone sends
+        // nothing; its card keeps its tab (PRD lane-desk-pair-view,
+        // conductor decision 3).
         if self
             .missions
             .shown

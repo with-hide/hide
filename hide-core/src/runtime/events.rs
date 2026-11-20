@@ -1774,9 +1774,7 @@ pub(super) enum Event {
     OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
-    DetailBack,
-    DetailClose,
-    DetailShow(super::detail::DetailShowPayload),
+    PairView(super::pair_view::PairViewPayload),
     RemoteControl(RemoteControlPayload),
     RemoteFileList(RemoteFileListPayload),
     FileOpen(FileOpenPayload),
@@ -2099,9 +2097,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         ),
         "task_reveal" => decode!(super::detail::TaskRevealPayload, TaskReveal),
         "detail_open" => decode!(super::detail::DetailOpenPayload, DetailOpen),
-        "detail_back" => Ok(Event::DetailBack),
-        "detail_close" => Ok(Event::DetailClose),
-        "detail_show" => decode!(super::detail::DetailShowPayload, DetailShow),
+        "pair_view" => decode!(super::pair_view::PairViewPayload, PairView),
         "remote_control" => decode!(RemoteControlPayload, RemoteControl),
         "remote_file_list" => decode!(RemoteFileListPayload, RemoteFileList),
         "file_open" => decode!(FileOpenPayload, FileOpen),
@@ -3876,6 +3872,7 @@ impl Runtime {
                     && let Some(key) = self.front_workspace_key()
                     && !self.admit_view_open(
                         &key,
+                        &self.front_place(&key),
                         &created,
                         crate::view_layout::DisplayKind::File,
                         None,
@@ -4536,9 +4533,7 @@ impl Runtime {
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail_at(payload.item, payload.at),
-            Event::DetailBack => self.detail_back(),
-            Event::DetailClose => self.close_detail(),
-            Event::DetailShow(payload) => self.show_detail(payload.shown),
+            Event::PairView(payload) => self.set_pair_view(payload),
             Event::UiStateUpdate(payload) => {
                 let payload = *payload;
                 if let Some(visible) = payload.usage_window_visible {
@@ -4610,16 +4605,15 @@ impl Runtime {
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
                     // `task_view_set`, `sidebar_project_set`,
-                    // `practice_progress_set`, `practice_invite_close`, `detail_*`,
-                    // `overview_graph_change`).
+                    // `practice_progress_set`, `practice_invite_close`,
+                    // `overview_graph_change`); slot cards still moving onto
+                    // their trays are the core's.
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     sidebar_project: current.sidebar_project,
                     practice: current.practice,
                     practice_invite_closed: current.practice_invite_closed,
-                    detail: current.detail,
-                    detail_pane: current.detail_pane,
-                    detail_panes: current.detail_panes,
+                    moving_cards: current.moving_cards,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the

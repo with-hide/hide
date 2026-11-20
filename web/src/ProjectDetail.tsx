@@ -27,7 +27,7 @@ import type { WorkspaceView } from "./workspace";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
-// What the Project tool opens in the 보기 slot (PRD lane-two-columns B30,
+// What the Project tool opens as a card tab on a desk (PRD lane-two-columns B30,
 // project-panel-results B9, B27-B34): the project's worktrees with its disk,
 // what one worktree left, and the seven days' cost by task. Each draws what
 // the core sent; a removal goes through the disk cleanup sheet's

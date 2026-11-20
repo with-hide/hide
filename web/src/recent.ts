@@ -21,10 +21,12 @@
 
 import { frontDeviceId, localDeviceId } from "./devices";
 import { allProjectsCount } from "./navigation";
+import { cardTitle } from "./cardTitle";
 import { translate } from "./i18n/client";
 import { remoteContext, remoteView } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { listedWorkspaces, type AgentRow, type Checkout, type PaneRow, type SnapshotRest, type Tab, type ViewDisplaySnapshot, type Workspace } from "./snapshot";
+import { useShellStore } from "./store";
 import type { Screen } from "./ui";
 import { activeDisplay, areasOf } from "./viewLayout";
 import { workspaceViewOf } from "./workspace";
@@ -53,7 +55,7 @@ export function tabSurface(checkout: Checkout, tabId: string, deviceId: string):
 }
 
 export function displaySurface(checkout: Checkout, display: ViewDisplaySnapshot, deviceId: string): Surface {
-  return { key: `display\u0000${checkout.id}\u0000${display.id}`, kind: display.kind, deviceId, workspaceId: checkout.workspace_id, checkoutId: checkout.id, id: display.id, label: display.label };
+  return { key: `display\u0000${checkout.id}\u0000${display.id}`, kind: display.kind, deviceId, workspaceId: checkout.workspace_id, checkoutId: checkout.id, id: display.id, label: display.kind === "card" ? cardTitle(useShellStore.getState(), translate, display.card ?? null) : display.label };
 }
 
 /** A screen of the page's own: a device's Home Overview, or one Project's Overview. */

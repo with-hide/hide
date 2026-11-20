@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { frontCard, type WorkspaceView } from "../../workspace";
 import "../chapters";
 import chapter from "../chapters/mission";
 import type { CoreEvent } from "../world";
@@ -116,18 +117,18 @@ describe("the mission flow's end: the report and Memory (UI_BEHAVIOR, Practice w
   });
 });
 
-describe("the mission's card in the 보기 slot (operator decision 2026-11-09)", () => {
-  it("opens beside the pane from the chip and goes with ✕, the lane drawing it while it stands", () => {
+describe("the mission's card as a desk tab (operator decision 2026-11-09; PRD lane-desk-pair-view D-13)", () => {
+  it("opens beside the pane from the chip and goes with its tab's ✕, the lane drawing it while it stands", () => {
     const rest = (model: MissionModel) => MISSION_WORLD.snapshot(model, Date.now()).rest;
     const open = apply(planned(), { kind: "detail_open", payload: { item: { kind: "mission", mission: "practice-mission" } } });
     expect(doneAt("chip", open)).toBe(true);
-    expect(rest(open).ui_state!.detail).toEqual({ items: [{ kind: "mission", mission: "practice-mission" }], shown: true });
+    expect(frontCard(rest(open).workspace_view as WorkspaceView)).toEqual({ kind: "mission", mission: "practice-mission" });
     expect(rest(open).workspace_view!.open).toBe(true);
     // A card of anything else is not this world's; the mission's card again changes nothing it shows.
     expect(MISSION_WORLD.apply(planned(), { kind: "detail_open", payload: { item: { kind: "cost", workspace_id: "w" } } })).toBeNull();
-    const closed = apply(open, { kind: "detail_close", payload: {} });
+    const closed = apply(open, { kind: "view_layout", payload: { workspace: { device_id: "local", path: "/" }, action: "close", display_id: "card-0" } });
     expect(doneAt("leave", closed)).toBe(true);
-    expect(rest(closed).ui_state!.detail).toEqual({ items: [], shown: false });
+    expect(frontCard(rest(closed).workspace_view as WorkspaceView)).toBeNull();
     expect(rest(closed).workspace_view!.open).toBe(false);
   });
 });

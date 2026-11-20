@@ -348,11 +348,11 @@ test("the chapter list leads back to Hide, and a finished chapter stops on its e
     await expect(practice).toHaveTitle(/Practice Hide|Hide 연습/);
     // The last step's button finishes the chapter on its end card, which lists the tasks and leads back to the list.
     await playFromList(practice, "overview");
-    await pressTo(practice, "overview", 9);
+    await pressTo(practice, "overview", 8);
     await practice.keyboard.press("Enter");
     const end = practice.locator('[data-practice-chapter="overview"] [data-practice-end]');
     await expect(end).toBeVisible();
-    await expect(end.locator("li")).toHaveCount(4);
+    await expect(end.locator("li")).toHaveCount(3);
     await end.locator("[data-practice-end-hub]").click();
     await expect(practice.locator('[data-practice-hub-chapter="overview"]')).toHaveAttribute("data-status", "done");
   });

@@ -4,7 +4,7 @@
 // core's record, the first plan opens nothing and, with the operator looking
 // at the Conductor pane, pins that pane's popover once (PRD mission-pane-chip
 // B11, B12); the pane's chip opens its mission's map as a card in the lane's
-// 보기 slot beside the pane (operator decision 2026-11-09, replacing PRD
+// desk beside the pane as a card tab (operator decision 2026-11-09, replacing PRD
 // mission-screen D-09, B12, B14), whose map follows each change of the
 // record, a card opens its node's panel with the events the core sends for
 // the card in front, and Escape lets the pick go and leaves the lane open
@@ -20,7 +20,7 @@ import type { HideAnswer } from "./agent-pane";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { enterWorkspace, placedBoxes, screenshot } from "./wire";
+import { closeFrontCard, enterWorkspace, placedBoxes, screenshot } from "./wire";
 import { git } from "./work-prs-fixture";
 import { closePane, withControl } from "./daemon-actions";
 
@@ -84,7 +84,7 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
     const opened = await conductorRepo(page, fixture, "mission-map");
     daemon = opened.daemon;
     const { conductor, worker } = opened;
-    const map = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await createMission(conductor);
     // A mission without a plan opens nothing; its pane's chip says it is being planned.
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
@@ -105,14 +105,15 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
     await expect(small.locator("[data-mission-mini-tally]")).toHaveAttribute("data-mission-mini-tally", "0 3");
     await expect(map).toHaveCount(0);
     await screenshot(page, "mission-pane-first-plan");
-    // A press on the chip opens the map as a card in the 보기 slot, the pane staying beside it, and closes the popover.
+    // A press on the chip opens the map as a card tab on the desk, the pane staying beside it, and closes the popover.
     await paneChip.click();
     await expect(small).toHaveCount(0);
     await expect(map).toBeVisible();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator(`[data-pane-view="${opened.pane}"]`)).toBeVisible();
     await expect(page.locator("[data-mission-screen]")).toHaveCount(0);
-    await expect(map.locator("[data-detail-title]")).toHaveAttribute("data-detail-title", /이슈 정리/);
+    // The card's tab carries the mission's name.
+    await expect(page.locator('[role="tab"][data-tab-kind="card"][aria-selected="true"]')).toHaveAttribute("aria-label", /이슈 정리/);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     // The node that waits on another is drawn below it (down flow).
@@ -142,7 +143,7 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
     await expect(decision.locator("[data-mission-answer-send]")).toBeEnabled();
     await expect(decision).toHaveAttribute("data-mission-answer", "open");
     // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice,
-    // and the core's events for it, which the core sends for the mission card in front of the slot (B31).
+    // and the core's events for it, which the core sends for the mission card in front of the desk (B31).
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
@@ -159,6 +160,8 @@ test("the Conductor's first plan shows on its pane, and the mission's card besid
 
     // The card belongs to the Agent tab it opened in: another tab in front shows none, and back in that tab it is as it was (operator decision 2026-11-09).
     const home = (await page.locator("[data-tab][aria-selected=true]").getAttribute("data-tab"))!;
+    // The keyboard back in the Conductor's pane, ⌘T opens an Agent tab; in the card on the desk it would open a View tab there.
+    await page.locator(`[data-pane-view="${opened.pane}"] .xterm-helper-textarea`).focus();
     await page.keyboard.press(chord("new_tab"));
     await expect(page.locator("[data-tab][aria-selected=true]")).not.toHaveAttribute("data-tab", home);
     await expect(map).toHaveCount(0);
@@ -181,7 +184,7 @@ test("the mission's card closes and opens again from the sidebar, the screen kee
     const opened = await conductorRepo(page, fixture, "mission-screen");
     daemon = opened.daemon;
     const { conductor } = opened;
-    const card = page.locator('aside[data-lane="detail"][data-detail="mission"]');
+    const card = page.locator('[data-card="mission"]');
     const map = page.locator("[data-mission-screen-detail]");
     const small = page.locator("[data-pane-mission]");
     await createMission(conductor);
@@ -192,7 +195,7 @@ test("the mission's card closes and opens again from the sidebar, the screen kee
     await expect(card).toBeVisible();
 
     // Closed by the operator, a later plan does not open it again, nor the pane's popover (B12).
-    await card.locator("[data-detail-close]").click();
+    await closeFrontCard(page);
     await expect(card).toHaveCount(0);
     await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", criteria: ["두 변경이 함께 동작한다"], depends_on: ["screen"] }] })]);
     const shown = await mission(conductor, ["mission", "show", "--json"]);
@@ -290,7 +293,7 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     await createMission(opened.conductor);
     await mission(opened.conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     // Nothing of a card, its title, its worker or its bottom line, reaches past its right edge.
@@ -405,7 +408,7 @@ test("at the largest Interface text a working change's branch line stays inside 
     await enterWorkspace(page, "fixture");
     const chip = page.locator("[data-pane-mission-chip]");
     await chip.click();
-    const map = page.locator('aside[data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", LONG_DESTINATION);
     await expect(map.locator('[data-mission-node="lone"] [data-node-warning]')).toHaveCount(1);
     const measure = () => measureLines(map);

@@ -52,7 +52,7 @@ import { InToolCell, ToolMark } from "./components/tool-mark";
 // missions, every project of it, as a table in the Mission tool's four
 // groups; a mission opened from it narrows the table to a list beside its
 // detail, the map as it has always drawn. A mission pressed anywhere else
-// opens as a card in the 보기 slot instead (operator decision 2026-11-09). It is the
+// opens as a card tab on a desk instead (operator decision 2026-11-09). It is the
 // page's own navigation, like the Overview and Desk: where it stands is
 // `MissionPlace`, and the core hears only which mission the detail shows,
 // so it sends that mission's events (D-16). Every state and number is the

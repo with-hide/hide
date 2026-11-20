@@ -7,7 +7,8 @@
 // areas' own rules are `viewLayout.ts`.
 
 import { findArea } from "./areaLayout";
-import type { Checkout, DetailSlot, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
+import { workspaceKey } from "./viewLayout";
+import type { Checkout, DetailItem, SnapshotRest, StripTab, ViewLayoutSnapshot } from "./snapshot";
 
 export { TOOLS, type Tool } from "./laneTools";
 import type { Tool } from "./laneTools";
@@ -17,16 +18,14 @@ export type ToolScope = "project" | "checkout";
 export const TOOL_SCOPES: Record<Tool, ToolScope> = { project: "project", memory: "project", explorer: "checkout", changes: "checkout" };
 
 /**
- * What the viewing column shows (PRD lane-two-columns D-01, D-04): the 보기
- * slot while the core says it is shown and holds something, else the
- * checkout's documents while the Workspace shows them and has a view, else
+ * What the viewing column shows (PRD lane-desk-pair-view D-06): the desk of
+ * the Agent tab in front while the core says it is shown and has a tab, else
  * nothing. Read with the lane closed too, so a closed lane's shape is known.
  */
-export type LaneView = "documents" | "detail" | "none";
+export type LaneView = "documents" | "none";
 
-export function laneViewOf(view: Pick<WorkspaceView, "documents"> | null, detail: DetailSlot | null | undefined, hasViews: boolean): LaneView {
-  if (detail?.shown && detail.items.length > 0) return "detail";
-  return view?.documents && hasViews ? "documents" : "none";
+export function laneViewOf(view: Pick<WorkspaceView, "tray"> | null, hasViews: boolean): LaneView {
+  return view?.tray.shown && hasViews ? "documents" : "none";
 }
 
 /** The front Workspace's presentation as the core published it. */
@@ -36,16 +35,10 @@ export type WorkspaceView = {
   git?: CheckoutGitHeader | null;
   /** Whether the lane is open; closed, its columns keep their shape for ⌘E (B15). */
   open: boolean;
-  /** Whether the viewing column shows the checkout's documents; false while it is folded or the last view closed (B11, B12). */
-  documents: boolean;
   /** The tool column's tool, or null while there is none. */
   tool: Tool | null;
-  /** Whether the lane is pinned beside Agent Views rather than drawn over it (PRD right-lane D-03). */
-  pinned: boolean;
   /** The documents' width in CSS pixels, or null for the default until it is resized (D-09). */
   document_width: number | null;
-  /** The 보기 slot's width, the same way, so a wide document leaves it as it was. */
-  detail_width: number | null;
   /** The Explorer column's width, the same way. */
   explorer_width: number | null;
   /** The width the Project tool and Changes share, the same way. */
@@ -56,11 +49,17 @@ export type WorkspaceView = {
   lane_called: number;
   /** How many lane calls the core has numbered, in any Workspace. */
   lane_calls: number;
-  /** Which column the last call brought forward (B19): the viewing column for an open, the 보기 slot or ⌘E, the tool column for a tool, a reveal or a folder link. */
+  /** Which column the last call brought forward (B19): the viewing column for an open, a card, the desk button or ⌘E, the tool column for a tool, a reveal or a folder link. */
   lane_called_side: LaneSide;
   /** The Workspace the operator last chose, now or before a restart, so the page opens on it (PRD right-lane D-11). */
   resumed?: boolean;
-  /** The View areas (S7); absent only from a core that predates them. */
+  /** The desk of the Agent tab in front (PRD lane-desk-pair-view D-06): its tab, whether the lane shows it, how many Views are on it (the rail's number, D-29) and its pair view. `layout` is its View areas. */
+  tray: TraySnapshot;
+  /** The window's pair view mode (D-45, D-47): on or off, and the left pane's share of the body in thousandths once the divider was dragged. */
+  pair_mode?: PairMode;
+  /** The panes of this Workspace's Agent tabs with something to show beside the desk (B19): ◧ is off, with why, on every other. */
+  pairable?: string[];
+  /** The View areas (S7) of the desk in front; absent only from a core that predates them. */
   layout?: ViewLayoutSnapshot;
   /** Null on a device this core dials, whose engine shows one tab. */
   agent_layout?: import("./agentLayout").AgentLayout | null;
@@ -69,6 +68,13 @@ export type WorkspaceView = {
   /** For each pane of the checkout, the Views of unsaved documents its close would close with its session (PRD session-files D-14); absent while there are none. */
   session_drafts?: SessionDrafts[];
 };
+
+/** One Agent tab's desk as the screen draws it. */
+export type TraySnapshot = { tab_id: string; shown: boolean; count: number; pair?: PairView | null };
+export type PairMode = { on: boolean; ratio?: number | null };
+/** An Agent tab in pair view: the pane drawn beside its desk. */
+/** An Agent tab in pair view: the pane drawn beside its desk, and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
+export type PairView = { tab_id: string; pane_id: string; folded?: string[] };
 
 /** The Views of unsaved documents one pane's session alone opened. */
 export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };
@@ -120,7 +126,7 @@ export type CheckoutCi = {
 /** The pixel sizes the body is laid out with, read from their tokens (D-09). */
 export type LaneSizes = {
   agentMin: number;
-  /** The documents' and the 보기 slot's minimum and width until the operator resizes them. */
+  /** The documents' minimum and width until the operator resizes them. */
   viewMin: number;
   viewIdeal: number;
   /** The document width a page opened in the lane widens it to (`pageLaneWidth`). */
@@ -130,7 +136,7 @@ export type LaneSizes = {
   /** The Project tool and Changes. */
   panelMin: number;
   panelIdeal: number;
-  /** A divider: between Agent Views and a pinned lane, and between the two columns. */
+  /** A divider: at the lane's left edge, and between the two columns. */
   divider: number;
 };
 
@@ -140,13 +146,13 @@ export type LaneSizes = {
  *
  * - `closed`: no column; Agent Views has the body.
  * - `overlay`: drawn over Agent Views, which keeps its width.
- * - `docked`: pinned, beside Agent Views, which gives up the lane's width.
  * - `expanded`: over the whole body; Agent Views keeps the width it had.
  */
-export type LaneMode = "closed" | "overlay" | "docked" | "expanded";
+/** `pair`: the lane is the right half of the body beside the paired pane (PRD lane-desk-pair-view B17, D-16). */
+export type LaneMode = "closed" | "overlay" | "expanded" | "pair";
 
 /** The Workspace widths the columns draw from (D-09). */
-export type LaneWidthField = "document_width" | "detail_width" | "explorer_width" | "panel_width";
+export type LaneWidthField = "document_width" | "explorer_width" | "panel_width";
 
 /** Which of the two columns a rail button or a stack brings in front. */
 export type LaneSide = "view" | "tool";
@@ -166,8 +172,8 @@ export type LaneFrame = {
   tool: LaneColumn | null;
   /** Both columns exist but the body holds only one at a time, the front one drawn (B19). */
   stacked: boolean;
-  /** Pinned, but drawn over Agent Views because docking would leave it under its minimum (B19). */
-  narrowPin: boolean;
+  /** In pair view, the paired pane's width left of the divider (D-47). */
+  pane?: number;
 };
 
 /** What `laneFrame` reads: the core's lane and this page's own facts. */
@@ -175,12 +181,14 @@ export type LaneInput = {
   open: boolean;
   view: LaneView;
   tool: Tool | null;
-  pinned: boolean;
   documentWidth: number | null;
-  detailWidth: number | null;
   explorerWidth: number | null;
   panelWidth: number | null;
   expanded: boolean;
+  /** Pair view is drawn (`drawnPair`): the lane is the desk beside the paired pane, whatever the lane's own open state. */
+  pair?: boolean;
+  /** Pair view's divider landing, the left pane's share in thousandths (D-47); half while null. */
+  pairRatio?: number | null;
   /** The column a stacked lane draws (B19); ignored while both fit. */
   front: LaneSide;
   /** The body's width left of the tool rail. */
@@ -193,7 +201,6 @@ type Want = { field: LaneWidthField; want: number; min: number };
 function viewWant(input: LaneInput): Want | null {
   const { sizes } = input;
   if (input.view === "documents") return { field: "document_width", want: Math.max(sizes.viewMin, input.documentWidth ?? sizes.viewIdeal), min: sizes.viewMin };
-  if (input.view === "detail") return { field: "detail_width", want: Math.max(sizes.viewMin, input.detailWidth ?? sizes.viewIdeal), min: sizes.viewMin };
   return null;
 }
 
@@ -220,64 +227,58 @@ function fitColumns(view: Want, tool: Want, room: number, divider: number): { vi
 }
 
 /**
- * The body as it is drawn (PRD lane-two-columns B1, B15, B17, B19, B20).
- * Each column draws at its own stored width, the same pinned or not, so a
- * wide document leaves the tool column as it was. A pinned lane docks
- * wherever its columns' minimums fit beside Agent Views' own, the viewing
- * column giving way first; when the two do not fit even at their minimums
- * the front one covers the other; and only a body too narrow for even that
- * draws it over the agents, where it stays (PRD right-lane D-07). A window
- * that narrows and widens again moves between these by width alone: nothing
- * narrow is stored. Expanded, the tool column keeps its width and the
- * viewing column takes the rest.
+ * The body as it is drawn (PRD lane-two-columns B1, B15, B17, B19, B20;
+ * lane-desk-pair-view B35): the lane is drawn over Agent Views, which keeps
+ * its width. Each column draws at its own stored width, so a wide document
+ * leaves the tool column as it was; a body narrower than both gives way
+ * inside the lane, the viewing column first, and when even their minimums
+ * do not fit the front one covers the other; a body narrower than one
+ * column is the lane's whole width. A window that narrows and widens again
+ * moves between these by width alone: nothing narrow is stored. Expanded,
+ * the tool column keeps its width and the viewing column takes the rest.
  */
 export function laneFrame(input: LaneInput): LaneFrame {
   const { body, sizes } = input;
   const view = viewWant(input);
   const tool = toolWant(input);
-  const columns = (view ? 1 : 0) + (tool ? 1 : 0);
-  const open = input.open && columns > 0;
-  const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false, narrowPin: false };
-  if (!open) return none;
-  if (body <= 0) return { ...none, mode: input.expanded ? "expanded" : input.pinned ? "docked" : "overlay", agents: 0 };
-  // The lane's room: beside the agents' minimum when pinned, else the body.
-  const dockRoom = body - sizes.divider - sizes.agentMin;
+  const none: LaneFrame = { mode: "closed", agents: body, width: 0, view: null, tool: null, stacked: false };
+  // Pair view draws the desk whatever the lane's own state (D-46): only its
+  // own ways out end it, and the lane comes back as it was. The paired pane
+  // keeps its width at the mode's ratio in every mode, so expanding the lane
+  // over it and back resizes no terminal (B29, D-47).
+  const pairing = input.pair === true && view !== null;
+  if ((!input.open && !pairing) || (!view && !tool)) return none;
+  const mode: LaneMode = input.expanded ? "expanded" : pairing ? "pair" : "overlay";
+  if (body <= 0) return { ...none, mode, agents: 0 };
   const column = (want: Want, width: number): LaneColumn => ({ field: want.field, width, min: want.min });
-  // What the lane wants in `room`: both columns, the front one alone when
-  // stacked, or the one column it has.
-  // `squeezed`, a column too narrow for its minimum takes `room` anyway: a
-  // body narrower than one column is the lane's whole width (B19).
-  const place = (room: number, squeezed = false): { view: LaneColumn | null; tool: LaneColumn | null; stacked: boolean; width: number } | null => {
-    if (view && tool) {
-      const fit = fitColumns(view, tool, room, sizes.divider);
-      if (fit) return { view: column(view, fit.view), tool: column(tool, fit.tool), stacked: false, width: fit.view + sizes.divider + fit.tool };
-      const front = input.front === "tool" ? tool : view;
-      if (front.min > room && !squeezed) return null;
-      const width = Math.min(front.want, room);
-      return { view: front === view ? column(view, width) : null, tool: front === tool ? column(tool, width) : null, stacked: true, width };
-    }
-    const one = (view ?? tool)!;
-    if (one.min > room && !squeezed) return null;
-    const width = Math.min(one.want, room);
-    return { view: view ? column(view, width) : null, tool: tool ? column(tool, width) : null, stacked: false, width };
-  };
-  const docks = input.pinned && dockRoom >= 0 && place(dockRoom) !== null;
-  const mode: LaneMode = input.expanded ? "expanded" : docks ? "docked" : "overlay";
+  const pane = pairing ? { pane: pairPaneWidth(body, input.pairRatio ?? null, sizes) } : {};
+  if (mode === "pair" && view && pane.pane !== undefined) {
+    // The desk takes what the pane and the divider leave (B17, D-47); a tool
+    // opened meanwhile stands beside the desk at its width (B15).
+    const width = Math.max(0, body - pane.pane - sizes.divider);
+    if (!tool) return { mode, agents: body, width, view: column(view, width), tool: null, stacked: false, ...pane };
+    const toolWidth = Math.min(tool.want, Math.max(0, width - sizes.divider - view.min));
+    return { mode, agents: body, width, view: column(view, width - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
+  }
   if (mode === "expanded") {
     // The tool column keeps its width and the viewing column takes the rest (B15).
     if (view && tool) {
       const toolWidth = Math.min(tool.want, Math.max(0, body - sizes.divider - view.min));
-      return { mode, agents: docks ? body - sizes.divider - place(dockRoom)!.width : body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, narrowPin: false };
+      return { mode, agents: body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
     }
     const one = (view ?? tool)!;
-    return { mode, agents: docks ? body - sizes.divider - place(dockRoom)!.width : body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, narrowPin: false };
+    return { mode, agents: body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, ...pane };
   }
-  // Docked, the lane takes what it wants of the agents' spare; over them it
-  // may take the body, giving way inside itself like a narrow dock, and a
-  // body narrower than one column is the whole lane.
-  const placed = docks ? place(dockRoom)! : place(body, true)!;
-  const agents = docks ? body - sizes.divider - placed.width : body;
-  return { mode, agents, width: placed.width, view: placed.view, tool: placed.tool, stacked: placed.stacked, narrowPin: input.pinned && !docks };
+  if (view && tool) {
+    const fit = fitColumns(view, tool, body, sizes.divider);
+    if (fit) return { mode, agents: body, width: fit.view + sizes.divider + fit.tool, view: column(view, fit.view), tool: column(tool, fit.tool), stacked: false };
+    const front = input.front === "tool" ? tool : view;
+    const width = Math.min(front.want, body);
+    return { mode, agents: body, width, view: front === view ? column(view, width) : null, tool: front === tool ? column(tool, width) : null, stacked: true };
+  }
+  const one = (view ?? tool)!;
+  const width = Math.min(one.want, body);
+  return { mode, agents: body, width, view: view ? column(view, width) : null, tool: tool ? column(tool, width) : null, stacked: false };
 }
 
 /** `value` within `min..max`, the minimum winning when the two cross. */
@@ -285,8 +286,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.round(Math.max(min, Math.min(value, max)));
 }
 
-/** A divider's landing: the widths it changes, each the value it should end at. */
-export type LaneLanding = Partial<Record<LaneWidthField, number>>;
+/** A divider's landing: the widths it changes, each the value it should end at; pair view's divider lands the mode's ratio (D-47). */
+export type LaneLanding = Partial<Record<LaneWidthField | "pair_ratio", number>>;
 
 /** The column at the lane's left edge: the viewing column while it is drawn, else the tool column. */
 export function edgeColumn(frame: LaneFrame): LaneColumn | null {
@@ -297,9 +298,8 @@ export function edgeColumn(frame: LaneFrame): LaneColumn | null {
  * Where the divider at the lane's left edge, dragged to `x` pixels from the
  * body's left edge, lands: the width of the column at that edge, in the
  * width it draws from, so the other column keeps its own, never under that
- * column's minimum (B17). Docked, it leaves Agent Views their own width;
- * over the agents it may reach the body's edge, since nothing beside it
- * gives way.
+ * column's minimum (B17); over the agents it may reach the body's edge,
+ * since nothing beside it gives way.
  */
 export function laneLanding(input: { x: number; body: number; frame: LaneFrame; sizes: LaneSizes }): LaneLanding {
   const { x, body, frame, sizes } = input;
@@ -307,8 +307,7 @@ export function laneLanding(input: { x: number; body: number; frame: LaneFrame; 
   if (!edge) return {};
   const other = frame.view && frame.tool ? frame.tool.width + sizes.divider : 0;
   const width = body - x - sizes.divider - other;
-  const beside = frame.mode === "overlay" ? 0 : sizes.agentMin;
-  return { [edge.field]: clamp(width, edge.min, body - sizes.divider - other - beside) };
+  return { [edge.field]: clamp(width, edge.min, body - sizes.divider - other) };
 }
 
 /**
@@ -329,7 +328,7 @@ export function columnLanding(input: { x: number; frame: LaneFrame }): LaneLandi
 /**
  * The document width to store when a page opens in the lane (PRD
  * browser-width-zoom D-02, D-21; lane-two-columns B18), or null to leave it:
- * a lane narrower than `lanePage` widens to it, pinned or not, as far as
+ * a lane narrower than `lanePage` widens to it, as far as
  * Agent Views keeps its minimum beside the lane and its tool column; it
  * never narrows the lane.
  */
@@ -346,32 +345,66 @@ export function workspaceViewOf(rest: SnapshotRest | null): WorkspaceView | null
   return (rest?.workspace_view as WorkspaceView | undefined) ?? null;
 }
 
+/** The card in front of the area in use of the desk in front (PRD lane-desk-pair-view D-13), or null. */
+export function frontCard(view: Pick<WorkspaceView, "layout"> | null): DetailItem | null {
+  const layout = view?.layout;
+  if (!layout) return null;
+  const area = findArea(layout.root, layout.active_area);
+  return area?.displays.find((display) => display.id === area.active)?.card ?? null;
+}
+
 /** Engine tabs: the Agent area's strip, in the core's order. */
 export function agentEntries(checkout: Checkout): StripTab[] {
   return checkout.strip.filter((entry) => entry.kind === "engine");
 }
 
-/**
- * The page in front of the active View area, as its Workspace, display and
- * load stamp, so a page that came forward or loaded again reads as new; null
- * when a file, a diff, a new tab or nothing is there.
- */
-function frontPage(view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): string | null {
-  const layout = view?.layout;
-  if (!layout) return null;
-  const area = findArea(layout.root, layout.active_area);
-  const display = area?.displays.find((row) => row.id === area.active);
-  return display?.kind === "browser" && display.url ? `${view.device_id}\u0000${view.path}\u0000${display.id}\u0000${display.load ?? 0}` : null;
-}
+type CalledView = Pick<WorkspaceView, "device_id" | "path" | "layout" | "open" | "tray">;
 
 /**
- * Whether a lane call put a page in front (PRD browser-width-zoom D-04): the
- * active area's front display is a page that was not in front, or loaded
- * again, before the call. The rail's documents button or a reveal leaves it as it was.
+ * The page in front of the active View area of the desk the lane draws, as
+ * its display and load stamp, so a page that came forward or loaded again
+ * reads as new; null when a file, a diff, a new tab or nothing is there, or
+ * the desk is not drawn.
  */
-export function pageCalled(previous: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined, view: Pick<WorkspaceView, "device_id" | "path" | "layout"> | null | undefined): boolean {
-  const page = frontPage(view);
-  return page !== null && page !== frontPage(previous);
+function frontPage(view: CalledView): string | null {
+  const layout = view.layout;
+  if (!layout || !view.open || !view.tray.shown) return null;
+  const area = findArea(layout.root, layout.active_area);
+  const display = area?.displays.find((row) => row.id === area.active);
+  return display?.kind === "browser" && display.url ? `${display.id}\u0000${display.load ?? 0}` : null;
+}
+
+/** At most this many Workspaces keep the page they drew last (`DrawnPages`). */
+export const DRAWN_PAGES_LIMIT = 256;
+
+/**
+ * The page each Workspace drew last in front of its desk (`frontPage`), by
+ * `workspaceKey`. A lane that closes or a desk that folds leaves it, so the
+ * same page drawn again is not new; at most `DRAWN_PAGES_LIMIT` Workspaces,
+ * the one whose page changed longest ago dropped first.
+ */
+export type DrawnPages = ReadonlyMap<string, string>;
+
+export const NO_DRAWN_PAGES: DrawnPages = new Map();
+
+/**
+ * Reads the page `view` draws in front (PRD browser-width-zoom D-04):
+ * `fresh` when the Workspace did not draw that page last, or drew it at an
+ * earlier load. A lane call with a fresh page widens the lane for it; the
+ * same page brought back by ⌘E or the desk button is not fresh, while one an
+ * agent opened as the lane was closed is, since it was never drawn
+ * (lane-desk-pair-view B2).
+ */
+export function readDrawnPage(drawn: DrawnPages, view: CalledView | null | undefined): { drawn: DrawnPages; fresh: boolean } {
+  const page = view ? frontPage(view) : null;
+  if (!view || page === null) return { drawn, fresh: false };
+  const key = workspaceKey(view);
+  if (drawn.get(key) === page) return { drawn, fresh: false };
+  const next = new Map(drawn);
+  next.delete(key);
+  next.set(key, page);
+  if (next.size > DRAWN_PAGES_LIMIT) next.delete(next.keys().next().value!);
+  return { drawn: next, fresh: true };
 }
 
 /** What the page has read of the core's lane calls. */
@@ -395,4 +428,37 @@ export function readCalls(seen: CallsSeen, view: FrontView | null | undefined): 
   if (!view) return { seen, call: false };
   const call = seen.last !== null && view.lane_calls >= seen.last && view.lane_called > seen.last;
   return { seen: seen.last === view.lane_calls ? seen : { last: view.lane_calls }, call };
+}
+
+/** The ratio pair view starts at, in thousandths: half and half (D-47). */
+export const PAIR_RATIO_HALF = 500;
+/** The ratio range the core accepts, in thousandths. */
+const PAIR_RATIO_MIN = 100;
+const PAIR_RATIO_MAX = 900;
+
+/**
+ * The paired pane's width in a body `body` pixels wide (B17, D-47): its share
+ * at the mode's ratio, half until the divider was dragged, each side kept
+ * above its own minimum. The same whether the lane beside it is expanded or
+ * not, so expanding resizes no terminal (B15, B29).
+ */
+export function pairPaneWidth(body: number, ratio: number | null, sizes: Pick<LaneSizes, "agentMin" | "viewMin" | "divider">): number {
+  const room = Math.max(0, body - sizes.divider);
+  const share = Math.floor((room * (ratio ?? PAIR_RATIO_HALF)) / 1000);
+  // A body too narrow for both minimums splits at the ratio alone.
+  if (sizes.agentMin + sizes.viewMin > room) return share;
+  return clamp(share, sizes.agentMin, room - sizes.viewMin);
+}
+
+/**
+ * Where pair view's divider, dragged to `x` pixels from the body's left edge,
+ * lands (D-47): the pane's share of the body in thousandths, inside what the
+ * core accepts and each side above its minimum.
+ */
+export function pairLanding(input: { x: number; body: number; sizes: Pick<LaneSizes, "agentMin" | "viewMin" | "divider"> }): number {
+  const { x, body, sizes } = input;
+  const room = body - sizes.divider;
+  if (room <= 0) return PAIR_RATIO_HALF;
+  const pane = sizes.agentMin + sizes.viewMin > room ? clamp(x, 0, room) : clamp(x, sizes.agentMin, room - sizes.viewMin);
+  return clamp(Math.round((pane * 1000) / room), PAIR_RATIO_MIN, PAIR_RATIO_MAX);
 }

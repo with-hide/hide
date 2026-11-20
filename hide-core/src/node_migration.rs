@@ -356,6 +356,31 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
+    // Slot cards moving to their pane's desk, waiting for its tab.
+    (
+        CORE_STATE,
+        "/moving_cards/*/pane",
+        Mechanism::Owned,
+        Moves::Pane,
+    ),
+    (
+        CORE_STATE,
+        "/moving_cards/*/cards/*/workspace_id",
+        Mechanism::Owned,
+        Moves::Registration,
+    ),
+    (
+        CORE_STATE,
+        "/moving_cards/*/cards/*/checkout_id",
+        Mechanism::Owned,
+        Moves::Checkout,
+    ),
+    (
+        CORE_STATE,
+        "/moving_cards/*/cards/*/session/device_id",
+        Mechanism::Rewritten,
+        Moves::Device,
+    ),
     // The sidebar's project, written only by builds that have node ids.
     (
         CORE_STATE,
@@ -759,9 +784,33 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Owned,
         Moves::Tab,
     ),
+    // An older file's one View list, read once into the desks
+    // (`workspace_views`, schema 6); a move before that first read still
+    // finds it.
     (
         WORKSPACE_VIEWS,
         "/workspaces/*/view_layout",
+        Mechanism::Rewritten,
+        Moves::Whole,
+    ),
+    // Each Agent tab's desk: its tab and its Views, whose openers and cards
+    // name machines at any depth; and the Views on no desk (PRD
+    // lane-desk-pair-view D-06, D-19).
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/trays/*/tab",
+        Mechanism::Owned,
+        Moves::Tab,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/trays/*/layout",
+        Mechanism::Rewritten,
+        Moves::Whole,
+    ),
+    (
+        WORKSPACE_VIEWS,
+        "/workspaces/*/shelf",
         Mechanism::Rewritten,
         Moves::Whole,
     ),
@@ -1642,10 +1691,11 @@ fn rename_key(object: Option<&mut Value>, node: &str) -> bool {
     true
 }
 
-/// The device a 보기 slot's records name.
-fn rewrite_slot_devices(slot: &mut Value, node: &str) -> bool {
+/// The device the cards under `key` name: a 보기 slot's `items`, or the
+/// `cards` of slot cards moving to their pane's desk.
+fn rewrite_card_devices(holder: &mut Value, key: &str, node: &str) -> bool {
     let mut changed = false;
-    for item in each(slot, "items") {
+    for item in each(holder, key) {
         changed |= rewrite(
             item.get_mut("session")
                 .and_then(|session| session.get_mut("device_id")),
@@ -1689,12 +1739,15 @@ fn convert_core_state(value: &mut Value, node: &str, _projects: &BTreeMap<String
     }
     // The front slot and each other pane's.
     if let Some(detail) = value.get_mut("detail") {
-        changed |= rewrite_slot_devices(detail, node);
+        changed |= rewrite_card_devices(detail, "items", node);
     }
     for held in each(value, "detail_panes") {
         if let Some(slot) = held.get_mut("slot") {
-            changed |= rewrite_slot_devices(slot, node);
+            changed |= rewrite_card_devices(slot, "items", node);
         }
+    }
+    for moving in each(value, "moving_cards") {
+        changed |= rewrite_card_devices(moving, "cards", node);
     }
     changed |= rename_key(value.get_mut("device_expanded_paths"), node);
     for fold in each(value, "session_open_folds") {
@@ -1766,7 +1819,7 @@ fn convert_workspace_views(value: &mut Value, node: &str, _: &BTreeMap<String, S
 }
 
 /// Calls `change` with every View opener's machine in one Workspace's
-/// layout, at any depth: the agent that opened a View last (`opener`) and
+/// layouts, at any depth: the agent that opened a View last (`opener`) and
 /// every session that opened it (`openers`, PRD session-files D-10).
 pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
     fn walk(value: &mut Value, change: &mut dyn FnMut(&mut Value) -> bool) -> bool {
@@ -1796,8 +1849,13 @@ pub(crate) fn each_opener(view: &mut Value, change: &mut dyn FnMut(&mut Value) -
             _ => false,
         }
     }
-    view.get_mut("view_layout")
-        .is_some_and(|layout| walk(layout, change))
+    // An older file's one View list, or each tray and the Views on no tray
+    // (PRD lane-desk-pair-view D-06, D-19).
+    ["view_layout", "trays", "shelf"]
+        .into_iter()
+        .fold(false, |changed, key| {
+            view.get_mut(key).is_some_and(|layout| walk(layout, change)) | changed
+        })
 }
 
 fn convert_labels(value: &mut Value, node: &str, _: &BTreeMap<String, String>) -> bool {
@@ -2090,6 +2148,14 @@ mod tests {
                     {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
                 ], "shown": false}}]),
             )
+            .tap_insert(
+                "moving_cards",
+                json!([{"pane": "w1:p2", "cards": [
+                    {"kind": "pull_request", "workspace_id": "workspace:a", "number": 7},
+                    {"kind": "record", "session": {"device_id": "local", "agent": "claude", "session_id": "s"}},
+                    {"kind": "remains", "workspace_id": "workspace:a", "checkout_id": "workspace:a:checkout:1"},
+                ], "shown": true}]),
+            )
             .tap_insert("agent_permissions", json!({"codex": {"mode": "ask"}}))
             .tap_insert(
                 "device_agent_permissions",
@@ -2128,6 +2194,8 @@ mod tests {
                     "terminal_id": "term_1", "workspace_id": "w1", "phase": "completed", "started_at": 1,
                     "result_pane": "w1:p1", "result_tab": "w1:t3"}},
                  "tab_views": {"w1:t1": "d1"}, "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}},
+                 "trays": [{"tab": "w1:t1", "shown": true, "layout": {"root": {"area": {"displays": [{"id": "d4", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}}}],
+                 "shelf": {"root": {"area": {"displays": [{"id": "d5", "openers": [{"device_id": "local", "terminal_id": "t1"}]}]}}},
                  "feedback": {"comments": [{"id": "c2", "recipient": {"device_id": "local"}, "shot": {"node": "local", "name": "shot.png"}}], "waiting": [{"to": {"device_id": "local"}}]}},
                 {"device_id": "mini", "path": "/srv/p"},
             ]}),
@@ -2541,12 +2609,20 @@ mod tests {
     fn every_field_the_core_saves_is_a_row_of_the_table_or_names_no_machine() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(CORE_STATE);
-        crate::persistence::save(
-            &path,
-            &crate::model::UiStateSnapshot::default(),
-            &Default::default(),
-        )
-        .unwrap();
+        // A field left out while empty is saved here with a value, so it is
+        // held to the table too.
+        let state = crate::model::UiStateSnapshot {
+            moving_cards: vec![crate::model::MovingCards {
+                pane: Some("w1:p1".into()),
+                cards: vec![crate::model::DetailItem::PullRequest {
+                    workspace_id: "workspace:a".into(),
+                    number: 7,
+                }],
+                shown: true,
+            }],
+            ..Default::default()
+        };
+        crate::persistence::save(&path, &state, &Default::default()).unwrap();
         let saved = read(&path);
         let rows: Vec<&str> = KEYS
             .iter()

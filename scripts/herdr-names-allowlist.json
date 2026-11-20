@@ -213,7 +213,6 @@
     "hide-core/src/runtime/tests/start_geometry.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/terminal.rs": {"max": 3, "reason": "test"},
     "hide-core/src/runtime/tests/tree_close.rs": {"max": 2, "reason": "test"},
-    "hide-core/src/runtime/tests/view_bookmarks.rs": {"max": 1, "reason": "test"},
     "hide-core/src/runtime/tests/workspace_control.rs": {"max": 2, "reason": "test"},
     "hide-core/src/sidebar.rs": {"max": 7, "reason": "import"},
     "hide-core/src/start_prompt.rs": {"max": 1, "reason": "measured"},

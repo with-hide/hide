@@ -3,7 +3,7 @@
 // commands from the agent's own pane change the core's record, a plan put up
 // for review asks the operator on the pane's band and the chip says Review,
 // the agent's approval clears both, a working step takes the pane's second
-// line, and the chip's map opens large in the 보기 slot.
+// line, and the chip's map opens large as a desk tab.
 
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -37,7 +37,7 @@ const PLAN = {
   ],
 };
 
-test("a plan put up for review asks on the pane, the agent's approval clears it, and its steps draw on the chip and in the 보기 slot", async ({ page }) => {
+test("a plan put up for review asks on the pane, the agent's approval clears it, and its steps draw on the chip and on the desk", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
@@ -76,8 +76,8 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const task = tasks.locator(`[data-task-row="${pane}"]`);
     await expect(task).toHaveAttribute("data-task-read", "true");
     await expect(task).toContainText("Task steps review · 4 steps");
-    // Putting a plan up opens no 보기 slot by itself (D-29).
-    await expect(page.locator('aside[data-detail="plan"]')).toHaveCount(0);
+    // Putting a plan up opens no card by itself (D-29).
+    await expect(page.locator('[data-card="plan"]')).toHaveCount(0);
 
     await plan(agent, ["approve"]);
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
@@ -94,7 +94,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await plan(agent, ["node", "core", "--status", "done"]);
     await expect(chip).toHaveText("Task steps2/4");
 
-    // The chip's popover is the checklist; Larger draws the map in the 보기 slot (PRD mission-plan-visibility B3, D-07).
+    // The chip's popover is the checklist; Larger draws the map as a desk tab (PRD mission-plan-visibility B3, D-07).
     await chip.hover();
     const popover = page.locator("[data-pane-plan]");
     await expect(popover.locator("[data-plan-row]")).toHaveCount(4);
@@ -102,7 +102,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(popover.locator("[data-plan-graph]")).toHaveCount(0);
     await screenshot(page, "plan-chip-popover");
     await popover.locator("[data-pane-plan-large]").click();
-    const map = page.locator('aside[data-detail="plan"]');
+    const map = page.locator('[data-card="plan"]');
     await expect(map).toBeVisible();
     await expect(map.locator('[data-plan-graph="large"] [data-plan-step]')).toHaveCount(4);
     await expect(map.locator("[data-plan-banner]")).toHaveCount(0);

@@ -11,7 +11,7 @@ import type { LaneFrame, LaneSizes } from "./workspace";
 // and Changes share (docs/UI_BEHAVIOR.md, The right lane).
 
 const sizes: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
-const documents: LaneFrame = { mode: "overlay", agents: 1600, width: 520, view: { field: "document_width", width: 520, min: 360 }, tool: null, stacked: false, narrowPin: false };
+const documents: LaneFrame = { mode: "overlay", agents: 1600, width: 520, view: { field: "document_width", width: 520, min: 360 }, tool: null, stacked: false };
 
 let unmount: (() => void) | null = null;
 afterEach(() => {

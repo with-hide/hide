@@ -6,7 +6,7 @@ import { setAgentState } from "../../web/e2e/fixture-agents";
 import { continueFixtureTranscript } from "../../web/e2e/pane-fixture";
 import { FIRST_GOAL, NEXT_GOAL, nextWork, seedFirstWork, workFixture, workRepositoryReady } from "../../web/e2e/session-work-fixture";
 import { chord } from "../../web/e2e/chords";
-import { enterWorkspace, hoverSettledTaskRow, openTaskFolds, setLanePinned, showExplorer, taskRow } from "../../web/e2e/wire";
+import { enterWorkspace, hoverSettledTaskRow, openTaskFolds, showExplorer, taskRow } from "../../web/e2e/wire";
 import { fitWindow, launchShell, REPO, startStack, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 import { finishNative } from "./native-teardown";
@@ -34,9 +34,8 @@ test("@platform session records by goal flow, ended work and search render in bo
     await fitWindow(app, { width: 1440, height: 1000 });
     await workRepositoryReady(run.env.HIDE_STATE_DIR!);
     await enterWorkspace(page, "fixture");
-    // The lane pinned, so the 보기 slot stays docked through the sheets below (PRD right-lane B5).
+    // The lane up on the Explorer, so the record opens beside it as a desk tab.
     await showExplorer(page);
-    await setLanePinned(page, true);
     const first = Date.now();
     github.clock(first, first);
     const { session, child: delegated, pane } = await seedFirstWork(fixture, daemon, first);
@@ -46,21 +45,22 @@ test("@platform session records by goal flow, ended work and search render in bo
     // The core settles the root among the resting ones once its child has ended; a hover before that is lost when the row moves.
     await hoverSettledTaskRow(root, "resting");
     await page.locator(`[data-task-record="${pane}"]`).click();
-    // The record opens in the lane's 보기 slot (PRD sidebar-task-lens B15).
-    const record = page.locator('aside[data-lane="detail"][data-detail="record"] [data-session-record="lane"]');
+    // The record opens as a tab on the desk (PRD sidebar-task-lens B15; lane-desk-pair-view D-13).
+    const record = page.locator('[data-card="record"] [data-session-record="lane"]');
     await expect(record.locator("[data-record-flow]")).toHaveCount(1, { timeout: 45_000 });
     // The record reads the session's one list (status-model, One list per session): #32, which the pane holds on
     // the checkout's branch, joins this session's and its child's from the start.
     await expectRecordPrs(record, child, 3);
-    // The rail keeps a button for the slot: pressed while the viewing column draws it, folding it when pressed then, and pressing it again comes back (B46; PRD lane-two-columns B11).
-    const slotButton = page.locator('[data-lane-tool="detail"][data-detail-slot="record"]');
-    await expect(slotButton).toHaveAttribute("aria-pressed", "true");
-    await slotButton.click();
-    await expect(record).toHaveCount(0);
-    await expect(slotButton).toHaveAttribute("aria-pressed", "false");
-    await slotButton.click();
+    // The rail's desk button is pressed while the desk shows the card, folds it when pressed, and brings it back (PRD lane-desk-pair-view B14).
+    const deskButton = page.locator('[data-lane-tool="documents"]');
+    await expect(deskButton).toHaveAttribute("aria-pressed", "true");
+    await deskButton.click();
+    // A folded desk stays laid out out of sight, as its documents do, so the card is kept but not drawn.
+    await expect(record).toBeHidden();
+    await expect(deskButton).toHaveAttribute("aria-pressed", "false");
+    await deskButton.click();
     await expect(record).toBeVisible();
-    await expect(slotButton).toHaveAttribute("aria-pressed", "true");
+    await expect(deskButton).toHaveAttribute("aria-pressed", "true");
     await page.locator(`[data-pane-view="${pane}"] .xterm-helper-textarea`).focus();
     await page.keyboard.type(NEXT_GOAL);
     await page.keyboard.press("Enter");

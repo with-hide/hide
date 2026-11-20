@@ -1,7 +1,7 @@
 import type { Catalog, Catalogs } from "../schema";
 
 // A Conductor's mission (PRD software-factory-conductor): the map in the
-// lane's 보기 slot, the Conductor row's mark, and Settings › Mission.
+// lane's desk, the Conductor row's mark, and Settings › Mission.
 export const missionsEnglish = {
   "mission.planning": "Planning",
   "mission.scope.pr": "Up to ready PRs",

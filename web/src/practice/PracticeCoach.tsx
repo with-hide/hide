@@ -319,8 +319,8 @@ function wordsIn(selector: string, step: PracticeStep): boolean {
 const ZONES = [
   { selector: "[data-sidebar-box]", key: "view" },
   { selector: "[data-agent-area]", key: "work" },
-  // The lane and the rail beside it that picks its tool, as one part.
-  { selector: "[data-lane-slot], [data-tool-rail]", key: "project" },
+  // The rail that picks the lane's tool.
+  { selector: "[data-tool-rail]", key: "project" },
 ] as const;
 
 type Props = {

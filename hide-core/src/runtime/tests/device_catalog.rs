@@ -2129,8 +2129,8 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
     ));
     let views = tempfile::tempdir().unwrap();
     let mut store = WorkspaceViewStore::open(views.path().join("views.json"), Default::default()).0;
-    store.views.entry(TARGET, &t.main).show_documents();
-    store.views.entry(TARGET, &t.linked).show_documents();
+    store.views.entry(TARGET, &t.main).open = true;
+    store.views.entry(TARGET, &t.linked).open = true;
     runtime.workspace_views = Some(store);
     runtime.reconcile_node_agent_topology(TARGET);
 
@@ -2157,7 +2157,7 @@ fn a_device_agent_chosen_brings_the_device_forward_and_moves_no_column() {
             .views
             .get(TARGET, path)
             .unwrap()
-            .shows_documents()
+            .open
     };
     assert!(panel(&runtime, &t.linked));
     assert!(panel(&runtime, &t.main));

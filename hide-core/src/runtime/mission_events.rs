@@ -954,18 +954,19 @@ impl Runtime {
 
     /// Makes the published events those of the mission shown, when it or its
     /// events moved: the mission screen's detail while the page names one,
-    /// else the card on top of the front Agent tab's 보기 slot while the slot
-    /// is drawn (operator decision 2026-11-09). The slot is the core's, so its
-    /// card needs no page round trip; the screen is the page's, so it names
-    /// its detail (PRD mission-screen D-16).
+    /// else the mission card in front of the tray the front Workspace draws
+    /// (PRD lane-desk-pair-view D-13). The tray is the core's, so its card
+    /// needs no page round trip; the screen is the page's, so it names its
+    /// detail (PRD mission-screen D-16).
     pub(super) fn refresh_mission_events(&mut self) {
-        let open = self.missions.shown.clone().or_else(|| {
-            let slot = &self.snapshot.ui_state.detail;
-            match slot.top().filter(|_| slot.shown) {
+        let open = self
+            .missions
+            .shown
+            .clone()
+            .or_else(|| match self.shown_card() {
                 Some(DetailItem::Mission { mission }) => Some(mission.clone()),
                 _ => None,
-            }
-        });
+            });
         if self.missions.events_made == (open.clone(), self.missions.events_edit) {
             return;
         }
