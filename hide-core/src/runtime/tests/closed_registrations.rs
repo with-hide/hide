@@ -44,13 +44,17 @@ fn observe_open(runtime: &mut Runtime, extra: Option<(&str, &str)>) {
 /// the session and the delivery read.
 fn closed_agent() -> Runtime {
     let mut runtime = registered_tree();
-    close_pane(&mut runtime, PANE);
-    capture_started(&mut runtime);
-    leave(&mut runtime, &OPEN);
-    observe_open(&mut runtime, None);
+    close(&mut runtime);
+    runtime
+}
+
+fn close(runtime: &mut Runtime) {
+    close_pane(runtime, PANE);
+    capture_started(runtime);
+    leave(runtime, &OPEN);
+    observe_open(runtime, None);
     assert!(runtime.close_operations.is_empty(), "the close settled");
     assert_eq!(runtime.recent_closed.len(), 1, "one item to reopen");
-    runtime
 }
 
 fn life_of(runtime: &Runtime, id: &str) -> Life {
@@ -76,20 +80,21 @@ fn watch_read(runtime: &mut Runtime, target_pane: &str) -> bool {
 /// The engine answers the reopen of the newest item: the pane comes back as
 /// `w1:p12`, its conversation resumed (`resumed`) or a new one started.
 fn reopen_answering(runtime: &mut Runtime, resumed: bool) -> String {
+    let request = reopen_asked(runtime);
+    reopen_answered(runtime, &request, resumed)
+}
+
+/// The operator asks to reopen the newest item, a pane: the request its
+/// worker runs.
+fn reopen_asked(runtime: &mut Runtime) -> crate::recent_closed::reopen::ReopenRequest {
     let item = runtime.recent_closed.back().cloned().unwrap();
-    let (session, registration) = match &item {
-        ClosedItem::Pane { pane, .. } => (
-            pane.agent
-                .as_ref()
-                .and_then(|agent| agent.session_id.clone()),
-            pane.registration().cloned(),
-        ),
-        other => panic!("a pane item, got {other:?}"),
-    };
+    assert!(
+        matches!(item, ClosedItem::Pane { .. }),
+        "a pane item, got {item:?}"
+    );
     assert!(runtime.reopen_closed());
     assert_eq!(runtime.reopen_in_flight.as_deref(), Some(item.key()));
-    let pane = reopened(PANE);
-    let request = crate::recent_closed::reopen::ReopenRequest {
+    crate::recent_closed::reopen::ReopenRequest {
         codex_daemon: Default::default(),
         permissions: Default::default(),
         item,
@@ -97,7 +102,24 @@ fn reopen_answering(runtime: &mut Runtime, resumed: bool) -> String {
         tab_exists: false,
         fallback_pane_id: None,
         owner: None,
+    }
+}
+
+/// The engine's answer to `request`: the pane comes back as `w1:p12`.
+fn reopen_answered(
+    runtime: &mut Runtime,
+    request: &crate::recent_closed::reopen::ReopenRequest,
+    resumed: bool,
+) -> String {
+    let ClosedItem::Pane { pane: closed, .. } = &request.item else {
+        unreachable!("reopen_asked takes a pane item");
     };
+    let session = closed
+        .agent
+        .as_ref()
+        .and_then(|agent| agent.session_id.clone());
+    let registration = closed.registration().cloned();
+    let pane = reopened(PANE);
     let outcome = crate::recent_closed::reopen::ReopenOutcome {
         tab_id: Some(pane.replace(":p", ":t")),
         consumed: true,
@@ -114,7 +136,7 @@ fn reopen_answering(runtime: &mut Runtime, resumed: bool) -> String {
         }],
     };
     assert!(runtime.ingest_reopen_result(
-        &request,
+        request,
         Ok(crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(outcome)),
     ));
     pane
@@ -289,43 +311,59 @@ fn a_restart_ends_the_registration_of_an_agent_closed_before_it() {
     assert_eq!(runtime.delivery_registrations_gone().len(), 1);
 }
 
-/// A letter waiting for an agent ends when its pane closes, and one sent
-/// to it while closed ends too, each with no recipient for its sender (PRD
-/// letters-missions-simplify B2, B7): a close can stay on the list for
-/// days. The reopen brings the same agent back, and the ended letters stay
-/// ended.
-#[test]
-fn a_closed_agents_letters_end_with_no_recipient_and_its_reopen_keeps_them_ended() {
-    let root = tempfile::tempdir().unwrap();
-    let runtime =
-        super::workspace_view::with_views_only(closed_agent(), &root.path().join("views.json"));
-    let context = runtime
-        .workspace_control_query(
-            crate::node::TEST_NODE,
-            "w1:p1",
-            crate::workspace_control::Query::Info,
+/// `runtime` with a delivery store of its own beside it, as the core runs
+/// one, and the context of `w1:p1`, agent-1, which sends the letters.
+struct Store {
+    shared: Arc<Mutex<Runtime>>,
+    client: crate::delivery::worker::Client,
+    context: crate::workspace_control::Context,
+    _worker: crate::delivery::worker::Worker,
+    _root: tempfile::TempDir,
+}
+
+impl Store {
+    fn beside(runtime: Runtime) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let runtime =
+            super::workspace_view::with_views_only(runtime, &root.path().join("views.json"));
+        let context = runtime
+            .workspace_control_query(
+                crate::node::TEST_NODE,
+                "w1:p1",
+                crate::workspace_control::Query::Info,
+            )
+            .unwrap()
+            .context;
+        let shared = Arc::new(Mutex::new(runtime));
+        let (worker, client) = crate::delivery::worker::Worker::store(
+            Arc::downgrade(&shared),
+            crate::handle::ChangeNotifier::noop(),
+            root.path().join("delivery.sqlite3"),
         )
-        .unwrap()
-        .context;
-    let shared = Arc::new(Mutex::new(runtime));
-    let (_worker, client) = crate::delivery::worker::Worker::store(
-        Arc::downgrade(&shared),
-        crate::handle::ChangeNotifier::noop(),
-        root.path().join("delivery.sqlite3"),
-    )
-    .unwrap();
-    shared
-        .lock()
-        .unwrap()
-        .install_delivery_client(client.clone());
-    for (target, intent) in [(AGENT, "by-id"), (PANE, "by-pane")] {
-        let prepared = shared
+        .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .install_delivery_client(client.clone());
+        Self {
+            shared,
+            client,
+            context,
+            _worker: worker,
+            _root: root,
+        }
+    }
+
+    /// agent-1's letter to `target` under `intent`, prepared as the core
+    /// reads the target now.
+    fn prepare(&self, target: &str, intent: &str) -> crate::delivery::worker::Prepared {
+        self.shared
             .lock()
             .unwrap()
             .prepare_delivery(
                 crate::node::TEST_NODE,
                 "w1:p1",
-                &context,
+                &self.context,
                 None,
                 crate::delivery::Command::Send {
                     target: target.into(),
@@ -336,53 +374,81 @@ fn a_closed_agents_letters_end_with_no_recipient_and_its_reopen_keeps_them_ended
                     force: false,
                 },
             )
-            .unwrap_or_else(|refusal| panic!("{target}: {refusal}"));
-        let sent = prepared.run(std::time::Duration::from_secs(10)).unwrap();
-        assert_eq!(sent["state"], "pending", "{target}");
-        assert_eq!(sent["recipient"]["pane_id"], PANE, "{target}");
+            .unwrap_or_else(|refusal| panic!("{target}: {refusal}"))
     }
-    let pass = || {
-        client
+
+    fn send(&self, target: &str, intent: &str) -> serde_json::Value {
+        self.prepare(target, intent)
+            .run(std::time::Duration::from_secs(10))
+            .unwrap()
+    }
+
+    /// One store pass with nothing to apply but its upkeep.
+    fn pass(&self) {
+        self.client
             .submit(
                 crate::delivery::worker::Effect::HumanClaim,
                 std::time::Duration::from_secs(5),
             )
             .unwrap();
-    };
-    let sent = |runtime: &Runtime| {
+    }
+
+    /// The state of the letter sent under `intent`, and the pane of its
+    /// recipient's registration.
+    fn letter(&self, intent: &str) -> (crate::delivery::ledger::State, String) {
+        let runtime = self.shared.lock().unwrap();
         let ledger = runtime.delivery_state().unwrap();
-        let mut sent = ledger
+        let letter = ledger
             .letters
             .iter()
-            .filter(|letter| letter.intent == "by-id" || letter.intent == "by-pane")
-            .map(|letter| (letter.intent.clone(), letter.state))
-            .collect::<Vec<_>>();
-        sent.sort_by(|left, right| left.0.cmp(&right.0));
-        sent
-    };
-    let no_recipient = vec![
-        (
-            "by-id".to_owned(),
-            crate::delivery::ledger::State::NoRecipient,
-        ),
-        (
-            "by-pane".to_owned(),
-            crate::delivery::ledger::State::NoRecipient,
-        ),
-    ];
-    pass();
-    assert_eq!(sent(&shared.lock().unwrap()), no_recipient);
+            .find(|letter| letter.intent == intent)
+            .unwrap();
+        let to = letter.to.as_deref().unwrap();
+        let record = ledger.agents.iter().find(|record| record.id == to).unwrap();
+        (letter.state, record.pane.clone())
+    }
+}
 
+/// A letter waiting for an agent ends when its pane closes, and one sent
+/// to it while closed ends as the store keeps it, each with no recipient
+/// for its sender (PRD letters-missions-simplify B2, B7): a close can stay
+/// on the list for days. The reopen brings the same agent back, and the
+/// ended letters stay ended.
+#[test]
+fn a_closed_agents_letters_end_with_no_recipient_and_its_reopen_keeps_them_ended() {
+    use crate::delivery::ledger::State::NoRecipient;
+    let store = Store::beside(registered_tree());
+    assert_eq!(store.send(AGENT, "waiting")["state"], "pending");
+    close(&mut store.shared.lock().unwrap());
+    for (target, intent) in [(AGENT, "by-id"), (PANE, "by-pane")] {
+        let sent = store.send(target, intent);
+        assert_eq!(sent["state"], "no_recipient", "{target}");
+        assert_eq!(sent["recipient"]["pane_id"], PANE, "{target}");
+    }
+    store.pass();
+    for intent in ["waiting", "by-id", "by-pane"] {
+        assert_eq!(store.letter(intent).0, NoRecipient, "{intent}");
+    }
+
+    let request = reopen_asked(&mut store.shared.lock().unwrap());
+    crate::runtime::settle_reopen(&store.shared, &request.item).unwrap();
     let pane = {
-        let mut runtime = shared.lock().unwrap();
-        let pane = reopen_answering(&mut runtime, true);
+        let mut runtime = store.shared.lock().unwrap();
+        let pane = reopen_answered(&mut runtime, &request, true);
         observe_open(&mut runtime, Some((&pane, &session_of(PANE))));
         runtime.advance_reopens();
         pane
     };
     // The store's pass moves the registration, and leaves its letters ended.
-    pass();
-    let runtime = shared.lock().unwrap();
+    store.pass();
+    for intent in ["waiting", "by-id", "by-pane"] {
+        assert_eq!(
+            store.letter(intent),
+            (NoRecipient, pane.clone()),
+            "{intent}"
+        );
+    }
+    let runtime = store.shared.lock().unwrap();
     let ledger = runtime.delivery_state().unwrap();
     let record = ledger
         .agents
@@ -390,7 +456,42 @@ fn a_closed_agents_letters_end_with_no_recipient_and_its_reopen_keeps_them_ended
         .find(|record| record.id == AGENT)
         .unwrap();
     assert!(!record.ended);
-    assert_eq!(record.pane, pane);
     assert_eq!(record.parent.as_deref(), Some("agent-1"));
-    assert_eq!(sent(&runtime), no_recipient);
+}
+
+/// A reopen that comes before the store's next pass still ends the letter
+/// the close owed: it ends it in the store before it starts anything. A
+/// letter prepared while the agent read closed ends wherever it reaches
+/// the store, and one sent once the reopen settled waits for the agent and
+/// follows it to its new pane (review of with-hide/hide#2749, finding 9).
+#[test]
+fn a_reopen_before_the_stores_pass_still_ends_the_letters_the_close_owed() {
+    use crate::delivery::ledger::State::{NoRecipient, Pending};
+    let store = Store::beside(registered_tree());
+    assert_eq!(store.send(AGENT, "waiting")["state"], "pending");
+    // The close and the reopen it is asked for land before the store runs
+    // a pass: it waits on the lock held here.
+    let (request, late) = {
+        let mut runtime = store.shared.lock().unwrap();
+        close(&mut runtime);
+        let request = reopen_asked(&mut runtime);
+        drop(runtime);
+        (request, store.prepare(AGENT, "late"))
+    };
+    crate::runtime::settle_reopen(&store.shared, &request.item).unwrap();
+    assert_eq!(store.letter("waiting").0, NoRecipient);
+    let sent = late.run(std::time::Duration::from_secs(10)).unwrap();
+    assert_eq!(sent["state"], "no_recipient", "prepared while closed");
+    assert_eq!(store.send(AGENT, "after")["state"], "pending");
+    let pane = {
+        let mut runtime = store.shared.lock().unwrap();
+        let pane = reopen_answered(&mut runtime, &request, true);
+        observe_open(&mut runtime, Some((&pane, &session_of(PANE))));
+        runtime.advance_reopens();
+        pane
+    };
+    store.pass();
+    assert_eq!(store.letter("waiting"), (NoRecipient, pane.clone()));
+    assert_eq!(store.letter("late"), (NoRecipient, pane.clone()));
+    assert_eq!(store.letter("after"), (Pending, pane));
 }

@@ -32,6 +32,7 @@ mod checkout_git;
 mod checks_wait;
 mod clone;
 mod closed_registrations;
+pub(crate) use closed_registrations::settle_reopen;
 mod control_lane;
 pub(crate) mod core_move;
 pub(crate) mod delivery;
@@ -1618,6 +1619,9 @@ pub struct Runtime {
     /// Registrations of reopened agents waiting for their new pane to take
     /// them over (`closed_registrations.rs`).
     reopen_continuations: Vec<closed_registrations::Continuation>,
+    /// The closed registrations whose letters a Reopen bringing them back
+    /// already ended in the delivery store (`closed_registrations::settle_reopen`).
+    reopen_settled: std::collections::BTreeSet<String>,
     /// User-initiated local closes, newest last. Memory only by contract.
     recent_closed: VecDeque<ClosedItem>,
     /// User closes in request order. A close is promoted onto
@@ -2614,6 +2618,7 @@ impl Runtime {
             tree_reopen_captures: Vec::new(),
             tree_reopen: None,
             reopen_continuations: Vec::new(),
+            reopen_settled: std::collections::BTreeSet::new(),
             recent_closed: VecDeque::new(),
             close_capture_order: VecDeque::new(),
             close_operations: HashMap::new(),

@@ -246,7 +246,13 @@ pub fn spawn_reopen(context: LiveContext, request: ReopenRequest) -> Result<(), 
                 program: &program,
                 hold: &hold,
             };
-            let result = run_engine_reopen(context.engine.as_ref(), &asks, &request)
+            // The letters the close owed end before anything comes back.
+            let settled = match context.runtime.upgrade() {
+                Some(runtime) => crate::runtime::settle_reopen(&runtime, &request.item),
+                None => return,
+            };
+            let result = settled
+                .and_then(|()| run_engine_reopen(context.engine.as_ref(), &asks, &request))
                 .map(FileReopenResultOrEngine::Engine);
             let Some(runtime) = context.runtime.upgrade() else {
                 return;

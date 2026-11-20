@@ -400,6 +400,10 @@ pub(crate) enum Effect {
         recipient: String,
         seen: BTreeMap<String, u64>,
     },
+    /// A Reopen is about to bring these closed agents back: the letters
+    /// that wait for them now end, before anything starts (B2, B7; see
+    /// `Runtime::delivery_closed`). The store answers once they are saved.
+    EndClosed(Vec<crate::agent_sleep::DormantRegistration>),
     /// What the hooks of `recipient`'s pane could not confirm, as the node
     /// of its machine handed it over (`mailbox::confirm_owed`).
     Owed {
@@ -952,6 +956,13 @@ fn apply(
             });
             return Ok((Value::Null, true));
         }
+        Effect::EndClosed(closed) => {
+            let mut ended = false;
+            for agent in closed {
+                ended |= ledger.end_letters_to(&agent.id, &agent.actor, now);
+            }
+            return Ok((json!({"ended": ended}), ended));
+        }
         Effect::Owed { recipient, owed } => {
             let confirmed = mailbox::confirm_owed(ledger, recipient, owed, now);
             let changed = !confirmed.is_empty();
@@ -1099,7 +1110,24 @@ fn apply(
             language,
             also_reads,
             written,
-        ),
+        )
+        .map(|value| {
+            // A letter sent to an agent that is closed ends as the store
+            // keeps it, wherever it falls among a Reopen's requests: the
+            // agent was not there to take it (`Runtime::closed_target`).
+            let closed = matches!(command, Command::Send { .. })
+                && target
+                    .as_ref()
+                    .is_some_and(|target| target.status == "closed");
+            match value["id"].as_str() {
+                Some(id) if closed && ledger.end_letter(id, now) => ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == id)
+                    .map_or(value.clone(), |letter| json!(letter)),
+                _ => value,
+            }
+        }),
     }?;
     Ok((
         value,
@@ -2691,6 +2719,54 @@ mod tests {
             },
             reply: mpsc::sync_channel(1).0,
         }
+    }
+
+    /// A Reopen's `EndClosed` ends every letter to its closed agents the
+    /// store took in before it, one in the same batch too, before anything
+    /// is saved or published; a letter it takes in after waits, and one the
+    /// core prepared while the agent read closed ends as it is kept
+    /// (review of with-hide/hide#2749, finding 9).
+    #[test]
+    fn a_reopens_end_closed_ends_what_the_store_took_in_before_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (_runtime, sender, target, _) = fixture(root.path());
+        let holds = crate::coordination::Held::default();
+        let mut ledger = Ledger::default();
+        let mut land = |request: &Request, now: u64| apply(&mut ledger, request, now, &holds);
+        let before = land(&send(&sender, &target, "before", "Rebase"), 1)
+            .unwrap()
+            .0;
+        let end = Request {
+            effect: Effect::EndClosed(vec![crate::agent_sleep::DormantRegistration {
+                id: "agent-closed".into(),
+                actor: target.actor.clone(),
+            }]),
+            reply: mpsc::sync_channel(1).0,
+        };
+        assert_eq!(land(&end, 2).unwrap(), (json!({"ended": true}), true));
+        let after = land(&send(&sender, &target, "after", "Rebase"), 3)
+            .unwrap()
+            .0;
+        let closed = Observation {
+            status: "closed".into(),
+            ..target.clone()
+        };
+        let late = land(&send(&sender, &closed, "late", "Rebase"), 4)
+            .unwrap()
+            .0;
+        assert_eq!(late["state"], "no_recipient");
+        let state = |answer: &Value| {
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == answer["id"])
+                .unwrap()
+                .state
+        };
+        assert_eq!(state(&before), super::ledger::State::NoRecipient);
+        assert_eq!(state(&after), super::ledger::State::Pending);
+        assert_eq!(state(&late), super::ledger::State::NoRecipient);
+        ledger.validate().unwrap();
     }
 
     fn upkeep() -> Upkeep {

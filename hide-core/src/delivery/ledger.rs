@@ -664,14 +664,27 @@ impl Ledger {
     /// acknowledged without a receipt stops awaiting intake. Returns whether
     /// any letter ended.
     pub(crate) fn end_letters_to(&mut self, id: &str, actor: &Actor, now: u64) -> bool {
+        self.end_letters_where(
+            |letter| match &letter.to {
+                Some(to) => to == id,
+                None => letter.recipient.same_identity(actor),
+            },
+            now,
+        )
+    }
+
+    /// Ends the letter `id` as [`Ledger::end_letters_to`] ends a letter to an
+    /// agent that ended: one sent to an agent that is closed
+    /// (`Runtime::closed_target`). Returns whether it ended.
+    pub(crate) fn end_letter(&mut self, id: &str, now: u64) -> bool {
+        self.end_letters_where(|letter| letter.id == id, now)
+    }
+
+    fn end_letters_where(&mut self, ends: impl Fn(&Letter) -> bool, now: u64) -> bool {
         let mut ended = false;
         let mut reports = Vec::new();
         for letter in &mut self.letters {
-            let addressed = match &letter.to {
-                Some(to) => to == id,
-                None => letter.recipient.same_identity(actor),
-            };
-            if !addressed || !letter.awaiting_intake() {
+            if !ends(letter) || !letter.awaiting_intake() {
                 continue;
             }
             reports.extend(letter.recipient_ended(now));

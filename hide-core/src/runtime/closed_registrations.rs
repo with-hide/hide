@@ -10,7 +10,13 @@
 //! nor the watches on it, while the letters waiting for it end at once, as
 //! an ended agent's do (PRD letters-missions-simplify B2, B7;
 //! `Runtime::delivery_closed`): a close can stay on the list for days, and
-//! its senders would wait that long with no answer. A reopen moves each
+//! its senders would wait that long with no answer. A letter sent to it
+//! while it is closed ends as the store keeps it (`closed_target`).
+//!
+//! A reopen ends them in the store before it starts anything
+//! ([`settle_reopen`]), so a reopen that comes before the store's next pass
+//! does not carry a letter the close owed; from then on its agent reads as
+//! reopening, and a letter sent to it waits and follows it. It moves each
 //! registration whose conversation resumed to its new pane through the
 //! delivery store's rebind, the wake's own continuation
 //! (`take_over_registration`), so the watch on it, its parent, its children
@@ -95,9 +101,10 @@ impl Runtime {
 
     /// The registered agent a letter to `target` reaches while its pane is
     /// closed: named by its registration's id or name, or by the pane it was
-    /// closed from. The letter is kept and the store's next pass ends it
-    /// with no recipient (`Runtime::delivery_closed`), so its sender reads
-    /// why it went nowhere.
+    /// closed from. While it is closed the store ends the letter with no
+    /// recipient as it keeps it (status `closed`), so its sender reads why it
+    /// went nowhere; once a reopen is bringing it back the letter waits and
+    /// follows it (status `reopening`).
     pub(super) fn closed_target(
         &self,
         ledger: &crate::delivery::ledger::Ledger,
@@ -114,19 +121,29 @@ impl Runtime {
                     .map(|record| &record.actor)
                     .find(|actor| self.reopen_holds_actor(actor))
             })?;
+        let closed = self
+            .letters_closed()
+            .any(|registration| registration.actor.same_identity(actor));
         Some(super::delivery::Observation {
-            status: "closed".into(),
+            status: if closed { "closed" } else { "reopening" }.into(),
             ..super::agent_sleep::letters::asleep_observation(actor.clone())
         })
+    }
+
+    /// The closed registrations whose letters end: those no reopen has
+    /// settled yet.
+    fn letters_closed(&self) -> impl Iterator<Item = &DormantRegistration> {
+        self.closed_registrations()
+            .filter(|registration| !self.reopen_settled.contains(&registration.id))
     }
 
     /// The registrations of agents closed and not being reopened, for the
     /// delivery store's pass: the letters waiting for them end with no
     /// recipient (PRD letters-missions-simplify B2, B7), while the
-    /// registrations themselves stay for Reopen closed. One being reopened
+    /// registrations themselves stay for Reopen closed. One a reopen settled
     /// is coming back, so a letter to it waits.
     pub(crate) fn delivery_closed(&self) -> Vec<DormantRegistration> {
-        self.closed_registrations().cloned().collect()
+        self.letters_closed().cloned().collect()
     }
 
     /// The ids of the registrations whose agent is closed, which read closed.
@@ -251,5 +268,52 @@ impl Runtime {
             }
         }
         changed
+    }
+}
+
+/// How long a reopen waits for the delivery store to end a close's letters.
+const SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Ends, in the delivery store, the letters waiting for the agents a reopen
+/// of `item` brings back, before the reopen starts anything (B2, B7): every
+/// letter the store kept before this request, and one sent while the agent
+/// read closed, ends with no recipient, wherever the store's passes stood.
+/// Once the store has saved that, the agents read as reopening, and a
+/// letter sent to them waits. Runs on the reopen worker, off the lock; a
+/// store that does not answer fails the reopen, which keeps its item to
+/// retry.
+pub(crate) fn settle_reopen(runtime: &Mutex<Runtime>, item: &ClosedItem) -> Result<(), String> {
+    let closed: Vec<DormantRegistration> = item.held_registrations().into_iter().cloned().collect();
+    if closed.is_empty() {
+        return Ok(());
+    }
+    let unavailable = |_| "the letter store is unavailable".to_owned();
+    let client = runtime
+        .lock()
+        .map_err(unavailable)?
+        .delivery_client
+        .clone()
+        .ok_or_else(|| "the letter store is unavailable".to_owned())?;
+    client
+        .submit(
+            crate::delivery::worker::Effect::EndClosed(closed.clone()),
+            SETTLE_TIMEOUT,
+        )
+        .map_err(|code| format!("the closed agents' letters could not be ended ({code})"))?;
+    runtime
+        .lock()
+        .map_err(unavailable)?
+        .reopen_settled
+        .extend(closed.into_iter().map(|registration| registration.id));
+    Ok(())
+}
+
+impl Runtime {
+    /// A reopen of `item` ended: its agents read as closed again unless the
+    /// reopen continues them (`continue_reopened_registrations`).
+    pub(super) fn unsettle_reopen(&mut self, item: &ClosedItem) {
+        for registration in item.held_registrations() {
+            self.reopen_settled.remove(&registration.id);
+        }
     }
 }
