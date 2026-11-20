@@ -50,6 +50,19 @@ fn engine_splits_first_tab(runtime: &mut Runtime, directory: &Path) {
 /// `engine_splits_first_tab`, with `w-order:t1:q` a plain shell when
 /// `q_agent` is false: no agent, no session, nothing it opened.
 fn engine_splits_first_tab_with(runtime: &mut Runtime, directory: &Path, q_agent: bool) {
+    let mut payload = split_payload(directory);
+    if !q_agent {
+        payload
+            .agents
+            .retain(|agent| agent.pane_id.as_deref() != Some("w-order:t1:q"));
+    }
+    runtime.ingest_session(Ok(payload));
+    runtime.sync_workspace_view();
+}
+
+/// The session snapshot `engine_splits_first_tab` ingests, an agent in
+/// every pane.
+fn split_payload(directory: &Path) -> SessionSnapshotPayload {
     let path = directory.to_string_lossy();
     let tabs: Vec<_> = TABS
         .iter()
@@ -97,13 +110,7 @@ fn engine_splits_first_tab_with(runtime: &mut Runtime, directory: &Path, q_agent
         }))
         .expect("split session payload");
     agents_in_every_pane(&mut payload);
-    if !q_agent {
-        payload
-            .agents
-            .retain(|agent| agent.pane_id.as_deref() != Some("w-order:t1:q"));
-    }
-    runtime.ingest_session(Ok(payload));
-    runtime.sync_workspace_view();
+    payload
 }
 
 /// Every pane of `payload` runs a Codex agent of its own session in its own
@@ -1957,6 +1964,76 @@ fn pair_view_ends_when_the_drawn_desks_last_view_closes() {
     );
     assert_eq!(drawn_pair(&runtime), None);
     assert!(!mode_on(&runtime));
+}
+
+/// D-46 beside a pane whose only thing to show is its View, such as a shell
+/// an agent ended in: the View closing empties the desk the screen drew, so
+/// the mode ends even though the pane has nothing left to show by then.
+#[test]
+fn pair_view_beside_a_pane_with_no_session_ends_when_its_last_view_closes() {
+    let (mut runtime, _checkout, directory) = setup("pair-emptied-shell");
+    // q's agent has not reported its session yet: its View is tied to its
+    // terminal, and nothing else of it can be shown.
+    let mut payload = split_payload(&directory);
+    for agent in &mut payload.agents {
+        if agent.pane_id.as_deref() == Some("w-order:t1:q") {
+            agent.lineage_session = None;
+            agent.agent_session = None;
+        }
+    }
+    runtime.ingest_session(Ok(payload));
+    runtime.sync_workspace_view();
+    control_file(&mut runtime, "w-order:t1:q", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    // The agent closes it (`hide view close`).
+    let a = display_id(&runtime, &directory, "a.md");
+    control(
+        &mut runtime,
+        "w-order:t1:q",
+        Action::Close {
+            view_id: a,
+            expected_browser_area: None,
+        },
+        "pair-emptied-close",
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), None);
+    assert!(!mode_on(&runtime), "no hidden mode is left on");
+}
+
+/// D-44 across Workspaces: the desk pair view drew in another Workspace,
+/// its lane opened there (a pin pressed on an open lane, an agent's View
+/// calling it), folds when the mode moves on, so going back shows nothing
+/// over the agents.
+#[test]
+fn pair_view_folds_the_desk_of_a_workspace_it_moves_away_from() {
+    let (mut runtime, _checkout, directory) = setup("pair-leaves-workspace");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    let elsewhere = ("studio".to_owned(), "/srv/remote".to_owned());
+    let tab = "studio:t1".to_owned();
+    let store = runtime.workspace_views.as_mut().unwrap();
+    store
+        .views
+        .entry(&elsewhere.0, &elsewhere.1)
+        .show_tray(&tab);
+    store.views.pair.on = true;
+    store.pair_left = Some(super::pair_view::PairLeft {
+        key: elsewhere.clone(),
+        tab: tab.clone(),
+        pane: "studio:p1".to_owned(),
+    });
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    let view = runtime
+        .workspace_views
+        .as_ref()
+        .unwrap()
+        .views
+        .get(&elsewhere.0, &elsewhere.1)
+        .unwrap();
+    assert!(!view.open, "the lane there closes");
+    assert!(!view.tray(&tab).unwrap().shown, "its desk folds");
 }
 
 /// Inventory X02: a pane in no Agent tab has no desk to pair with, and the

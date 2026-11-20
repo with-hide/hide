@@ -221,17 +221,7 @@ impl Runtime {
     /// left to the tab prune, which an unanswered catalog does not run.
     /// Whether it ended.
     pub(super) fn end_pairs_of_gone_panes(&mut self) -> bool {
-        if !self.pair_mode_on() {
-            return false;
-        }
-        let Some((key, tab, pane)) = self.snapshot.workspace_view.as_ref().and_then(|view| {
-            let pair = view.tray.pair.as_ref()?;
-            Some((
-                (view.device_id.clone(), view.path.clone()),
-                pair.tab_id.clone(),
-                pair.pane_id.clone(),
-            ))
-        }) else {
+        let Some((key, tab, pane)) = self.published_pair() else {
             return false;
         };
         let listed: Option<Vec<&str>> = self
