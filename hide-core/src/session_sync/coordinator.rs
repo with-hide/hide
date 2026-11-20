@@ -638,7 +638,7 @@ fn publish_session(
                 let tokens =
                     guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
                 guard.end_unresumed(target_id, None, &payload, not_resumed);
-                guard.note_healing(target_id, healing);
+                guard.note_healing(target_id, healing, crate::links::now_ms());
                 // The restore after the device's switch said what it closed.
                 if let Some(left) = &session.published_state().not_carried {
                     guard.settle_switch_open(target_id, left);
@@ -872,7 +872,7 @@ fn publish_session(
             // still naming it until an agent shows in its pane.
             let device = guard.node().to_string();
             guard.end_unresumed(&device, host_scope, &payload, not_resumed);
-            guard.note_healing(&device, healing);
+            guard.note_healing(&device, healing, crate::links::now_ms());
             // The ingest observes this payload for delivery and lays the
             // turns its observations wait on, with this pass's overlay.
             let (changed, readback) =

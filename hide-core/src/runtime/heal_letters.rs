@@ -71,8 +71,18 @@ pub(in crate::runtime) struct HealLetters {
     /// The keys a thread is sending now; it is the only one.
     sending: BTreeSet<String>,
     /// The panes each machine's engine names as being healed in its last
-    /// read (`ProjectionState::healing`), by the machine's own pane ids.
-    healing: BTreeMap<String, BTreeSet<String>>,
+    /// read (`ProjectionState::healing`), by the machine's own pane ids,
+    /// with when the core first saw each so named.
+    healing: BTreeMap<String, BTreeMap<String, Healing>>,
+}
+
+/// A pane its engine names healing. A resumed agent's first report can be
+/// lost (a hook that cannot reach a daemon still starting gives up), and an
+/// agent at rest may report nothing more, so the engine would name it
+/// healing for good: the core reads it so for [`OWED_FOR`] at most.
+struct Healing {
+    since: u64,
+    given_up: bool,
 }
 
 struct Owed {
@@ -286,14 +296,52 @@ impl Runtime {
         true
     }
 
-    /// Keeps the panes `device`'s engine named healing in its last read.
-    pub(crate) fn note_healing(&mut self, device: &str, panes: &[String]) {
+    /// Keeps the panes `device`'s engine named healing in its last read,
+    /// each from when the core first saw it so.
+    pub(crate) fn note_healing(&mut self, device: &str, panes: &[String], now_unix_ms: u64) {
         let healing = &mut self.heal_letters.healing;
         if panes.is_empty() {
             healing.remove(device);
-        } else {
-            healing.insert(device.to_owned(), panes.iter().cloned().collect());
+            return;
         }
+        let mut was = healing.remove(device).unwrap_or_default();
+        let now: BTreeMap<String, Healing> = panes
+            .iter()
+            .map(|pane| {
+                let kept = was.remove(pane).unwrap_or(Healing {
+                    since: now_unix_ms,
+                    given_up: false,
+                });
+                (pane.clone(), kept)
+            })
+            .collect();
+        healing.insert(device.to_owned(), now);
+        self.give_up_healing(now_unix_ms);
+    }
+
+    /// Reads a pane named healing past [`OWED_FOR`] as healed no more.
+    fn give_up_healing(&mut self, now_unix_ms: u64) {
+        for (device, panes) in &mut self.heal_letters.healing {
+            for (pane, healing) in panes.iter_mut() {
+                if !healing.given_up && now_unix_ms.saturating_sub(healing.since) > OWED_FOR {
+                    healing.given_up = true;
+                    crate::diagnostic!(json!({
+                        "component": "heal", "kind": "heal.unconfirmed",
+                        "device": device, "pane_id": pane,
+                    }));
+                }
+            }
+        }
+    }
+
+    /// Whether `device`'s engine names a pane healing that the core still
+    /// reads so.
+    fn still_healing(&self, device: &str, pane: Option<&str>) -> bool {
+        self.heal_letters.healing.get(device).is_some_and(|panes| {
+            panes
+                .iter()
+                .any(|(named, healing)| !healing.given_up && pane.is_none_or(|pane| pane == named))
+        })
     }
 
     /// Whether the agent `record` names is being healed: its engine has yet
@@ -301,10 +349,7 @@ impl Runtime {
     /// does or leaves undone in that time is its own (B19).
     pub(crate) fn healing(&self, record: &AgentRecord) -> bool {
         let pane = record.pane_on(self.node.as_str());
-        self.heal_letters
-            .healing
-            .get(&record.machine)
-            .is_some_and(|panes| panes.contains(&record.pane))
+        self.still_healing(&record.machine, Some(&record.pane))
             || self.heal_letters.owed.values().any(|owed| {
                 matches!(owed.body, Body::GoOn { .. })
                     && matches!(&owed.to, To::Pane(to) if *to == pane)
@@ -315,6 +360,7 @@ impl Runtime {
     /// ([`Self::heal_notes_due`]). Run by the coordinator's tick; a tick with
     /// nothing owed or counted is one test.
     pub(crate) fn drive_heal_letters(&mut self, now_unix_ms: u64) {
+        self.give_up_healing(now_unix_ms);
         let letters = &self.heal_letters;
         if (letters.owed.is_empty() && letters.resumed.is_empty())
             || !letters.sending.is_empty()
@@ -358,7 +404,6 @@ impl Runtime {
     /// settled here: a line stays owed until the ledger admits it
     /// ([`Self::heal_lines_admitted`]).
     pub(in crate::runtime) fn heal_notes_due(&mut self, now_unix_ms: u64) -> Vec<Note> {
-        let healing = &self.heal_letters.healing;
         let settled: Vec<String> = self
             .heal_letters
             .resumed
@@ -368,7 +413,7 @@ impl Runtime {
                     && resumed
                         .machines
                         .iter()
-                        .all(|machine| !healing.contains_key(machine)))
+                        .all(|machine| !self.still_healing(machine, None)))
                     || now_unix_ms.saturating_sub(resumed.since) > OWED_FOR
             })
             .map(|(parent, _)| parent.clone())

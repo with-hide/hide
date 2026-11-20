@@ -397,16 +397,30 @@ fn a_worker_heals_while_its_engine_names_it_and_while_its_line_is_owed() {
     let device_worker = record("agent-2", &actor(DEVICE, "w1:p1", "s-1"), Some("agent-9"));
     assert!(!runtime.healing(&worker));
 
-    runtime.note_healing(&node, &["w1:p1".to_owned()]);
+    runtime.note_healing(&node, &["w1:p1".to_owned()], 0);
     assert!(runtime.healing(&worker));
     assert!(!runtime.healing(&device_worker), "another machine's pane");
-    runtime.note_healing(DEVICE, &["w1:p1".to_owned()]);
+    runtime.note_healing(DEVICE, &["w1:p1".to_owned()], 0);
     assert!(runtime.healing(&device_worker));
+    // A first report that never came leaves the engine naming the pane
+    // healing; past the bound the core reads it healed no more.
+    runtime.note_healing(DEVICE, &["w1:p1".to_owned()], 10 * 60 * 1000);
+    assert!(
+        runtime.healing(&device_worker),
+        "the clock runs from the first read"
+    );
+    runtime.drive_heal_letters(10 * 60 * 1000 + 1);
+    assert!(!runtime.healing(&device_worker));
+    runtime.note_healing(DEVICE, &["w1:p1".to_owned()], 10 * 60 * 1000 + 2);
+    assert!(
+        !runtime.healing(&device_worker),
+        "the same naming is not new"
+    );
 
     // Back in its pane, it is still healing until it is told to go on.
     registered(&mut runtime, vec![worker.clone()]);
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
-    runtime.note_healing(&node, &[]);
+    runtime.note_healing(&node, &[], 0);
     runtime.hook_after_heal(&node, "w1:p1", "s-1", true, 1_000);
     assert!(runtime.healing(&worker));
     observe(&mut runtime, &worker.actor);
