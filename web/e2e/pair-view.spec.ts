@@ -176,12 +176,12 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
   let daemon: Daemon | null = null;
   try {
     const fixture = path.join(engine.root, "fixture");
-    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    for (const name of ["a.md", "b.md"]) fs.writeFileSync(path.join(fixture, name), `# ${name}\n`);
     daemon = await startHided(engine, "pair-view-tab");
     const [left, other] = engine.panes;
     const second = await withControl(daemon, (control) => newTab(control, engine, "second"));
-    // An agent in the second tab with its session and nothing opened: pair view shows its record there.
-    await agentPane(engine, daemon.stateDir, second.pane);
+    // An agent in the second tab that opened a View of its own, which waits in its pane's list.
+    const secondAgent = await agentPane(engine, daemon.stateDir, second.pane);
     const leftAgent = await agentPane(engine, daemon.stateDir, left!);
     await withControl(daemon, async (control) => {
       await focusTab(control, engine, engine.tab);
@@ -190,8 +190,10 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     // The watched pane is `other`: `left`'s open waits in its pane's list until the operator puts it on the desk.
-    const answer = await leftAgent(["file", "open", "a.md"]);
-    expect(answer.status, answer.out).toBe(0);
+    for (const [agent, name] of [[leftAgent, "a.md"], [secondAgent, "b.md"]] as const) {
+      const answer = await agent(["file", "open", name]);
+      expect(answer.status, answer.out).toBe(0);
+    }
     await page.locator(`[data-pane-views="${left}"]`).click();
     await page.getByRole("menuitem", { name: /a\.md/ }).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
@@ -205,7 +207,7 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await expect(page.locator("[data-lane-documents-close]")).toHaveCount(0);
     await expect(strip(page)).toBeVisible();
 
-    // D-45: a tab switch keeps pair view, the new tab's agent on the left and its record on its desk.
+    // D-45: a tab switch keeps pair view, the new tab's agent on the left and its View on its desk.
     await page.locator(`[data-agent-tab-bar] [data-tab="${second.tab}"]`).click();
     await expect(page.locator(`[data-pair-pane="${second.pane}"]`)).toBeVisible();
     await expect(strip(page)).toBeVisible();
@@ -275,26 +277,34 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     const fixture = path.join(engine.root, "fixture");
     daemon = await startHided(engine, "pair-view-key");
     const [left] = engine.panes;
-    // An agent with its session and nothing opened: pair view shows its record.
-    await agentPane(engine, daemon.stateDir, left!);
+    // An agent with its session and nothing opened yet.
+    const leftAgent = await agentPane(engine, daemon.stateDir, left!);
     const shell = await withControl(daemon, (control) => splitPane(control, engine.tab, fixture, { direction: "down" }));
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
 
-    // B19, D-43: a shell with nothing to show draws no views and ◧ button at all; the agent with only its session draws ◧ alone.
-    await expect(paneView(page, shell).locator("[data-pane-split]")).toHaveCount(0);
-    await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
-    await expect(paneView(page, left!).locator("[data-pane-split] [data-pane-views]")).toHaveCount(0);
-
-    // ⌘. on the shell sends nothing and the screen stays as it is.
-    await paneView(page, shell).locator("[data-terminal-host]").click();
-    await expect(paneView(page, shell)).toHaveAttribute("data-focused", "true");
-    await page.keyboard.press(chord("pair_view"));
+    // B19, D-49: a shell and an agent that opened nothing have nothing to show: no views and ◧ button at all, and ⌘. sends nothing.
+    for (const pane of [shell, left!]) {
+      await expect(paneView(page, pane).locator("[data-pane-split]")).toHaveCount(0);
+      await paneView(page, pane).locator("[data-terminal-host]").click();
+      await expect(paneView(page, pane)).toHaveAttribute("data-focused", "true");
+      await page.keyboard.press(chord("pair_view"));
+    }
     await quietFor(page, 300, "a refused ⌘. would have sent its event by now");
     expect(sent.pair).toBe(0);
     await expect(strip(page)).toHaveCount(0);
 
-    // B18: ⌘. on the agent's pane enters, its record on the desk.
+    // B18: once the agent opened a View, ⌘. on its pane enters with it on the desk.
+    fs.writeFileSync(path.join(fixture, "a.md"), "# a.md\n");
+    const opened = await leftAgent(["file", "open", "a.md"]);
+    expect(opened.status, opened.out).toBe(0);
+    await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
+    // B20, B21, D-43: ◧ stands left of the zoom, and stays drawn on a pane that does not hold the keyboard.
+    const [pairBox, zoomBox] = await Promise.all([pairButton(page, left!).boundingBox(), paneView(page, left!).locator('[data-pane-zoom="false"]').boundingBox()]);
+    expect(pairBox!.x + pairBox!.width).toBeLessThanOrEqual(zoomBox!.x + 1);
+    await paneView(page, shell).locator("[data-terminal-host]").click();
+    await page.mouse.move(1, 1);
+    await expect(pairButton(page, left!)).toHaveCSS("opacity", "1");
     await paneView(page, left!).locator("[data-terminal-host]").click();
     await expect(paneView(page, left!)).toHaveAttribute("data-focused", "true");
     await page.keyboard.press(chord("pair_view"));

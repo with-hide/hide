@@ -62,14 +62,6 @@ impl PairEnd {
     }
 }
 
-/// What pair view puts on the desk beside a pane (B17, B19): the View its
-/// agent opened, else its session's record. The one rule `pairable`, the
-/// entries and the operator's choice of another pane read.
-enum PairContent {
-    View(String),
-    Record(SessionIdentity),
-}
-
 /// `pair_view`: the pane to draw on the left, which turns the mode on, or
 /// none to turn it off.
 #[derive(Debug, Deserialize)]
@@ -120,7 +112,7 @@ impl Runtime {
             return true;
         };
         let content = match payload.display_id {
-            Some(id) if self.view_display(&key, &id).is_some() => PairContent::View(id),
+            Some(id) if self.view_display(&key, &id).is_some() => id,
             Some(id) => {
                 let error = crate::view_layout::LayoutError::UnknownDisplay(id);
                 self.set_error(error.kind(), error.message(), false);
@@ -148,12 +140,9 @@ impl Runtime {
         let store = self.workspace_views.as_ref();
         let unchanged = on
             && store.is_some_and(|store| store.pair_left.as_ref() == Some(&left))
-            && match &content {
-                PairContent::View(id) => self
-                    .view_layout_at(&key, &Place::Tray(tab.clone()))
-                    .is_some_and(|layout| layout.active_area().active.as_ref() == Some(id)),
-                PairContent::Record(_) => false,
-            };
+            && self
+                .view_layout_at(&key, &Place::Tray(tab.clone()))
+                .is_some_and(|layout| layout.active_area().active.as_ref() == Some(&content));
         if unchanged {
             return false;
         }
@@ -181,7 +170,7 @@ impl Runtime {
 
     /// Draws `left` beside its tab's desk, with `content` in front of the
     /// desk; none leaves the desk as it is (a pane with nothing to show).
-    fn show_pair(&mut self, left: PairLeft, content: Option<PairContent>) {
+    fn show_pair(&mut self, left: PairLeft, content: Option<String>) {
         let key = left.key.clone();
         let place = Place::Tray(left.tab.clone());
         if let Some(store) = self.workspace_views.as_mut() {
@@ -197,24 +186,19 @@ impl Runtime {
             store.pair_left = Some(left);
             store.generation += 1;
         }
-        match content {
-            Some(PairContent::View(id)) => {
-                if self.view_place(&key, &id).as_ref() != Some(&place)
-                    && !self.bring_view_to(&key, &id, &place)
-                {
-                    let error = crate::view_layout::LayoutError::DisplayLimit;
-                    self.set_error(error.kind(), error.message(), false);
-                    return;
-                }
-                let _ = self.change_view_layout(&key, &place, |layout, stamp| {
-                    layout.focus(&id, stamp).map(|changed| ((), changed))
-                });
-            }
-            Some(PairContent::Record(session)) => {
-                self.place_card_on(&key, &place, DetailItem::Record { session });
-            }
-            None => {}
+        let Some(id) = content else {
+            return;
+        };
+        if self.view_place(&key, &id).as_ref() != Some(&place)
+            && !self.bring_view_to(&key, &id, &place)
+        {
+            let error = crate::view_layout::LayoutError::DisplayLimit;
+            self.set_error(error.kind(), error.message(), false);
+            return;
         }
+        let _ = self.change_view_layout(&key, &place, |layout, stamp| {
+            layout.focus(&id, stamp).map(|changed| ((), changed))
+        });
     }
 
     /// Gives the keyboard to `pane`, on this machine or on its device,
@@ -378,21 +362,6 @@ impl Runtime {
             .filter(in_tab)
     }
 
-    /// The View of `pane`'s agent that pairs with it: the newest it opened
-    /// that the operator has not looked at, else the one it opened last.
-    fn pair_view_of(&self, key: &WorkspaceKey, pane: &str) -> Option<String> {
-        let scope = self.session_scope_of_pane(pane)?;
-        let own: Vec<&crate::view_layout::Display> = self
-            .view_displays(key)
-            .filter(|display| display.openers.iter().any(|o| o.of_session(&scope)))
-            .collect();
-        own.iter()
-            .filter(|display| display.unseen.is_some())
-            .max_by_key(|display| display.opened_stamp)
-            .or_else(|| own.iter().max_by_key(|display| display.opened_stamp))
-            .map(|display| display.id.clone())
-    }
-
     /// In pair view, a desk tab the operator brought in front that another
     /// agent of the drawn tab opened takes that agent's pane to the left; a
     /// tab nobody's agent opened leaves the left pane (B24, D-21).
@@ -485,23 +454,36 @@ impl Runtime {
             .collect()
     }
 
-    /// What pair view shows beside `pane` (B17, B19): the newest View its
-    /// agent opened that the operator has not looked at, else the one it
-    /// opened last, else its session's record; none for a pane with
-    /// nothing to show. `sessions` is the machine's live sessions by pane.
+    /// What pair view shows beside `pane` (B17, B19, D-49): of the Views
+    /// its agent opened and the record cards of its session the operator
+    /// put on a desk, the newest the operator has not looked at, else the
+    /// newest; none for a pane with nothing to show, such as a shell or an
+    /// agent that opened nothing, which draws its tab's own layout. No card
+    /// is opened for it. `sessions` is the machine's live sessions by pane.
     fn pair_content(
         &self,
         key: &WorkspaceKey,
         pane: &str,
         sessions: &[(String, SessionIdentity)],
-    ) -> Option<PairContent> {
-        if let Some(id) = self.pair_view_of(key, pane) {
-            return Some(PairContent::View(id));
-        }
-        sessions
-            .iter()
-            .find(|(live, _)| live == pane)
-            .map(|(_, session)| PairContent::Record(session.clone()))
+    ) -> Option<String> {
+        let scope = self.session_scope_of_pane(pane);
+        let own: Vec<&crate::view_layout::Display> = self
+            .view_displays(key)
+            .filter(|display| match &display.card {
+                Some(card @ DetailItem::Record { .. }) => {
+                    self.detail_owner_pane_among(card, sessions).as_deref() == Some(pane)
+                }
+                Some(_) => false,
+                None => scope
+                    .as_ref()
+                    .is_some_and(|scope| display.openers.iter().any(|o| o.of_session(scope))),
+            })
+            .collect();
+        own.iter()
+            .filter(|display| display.unseen.is_some())
+            .max_by_key(|display| display.opened_stamp)
+            .or_else(|| own.iter().max_by_key(|display| display.opened_stamp))
+            .map(|display| display.id.clone())
     }
 
     /// The panes of `key`'s Agent tabs that have something to show beside

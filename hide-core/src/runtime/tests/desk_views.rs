@@ -2081,17 +2081,37 @@ fn pairable(runtime: &Runtime) -> Vec<String> {
         .clone()
 }
 
-/// B24, D-41: every desk tab names the pane of the agent it belongs to, an
-/// agent's View its opener's and a card its owner's, and bringing one in
-/// front in pair view takes that pane to the left; the operator's own tab
-/// names none and leaves the left pane.
+/// B24, D-41, D-49: every desk tab names the pane of the agent it belongs
+/// to, an agent's View its opener's and a card its owner's, and bringing one
+/// in front in pair view takes that pane to the left; the operator's own tab
+/// names none and leaves the left pane. An agent that opened nothing has
+/// nothing to pair with and no card is opened for it; a record card of its
+/// session the operator opened counts as its View.
 #[test]
 fn a_desk_tab_names_its_agents_pane_and_takes_it_to_the_left_in_pair_view() {
     let (mut runtime, checkout, directory) = setup("pair-owner");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     open(&mut runtime, &checkout, &directory, "c.md");
-    // q has opened nothing: pair view puts its session's record card on the desk.
+    // q has opened nothing: nothing to pair with, and no card opens (D-49).
+    let before = desk(&runtime, &directory, TABS[0]);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert!(!mode_on(&runtime));
+    assert_eq!(
+        desk(&runtime, &directory, TABS[0]),
+        before,
+        "no record card is opened for it"
+    );
+    // The operator opens q's record card; it is q's to pair with.
+    let session = crate::links::ledger::SessionIdentity {
+        device_id: crate::node::TEST_NODE.to_owned(),
+        agent: "codex".to_owned(),
+        session_id: "session-w-order:t1:q".to_owned(),
+    };
+    runtime.dispatch_json(&explorer_event(
+        "detail_open",
+        serde_json::json!({"item": crate::model::DetailItem::Record { session }}),
+    ));
     pair_event(&mut runtime, Some("w-order:t1:q"));
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
@@ -2358,6 +2378,7 @@ fn a_shell_with_nothing_to_show_draws_its_tab_and_keeps_the_mode_on() {
     let (mut runtime, _checkout, directory) = setup("pair-shell");
     engine_splits_first_tab_with(&mut runtime, &directory, false);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    runtime.sync_workspace_view();
     let listed = pairable(&runtime);
     assert!(listed.contains(&"w-order:t1:p".to_owned()), "{listed:?}");
     assert!(!listed.contains(&"w-order:t1:q".to_owned()), "{listed:?}");
@@ -2419,33 +2440,6 @@ fn a_mode_on_a_shell_draws_no_pair_view_anywhere_the_core_looks() {
         mode_on(&runtime),
         "a desk pair view does not draw empties without ending it"
     );
-}
-
-/// D-44: pair view draws its desk whatever the lane's state, so following
-/// the operator through tabs opens no lane and shows no desk, and leaving
-/// leaves every desk it put a record on folded.
-#[test]
-fn pair_view_opens_no_lane_on_the_desks_it_fills() {
-    let (mut runtime, checkout, directory) = setup("pair-no-lane");
-    pair_event(&mut runtime, Some("w-order:t1:p"));
-    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
-    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
-    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], "w-order:t2:p")));
-    pair_event(&mut runtime, None);
-    let view = runtime
-        .workspace_views
-        .as_ref()
-        .unwrap()
-        .views
-        .get(crate::node::TEST_NODE, &directory.to_string_lossy())
-        .unwrap();
-    assert!(!view.open, "the lane stays closed");
-    for tab in &TABS[..2] {
-        assert!(
-            !view.tray(tab).is_some_and(|tray| tray.shown),
-            "{tab}'s desk is folded"
-        );
-    }
 }
 
 /// B33, D-36: `hide view split` and `move` arrange a View on a desk; one

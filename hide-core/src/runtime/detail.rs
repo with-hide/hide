@@ -328,28 +328,12 @@ impl Runtime {
         place: &Place,
         item: DetailItem,
     ) -> bool {
-        if self.place_card_on(key, place, item) {
-            self.open_tray_for(key, place);
-        }
-        true
-    }
-
-    /// `open_card_on` without opening the lane: pair view draws its desk
-    /// whatever the lane's state, so a card it puts there leaves the lane as
-    /// it was (PRD lane-desk-pair-view D-44). Whether the card was placed; a
-    /// refusal is set as the error.
-    pub(super) fn place_card_on(
-        &mut self,
-        key: &WorkspaceKey,
-        place: &Place,
-        item: DetailItem,
-    ) -> bool {
         let existing =
             self.claim_existing_view(key, place, |display| display.card.as_ref() == Some(&item));
         if existing.is_none() && !self.make_view_room(key, place) {
             let error = crate::view_layout::LayoutError::DisplayLimit;
             self.set_error(error.kind(), error.message(), false);
-            return false;
+            return true;
         }
         let placed = self.change_view_layout(key, place, |layout, stamp| {
             match &existing {
@@ -366,11 +350,12 @@ impl Runtime {
         });
         if let Err(error) = placed {
             self.set_error(error.kind(), error.message(), false);
-            return false;
+            return true;
         }
         if let Some(store) = self.workspace_views.as_mut() {
             store.card_read_again = true;
         }
+        self.open_tray_for(key, place);
         true
     }
 

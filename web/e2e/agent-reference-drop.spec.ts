@@ -74,7 +74,7 @@ test("an agent row dropped on another terminal types its reference there and not
   }
 });
 
-test("a pane's @ is an item of its pane menu, lists the other agents and types the chosen one's reference into that pane, and ◧ stands left of the zoom (PRD lane-desk-pair-view B20, B21, D-43)", async ({ page }) => {
+test("a pane's @ is an item of its pane menu, lists the other agents and types the chosen one's reference into that pane, and the head's grip and zoom show where the keyboard is", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   const engine = await startFixture();
   const daemon = await startHided(engine, "agent-reference-mention").catch((error) => { engine.stop(); throw error; });
@@ -125,20 +125,14 @@ test("a pane's @ is an item of its pane menu, lists the other agents and types t
     await expect(page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`)).toBeFocused();
 
     // The grip and zoom show on the pane that holds the keyboard; on the other pane only while its
-    // header is pointed at or focused, and nothing in that row moves when they show. ◧, the right cell
-    // of the views button, is always drawn (D-43), left of the zoom.
+    // header is pointed at or focused, and nothing in that row moves when they show. ◧'s place beside
+    // the zoom is pair-view.spec.ts's: these agents opened nothing, so they draw none (D-49).
     const grip = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-move-grip]`);
     const zoom = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-zoom="false"]`);
-    const pair = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-pair]`);
     await expect(grip(target!)).toHaveCSS("opacity", "1");
-    await expect(pair(target!)).toHaveCSS("opacity", "1");
     await expect(zoom(target!)).toHaveCSS("opacity", "1");
-    await expect(pair(target!)).toHaveAttribute("aria-label", "Pair view");
-    const [pairBox, zoomBox] = await Promise.all([pair(target!).boundingBox(), zoom(target!).boundingBox()]);
-    expect(pairBox!.x + pairBox!.width).toBeLessThanOrEqual(zoomBox!.x + 1);
     await page.mouse.move(1, 1);
     await expect(grip(agent!)).toHaveCSS("opacity", "0");
-    await expect(pair(agent!)).toHaveCSS("opacity", "1");
     await expect(zoom(agent!)).toHaveCSS("opacity", "0");
     const other = page.locator(`[data-pane-view="${agent}"] > header`);
     const places = () => Promise.all([other.locator("[data-pane-move-title]").first().boundingBox(), other.locator("[data-pane-zoom]").boundingBox()]);
