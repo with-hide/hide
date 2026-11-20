@@ -910,6 +910,7 @@ impl OwnEngine<'static> {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                 };
+                let saved = resume.pane.clone();
                 let opened;
                 let resume = match &resume.new_tab {
                     None => resume,
@@ -938,6 +939,10 @@ impl OwnEngine<'static> {
                     },
                 };
                 healed().insert(resume.pane.clone(), resume.kind.clone());
+                // Said before it is typed, so the core takes it before any
+                // report of the resumed agent: a resume that then fails is
+                // said not resumed (`leave_not_resumed`).
+                engine.say_resumed(&resume.pane, &saved);
                 match engine.resume_agent(resume, shell) {
                     Ok(by_name) => crate::diagnostic!(serde_json::json!({
                         "component": "own_engine",

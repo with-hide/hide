@@ -85,6 +85,20 @@ fn registered(runtime: &mut Runtime, records: Vec<AgentRecord>) {
     }));
 }
 
+/// The engine on `device` resumes the agents saved in `panes` and says so,
+/// and names those panes healing.
+fn heal(runtime: &mut Runtime, device: &str, panes: &[String], now: u64) {
+    let resumed: Vec<crate::engine::ResumedPane> = panes
+        .iter()
+        .map(|pane| crate::engine::ResumedPane {
+            pane: pane.clone(),
+            saved: pane.clone(),
+        })
+        .collect();
+    runtime.heal_resumed(device, &resumed, now);
+    runtime.note_healing(device, panes, now);
+}
+
 /// Shows `actor` in its pane.
 fn observe(runtime: &mut Runtime, actor: &Actor) {
     runtime.delivery_observations.insert(
@@ -205,8 +219,8 @@ fn a_healed_agent_at_work_is_told_to_go_on_only_when_it_is_a_child_or_a_particip
     let healing: Vec<String> = ["w1:p1", "w1:p2", "w1:p3", "w1:p4"]
         .map(str::to_owned)
         .to_vec();
-    runtime.note_healing(&node, &healing, 1_000);
-    runtime.note_healing(DEVICE, &["w1:p5".to_owned()], 1_000);
+    heal(&mut runtime, &node, &healing, 1_000);
+    heal(&mut runtime, DEVICE, &["w1:p5".to_owned()], 1_000);
     // The holder kept its agent: it reports with no heal behind it.
     runtime.hook_after_heal(&node, "w1:p6", false);
     assert_eq!(
@@ -289,13 +303,13 @@ fn a_second_cut_of_the_same_conversation_is_told_again() {
     observe(&mut runtime, &child);
 
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
-    runtime.note_healing(&node, &["w1:p1".to_owned()], 1_000);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 1_000);
     assert_eq!(runtime.heal_letters_owed(), ["go-on:agent-1:1000"]);
     admit(&mut runtime);
     runtime.note_healing(&node, &[], 2_000);
 
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
-    runtime.note_healing(&node, &["w1:p1".to_owned()], 50_000);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 50_000);
     assert_eq!(runtime.heal_letters_owed(), ["go-on:agent-1:50000"]);
 }
 
@@ -324,7 +338,7 @@ fn every_device_owes_its_own_agents_their_line() {
     registered(&mut runtime, records);
     for device in ["mini", "studio"] {
         let healing: Vec<String> = (0..panes).map(|at| format!("w1:p{at}")).collect();
-        runtime.note_healing(device, &healing, 1_000);
+        heal(&mut runtime, device, &healing, 1_000);
     }
     assert_eq!(runtime.heal_letters_owed().len(), 2 * panes);
 }
@@ -350,7 +364,7 @@ fn a_line_never_goes_to_another_agent_that_took_the_pane() {
     );
     observe(&mut runtime, &parent);
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
-    runtime.note_healing(&node, &["w1:p1".to_owned()], 1_000);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 1_000);
 
     // The child's registration ends; the operator's own agent takes the pane.
     let mut ended = record("agent-1", &child, Some("agent-9"));
@@ -402,7 +416,7 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
         .missions
         .push(mission_with_worker("agent-3"));
     let healing: Vec<String> = ["w1:p1", "w1:p2", "w1:p3"].map(str::to_owned).to_vec();
-    runtime.note_healing(&node, &healing, 1_000);
+    heal(&mut runtime, &node, &healing, 1_000);
     runtime.heal_not_woken(&["agent-2".to_owned(), "agent-3".to_owned()]);
     observe(&mut runtime, &child);
 
@@ -422,6 +436,109 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
             ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
         ]
     );
+}
+
+/// B17, B18: the resumed agent's reports can reach the core before its
+/// session pass reads the engine, whose read then names nothing healing:
+/// the resume said before it was typed is taken first, so the line and the
+/// parent's count are owed all the same, once.
+#[test]
+fn a_resumed_agent_reporting_before_the_core_reads_its_engine_is_still_told() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    let parent = actor(&node, "w1:p9", "s-9");
+    let child = actor(&node, "w1:p1", "s-1");
+    registered(
+        &mut runtime,
+        vec![
+            record("agent-9", &parent, None),
+            record("agent-1", &child, Some("agent-9")),
+        ],
+    );
+    started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
+    let resumed = [crate::engine::ResumedPane {
+        pane: "w1:p1".into(),
+        saved: "w1:p1".into(),
+    }];
+    // Its first report, then a second with no heal behind it.
+    runtime.heal_resumed(&node, &resumed, 1_000);
+    runtime.hook_after_heal(&node, "w1:p1", true);
+    runtime.hook_after_heal(&node, "w1:p1", false);
+    // The session pass reads the engine after both.
+    runtime.heal_resumed(&node, &[], 2_000);
+    runtime.note_healing(&node, &[], 2_000);
+    observe(&mut runtime, &child);
+    observe(&mut runtime, &parent);
+    assert_eq!(
+        admit(&mut runtime),
+        [
+            (
+                "w1:p1".to_owned(),
+                "Carry on with the work that was cut off.".to_owned()
+            ),
+            ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
+        ]
+    );
+    assert!(admit(&mut runtime).is_empty(), "owed once");
+}
+
+/// B17, B18: a machine whose owed lines are at their bound keeps a new
+/// heal's line and its parent's count waiting, not settled; once a line of
+/// that machine is admitted, they are owed and go.
+#[test]
+fn a_heal_past_the_bound_waits_for_room_and_then_goes() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    let parent = actor(&node, "w1:p9", "s-9");
+    let child = actor(&node, "w1:p1", "s-1");
+    let bound = 3 * hide_kit::panes::HOLDER_CAP;
+    let lost: Vec<AgentRecord> = (0..bound)
+        .map(|n| {
+            let pane = format!("w2:p{n}");
+            record(
+                &format!("agent-{}", 100 + n),
+                &actor(&node, &pane, &format!("s-{pane}")),
+                Some("agent-9"),
+            )
+        })
+        .collect();
+    let lost_ids: Vec<String> = lost.iter().map(|record| record.id.clone()).collect();
+    let mut records = vec![
+        record("agent-9", &parent, None),
+        record("agent-1", &child, Some("agent-9")),
+    ];
+    records.extend(lost);
+    registered(&mut runtime, records);
+    // The parent, away, is owed as many lines as the machine may owe.
+    runtime.heal_not_woken(&lost_ids);
+    assert_eq!(runtime.heal_letters_owed().len(), bound);
+
+    started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 1_000);
+    assert_eq!(runtime.heal_letters_waiting(), ["go-on:agent-1:1000"]);
+    let worker = record("agent-1", &child, Some("agent-9"));
+    assert!(runtime.healing(&worker), "a waiting line is still owed");
+    observe(&mut runtime, &child);
+    runtime.note_healing(&node, &[], 2_000);
+    observe(&mut runtime, &parent);
+    let first = admit(&mut runtime);
+    assert_eq!(first.len(), bound, "the older lines go first");
+    assert!(!first.iter().any(|(pane, _)| pane == "w1:p1"));
+
+    assert_eq!(
+        admit(&mut runtime),
+        [
+            (
+                "w1:p1".to_owned(),
+                "Carry on with the work that was cut off.".to_owned()
+            ),
+            ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
+        ]
+    );
+    assert!(runtime.heal_letters_waiting().is_empty());
+    assert!(runtime.heal_letters_owed().is_empty());
 }
 
 /// B19: a node's worker is healing while its engine names its pane so and
@@ -458,7 +575,7 @@ fn a_worker_heals_while_its_engine_names_it_and_while_its_line_is_owed() {
     runtime.note_healing(&node, &[], 1);
     registered(&mut runtime, vec![worker.clone()]);
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
-    runtime.note_healing(&node, &["w1:p1".to_owned()], 2);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 2);
     runtime.note_healing(&node, &[], 3);
     assert!(runtime.healing(&worker));
     observe(&mut runtime, &worker.actor);
@@ -525,7 +642,7 @@ fn a_line_stays_owed_until_the_store_admits_it() {
             .unwrap();
         guard.observe_delivery_laid(node, &observed, None, None);
         started_with(&mut guard, root.path(), &[("w1:p1", "s-1", true)]);
-        guard.note_healing(node, &["w1:p1".to_owned()], 1_000);
+        heal(&mut guard, node, &["w1:p1".to_owned()], 1_000);
         assert_eq!(go_on(&guard), ["go-on:agent-1:1000"]);
         guard.install_worker_context(Arc::downgrade(&runtime), ChangeNotifier::noop());
         // No delivery client yet: the send cannot start.

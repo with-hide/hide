@@ -131,6 +131,14 @@ impl From<EngineError> for String {
 /// now, so a replaced connection retires the readers of the old one.
 pub(crate) type SharedEngine = Arc<dyn Engine>;
 
+/// A resume a heal typed: the pane it was typed into, and the pane the agent
+/// was saved in, the same unless the resume opened a tab of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResumedPane {
+    pub(crate) pane: String,
+    pub(crate) saved: String,
+}
+
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
 use crate::session_sync::{ProjectedAgent, ProjectionState};
 use crate::sidebar::{SessionLayoutPayload, SessionSnapshotPayload};
@@ -196,8 +204,8 @@ pub(crate) trait Engine: Send + Sync {
     /// agent's session, saved with the pane, so a reboot resumes that
     /// conversation. Answers true once for the first session of an agent
     /// a heal resumed after its pane was cut under it (an engine switch, a
-    /// reboot, a lost holder, a device's return); the core then reads whether
-    /// the agent was at work and owes it its line (PRD
+    /// reboot, a lost holder, a device's return), so a report with no heal
+    /// behind it says the holder kept its agent (PRD
     /// letters-missions-simplify D-19, B17).
     /// `lineage` is the processes from the report's sender up to the pane's
     /// shell, as the pane's kernel named them: a session an agent the
@@ -211,6 +219,15 @@ pub(crate) trait Engine: Send + Sync {
         _lineage: Option<&[hide_agent_hooks::hook_request::ExecProcess]>,
     ) -> Answer<bool> {
         Ok(false)
+    }
+
+    /// The resumes a heal typed since the last call, each given once, in
+    /// the order typed (PRD letters-missions-simplify B17, B18): the core
+    /// owes what each heal says from these, whatever order the resumed
+    /// agents' reports reach it in, and whether or not they reach it. The
+    /// session-sync pass takes them off the runtime lock.
+    fn take_resumed(&self) -> Vec<ResumedPane> {
+        Vec::new()
     }
 
     /// What `hide agent exec` reported of the profile's start this engine

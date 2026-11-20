@@ -612,6 +612,8 @@ fn publish_session(
     labels: &mut Option<LabelWorker>,
 ) -> bool {
     let mut payload = session.project();
+    // The resumes a heal typed, each once, taken off the lock.
+    let resumed = context.engine.take_resumed();
     let healing = &session.published_state().healing;
     let not_resumed = &session.published_state().not_resumed;
     let overlay = labels.as_mut().map(|worker| {
@@ -637,6 +639,7 @@ fn publish_session(
                 }
                 let tokens =
                     guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
+                guard.heal_resumed(target_id, &resumed, crate::links::now_ms());
                 guard.end_unresumed(target_id, None, &payload, not_resumed);
                 guard.note_healing(target_id, healing, crate::links::now_ms());
                 // The restore after the device's switch said what it closed.
@@ -871,6 +874,7 @@ fn publish_session(
             // An agent a restore did not resume is ended, with the engine
             // still naming it until an agent shows in its pane.
             let device = guard.node().to_string();
+            guard.heal_resumed(&device, &resumed, crate::links::now_ms());
             guard.end_unresumed(&device, host_scope, &payload, not_resumed);
             guard.note_healing(&device, healing, crate::links::now_ms());
             // The ingest observes this payload for delivery and lays the

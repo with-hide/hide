@@ -148,6 +148,9 @@ struct Shared {
     /// it was cut mid-turn and owes it its line (PRD letters-missions-simplify
     /// D-19, B17). Bounded by one restore's resumes.
     healed: Mutex<BTreeMap<String, String>>,
+    /// The resumes typed since the core last took them
+    /// ([`Engine::take_resumed`]), one per pane, so bounded by the panes.
+    resumed: Mutex<Vec<crate::engine::ResumedPane>>,
 }
 
 /// The most panes whose facts wait to enter the topology: a node's cap of
@@ -361,6 +364,7 @@ impl OwnEngine<'static> {
                 definitions: agents::Definitions::new(definitions),
                 early: Mutex::default(),
                 healed: Mutex::default(),
+                resumed: Mutex::default(),
             }),
             gates: Vec::new(),
             saver: None,
@@ -509,6 +513,26 @@ impl OwnEngine<'_> {
 
     /// Records that `left`'s agent was not resumed, and withdraws the heal
     /// its resume was typed with: nothing runs there to be told.
+    /// Keeps the resume about to be typed into `pane` for the core to take,
+    /// the agent saved in `saved`; a pane already waiting to be taken keeps
+    /// its first, as the core reads the cut once.
+    fn say_resumed(&self, pane: &str, saved: &str) {
+        let mut resumed = self
+            .shared
+            .resumed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if resumed.iter().any(|said| said.pane == pane) {
+            return;
+        }
+        resumed.push(crate::engine::ResumedPane {
+            pane: pane.to_owned(),
+            saved: saved.to_owned(),
+        });
+        drop(resumed);
+        self.changed();
+    }
+
     fn say_not_resumed(&self, left: &NotResumed) {
         self.shared
             .healed
@@ -1771,6 +1795,16 @@ impl<'g> Engine for OwnEngine<'g> {
             self.changed();
         }
         Ok(healed)
+    }
+
+    fn take_resumed(&self) -> Vec<crate::engine::ResumedPane> {
+        std::mem::take(
+            &mut *self
+                .shared
+                .resumed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     fn session(&self, _wait: Wait) -> Answer<ProjectionState> {
@@ -7135,6 +7169,18 @@ mod tests {
             "healed once"
         );
         assert_eq!(next.session(WAIT).unwrap().healing, vec![resting.clone()]);
+        // Each resume is said once, whatever its agent reported since.
+        let mut said: Vec<String> = next
+            .take_resumed()
+            .into_iter()
+            .map(|resumed| {
+                assert_eq!(resumed.pane, resumed.saved);
+                resumed.pane
+            })
+            .collect();
+        said.sort();
+        assert_eq!(said, both);
+        assert!(next.take_resumed().is_empty());
     }
 
     /// Two agents, each with the conversation its hook named and a turn that

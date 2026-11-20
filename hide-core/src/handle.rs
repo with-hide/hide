@@ -943,7 +943,14 @@ impl Core {
             match engine.hook_session(&pane, &report.runtime, session, lineage) {
                 // One the engine did not heal was never cut (PRD
                 // letters-missions-simplify D-19, B17).
-                Ok(healed) => lock_recover(&self.runtime).hook_after_heal(device, caller, healed),
+                Ok(healed) => {
+                    // A resume the engine said is taken first, so this
+                    // report never meets a heal the core has not read.
+                    let resumed = engine.take_resumed();
+                    let mut runtime = lock_recover(&self.runtime);
+                    runtime.heal_resumed(device, &resumed, crate::links::now_ms());
+                    runtime.hook_after_heal(device, caller, healed);
+                }
                 Err(error) => crate::diagnostic!(serde_json::json!({
                     "component": "agent_hooks", "kind": "hook_session.refused",
                     "pane": caller, "device": device, "agent": report.runtime,
