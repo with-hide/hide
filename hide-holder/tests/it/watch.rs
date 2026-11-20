@@ -115,7 +115,8 @@ fn a_watch_reports_explicit_program_status_only_when_negotiated() {
         vec![
             b"\x1b]7501;state=working:app=codex\x1b\\".to_vec(),
             b"\x1b]7501;state=idle:app=codex\x1b\\".to_vec(),
-            b"\x1b]7501;state=done:app=codex\x1b\\".to_vec(),
+            // Both reports in one write must still publish the completion.
+            b"\x1b]7501;state=done:app=codex\x1b\\\x1b]7501;state=idle:app=codex\x1b\\".to_vec(),
             b"\x1b]7501;state=clear\x1b\\\x1b]2;cleared\x07".to_vec(),
         ],
     );
