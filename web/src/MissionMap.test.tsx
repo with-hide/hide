@@ -883,6 +883,30 @@ it("shows on the card and in the panel how long a node took from its events, and
   } finally { await stale.unmount(); }
 });
 
+it("says in the panel's head where a node's time went, work, review and CI, and the wait before it, in place of its total (mission-82)", async () => {
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
+  const at = (minutes: number) => now - minutes * 60_000;
+  const nodes = [
+    // Waited 3h for its dependency, worked 1.5h to its own lines, then 8.5h in review and CI so far.
+    node("a", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), worked_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }),
+    // A done node of a book from before the stamp keeps its total; the core sends every started mission's node its ready time.
+    node("b", { status: "done", pr: 3, pr_state: "merged", ready_at_unix_ms: at(780), started_at_unix_ms: at(90), finished_at_unix_ms: at(30) }),
+  ];
+  const move = (minutes: number, key: string, status: MissionNode["status"]): MissionEvent => ({ at_unix_ms: at(minutes), kind: "node", node: key, status });
+  const events = [move(600, "a", "working"), move(90, "b", "working"), move(30, "b", "done")];
+  const facts = async (map: Awaited<ReturnType<typeof mount>>, key: string) => {
+    await act(async () => card(map, key).click());
+    return map.q("[data-panel-fact]")?.textContent ?? null;
+  };
+  const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
+  try {
+    expect(await facts(map, "a")).toBe("work 1.5h · review·CI 8.5h · waited 3h");
+    expect(await facts(map, "b")).toBe("took 1h");
+  } finally { await map.unmount(); }
+});
+
 it("lights a picked card and the cards one edge away and dims the rest, and the same card, an empty spot or Escape lets go (B30)", async () => {
   const nodes = [node("a"), node("b", { depends_on: ["a"] }), node("c", { depends_on: ["b"] }), node("d", { depends_on: ["a"] })];
   const map = await mount({ items: [mission({ nodes })] });

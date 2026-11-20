@@ -250,6 +250,46 @@
     "line": "Shows an agent's plan, with the status of each of its steps.",
     "example": "hide task show"
   },
+  "automation help": {
+    "line": "Prints the guide for making an automation from the operator's words: the schedule forms, the task, the folder and the agent.",
+    "example": "hide automation help"
+  },
+  "automation add": {
+    "line": "Makes an automation: at each time of its schedule Hide starts one agent on the task, in the automation's own folder under ~/hide/automations unless --folder names a project. An automation runs at most every five minutes.",
+    "example": "hide automation add --name 'Morning issues' --task 'Sort the new issues' --schedule 'weekdays 09:00' --kind claude"
+  },
+  "automation list": {
+    "line": "Lists the automations with what each schedule reads as, the next run on this machine's clock and the newest run.",
+    "example": "hide automation list"
+  },
+  "automation show": {
+    "line": "Shows one automation, by its id or its name, with its task, settings and runs, newest first.",
+    "example": "hide automation show 'Morning issues'"
+  },
+  "automation run": {
+    "line": "Starts a run of the automation now, marked manual; refused while one of its runs is going.",
+    "example": "hide automation run 'Morning issues'"
+  },
+  "automation pause": {
+    "line": "Stops the automation's next runs; a run going finishes.",
+    "example": "hide automation pause 'Morning issues'"
+  },
+  "automation resume": {
+    "line": "Turns a paused automation on again from its next time.",
+    "example": "hide automation resume 'Morning issues'"
+  },
+  "automation edit": {
+    "line": "Changes an automation's name, task, schedule, agent or folder from its next run on; a run going keeps what it started with.",
+    "example": "hide automation edit 'Morning issues' --schedule 'weekly mon,thu 09:00'"
+  },
+  "automation remove": {
+    "line": "Removes an automation and its runs' records, ending a run that is going; its folder and files stay.",
+    "example": "hide automation remove 'Morning issues'"
+  },
+  "automation preview": {
+    "line": "Shows what a schedule reads as and when it would run next, without making anything.",
+    "example": "hide automation preview --schedule 'cron 0 9 * * 1-5'"
+  },
   "pane read": {
     "line": "Prints the last lines of a pane, unwrapped, so you can see what its program last showed.",
     "example": "hide pane read w1:p2 --lines 20"

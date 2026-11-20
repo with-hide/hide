@@ -583,6 +583,7 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: vec![checkout(id, last_commit_unix_seconds, pane_ids)],
             pinned: false,
+            unlisted: false,
             inactive_checkouts: InactiveCheckoutGroupSnapshot::default(),
             session_folds: Default::default(),
             removal: Default::default(),

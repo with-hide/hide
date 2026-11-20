@@ -170,6 +170,13 @@ enum Command {
         call: hide_core::access::Call,
         reply: Sender<Result<serde_json::Value, String>>,
     },
+    Automation {
+        call: hide_core::automations::Call,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
+    AutomationsOn {
+        reply: Sender<Arc<std::sync::atomic::AtomicBool>>,
+    },
     AgentSleep {
         device_id: String,
         pane_id: String,
@@ -363,6 +370,9 @@ pub struct CoreHandle {
     /// What a shutdown ends, taken out by the first one, so a second
     /// shutdown or the `Drop` after it finds nothing left to close.
     running: Mutex<Option<Running>>,
+    /// Whether any automation is on: the daemon skips its idle exit while
+    /// one is (PRD automations D-19), read without the owner thread.
+    automations_on: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The core's owner thread and this machine's terminal service, which
@@ -842,6 +852,27 @@ impl CoreHandle {
         result.recv().map_err(|_| "ps_unavailable".to_owned())?
     }
 
+    /// One call on the automations (PRD automations B10): `hide automation`,
+    /// a form's preview, or a phone's run and pause.
+    pub fn automation(
+        &self,
+        call: hide_core::automations::Call,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Automation { call, reply })
+            .map_err(|_| "automations_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "automations_unavailable".to_owned())?
+    }
+
+    /// Whether any automation is on (PRD automations D-19).
+    pub fn automations_on(&self) -> bool {
+        self.automations_on
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// One call for an external tool (PRD hide-external-control): its
     /// request, status, leave, its key's proof or a command's check.
     pub fn access(&self, call: hide_core::access::Call) -> Result<serde_json::Value, String> {
@@ -1058,6 +1089,14 @@ impl CoreHandle {
         ready_rx
             .recv()
             .map_err(|_| "core owner thread exited before ready".to_owned())??;
+        let automations_on = {
+            let (reply, rx) = mpsc::channel();
+            command_tx
+                .send(Command::AutomationsOn { reply })
+                .map_err(|_| "core owner thread is gone".to_owned())?;
+            rx.recv()
+                .map_err(|_| "core owner thread dropped the automations flag".to_owned())?
+        };
         let handle = Self {
             node,
             commands: command_tx,
@@ -1070,6 +1109,7 @@ impl CoreHandle {
             engine,
             holders: pane_holders,
             running: Mutex::new(Some(Running { thread, local })),
+            automations_on,
         };
         handle.read_agent_definitions();
         Ok(handle)
@@ -1823,6 +1863,12 @@ fn owner_loop(
             }
             Command::Access { call, reply } => {
                 let _ = reply.send(core.access(call));
+            }
+            Command::Automation { call, reply } => {
+                let _ = reply.send(core.automation(call));
+            }
+            Command::AutomationsOn { reply } => {
+                let _ = reply.send(core.automations_on());
             }
             Command::AgentSleep {
                 device_id,

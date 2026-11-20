@@ -10,9 +10,10 @@
 //! - Unix: in a session of its own, so no terminal the starter controls can
 //!   reach it, started through an intermediate process that exits at once, so
 //!   the child is no child of the starter's and can never take a controlling
-//!   terminal; every signal at its default and none blocked; standard
-//!   streams on `/dev/null`; and no descriptor of the starter's but the ones
-//!   it is lent.
+//!   terminal; every signal at its default and none blocked; the open-file
+//!   limit the starter started with, before it raised its own
+//!   ([`super::raise_open_file_limit`]); standard streams on `/dev/null`; and
+//!   no descriptor of the starter's but the ones it is lent.
 //! - Windows: out of the starter's own job object
 //!   (`CREATE_BREAKAWAY_FROM_JOB`), which is refused when that job does not
 //!   allow it or the child is found in it still, rather than started into
@@ -309,10 +310,12 @@ mod sys {
         let (mut report_read, report_write) = std::io::pipe()?;
         let report = report_write.as_raw_fd();
         let mut inherited = super::super::sys::Inherited::prepare();
+        // The limit this process started with, read before the fork.
+        let starting_limit = super::super::open_files::starting_limit();
         // SAFETY: after each fork the closure calls only functions POSIX lists
         // as async-signal-safe (`setsid`, `fork`, `write`, `_exit`,
         // `sigaction`, `sigprocmask`, `fcntl`, `dup2`, `close`, `getpid`) and
-        // bare system-call entries (`syscall`, `proc_pidinfo`); it allocates
+        // bare system-call entries (`syscall`, `proc_pidinfo`, `setrlimit`); it allocates
         // nothing, takes no lock, and writes only its own copy of the
         // listing buffer prepared before the fork.
         unsafe {
@@ -366,6 +369,16 @@ mod sys {
                         return Err(io::Error::last_os_error());
                     }
                     libc::close(*copy);
+                }
+                // The open-file limit the starter raised for itself goes back
+                // to the one it started with, since a resident's programs are
+                // the operator's (`open_files`). Last, once every copy above
+                // is made: a starter holding more descriptors than that limit
+                // leaves no free number below it until the exec closes them.
+                if let Some(limit) = &starting_limit
+                    && libc::setrlimit(libc::RLIMIT_NOFILE, limit) == -1
+                {
+                    return Err(io::Error::last_os_error());
                 }
                 Ok(())
             })

@@ -1,7 +1,7 @@
 import { badgeParts } from "./agentRow";
 import { scopeOccurrences, type AgentRef } from "./agentScope";
 import type { AgentScope } from "./agentScope";
-import type { MissionAsk } from "./missions";
+import type { OwnAsk } from "./ownAsks";
 // The Projects list as the sidebar draws it: the raised Needs You and Done
 // agents, then pinned rows with no header of their own (the pin is the row's
 // mark and sort), a hairline, and the activity rows. A project with no agent,
@@ -27,7 +27,7 @@ export function projectCheckout(workspace: Workspace, recent: readonly RecentChe
 }
 
 export type ProjectRow =
-  | { kind: "raised"; group: AgentGroup; agents: ListedAgent[]; more: ListedAgent[]; expanded: boolean; missions: MissionAsk[] }
+  | { kind: "raised"; group: AgentGroup; agents: ListedAgent[]; more: ListedAgent[]; expanded: boolean; /** Missions and automations that are their own Needs You item, Needs You only (`ownAsks.ts`). */ asks: OwnAsk[] }
   | { kind: "workspace"; workspace: Workspace; /** Nothing touched it for a week: drawn dimmed in its place, never folded away. */ quiet?: boolean }
   | { kind: "divider" };
 
@@ -55,7 +55,7 @@ export function projectRows(
   listed: ListedAgent[],
   scope: AgentScope | null,
   openRaised: readonly string[] = [],
-  missions: readonly MissionAsk[] = [],
+  asks: readonly OwnAsk[] = [],
   elsewhere: { shown: readonly ListedAgent[]; more: readonly ListedAgent[] } = { shown: [], more: [] },
 ): ProjectRow[] {
   const rows: ProjectRow[] = [];
@@ -66,14 +66,14 @@ export function projectRows(
   for (const raised of scope?.raised ?? []) {
     const needsYou = raised.group === "needs_you";
     rows.push({
-      kind: "raised", group: raised.group, expanded: openRaised.includes(raised.group), missions: needsYou ? [...missions] : [],
+      kind: "raised", group: raised.group, expanded: openRaised.includes(raised.group), asks: needsYou ? [...asks] : [],
       // Needs You lists the other devices' rows after the front device's own, each past its own device's cap too.
       agents: [...drawn(raised.shown), ...(needsYou ? elsewhere.shown : [])], more: [...drawn(raised.more), ...(needsYou ? elsewhere.more : [])],
     });
   }
-  // A mission no row carries is Needs You on its own, with no agent raised beside it too (PRD mission-node-simple D-19, B14), and so is another device's row.
-  if ((missions.length > 0 || elsewhere.shown.length + elsewhere.more.length > 0) && !rows.some((row) => row.kind === "raised" && row.group === "needs_you")) {
-    rows.unshift({ kind: "raised", group: "needs_you", agents: [...elsewhere.shown], more: [...elsewhere.more], expanded: openRaised.includes("needs_you"), missions: [...missions] });
+  // A mission or an automation no row carries is Needs You on its own, with no agent raised beside it too (PRD mission-node-simple D-19, B14; automations B23), and so is another device's row.
+  if ((asks.length > 0 || elsewhere.shown.length + elsewhere.more.length > 0) && !rows.some((row) => row.kind === "raised" && row.group === "needs_you")) {
+    rows.unshift({ kind: "raised", group: "needs_you", agents: [...elsewhere.shown], more: [...elsewhere.more], expanded: openRaised.includes("needs_you"), asks: [...asks] });
   }
   const pinned = workspaces.filter((row) => row.pinned);
   const recent = workspaces.filter((row) => !row.pinned);

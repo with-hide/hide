@@ -191,7 +191,10 @@ impl Catalog {
                 connected,
             });
         };
-        for workspace in workspaces {
+        for workspace in workspaces
+            .iter()
+            .filter(|workspace| hide_core::agent_state::phone::listed_project(workspace))
+        {
             let checkouts = array_of(workspace.get("checkouts"));
             let folder = workspace.get("is_git").and_then(Value::as_bool) != Some(true)
                 && checkouts.len() == 1;
@@ -706,6 +709,26 @@ mod tests {
             },
             "ui_state": {"agent_start": {"kind": "codex", "models": {"claude": "opus"}}},
         })
+    }
+
+    /// An automation's own folder is a project the core keeps off every
+    /// list (PRD automations B30): the phone's start sheet offers no place
+    /// in it.
+    #[test]
+    fn an_unlisted_project_is_no_start_target() {
+        let mut rest = rest();
+        rest["navigator"]["workspaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "w3", "label": "automations", "is_git": false, "unlisted": true,
+                "path": "/Users/example/hide/automations/a",
+                "checkouts": [{"id": "c5", "path": "/Users/example/hide/automations/a", "label": "a"}]}));
+        let ids: Vec<_> = Catalog::of(&rest, "local")
+            .targets
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        assert_eq!(ids, ["c1", "c2", "c4", "rc1"]);
     }
 
     #[test]

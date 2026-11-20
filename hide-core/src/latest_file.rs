@@ -161,6 +161,19 @@ pub(crate) fn keep_first_copy(path: &Path, bytes: &[u8]) -> Result<bool, String>
         .map_err(|error| format!("could not be written: {error}"))
 }
 
+/// Moves a store's file its loader could not read beside it, named with
+/// `now_unix_ms`, so the next save starts a new file and the unreadable one
+/// is kept for a person rather than written over. Where it went.
+pub(crate) fn set_aside(path: &Path, now_unix_ms: u64) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("has no file name")?;
+    let aside = path.with_file_name(format!("{name}.unreadable-{now_unix_ms}"));
+    std::fs::rename(path, &aside).map_err(|error| format!("could not be set aside: {error}"))?;
+    Ok(aside)
+}
+
 /// The file's bytes, or `None` when there is no file; a file past `cap` is
 /// refused rather than read.
 pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, String> {

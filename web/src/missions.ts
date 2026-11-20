@@ -312,19 +312,31 @@ export function missionHeadCells(mission: Mission): HeadCell[] {
   });
 }
 
-/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): the operator's turn, else its state. */
+/** The colour a mission's own chip wears on the sidebar row, the Overview and its Conductor's pane (B35): the operator's turn, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  return missionToneOf(mission.status, missionTurn(mission) !== null);
+  return missionToneOf(mission.status, missionTurn(mission) !== null, missionStalled(mission));
 }
 
-/** A mission chip's colour from its status and whether the operator's turn waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
-export function missionToneOf(status: Mission["status"], turn: boolean): CellTone {
+/**
+ * Whether no one moves a mission's work: a node stopped (`nodePace`) and none
+ * at work, so its chips turn from the working colour to the stopped one
+ * (operator decision 2026-11-20). A node waiting on CI or a review still
+ * counts as at work, and a mission between steps with nothing stopped is not
+ * stalled.
+ */
+export function missionStalled(mission: MissionBrief): boolean {
+  const cells = missionCells(mission);
+  return cells.includes("stopped") && !cells.includes("working");
+}
+
+/** A mission chip's colour from its status, whether the operator's turn waits and whether it stalled: the one rule every mission chip follows. */
+export function missionToneOf(status: Mission["status"], turn: boolean, stalled: boolean): CellTone {
   if (turn) return "hold";
   switch (status) {
     case "planning":
       return "waiting";
     case "running":
-      return "working";
+      return stalled ? "stopped" : "working";
     case "merge_wait":
       return "review";
     case "done":
@@ -621,6 +633,31 @@ export function nodeTimes(node: MissionNode, events: readonly MissionEvent[], en
   const running = last.status !== "done" && last.status !== "dropped";
   const stop = running ? end : last.at_unix_ms;
   return { took: start ? Math.max(0, stop - start.at_unix_ms) : null, running };
+}
+
+/**
+ * Where a node's time went (mission-82), as `hide mission show` splits it:
+ * `work` from when it last went to work (its start, or back from a finish)
+ * until its worker's lines stood met, `review` from then until it finished,
+ * and `wait` from when it could have started until it did; a span still
+ * running counts to `end`. A part the record cannot say (no start yet, a
+ * book from before the stamps) is null, and so is a wait under a minute.
+ * Null when neither work nor review can be said of a node that started, so
+ * a wait alone never stands in for its total.
+ */
+export function nodeSpans(node: MissionNode, end: number): { work: number | null; review: number | null; wait: number | null } | null {
+  const started = node.started_at_unix_ms;
+  const from = node.worked_at_unix_ms ?? started;
+  const finished = node.finished_at_unix_ms;
+  const met = node.own_met_at_unix_ms ?? null;
+  const span = (since: number, to: number) => Math.max(0, to - since);
+  const work = from == null ? null : met != null ? span(from, met) : finished == null ? span(from, end) : null;
+  const review = met == null ? null : span(met, finished ?? end);
+  const ready = node.ready_at_unix_ms ?? null;
+  const waited = ready == null ? null : started != null ? span(ready, started) : node.status === "planned" ? span(ready, end) : null;
+  const wait = waited != null && waited >= 60_000 ? waited : null;
+  if (work == null && review == null && (started != null || wait == null)) return null;
+  return { work, review, wait };
 }
 
 /**
@@ -1129,14 +1166,16 @@ export function heldNodes(mission: Mission): number {
  * nothing.
  */
 export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): { short: string; full: string[] } | null {
-  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []);
+  // An older core's review warning carries no rounds (a connected device of an earlier build): it says nothing rather than `0/0`.
+  const rounds = node.review_rounds;
+  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []).filter((warning) => warning.kind !== "review_fails" || rounds != null);
   const first = warnings[0];
   if (!first) return null;
   const minutes = (warning: MissionNodeWarning) => String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000));
   const words = (warning: MissionNodeWarning, form: "short" | "full") => {
     switch (warning.kind) {
       case "review_fails":
-        return t(`mission.warning.review_fails.${form}`, { count: node.review_fails ?? 0 });
+        return t(`mission.warning.review_fails.${form}`, { rounds: rounds!.rounds, limit: rounds!.limit });
       case "no_push":
         return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
       case "stopped":

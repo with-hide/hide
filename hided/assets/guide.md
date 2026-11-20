@@ -118,6 +118,20 @@ hide workspace remove <path> [--delete-branch] [--force]
 - `--delete-branch` takes the local branch with it. Without `--force` it refuses uncommitted or untracked files (`worktree_remove_needs_force`) and a branch with commits its base lacks (`worktree_remove_branch_unmerged`); add `--force` only when that work may go.
 - It refuses the main checkout, your own checkout and a worktree whose agent is still working or waiting there, and it waits until the removal ends; running it again waits for the same removal or answers how it ended.
 
+## Automations
+
+```
+hide automation add --name <name> --task <text> --schedule <when> --kind <kind> [--profile <name>] [--model <model>] [--effort <effort>] [--folder <path> [--worktree]] [--run-now]
+hide automation list | show <id|name> | run <id|name> | pause <id|name> | resume <id|name> | remove <id|name>
+hide automation edit <id|name> …        hide automation preview --schedule <when>        hide automation help
+```
+
+- When the operator asks for a task to run again at set times with no one present ("매일 아침 9시에 이슈 정리해줘"), make an automation: each time comes, Hide starts one agent on the task, in the automation's own folder unless a project is named, and the operator sees its runs under 자동화 in the sidebar.
+  A wait or a check inside this conversation is not one; keep doing it yourself.
+- Run `hide automation help` first: it names the schedule forms (`daily 09:00`, `weekdays 09:00`, `weekly mon,thu 09:00`, `every 15m`, `every 3h 09:00`, `cron 0 9 * * 1-5`), how to write the task and which folder and agent to choose.
+- The answer gives `reads_as_text` and `next_run_at` on the wall clock of the machine that runs Hide; tell the operator both in one line. A refusal's `message` says what to change, such as a period under five minutes.
+- Remove an automation only when the operator asked for it.
+
 ## Devices
 
 ```
@@ -145,7 +159,7 @@ hide access list [--json]
 
 - These are for a program outside Hide's panes, on the machine where Hide's core runs, such as a scheduler or another assistant; an agent in a Hide pane acts as itself and is refused with `access_from_pane`.
 - `request` asks the operator, who approves it in Settings › External tools as View only or Act, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
-- View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does. No agent writes to a tool first.
+- View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`, `hide automation list`, `show` and `preview`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does, and makes, changes and runs automations with `hide automation`. No agent writes to a tool first.
 - What only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
 - A home with several tools' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a tool at any time, and `leave` disconnects it from the tool's side.
 - A key file that cannot be read refuses each command with `access_key_unreadable`; run `request` again, which replaces it and asks anew, and while the old connection of that name stands the operator disconnects it first (`access_name_taken`).

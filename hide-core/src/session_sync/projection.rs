@@ -612,6 +612,7 @@ impl ProjectionState {
                         ..CheckoutSnapshot::default()
                     }],
                     pinned: false,
+                    unlisted: false,
                     inactive_checkouts: Default::default(),
                     session_folds: Default::default(),
                     removal: Default::default(),

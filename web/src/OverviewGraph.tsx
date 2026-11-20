@@ -11,6 +11,8 @@ import { askWhat } from "./components/agent-tree";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { KindIcon } from "./components/kind-mark";
 import { MissionAskChoices, MissionAskLine, useMissionAsks, useMissionPlace } from "./components/sidebar-mission-row";
+import { AutomationAskChoices, AutomationAskLine, AutomationMark, useAutomationAsks } from "./components/sidebar-automation-row";
+import type { AutomationAsk } from "./ownAsks";
 import { missionAskWhat, type MissionAsk } from "./missions";
 import { Button } from "./components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
@@ -505,6 +507,7 @@ function ProjectColumn({ deviceId, projectId, tool, model, query, setQuery, hidd
   // or in a tool's cell as the tool's turn counts it (PRD hide-external-control B40);
   // a map narrowed to one project lists that project's missions only.
   const missions = useMissionAsks(deviceId, projectId, tool);
+  const automations = useOverviewAutomationAsks(deviceId, projectId, tool);
   const heading = t(tool ? "taskLens.tool.group.needs_you" : "overviewGraph.waiting");
   return <aside className="og-navigator" aria-label={t("overviewGraph.projects")} data-graph-projects="true">
     <Input aria-label={t("overviewGraph.find")} placeholder={t("overviewGraph.find")} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !composingKey(event)) { event.preventDefault(); takeFirst(event.currentTarget); } }} />
@@ -526,10 +529,11 @@ function ProjectColumn({ deviceId, projectId, tool, model, query, setQuery, hidd
       {found.slice(0, FOUND_LIMIT).map((row) => <button key={row.id} type="button" data-graph-found-session={row.agent.pane_id} title={row.agent.profile ? agentWithProfile(t, row.agent) : undefined} aria-label={[rowAccessibleName(t, row.agent, row.device), row.project.label, row.checkout.branch ?? row.checkout.label].join(", ")} onClick={(event) => show(row.id, event.currentTarget)}><StatusMark mark={row.agent.mark} /><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>)}
       {found.length > FOUND_LIMIT ? <p className="og-no-match">{t("overviewGraph.moreFound", { count: found.length - FOUND_LIMIT })}</p> : null}
     </section> : null}
-    {waiting.length + missions.length > 0 ? <section className="og-waiting" aria-label={heading}>
-      <h3>{heading} <span>{waiting.length + missions.length}</span></h3>
+    {waiting.length + missions.length + automations.length > 0 ? <section className="og-waiting" aria-label={heading}>
+      <h3>{heading} <span>{waiting.length + missions.length + automations.length}</span></h3>
       <div className="og-ask-list">
       {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
+      {automations.map((ask) => <OverviewAutomationAsk key={`automation:${ask.automation.id}`} ask={ask} actions={actions} />)}
       {waiting.map((row) => <div key={row.id} className="og-ask" data-graph-ask={row.agent.pane_id}>
         <button type="button" className="og-ask-who" title={row.agent.profile ? agentWithProfile(t, row.agent) : undefined} aria-label={rowAccessibleName(t, row.agent, row.device)} onClick={(event) => choose(row.id, event.currentTarget)}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} /><span><AgentRecordTitle agent={row.agent} /></span><small>{row.project.label}</small>{hidden.has(row.projectId) ? <small className="og-hidden-mark">{t("overviewGraph.hiddenProject")}</small> : null}</button>
         {/* A tool's agent leads its line with the tool's name, as its sidebar row does (PRD hide-external-control B31); never inside the tool's own cell. */}
@@ -554,15 +558,37 @@ function OverviewMissionAsk({ ask, actions }: { ask: MissionAsk; actions: Action
   </div>;
 }
 
-/** The missions waiting on the operator, or on the tool in its cell, when the map draws no session: the same items the project column lists beside its sessions. */
+/** An automation stopped for a person to fix, as the Overview lists it (PRD automations B23). */
+function OverviewAutomationAsk({ ask, actions }: { ask: AutomationAsk; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  return <div className="og-ask" data-graph-automation-ask={ask.automation.id}>
+    <Button variant="text" size="inline" className="og-ask-who flex justify-start font-normal" aria-label={t("automationScreen.open", { name: ask.automation.name })} onClick={() => actions.openAutomation(ask.automation.id)}><AutomationMark className="size-(--size-agent-badge-compact)" /><span>{ask.automation.name}</span></Button>
+    <p><AutomationAskLine ask={ask} /></p>
+    <AutomationAskChoices ask={ask} actions={actions} />
+  </div>;
+}
+
+/** The device's automations stopped for a person, on a map of every project; an automation is no project's, and never a tool's. */
+function useOverviewAutomationAsks(deviceId: string, projectId: string | null, tool: ToolCell | null): AutomationAsk[] {
+  const asks = useAutomationAsks(deviceId);
+  return projectId === null && tool === null ? asks : NO_AUTOMATION_ASKS;
+}
+
+const NO_AUTOMATION_ASKS: AutomationAsk[] = [];
+
+/** The missions and automations waiting on the operator, or the missions on the tool in its cell, when the map draws no session: the same items the project column lists beside its sessions. */
 function OverviewMissionAsks({ deviceId, projectId, tool, actions }: { deviceId: string; projectId: string | null; tool: ToolCell | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const missions = useMissionAsks(deviceId, projectId, tool);
-  if (missions.length === 0) return null;
+  const automations = useOverviewAutomationAsks(deviceId, projectId, tool);
+  if (missions.length + automations.length === 0) return null;
   const heading = t(tool ? "taskLens.tool.group.needs_you" : "overviewGraph.waiting");
   return <section className="og-waiting og-waiting-alone" aria-label={heading} data-graph-mission-asks="true">
-    <h3>{heading} <span>{missions.length}</span></h3>
-    <div className="og-ask-list">{missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}</div>
+    <h3>{heading} <span>{missions.length + automations.length}</span></h3>
+    <div className="og-ask-list">
+      {missions.map((ask) => <OverviewMissionAsk key={`mission:${ask.mission.id}`} ask={ask} actions={actions} />)}
+      {automations.map((ask) => <OverviewAutomationAsk key={`automation:${ask.automation.id}`} ask={ask} actions={actions} />)}
+    </div>
   </section>;
 }
 
