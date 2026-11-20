@@ -59,6 +59,8 @@ impl CodexHome {
             unique_suffix()
         ));
         create_private_dir(&dir).map_err(|kind| home_unavailable("mkdir", kind))?;
+        #[cfg(test)]
+        MADE.with(|made| made.replace(Some(dir.clone())));
         let home = Self::Private(dir);
         match link::create_link(&account.join("auth.json"), &home.path().join("auth.json")) {
             Ok(()) => Ok(home),
@@ -267,6 +269,13 @@ fn source_codex_dir(variable: Variable<'_>) -> Result<PathBuf, std::io::ErrorKin
         })
 }
 
+// The private home `CodexHome::create` last made on this thread, so a test
+// checks its own home while other tests make theirs in the same process.
+#[cfg(test)]
+thread_local! {
+    static MADE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 fn unique_suffix() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -365,7 +374,6 @@ mod create_tests {
             .join("a".repeat(250))
             .join("b".repeat(250));
         let too_long = (0..20).fold(long, |path, _| path.join("c".repeat(250)));
-        let before = private_homes_of_this_process();
         let refused = CodexHome::create(&|name| {
             (name == "CODEX_HOME").then(|| too_long.as_os_str().to_owned())
         });
@@ -379,24 +387,10 @@ mod create_tests {
             Err(other) => panic!("{other:?}"),
             Ok(home) => panic!("a home was made: {}", home.path().display()),
         }
-        assert_eq!(
-            private_homes_of_this_process(),
-            before,
-            "the refused home was removed"
-        );
-    }
-
-    #[cfg(unix)]
-    fn private_homes_of_this_process() -> Vec<std::ffi::OsString> {
-        let own = format!("{PREFIX}{}-", std::process::id());
-        let mut homes: Vec<_> = std::fs::read_dir(std::env::temp_dir())
-            .expect("the temporary folder is readable")
-            .filter_map(Result::ok)
-            .map(|entry| entry.file_name())
-            .filter(|name| name.to_string_lossy().starts_with(&own))
-            .collect();
-        homes.sort();
-        homes
+        let made = MADE
+            .with(|made| made.take())
+            .expect("the refused call made a home first");
+        assert!(!made.exists(), "the refused home was removed");
     }
 }
 
