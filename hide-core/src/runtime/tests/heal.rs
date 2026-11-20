@@ -79,9 +79,10 @@ fn record_in(id: &str, actor: &Actor, pane: &str, parent: Option<&str>) -> Agent
 
 /// Registers `records` with the core.
 fn registered(runtime: &mut Runtime, records: Vec<AgentRecord>) {
-    let mut ledger = crate::delivery::ledger::Ledger::default();
-    ledger.agents = records;
-    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
+        agents: records,
+        ..Default::default()
+    }));
 }
 
 /// Shows `actor` in its pane.
