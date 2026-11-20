@@ -376,6 +376,24 @@ impl StoreRecord {
     }
 }
 
+/// The content a take-over card showed, with no key values (B6, B9, B20).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AdoptConfirmation {
+    Skill { digest: String },
+    Mcp { server: Server },
+}
+
+impl AdoptConfirmation {
+    fn matches(&self, body: &ItemBody) -> bool {
+        match (self, body) {
+            (Self::Skill { digest }, ItemBody::Skill(body)) => *digest == body.digest,
+            (Self::Mcp { server }, ItemBody::Mcp(body)) => *server == body.server,
+            _ => false,
+        }
+    }
+}
+
 /// The operator's change to a machine's store, one cell or button of the
 /// screen or one `hide skill` command. The wire and the device protocol
 /// carry it as it is.
@@ -408,6 +426,9 @@ pub enum StoreChange {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
+        /// Every screen take-over binds Apply to its own card's content.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirmed: Option<AdoptConfirmation>,
     },
     /// Ask every git item's repository for a newer version (D-33).
     CheckUpdates,
@@ -1705,9 +1726,12 @@ fn change_one(
             purge(ctx, &gone);
             Ok(None)
         }
-        StoreChange::Adopt { kind, name, from } => {
-            adopt(ctx, store, *kind, name, from.as_deref()).map(nothing)
-        }
+        StoreChange::Adopt {
+            kind,
+            name,
+            from,
+            confirmed,
+        } => adopt(ctx, store, *kind, name, from.as_deref(), confirmed.as_ref()).map(nothing),
         StoreChange::CheckUpdates => fetched.checked().map(nothing),
         StoreChange::PreviewUpdate { item } => {
             store
@@ -2163,6 +2187,7 @@ fn adopt(
     kind: ItemKind,
     name: &str,
     from: Option<&str>,
+    confirmed: Option<&AdoptConfirmation>,
 ) -> Result<(), StoreRefusal> {
     if hides_own(name) || !valid_name(name) {
         return Err(StoreRefusal::new(
@@ -2201,10 +2226,31 @@ fn adopt(
         }
     };
     if let Some((place, _)) = chosen {
-        if existing {
-            delete(ctx, store, &id)?;
+        // Read into a private staging folder before touching any existing
+        // item or agent entry. Only these checked bytes can be installed.
+        let staged = ctx.staging().join(source::fresh_id("adopt-"));
+        let result = (|| {
+            let (source, body) = applier.adopt(ctx, place, name, &staged)?;
+            if confirmed.is_some_and(|confirmed| !confirmed.matches(&body)) {
+                return Err(StoreRefusal::new(
+                    StoreRefusalCause::Differs,
+                    "the copy changed since it was shown; close and confirm it again",
+                ));
+            }
+            if existing {
+                delete(ctx, store, &id)?;
+            }
+            move_folder(&staged, &ctx.item_files(&id)).map_err(failed)?;
+            Ok((source, body))
+        })();
+        // On success the rename consumed it; on any failure its files and
+        // private keys go now. The pass's staging sweep also retries cleanup.
+        if let Err(error) = std::fs::remove_dir_all(&staged)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            log("store.staged_left", Some(&id), &error.to_string());
         }
-        let (source, body) = applier.adopt(ctx, place, name, &ctx.item_files(&id))?;
+        let (source, body) = result?;
         store.items.push(StoreItem {
             id: id.clone(),
             kind,

@@ -1831,6 +1831,7 @@ mod tests {
                 on: false,
             },
             StoreChange::Adopt {
+                confirmed: None,
                 kind: ItemKind::Skill,
                 name: "notes".into(),
                 from: None,

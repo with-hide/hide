@@ -1283,7 +1283,7 @@ pub struct StoreCellRef {
 /// `status.agent_profile_answer` does for profiles: the request id it
 /// carried and the machine, then each of its changes' outcomes in order once
 /// the machine's store ran them. `refused` with no outcomes is a request that
-/// never reached the store, and why is in the log. A request from the screen
+/// never reached the store; `refused` retains its cause and log sentence. A request from the screen
 /// and one from `hide skill` / `hide mcp` each find their own by id.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StoreAnswer {
@@ -1291,6 +1291,9 @@ pub struct StoreAnswer {
     pub device_id: String,
     pub state: crate::agent_profiles::AnswerState,
     pub outcomes: Vec<hide_kit::store::ChangeOutcome>,
+    /// A refusal before any per-change outcome, such as a copy export limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<hide_kit::store::StoreRefusal>,
 }
 
 /// A machine's agent profiles: what its node lists, never a variable's

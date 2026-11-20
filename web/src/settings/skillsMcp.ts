@@ -275,6 +275,7 @@ export function trashFor(report: StoreReport, item: Pick<StoreItem, "kind" | "na
 /** What a store request's refusal says: the first change refused, or the request that never ran. */
 export function refusalOf(answer: StoreAnswer | null | undefined): StoreRefusalCause | "unavailable" | null {
   if (!answer) return null;
+  if (answer.refused) return answer.refused.cause;
   if (answer.state === "refused") return "unavailable";
   return answer.outcomes.find((outcome) => outcome.refused)?.refused?.cause ?? null;
 }

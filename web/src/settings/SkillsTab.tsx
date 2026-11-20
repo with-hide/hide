@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, FolderIcon, GitBranchIcon, GlobeIcon, HandIcon, PackageIcon, PlusIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentMark } from "../AgentMark";
 import type { Actions } from "../actions";
 import { useMinuteClock } from "../components/elapsed";
@@ -131,6 +131,12 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
   const [undone, setUndone] = useState(false);
   const removal = useStoreRequest(device.id, actions);
   const check = useStoreRequest(device.id, actions);
+  const checkedOnOpen = useRef(false);
+  useEffect(() => {
+    if (checkedOnOpen.current || readOnly || !report?.items.some((item) => item.source.kind === "git")) return;
+    checkedOnOpen.current = true;
+    check.send([{ op: "check_updates" }]);
+  }, [check, readOnly, report]);
   const page: Page = {
     device,
     report: report ?? EMPTY_REPORT,
@@ -346,7 +352,7 @@ function CopyFromHere({ device, own, actions }: { device: Device; own: string; a
   const [sent, setSent] = useState<string | null>(null);
   const answer = useShellStore((s) => (sent ? s.rest?.status?.store_answers?.find((row) => row.request_id === sent) : undefined));
   const pending = sent !== null && (!answer || answer.state === "pending");
-  const refusal = answer?.outcomes.find((outcome) => outcome.refused)?.refused;
+  const refusal = answer?.refused ?? answer?.outcomes.find((outcome) => outcome.refused)?.refused;
   const failed = answer?.state === "refused" || !!refusal;
   return (
     <span className="inline-flex items-center gap-xs">

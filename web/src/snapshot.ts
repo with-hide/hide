@@ -2568,6 +2568,8 @@ export type StoreReport = {
 export type StoreRefusalCause = "not_found" | "no_skills" | "no_access" | "unreachable" | "no_git" | "too_large" | "name_taken" | "differs" | "too_many" | "unsupported" | "failed";
 
 /** The operator's change to a machine's store (`StoreChange`), as the screen sends it. */
+export type StoreAdoptConfirmation = { kind: "skill"; digest: string } | { kind: "mcp"; server: McpServer };
+
 export type StoreChange =
   | { op: "inspect"; source: StoreSourceSpec }
   | { op: "install"; preview: string; names: string[] }
@@ -2575,7 +2577,7 @@ export type StoreChange =
   | { op: "delete"; item: string }
   | { op: "restore"; entry: string }
   | { op: "forget"; entry: string }
-  | { op: "adopt"; kind: StoreItemKind; name: string; from?: string }
+  | { op: "adopt"; kind: StoreItemKind; name: string; from?: string; confirmed?: StoreAdoptConfirmation }
   | { op: "check_updates" }
   | { op: "preview_update"; item: string }
   | { op: "update"; item: string; commit: string }
@@ -2589,7 +2591,7 @@ export type StoreChange =
 export type StoreChangeOutcome = { change: StoreChange; refused?: { cause: StoreRefusalCause; reason: string } | null; made?: string | null };
 
 /** What one store request came to (`status.store_answers`), found by its request id. */
-export type StoreAnswer = { request_id: string; device_id: string; state: "pending" | "done" | "refused"; outcomes: StoreChangeOutcome[] };
+export type StoreAnswer = { request_id: string; device_id: string; state: "pending" | "done" | "refused"; outcomes: StoreChangeOutcome[]; refused?: { cause: StoreRefusalCause; reason: string } };
 
 /** An install or update an agent asked for with `hide skill` / `hide mcp`, waiting on the operator's confirm (B32). */
 export type StoreAsk = {

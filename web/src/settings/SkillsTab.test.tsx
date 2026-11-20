@@ -43,9 +43,9 @@ it.each(["refused", "done"] as const)("shows a device copy failure when the answ
     const request = events.map((event) => event as { kind: string; payload: { request_id: string } }).find((event) => event.kind === "kit_store_copy")!;
     await act(async () => {
       const rest = useShellStore.getState().rest!;
-      useShellStore.setState({ rest: { ...rest, status: { ...rest.status, store_answers: [{ request_id: request.payload.request_id, device_id: "mac", state, outcomes: state === "done" ? [{ change: { op: "check_updates" }, refused: { cause: "failed", reason: "the device could not receive it" } }] : [] }] } } });
+      useShellStore.setState({ rest: { ...rest, status: { ...rest.status, store_answers: [{ request_id: request.payload.request_id, device_id: "mac", state, ...(state === "refused" ? { refused: { cause: "too_large" as const, reason: "copy limit" } } : {}), outcomes: state === "done" ? [{ change: { op: "check_updates" }, refused: { cause: "failed", reason: "the device could not receive it" } }] : [] }] } } });
     });
-    expect(container.querySelector("[data-store-copy-failed]")?.getAttribute("aria-label")).toBe("Could not be done");
+    expect(container.querySelector("[data-store-copy-failed]")?.getAttribute("aria-label")).toBe(state === "refused" ? "Too large to install" : "Could not be done");
     expect(button().disabled).toBe(false);
     await act(async () => button().click());
     expect(container.querySelector("[data-store-copy-failed]")).toBeNull();
@@ -125,7 +125,7 @@ it("confirms taking over an agent's own server with that server's command, and C
     await press('[data-store-take-over="mcp:github:claude"]');
     await press('[data-store-dialog="adopt"] [data-store-mcp-add]');
     expect(sent(events)).toHaveLength(1);
-    expect(JSON.parse(sent(events)[0]!).payload.changes).toEqual([{ op: "adopt", kind: "mcp", name: "github", from: "claude-file" }]);
+    expect(JSON.parse(sent(events)[0]!).payload.changes).toEqual([{ op: "adopt", kind: "mcp", name: "github", from: "claude-file", confirmed: { kind: "mcp", server: theirs } }]);
   } finally {
     await unmount();
   }

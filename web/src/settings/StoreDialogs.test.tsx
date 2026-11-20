@@ -107,7 +107,7 @@ it("keeps showing its own reading when another pane's newer read lands, and Appl
     expect(dialog()).toContain("/skills/writer");
     expect(dialog()).not.toContain("later");
     await act(async () => (document.querySelector("[data-store-install]") as HTMLElement).click());
-    expect(sent[1]?.changes).toEqual([{ op: "adopt", kind: "skill", name: "writer", from: "claude" }]);
+    expect(sent[1]?.changes).toEqual([{ op: "adopt", kind: "skill", name: "writer", from: "claude", confirmed: { kind: "skill", digest: "digest-own" } }]);
   } finally {
     await act(async () => root.unmount());
   }

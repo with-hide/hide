@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hide_kit::store::{Source, StoreChange, StoreReport};
+use hide_kit::store::{Source, StoreChange, StoreRefusal, StoreRefusalCause, StoreReport};
 
 use super::Runtime;
 use super::hosts::HostPhase;
@@ -179,6 +179,7 @@ impl StoreAnswer {
             device_id: device_id.to_owned(),
             state: AnswerState::Pending,
             outcomes: Vec::new(),
+            refused: None,
         }
     }
 }
@@ -385,6 +386,10 @@ impl Runtime {
             "reason": reason,
         }));
         answer.state = AnswerState::Refused;
+        answer.refused = Some(StoreRefusal {
+            cause: StoreRefusalCause::Failed,
+            reason,
+        });
         let request_id = answer.request_id.clone();
         match self.store_answer_mut(&request_id) {
             Some(kept) => *kept = answer,
@@ -455,20 +460,27 @@ impl Runtime {
             self.snapshot.status.store_answers.iter().any(|answer| {
                 answer.request_id == request_id && answer.state == AnswerState::Pending
             });
-        let reason = match exported {
-            Err(reason) => reason,
+        let refusal = match exported {
+            Err(reason) => StoreRefusal {
+                cause: StoreRefusalCause::Failed,
+                reason,
+            },
             Ok(export) => match export.refused {
-                Some(refusal) => refusal.reason,
+                Some(refusal) => refusal,
                 None if self.stores.queued_changes(device_id, false) + export.items.len()
                     > QUEUED_CHANGES_LIMIT =>
                 {
-                    format!(
-                        "{device_id} would have more than {QUEUED_CHANGES_LIMIT} store changes waiting"
-                    )
+                    StoreRefusal {
+                        cause: StoreRefusalCause::TooMany,
+                        reason: format!(
+                            "{device_id} would have more than {QUEUED_CHANGES_LIMIT} store changes waiting"
+                        ),
+                    }
                 }
-                None if !self.device_registration_exists(device_id) => {
-                    format!("Device {device_id} is not registered")
-                }
+                None if !self.device_registration_exists(device_id) => StoreRefusal {
+                    cause: StoreRefusalCause::NotFound,
+                    reason: format!("Device {device_id} is not registered"),
+                },
                 None if !waiting => return false,
                 None if export.items.is_empty() => {
                     if let Some(answer) = self.store_answer_mut(&request_id) {
@@ -495,13 +507,14 @@ impl Runtime {
             "kind": "copy.refused",
             "device_id": device_id,
             "request_id": request_id,
-            "reason": reason,
+            "reason": refusal.reason,
         }));
         if !waiting {
             return false;
         }
         if let Some(answer) = self.store_answer_mut(&request_id) {
             answer.state = AnswerState::Refused;
+            answer.refused = Some(refusal);
         }
         self.store_answer_ended(&request_id);
         true

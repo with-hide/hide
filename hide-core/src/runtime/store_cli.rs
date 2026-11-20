@@ -796,6 +796,9 @@ fn install_ask(
 /// Why an ended request refuses its command, if it does: it never ran, or
 /// one of its changes was refused.
 fn answer_refusal(answer: &StoreAnswer) -> Option<String> {
+    if let Some(refusal) = &answer.refused {
+        return Some(store_refused(refusal));
+    }
     if answer.state == AnswerState::Refused {
         return Some(refused(
             UNAVAILABLE,

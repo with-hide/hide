@@ -565,3 +565,43 @@ fn a_typed_key_reaches_the_devices_store_and_never_the_snapshot_or_the_log() {
         assert!(!record.to_string().contains(KEY), "{record}");
     }
 }
+
+#[test]
+fn a_copy_export_refusal_reaches_the_screen_with_its_cause_before_any_receive() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = with_consent(Some(helper.clone()));
+    assert!(dispatch(
+        &shared,
+        "kit_store_copy",
+        serde_json::json!({"device_id": DEVICE, "request_id": "too-large"})
+    ));
+    assert_eq!(
+        shared.lock().unwrap().take_store_export().as_deref(),
+        Some(DEVICE)
+    );
+    let refusal = hide_kit::store::StoreRefusal {
+        cause: hide_kit::store::StoreRefusalCause::TooLarge,
+        reason: "the store copy is past the 30 MiB transfer limit".to_owned(),
+    };
+    assert!(shared.lock().unwrap().ingest_store_export(
+        DEVICE,
+        Ok(StoreExport {
+            items: Vec::new(),
+            refused: Some(refusal.clone())
+        })
+    ));
+    let answered = answer(&shared).unwrap();
+    assert_eq!(answered.state, AnswerState::Refused);
+    assert_eq!(answered.refused, Some(refusal));
+    assert!(answered.outcomes.is_empty());
+    settle(&shared);
+    assert!(store_calls(&helper).is_empty());
+    // Retry is a new request and no longer carries the previous refusal.
+    assert!(dispatch(
+        &shared,
+        "kit_store_copy",
+        serde_json::json!({"device_id": DEVICE, "request_id": "retry"})
+    ));
+    assert_eq!(answer(&shared).unwrap().state, AnswerState::Pending);
+    assert!(answer(&shared).unwrap().refused.is_none());
+}

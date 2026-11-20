@@ -11,7 +11,7 @@ import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import type { Device, McpPastedServer, McpReach, McpServer, StoreAsk, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreUpdateDiff } from "../snapshot";
+import type { Device, McpPastedServer, McpReach, McpServer, StoreAdoptConfirmation, StoreAsk, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreUpdateDiff } from "../snapshot";
 import { agentShortName, addInput, filesOf, keyNames, previewSource, serverLine, versionValue } from "./skillsMcp";
 import { useStoreRequest } from "./useStoreRequest";
 
@@ -307,14 +307,15 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
   useEffect(() => {
     if (apply.done) onClose();
   }, [apply.done, onClose]);
-  const adopt = () => apply.send([{ op: "adopt", kind: target.kind, name: target.name, ...(target.from ? { from: target.from } : {}) }]);
+  const adopt = (confirmed: StoreAdoptConfirmation) => apply.send([{ op: "adopt", kind: target.kind, name: target.name, ...(target.from ? { from: target.from } : {}), confirmed }]);
   const title = t("store.adopt.title", { name: target.name });
   const header = <p className="text-body text-muted-foreground">{t("store.adopt.line")}</p>;
   // The preview this dialog's own read made, as its answer names it: another pane's read never replaces it.
   const preview = reads && read.done ? (report.previews.find((row) => row.id === read.made) ?? null) : null;
-  const lost = reads && read.done && !preview;
-  if (preview) {
-    return <InstallConfirm title={title} data="adopt" preview={preview} skills={preview.skills} shown={shown} pending={apply.pending} refusal={apply.refusal} onClose={onClose} onInstall={adopt} confirmLabel={t("store.adopt.apply")} header={header} />;
+  const skill = preview?.skills.find((skill) => skill.name === target.name);
+  const lost = reads && read.done && (!preview || !skill);
+  if (preview && skill) {
+    return <InstallConfirm title={title} data="adopt" preview={preview} skills={[skill]} shown={shown} pending={apply.pending} refusal={apply.refusal} onClose={onClose} onInstall={() => adopt({ kind: "skill", digest: skill.digest })} confirmLabel={t("store.adopt.apply")} header={header} />;
   }
   const agents = (report.columns[target.kind] ?? []).flatMap((column) => column.agents).filter((agent, index, all) => shown.has(agent) && all.indexOf(agent) === index);
   if (target.kind === "mcp" && target.server) {
@@ -332,7 +333,7 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
         refusal={apply.refusal}
         confirmLabel={t("store.adopt.apply")}
         onClose={onClose}
-        onConfirm={adopt}
+        onConfirm={() => adopt({ kind: "mcp", server: target.server! })}
         keyEntry={<span className="flex flex-col font-mono">{names.map((key) => <span key={key}>{key}</span>)}</span>}
       />
     );
@@ -347,9 +348,6 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-store-cancel="true">{t("common.cancel")}</Button>
-          {reads || unreadable ? null : (
-            <Button disabled={apply.pending} aria-busy={apply.pending} onClick={adopt} data-store-install="true">{t("store.adopt.apply")}</Button>
-          )}
         </>
       }
     >
@@ -364,6 +362,7 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
       )}
       {read.refusal || lost ? <Note tone="error" data-store-adopt-refused={read.refusal ?? "not_found"}>{refusalText(read.refusal ?? "not_found", t)}</Note> : null}
       {unreadable ? <Note tone="error" data-store-adopt-unreadable="true">{t("store.adopt.unreadable")}</Note> : null}
+      {!reads && !unreadable ? <Note tone="error">{refusalText("not_found", t)}</Note> : null}
       {apply.refusal ? <Note tone="error" data-store-install-refused={apply.refusal}>{refusalText(apply.refusal, t)}</Note> : null}
     </StoreDialog>
   );

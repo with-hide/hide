@@ -611,6 +611,7 @@ fn a_skill_of_the_same_name_the_operator_put_there_is_left_alone_until_taken_ove
     let taken = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Skill,
             name: "archify".to_owned(),
             from: None,
@@ -643,6 +644,7 @@ fn a_skill_one_agent_had_is_adopted_into_every_folder_and_then_managed_there() {
     let adopted = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Skill,
             name: "aside".to_owned(),
             from: None,
@@ -679,6 +681,7 @@ fn differing_copies_are_adopted_only_from_the_one_picked_and_a_link_is_followed_
     let refused = crate::apply_store(
         &fixture.target,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Skill,
             name: "style".to_owned(),
             from: None,
@@ -708,6 +711,7 @@ fn differing_copies_are_adopted_only_from_the_one_picked_and_a_link_is_followed_
     let adopted = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Skill,
             name: "style".to_owned(),
             from: Some(claude_place),
@@ -733,6 +737,7 @@ fn differing_copies_are_adopted_only_from_the_one_picked_and_a_link_is_followed_
     let linked = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Skill,
             name: "linked".to_owned(),
             from: None,
@@ -863,6 +868,7 @@ fn removing_the_machine_leaves_the_operators_adopted_skills_where_they_were() {
         );
     }
     let adopt = |name: &str| StoreChange::Adopt {
+        confirmed: None,
         kind: ItemKind::Skill,
         name: name.to_owned(),
         from: None,
@@ -1163,3 +1169,89 @@ fn a_copy_carries_each_skill_with_its_files_to_another_machines_store_once() {
 
 #[path = "store_mcp_cases.rs"]
 mod mcp;
+
+#[test]
+fn a_take_over_refuses_skill_content_or_executable_changes_until_confirmed_again() {
+    use crate::store::AdoptConfirmation;
+    for permission_only in [false, true] {
+        if permission_only && cfg!(windows) {
+            continue;
+        }
+        let fixture = every_agent();
+        let (_, url) = repository(&fixture);
+        let installed = install(&fixture, SourceSpec::Git { url }, &["archify"]);
+        let own = fixture.home().join(".claude/skills/archify");
+        write(&own.join("SKILL.md"), &skill_md("archify", "Shown copy."));
+        let inspected = store(
+            &fixture,
+            vec![StoreChange::Inspect {
+                source: SourceSpec::Folder {
+                    path: own.display().to_string(),
+                },
+            }],
+        );
+        let preview = inspected.previews.last().unwrap();
+        let digest = preview.skills[0].digest.clone();
+        let place = inspected.items[0]
+            .cells
+            .iter()
+            .find(|cell| cell.column == "claude")
+            .unwrap()
+            .place
+            .clone()
+            .unwrap();
+        if permission_only {
+            hide_platform::fs::permissions::mark_executable(&own.join("SKILL.md")).unwrap();
+        } else {
+            write(&own.join("SKILL.md"), &skill_md("archify", "Unseen copy."));
+        }
+        let before = folders(&fixture).map(|folder| tree(&folder));
+        let root = crate::layout::store_dir(fixture.home());
+        let stored = tree(&root.join("items"));
+        let staging = tree(&root.join("staging"));
+        let refused = crate::apply_store(
+            &fixture.target,
+            vec![StoreChange::Adopt {
+                kind: ItemKind::Skill,
+                name: "archify".to_owned(),
+                from: Some(place.clone()),
+                confirmed: Some(AdoptConfirmation::Skill { digest }),
+            }],
+        );
+        assert_eq!(
+            refused.outcomes[0].refused.as_ref().unwrap().cause,
+            StoreRefusalCause::Differs
+        );
+        assert_eq!(refused.items[0].source, installed.items[0].source);
+        assert!(refused.trash.is_empty());
+        assert_eq!(folders(&fixture).map(|folder| tree(&folder)), before);
+        assert_eq!(tree(&root.join("items")), stored);
+        // A failed attempt removes only its own staging, not the still-open preview.
+        assert_eq!(tree(&root.join("staging")), staging);
+        let read = store(
+            &fixture,
+            vec![StoreChange::Inspect {
+                source: SourceSpec::Folder {
+                    path: own.display().to_string(),
+                },
+            }],
+        );
+        let digest = read.previews.last().unwrap().skills[0].digest.clone();
+        let adopted = store(
+            &fixture,
+            vec![StoreChange::Adopt {
+                kind: ItemKind::Skill,
+                name: "archify".to_owned(),
+                from: Some(place),
+                confirmed: Some(AdoptConfirmation::Skill { digest }),
+            }],
+        );
+        assert!(adopted.outcomes[0].refused.is_none(), "{adopted:#?}");
+        for folder in folders(&fixture) {
+            assert_eq!(
+                std::fs::read(folder.join("archify/SKILL.md")).unwrap(),
+                std::fs::read(own.join("SKILL.md")).unwrap()
+            );
+        }
+    }
+}

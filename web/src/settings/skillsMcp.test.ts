@@ -46,6 +46,7 @@ describe("a store request's answer", () => {
     expect(refusalOf(answer("done", false))).toBeNull();
     expect(refusalOf(answer("done", true))).toBe("not_found");
     expect(refusalOf(answer("refused", false))).toBe("unavailable");
+    expect(refusalOf({ ...answer("refused", false), refused: { cause: "too_large", reason: "copy limit" } })).toBe("too_large");
   });
 });
 

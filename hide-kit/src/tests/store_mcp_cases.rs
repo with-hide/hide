@@ -739,6 +739,7 @@ fn a_server_of_the_same_name_the_operator_put_in_is_left_alone_until_taken_over(
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "github".to_owned(),
             from: Some(place),
@@ -780,6 +781,7 @@ fn a_server_only_one_agent_had_is_listed_and_adopted_into_every_agent_with_its_k
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "fetch".to_owned(),
             from: None,
@@ -989,6 +991,7 @@ fn a_take_over_sets_each_other_copy_aside_whole_and_a_machine_leaving_puts_it_ba
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "github".to_owned(),
             from: Some(place),
@@ -1051,6 +1054,7 @@ fn a_server_taken_over_and_switched_off_where_it_was_goes_back_there_when_the_ma
     store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "fetch".to_owned(),
             from: None,
@@ -1112,6 +1116,7 @@ fn the_same_server_with_two_keys_is_two_servers_and_a_take_over_keeps_both_keys(
     let refused = crate::apply_store(
         &fixture.target,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "github".to_owned(),
             from: None,
@@ -1133,6 +1138,7 @@ fn the_same_server_with_two_keys_is_two_servers_and_a_take_over_keeps_both_keys(
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "github".to_owned(),
             from: Some(place),
@@ -1181,6 +1187,7 @@ fn the_same_server_with_two_keys_is_two_servers_and_a_take_over_keeps_both_keys(
     let report = store(
         &fixture,
         vec![StoreChange::Adopt {
+            confirmed: None,
             kind: ItemKind::Mcp,
             name: "github".to_owned(),
             from: None,
@@ -1324,5 +1331,80 @@ fn a_store_whose_secret_is_gone_or_unreadable_is_kept_and_no_agent_file_changes(
         );
         assert!(dir.join("store.json").exists(), "{damage}");
         assert_eq!(files(), before, "{damage}");
+    }
+}
+
+#[test]
+fn a_take_over_refuses_a_changed_command_or_address_without_losing_the_existing_item() {
+    use crate::store::AdoptConfirmation;
+    for remote in [false, true] {
+        let fixture = mcp_agents();
+        let original = add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+        let own = path_of(&fixture, "claude-code");
+        let entry = |changed: bool| {
+            if remote {
+                serde_json::json!({"type":"http", "url": if changed {"https://changed.test/mcp"} else {"https://shown.test/mcp"}})
+            } else {
+                serde_json::json!({"command": if changed {"docker"} else {"uvx"}, "args": if changed {vec!["run", "unseen"]} else {vec!["shown"]}})
+            }
+        };
+        write(
+            &own,
+            &serde_json::json!({"mcpServers":{"github":entry(false)}}).to_string(),
+        );
+        let listed = store(&fixture, Vec::new());
+        let place = cell_place(&listed, "mcp:github", "claude-code");
+        let shown = held(&fixture, "claude-code", "github").unwrap().0;
+        write(
+            &own,
+            &serde_json::json!({"mcpServers":{"github":entry(true)}}).to_string(),
+        );
+        let before = the_mcp_files(&fixture);
+        let root = crate::layout::store_dir(fixture.home());
+        let stored = tree(&root.join("items"));
+        let refused = crate::apply_store(
+            &fixture.target,
+            vec![StoreChange::Adopt {
+                kind: ItemKind::Mcp,
+                name: "github".to_owned(),
+                from: Some(place.clone()),
+                confirmed: Some(AdoptConfirmation::Mcp { server: shown }),
+            }],
+        );
+        assert_eq!(
+            refused.outcomes[0].refused.as_ref().unwrap().cause,
+            StoreRefusalCause::Differs
+        );
+        assert_eq!(refused.items[0].server, original.items[0].server);
+        assert!(refused.trash.is_empty());
+        assert_eq!(the_mcp_files(&fixture), before);
+        assert_eq!(tree(&root.join("items")), stored);
+        assert!(!staged_bytes(&fixture).contains("changed.test"));
+        assert!(
+            std::fs::read_dir(root.join("staging"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        let confirmed = held(&fixture, "claude-code", "github").unwrap().0;
+        let adopted = store(
+            &fixture,
+            vec![StoreChange::Adopt {
+                kind: ItemKind::Mcp,
+                name: "github".to_owned(),
+                from: Some(place),
+                confirmed: Some(AdoptConfirmation::Mcp {
+                    server: confirmed.clone(),
+                }),
+            }],
+        );
+        assert!(adopted.outcomes[0].refused.is_none(), "{adopted:#?}");
+        assert_eq!(adopted.items[0].server.as_ref(), Some(&confirmed));
+        assert!(
+            std::fs::read_dir(root.join("staging"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
     }
 }
