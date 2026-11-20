@@ -78,12 +78,12 @@ function StoreDialog({ title, onClose, children, footer, data }: { title: string
   );
 }
 
-type Stage = { kind: "source" } | { kind: "pick"; preview: string } | { kind: "confirm"; preview: string; names: string[] } | { kind: "mcp"; preview: string | null; server: McpServer; index: number | null } | { kind: "mcp_confirm"; preview: string | null; server: McpServer; index: number | null; keys: Record<string, string> };
+type Stage = { kind: "source" } | { kind: "confirm"; preview: string; names: string[] } | { kind: "mcp"; preview: string | null; server: McpServer; index: number | null } | { kind: "mcp_confirm"; preview: string | null; server: McpServer; index: number | null; keys: Record<string, string> };
 
 /**
  * + 추가 (scenes 2 and 3): one field takes a GitHub address, a folder or an
- * MCP paste; a source with several skills asks which, then the confirm shows
- * the chosen skill names, descriptions and the agents; a paste fills an MCP
+ * MCP paste; one confirm shows the source, selectable skill names and
+ * descriptions, and the agents; a paste fills an MCP
  * server's fields, whose keys are typed here only and hidden once typed.
  */
 export function AddDialog({ device, name, report, shown, local, actions, onClose }: { device: Device; name: string; report: StoreReport; shown: ReadonlySet<string>; local: boolean; actions: Actions; onClose: () => void }) {
@@ -97,12 +97,11 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
   const readPaste = read.done ? (report.mcp_previews?.find((row) => row.id === read.made) ?? null) : null;
   const lost = read.done && !readPreview && !readPaste;
 
-  // A read that answered: on to picking, or straight to the confirm for one skill, or to a pasted server's fields.
+  // A read that answered: on to the skill confirm or a pasted server's fields.
   useEffect(() => {
     if (stage.kind !== "source") return;
     if (readPreview) {
-      const [only, ...more] = readPreview.skills;
-      setStage(only && more.length === 0 && !only.taken ? { kind: "confirm", preview: readPreview.id, names: [only.name] } : { kind: "pick", preview: readPreview.id });
+      setStage({ kind: "confirm", preview: readPreview.id, names: readPreview.skills.filter((skill) => !skill.taken).map((skill) => skill.name) });
       return;
     }
     const first = readPaste?.servers.find((server) => !server.taken) ?? readPaste?.servers[0] ?? null;
@@ -127,15 +126,14 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
     if (stage.kind === "mcp" && stage.preview) actions.changeStore(device.id, `store-cancel-${Date.now().toString(36)}`, [{ op: "cancel_mcp", preview: stage.preview }]);
     onClose();
   };
-  const preview = stage.kind === "pick" || stage.kind === "confirm" ? report.previews.find((row) => row.id === stage.preview) ?? null : null;
+  const preview = stage.kind === "confirm" ? report.previews.find((row) => row.id === stage.preview) ?? null : null;
 
-  if (stage.kind === "pick" && preview) return <PickSkills preview={preview} onClose={close} onNext={(names) => setStage({ kind: "confirm", preview: preview.id, names })} />;
   if (stage.kind === "confirm" && preview) {
-    const skills = preview.skills.filter((skill) => stage.names.includes(skill.name));
     return (
       <InstallConfirm
         preview={preview}
-        skills={skills}
+        skills={preview.skills}
+        selection={{ names: stage.names, onChange: (names) => setStage({ ...stage, names }) }}
         shown={shown}
         pending={apply.pending}
         refusal={apply.refusal}
@@ -209,58 +207,23 @@ function pastedOf(report: StoreReport, preview: string | null, index: number | n
   return report.mcp_previews?.find((row) => row.id === preview)?.servers[index] ?? null;
 }
 
-/** 찾은 스킬 n개: the skills a source holds, the new ones ticked, the ones already in the list greyed. */
-function PickSkills({ preview, onClose, onNext }: { preview: StorePreview; onClose: () => void; onNext: (names: string[]) => void }) {
-  const { t } = useInterfaceTranslation();
-  const [names, setNames] = useState(() => preview.skills.filter((skill) => !skill.taken).map((skill) => skill.name));
-  return (
-    <StoreDialog
-      title={t("store.add.title")}
-      onClose={onClose}
-      data="pick"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button disabled={names.length === 0} onClick={() => onNext(names)} data-store-pick-next="true">{t("store.add.next")}</Button>
-        </>
-      }
-    >
-      <p className="break-all font-mono text-body text-subtle-foreground">{previewSource(preview)}</p>
-      <p className="text-body font-semibold text-subtle-foreground">{t("store.add.found", { count: preview.skills.length })}</p>
-      <div className="flex flex-col gap-sm">
-        {preview.skills.map((skill) => (
-          <label key={skill.name} className={cn("flex items-start gap-sm text-body", skill.taken && "text-muted-foreground")} data-store-pick={skill.name}>
-            <Checkbox
-              checked={names.includes(skill.name)}
-              disabled={skill.taken}
-              onCheckedChange={(checked) => setNames((now) => (checked === true ? [...now, skill.name] : now.filter((one) => one !== skill.name)))}
-              className="mt-xxs"
-            />
-            <span className="flex min-w-0 flex-col">
-              <span className="font-medium text-foreground">{skill.name}{skill.taken ? <span className="font-normal text-muted-foreground"> · {t("store.add.taken")}</span> : null}</span>
-              {skill.description ? <span className="break-words text-caption text-muted-foreground">{skill.description}</span> : null}
-            </span>
-          </label>
-        ))}
-      </div>
-    </StoreDialog>
-  );
-}
-
 /** 스킬 n개 설치: where they come from, their names and descriptions, and the agents that get them, every profile included. */
-function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onInstall, confirmLabel, header, title, data = "install" }: { preview: StorePreview; skills: StoreFoundSkill[]; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; onClose: () => void; onInstall: () => void; confirmLabel?: string; header?: ReactNode; title?: string; data?: string }) {
+function InstallConfirm({ preview, skills, selection, shown, pending, refusal, onClose, onInstall, confirmLabel, header, title, data = "install" }: { preview: StorePreview; skills: StoreFoundSkill[]; selection?: { names: string[]; onChange: (names: string[]) => void }; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; onClose: () => void; onInstall: () => void; confirmLabel?: string; header?: ReactNode; title?: string; data?: string }) {
   const { t } = useInterfaceTranslation();
   const agents = preview.agents.filter((agent) => shown.has(agent));
+  const count = selection ? selection.names.length : skills.length;
+  const selectable = selection !== undefined && skills.length > 1;
+  const SkillRow = selectable ? "label" : "span";
   return (
     <StoreDialog
-      title={title ?? t("store.add.install", { count: skills.length })}
+      title={title ?? t("store.add.install", { count })}
       onClose={onClose}
       data={data}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-store-cancel="true">{t("common.cancel")}</Button>
-          <Button disabled={pending || skills.length === 0} aria-busy={pending} onClick={onInstall} data-store-install="true">
-            {confirmLabel ?? t("store.add.install", { count: skills.length })}
+          <Button disabled={pending || count === 0} aria-busy={pending} onClick={onInstall} data-store-install="true">
+            {confirmLabel ?? t("store.add.install", { count })}
           </Button>
         </>
       }
@@ -271,10 +234,20 @@ function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onI
         <Fact label={t("store.section.skill")}>
           <span className="flex flex-col gap-sm" data-store-confirm-skills="true">
             {skills.map((skill) => (
-              <span key={skill.name}>
-                <span className="block">{skill.name}</span>
-                {skill.description ? <span className="block text-caption text-muted-foreground">{skill.description}</span> : null}
-              </span>
+              <SkillRow key={skill.name} className="flex items-start gap-sm" data-store-pick={selectable ? skill.name : undefined}>
+                {selectable && selection ? (
+                  <Checkbox
+                    checked={selection.names.includes(skill.name)}
+                    disabled={pending || skill.taken}
+                    onCheckedChange={(checked) => selection.onChange(checked === true ? [...selection.names, skill.name] : selection.names.filter((name) => name !== skill.name))}
+                    className="mt-xxs"
+                  />
+                ) : null}
+                <span className="flex min-w-0 flex-col">
+                  <span>{skill.name}{selection && skill.taken ? <span className="text-muted-foreground"> · {t("store.add.taken")}</span> : null}</span>
+                  {skill.description ? <span className="text-caption text-muted-foreground">{skill.description}</span> : null}
+                </span>
+              </SkillRow>
             ))}
           </span>
         </Fact>
@@ -716,29 +689,18 @@ export function AskDialog({ ask, report, shown, actions, onClose }: { ask: Store
 function AskInstall({ preview, names, shown, onDecline, onConfirm }: { preview: StorePreview; names: string[]; shown: ReadonlySet<string>; onDecline: () => void; onConfirm: (names: string[]) => void }) {
   const { t } = useInterfaceTranslation();
   const [ticked, setTicked] = useState(names);
-  const skills = preview.skills.filter((skill) => ticked.includes(skill.name));
+  const skills = preview.skills.filter((skill) => names.includes(skill.name));
   return (
     <InstallConfirm
       preview={preview}
       skills={skills}
+      selection={{ names: ticked, onChange: setTicked }}
       shown={shown}
       pending={false}
       refusal={null}
       onClose={onDecline}
       onInstall={() => onConfirm(ticked)}
       confirmLabel={t("store.ask.confirmInstall")}
-      header={
-        names.length > 1 ? (
-          <div className="flex flex-col gap-xs">
-            {names.map((name) => (
-              <label key={name} className="flex items-center gap-sm text-body" data-store-ask-pick={name}>
-                <Checkbox checked={ticked.includes(name)} onCheckedChange={(checked) => setTicked((now) => (checked === true ? [...now, name] : now.filter((one) => one !== name)))} />
-                {name}
-              </label>
-            ))}
-          </div>
-        ) : null
-      }
     />
   );
 }

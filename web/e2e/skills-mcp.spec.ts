@@ -120,16 +120,18 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await expect(manualConfirm).toContainText("npx");
     await manualConfirm.locator("[data-store-cancel]").click();
 
-    // A source with several skills asks which; the ones left ticked are confirmed with their names, descriptions and agents.
+    // One confirm holds the source, skill choices, agents and the checked install count.
     await machine.locator("[data-store-empty-add]").click();
     await page.locator("[data-store-add-input]").fill(fixture.repos.archify);
     await page.locator("[data-store-add-next]").click();
-    const pick = page.locator('[data-store-dialog="pick"]');
-    await expect(pick).toContainText("3 skills found", { timeout: 60_000 }); // wait-ok: the kit's read of the source repository
-    await pick.locator('[data-store-pick="archify-legacy"] button[role="checkbox"]').click();
-    await screenshot(page, "store-add-pick");
-    await pick.locator("[data-store-pick-next]").click();
     const confirm = page.locator('[data-store-dialog="install"]');
+    await expect(confirm.locator("[data-store-install]")).toHaveText("Install 3 skills", { timeout: 60_000 }); // wait-ok: the kit's read of the source repository
+    for (const name of ["archify", "archify-export", "archify-legacy"]) await confirm.locator(`[data-store-pick="${name}"] button[role="checkbox"]`).click();
+    await expect(confirm.locator("[data-store-install]")).toHaveText("Install 0 skills");
+    await expect(confirm.locator("[data-store-install]")).toBeDisabled();
+    for (const name of ["archify", "archify-export"]) await confirm.locator(`[data-store-pick="${name}"] button[role="checkbox"]`).click();
+    await expect(confirm.locator("[data-store-install]")).toHaveText("Install 2 skills");
+    await expect(confirm.getByRole("button", { name: "Next", exact: true })).toHaveCount(0);
     await expect(confirm.locator("[data-store-confirm-skills]")).toContainText("archify");
     await expect(confirm).not.toContainText("▲");
     await expect(confirm).not.toContainText("render.py");
@@ -146,6 +148,7 @@ test("a skill is added from a git address and from a folder, picked and confirme
     await page.locator("[data-store-add-input]").fill(fixture.folder);
     await page.locator("[data-store-add-next]").click();
     await expect(page.locator('[data-store-dialog="install"]')).toContainText("Install 1 skill", { timeout: 60_000 }); // wait-ok: the kit's read of the folder source
+    await expect(page.locator('[data-store-dialog="install"] [role="checkbox"]')).toHaveCount(0);
     await page.locator("[data-store-install]").click();
     await expect(machine.locator('[data-store-row="skill:aside-browser"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's install pass
 
