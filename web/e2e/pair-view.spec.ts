@@ -89,7 +89,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await expect(deskTabs(page)).toHaveCount(2);
     // The desk stands beside the panes; closed, they have the body before pair view as after it, which closes the desk (D-44, D-50).
     await page.keyboard.press(chord("toggle_lane"));
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
+    await page.locator('[data-workspace-screen][data-lane-mode="closed"]').waitFor();
     await quietFor(page, 500, "every pane's first fit has landed");
 
     // The keyboard goes to the shell, so ◧ is pressed on a pane that does not hold it.

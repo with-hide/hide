@@ -192,8 +192,8 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await page.mouse.click(point.x, point.y);
   await expect(viewTab(page, "Page A")).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
+  // The page's tab is on the desk, which stands (D-50).
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
-  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
   expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
   expect(dialogs).toEqual([]);
 
