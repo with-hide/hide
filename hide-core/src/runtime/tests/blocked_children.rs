@@ -302,3 +302,93 @@ fn a_parent_is_rung_once_for_a_new_cell_and_given_only_what_changed() {
             .all(|cell| cell.subject != "letter:9")
     );
 }
+
+/// B10, B12: a cell that resolved and comes back is a new cell: it rings its
+/// receiver again, whether the receiver was rung for it or read it, while an
+/// update of a cell still standing rings nothing.
+#[test]
+fn a_cell_that_resolves_and_comes_back_rings_again() {
+    let mut runtime = blocked_lineage();
+    let parent_session = agent_row(&runtime, "w1:p1").lineage_session.clone();
+    let observed: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"parent-agent","pane_id":"w1:p1","agent":"claude","agent_status":"idle","state_change_seq":1,"lineage_session":parent_session},
+        {"id":"child-agent","pane_id":"w1:p2","agent":"claude","agent_status":"blocked","state_change_seq":1},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+    let actor = runtime.delivery_observations["w1:p1"].actor.clone();
+    let ledger = runtime.delivery_state().ok();
+    let parent = crate::runtime::status_recipient(ledger.as_deref(), &actor);
+    let subject = "child:w1:p2".to_owned();
+    let ring = |runtime: &mut Runtime| {
+        let due = runtime.status_rings_due();
+        for ring in &due {
+            runtime.status_rung(&ring.recipient, &ring.subjects);
+        }
+        due.into_iter()
+            .flat_map(|ring| ring.subjects)
+            .collect::<Vec<_>>()
+    };
+
+    runtime.post_status(&actor, subject.clone(), "blocked once".into(), false);
+    assert_eq!(ring(&mut runtime), std::slice::from_ref(&subject));
+    runtime.post_status(&actor, subject.clone(), "still blocked".into(), false);
+    assert!(ring(&mut runtime).is_empty(), "an update rings nothing");
+    // It resolves, and comes back: a new cell.
+    runtime.retract_status(&subject);
+    assert!(ring(&mut runtime).is_empty());
+    runtime.post_status(&actor, subject.clone(), "blocked again".into(), false);
+    assert_eq!(
+        ring(&mut runtime),
+        std::slice::from_ref(&subject),
+        "the recurrence rings"
+    );
+    // Read, resolved and back once more: it rings again too.
+    assert_eq!(
+        runtime
+            .take_status_of(&parent, ledger.as_deref(), None)
+            .len(),
+        1
+    );
+    runtime.retract_status(&subject);
+    assert!(ring(&mut runtime).is_empty());
+    runtime.post_status(
+        &actor,
+        subject.clone(),
+        "blocked a third time".into(),
+        false,
+    );
+    assert_eq!(ring(&mut runtime), [subject]);
+}
+
+/// B11, B12: an agent whose prompt hook cannot hand it context (Grok) takes
+/// nothing at its prompt, so a cell is never consumed unseen; `hide inbox`
+/// gives it the same cells.
+#[test]
+fn a_prompt_hook_that_carries_no_context_takes_no_cells() {
+    let mut runtime = blocked_lineage();
+    let observed: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"grok-agent","pane_id":"w1:p1","agent":"grok","agent_status":"idle","state_change_seq":1},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+    let actor = runtime.delivery_observations["w1:p1"].actor.clone();
+    assert_eq!(actor.kind, "grok");
+    runtime.post_status(
+        &actor,
+        "letter:7".into(),
+        "your letter 7 ended".into(),
+        true,
+    );
+    let node = crate::node::TEST_NODE;
+    assert!(
+        runtime.take_status(node, "w1:p1", Some(4_096)).is_none(),
+        "the prompt takes nothing"
+    );
+    let inbox = runtime.take_status(node, "w1:p1", None).unwrap();
+    assert_eq!(inbox.len(), 1, "the inbox gives it");
+    assert!(
+        runtime.take_status(node, "w1:p1", None).unwrap().is_empty(),
+        "once"
+    );
+}

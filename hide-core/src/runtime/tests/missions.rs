@@ -1862,6 +1862,8 @@ fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
             ci: None,
             line: None,
             key: Some(format!("filler:{at}")),
+            since_unix_ms: None,
+            notified: false,
         })
         .collect();
     let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
@@ -9183,6 +9185,8 @@ fn a_full_wake_queue_keeps_what_waits() {
         ci: None,
         line: None,
         key: None,
+        since_unix_ms: None,
+        notified: false,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 }
@@ -10258,6 +10262,8 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
             ci: None,
             line: None,
             key: Some(format!("filler:{at}")),
+            since_unix_ms: None,
+            notified: false,
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
@@ -17765,6 +17771,8 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
                 ci: None,
                 line: None,
                 key: None,
+                since_unix_ms: None,
+                notified: false,
             },
         )
     };
@@ -18389,46 +18397,69 @@ fn one_cause_is_one_cell_and_no_send_however_often_it_is_evaluated() {
     assert_eq!(hide_letters(&runtime), 0, "nothing was sent");
 }
 
-/// B15 (D-23, D-25): the safety net counts the Conductor's unresolved raise
-/// cells. Two nodes held by one cause 20 minutes are one card for the
-/// mission, its rows the cells' nodes and typed reasons (which the screen
-/// words in the operator's language), and a resolved cell leaves the card.
+/// B15 (D-23, D-25): the safety net counts every cell standing unresolved
+/// for the Conductor, a raise or a failed CI alike. Two nodes held 20
+/// minutes are one card for the mission, its rows each node's typed fact
+/// (which the screen words in the operator's language), an update keeps
+/// when the cell began, and a resolved cell leaves the card.
 #[test]
 fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
-    use crate::missions::{AttentionReason, WakeEvent};
+    use crate::mission_health::{CellReason, HeldReason};
+    use crate::missions::AttentionReason;
     const MINUTE: u64 = 60_000;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     runtime.snapshot.navigator.agents = vec![conductor_row()];
     running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
     let now = crate::runtime::unix_milliseconds();
     let then = now - 25 * MINUTE;
+    // The Conductor has been there since before the cells.
     runtime.drive_mission_health(then);
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    for key in ["cause", "fix"] {
-        assert!(
-            !crate::runtime::mission_health::raise(
-                mission,
-                key,
-                AttentionReason::PrClosed,
-                Some(7),
-                then
-            )
-            .is_empty()
-        );
-    }
+    assert!(
+        !crate::runtime::mission_health::raise(
+            mission,
+            "cause",
+            AttentionReason::PrClosed,
+            None,
+            then
+        )
+        .is_empty()
+    );
     runtime.save_missions();
-    let cells: Vec<String> = runtime
-        .missions
-        .book
-        .get("mission-1")
-        .unwrap()
-        .wakes
-        .iter()
-        .filter(|wake| wake.standing() && wake.event == WakeEvent::Attention)
-        .map(|wake| wake.node.clone())
-        .collect();
-    assert_eq!(cells, ["cause", "fix"], "one cell per node");
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
+    );
+    let fix_cell = |runtime: &mut Runtime| {
+        runtime
+            .missions
+            .book
+            .get_mut("mission-1")
+            .unwrap()
+            .wakes
+            .iter_mut()
+            .find(|wake| wake.node == "fix" && wake.standing())
+            .map(|wake| wake.since_unix_ms)
+    };
+    // The failure stood since then.
+    {
+        let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+        let wake = mission
+            .wakes
+            .iter_mut()
+            .find(|wake| wake.node == "fix" && wake.standing())
+            .unwrap();
+        wake.since_unix_ms = Some(then + MINUTE);
+    }
     let rows = |runtime: &Runtime| {
         runtime
             .mission_view_of("mission-1")
@@ -18444,15 +18475,32 @@ fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
     assert_eq!(
         rows(&runtime),
         Some(vec![
-            ("cause".to_owned(), AttentionReason::PrClosed),
-            ("fix".to_owned(), AttentionReason::PrClosed),
+            (
+                "cause".to_owned(),
+                HeldReason::Raise(AttentionReason::PrClosed)
+            ),
+            ("fix".to_owned(), HeldReason::Cell(CellReason::CiFailed)),
         ]),
-        "one card, its rows the cells"
+        "one card, its rows the unresolved cells, oldest first"
     );
     // The Conductor reading the cells does not resolve them.
     assert_eq!(runtime.take_conductor_cells("mission-1").len(), 2);
     assert!(rows(&runtime).is_some());
-    // The cause of one is resolved: its cell and its row go.
+    // A failure on the next commit updates the cell and keeps its start.
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "b2", PullRequestChecks::Failed, &["verify"]),
+    );
+    assert_eq!(fix_cell(&mut runtime), Some(Some(then + MINUTE)));
+    // The pass resolves it: its row goes, the raise's stays.
+    runtime.note_mission_pulls(node, &checked(7, "b2", PullRequestChecks::Passing, &[]));
+    assert_eq!(
+        rows(&runtime),
+        Some(vec![(
+            "cause".to_owned(),
+            HeldReason::Raise(AttentionReason::PrClosed)
+        )])
+    );
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission
         .nodes
@@ -18462,12 +18510,158 @@ fn the_safety_net_is_one_card_whose_rows_are_the_unresolved_cells() {
         .attention = None;
     crate::runtime::mission_health::prune_attention_wakes(mission);
     runtime.save_missions();
-    assert_eq!(
-        rows(&runtime),
-        Some(vec![("fix".to_owned(), AttentionReason::PrClosed)])
+    assert_eq!(rows(&runtime), None, "nothing stands, no card");
+}
+
+/// B15: a failed CI cell under 20 minutes holds no card while its Conductor
+/// is there; the same cell past 20 minutes does, as a raise would.
+#[test]
+fn a_standing_cell_holds_the_safety_net_only_after_twenty_minutes() {
+    const MINUTE: u64 = 60_000;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"pr": 7}}),
+    )
+    .unwrap();
+    let now = crate::runtime::unix_milliseconds();
+    runtime.drive_mission_health(now - 60 * MINUTE);
+    let node = crate::node::TEST_NODE;
+    runtime.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+    runtime.note_mission_pulls(
+        node,
+        &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
     );
+    let net = |runtime: &Runtime| runtime.mission_view_of("mission-1").unwrap().safety_net;
+    let set_since = |runtime: &mut Runtime, since: u64| {
+        for wake in &mut runtime.missions.book.get_mut("mission-1").unwrap().wakes {
+            if wake.standing() {
+                wake.since_unix_ms = Some(since);
+            }
+        }
+    };
+    set_since(&mut runtime, now - 19 * MINUTE);
+    assert_eq!(net(&runtime), None);
+    set_since(&mut runtime, now - 21 * MINUTE);
+    assert_eq!(net(&runtime).map(|net| net.nodes.len()), Some(1));
+}
+
+/// What a registered Conductor saw outlives the core: the delivery store
+/// keeps it (`Ledger::status_seen`), a core started again on the same store
+/// reads it back and gives nothing that did not change, and the next fact
+/// is given once (B11, B12).
+#[test]
+fn what_a_registered_conductor_saw_outlives_a_restart_of_the_core() {
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _, _, path) = fixture(root.path());
+    const SESSION: &str = "conductor-native-session";
+    let actor = {
+        let mut guard = runtime.lock().unwrap();
+        let digest = crate::engine::tokens::session_digest(SESSION).unwrap();
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"idle","state_change_seq":1,"lineage_session":digest},
+        ]}))
+        .unwrap();
+        guard.observe_delivery_laid(crate::node::TEST_NODE, &payload, None, None);
+        guard.delivery_observations["sender"].actor.clone()
+    };
+    let record = crate::coordination::AgentRecord {
+        id: String::new(),
+        name: Some("conductor".into()),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: SESSION.into(),
+        instance: "terminal-sender".into(),
+        pane: actor.pane_id.clone(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor: actor.clone(),
+        ended: false,
+        terminal_id: None,
+        forked: false,
+    };
+    let (_worker, client) =
+        Worker::spawn(Arc::downgrade(&runtime), ChangeNotifier::noop(), path).unwrap();
+    {
+        let mut guard = runtime.lock().unwrap();
+        guard.install_delivery_client(client.clone());
+        guard
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: PROJECT.into(),
+                ..Default::default()
+            });
+    }
+    let registered = client
+        .submit(
+            crate::delivery::worker::Effect::Agents {
+                authority: authority(&actor),
+                actor: actor.clone(),
+                mutation: Box::new(crate::coordination::Mutation::Register {
+                    record,
+                    check: false,
+                }),
+            },
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+    let agent = registered["id"].as_str().unwrap().to_owned();
+    super::wait_for("the store published its registration", || {
+        runtime
+            .lock()
+            .unwrap()
+            .delivery_state()
+            .is_ok_and(|ledger| ledger.agents.iter().any(|record| record.id == agent))
+    });
+    let node = crate::node::TEST_NODE;
+    {
+        let mut guard = runtime.lock().unwrap();
+        fixing_seven(&mut guard);
+        guard
+            .missions
+            .book
+            .get_mut("mission-1")
+            .unwrap()
+            .conductor
+            .agent_id = Some("agent-1".into());
+        guard.note_mission_pulls(node, &checked(7, "a1", PullRequestChecks::Pending, &[]));
+        guard.note_mission_pulls(
+            node,
+            &checked(7, "a1", PullRequestChecks::Failed, &["verify"]),
+        );
+        assert_eq!(guard.take_conductor_cells("mission-1").len(), 1);
+    }
+    super::wait_for("the store kept what the Conductor saw", || {
+        runtime
+            .lock()
+            .unwrap()
+            .delivery_state()
+            .is_ok_and(|ledger| ledger.status_seen.contains_key(&agent))
+    });
+    let mut guard = runtime.lock().unwrap();
+    // A core started again: its memory is empty, the book read from disk.
+    guard.status_cells = Default::default();
+    let stored: crate::missions::MissionBook =
+        serde_json::from_value(serde_json::to_value(&guard.missions.book).unwrap()).unwrap();
+    guard.missions.book = stored;
     assert!(
-        runtime.take_conductor_cells("mission-1").is_empty(),
-        "nothing changed"
+        guard.take_conductor_cells("mission-1").is_empty(),
+        "what it saw is read back"
+    );
+    guard.note_mission_pulls(
+        node,
+        &checked(7, "b2", PullRequestChecks::Failed, &["verify"]),
+    );
+    assert_eq!(
+        guard.take_conductor_cells("mission-1").len(),
+        1,
+        "the next fact"
     );
 }

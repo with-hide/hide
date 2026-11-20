@@ -193,6 +193,8 @@ pub(super) fn raise_for(
                 ci: None,
                 line: None,
                 key: Some(raise_key.clone()),
+                since_unix_ms: Some(now),
+                notified: false,
             },
         );
     }
@@ -262,10 +264,16 @@ pub(super) fn ensure_raise_cells(mission: &mut Mission) -> bool {
         if attention.reason.stall() {
             key = format!("{key}:{}", attention.key);
         }
-        asked.push((node.key.clone(), attention.pr, attention.reason, key));
+        asked.push((
+            node.key.clone(),
+            attention.pr,
+            attention.reason,
+            key,
+            attention.since_unix_ms,
+        ));
     }
     let added = !asked.is_empty();
-    for (node, pr, reason, key) in asked {
+    for (node, pr, reason, key, since) in asked {
         mission.wake_seq += 1;
         super::missions::push_wake(
             mission,
@@ -283,6 +291,8 @@ pub(super) fn ensure_raise_cells(mission: &mut Mission) -> bool {
                 ci: None,
                 line: None,
                 key: Some(key),
+                since_unix_ms: Some(since),
+                notified: false,
             },
         );
     }
@@ -398,6 +408,8 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 ci: None,
                 line: None,
                 key: Some(act_key(target, &fact)),
+                since_unix_ms: None,
+                notified: false,
             };
             // A full queue refuses the rest too; it is logged once a pass.
             if super::missions::push_wake(mission, wake).is_none() {
@@ -1487,6 +1499,8 @@ impl Runtime {
                 ci: None,
                 line: None,
                 key: Some(act.clone()),
+                since_unix_ms: None,
+                notified: false,
             },
         );
         if pushed.is_none() {
@@ -1567,6 +1581,8 @@ impl Runtime {
                         ci: None,
                         line: None,
                         key: Some(wake_key),
+                        since_unix_ms: None,
+                        notified: false,
                     },
                 );
                 vec![MissionEvent::new(now, EventKind::HideClosed)]
@@ -1886,6 +1902,8 @@ impl Runtime {
                     ci: None,
                     line: None,
                     key: None,
+                    since_unix_ms: None,
+                    notified: false,
                 },
             );
         }
@@ -2034,19 +2052,13 @@ impl Runtime {
             let Some(net) = self.mission_safety_net(mission, now) else {
                 continue;
             };
-            let told = net.nodes.iter().any(|&index| {
-                mission.nodes[index]
-                    .attention
-                    .as_ref()
-                    .is_some_and(|attention| attention.notified)
-            });
+            let told = net
+                .nodes
+                .iter()
+                .any(|&index| crate::mission_health::held_notified(mission, index));
             if told {
                 for index in net.nodes {
-                    if mission.nodes[index]
-                        .attention
-                        .as_ref()
-                        .is_some_and(|attention| !attention.notified)
-                    {
+                    if !crate::mission_health::held_notified(mission, index) {
                         inherited.push((at, index));
                     }
                 }
@@ -2058,12 +2070,7 @@ impl Runtime {
             return Vec::new();
         }
         for (at, index) in inherited {
-            if let Some(attention) = self.missions.book.missions[at].nodes[index]
-                .attention
-                .as_mut()
-            {
-                attention.notified = true;
-            }
+            crate::mission_health::mark_held_notified(&mut self.missions.book.missions[at], index);
         }
         let mut notices = Vec::new();
         for (at, nodes, kind) in claims {
@@ -2072,9 +2079,7 @@ impl Runtime {
                 continue;
             };
             for &index in &nodes {
-                if let Some(attention) = mission.nodes[index].attention.as_mut() {
-                    attention.notified = true;
-                }
+                crate::mission_health::mark_held_notified(mission, index);
             }
             let node = &mission.nodes[first];
             crate::diagnostic!(json!({

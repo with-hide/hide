@@ -4,13 +4,11 @@
 //! read settles what its turn waits for (`session_unread`). When the read
 //! refused for a reason reading again cannot clear (`Observation::unreadable`,
 //! the reader's code), that hold would last until the letter expires, so the
-//! sender is told once, by `hide:delivery`, why and what it can do. The letter
-//! stays pending: a read that lands rings it as usual, and a `--force` letter
-//! is typed without waiting for one.
-//!
-//! "Once" is the note's intent, `session-unreadable:<letter>`: the ledger
-//! takes one letter per sender and intent, so the note a restart sends again
-//! converges on the first. Memory here only keeps a pass from asking twice.
+//! sender's cell about the letter says why and what it can do, standing while
+//! the read refuses (`runtime::status_cells`). The letter stays pending: a
+//! read that lands rings it as usual, and a `--force` letter is typed without
+//! waiting for one. The cell goes once the letter is no longer held so: the
+//! session reads again, or the letter was delivered or ended.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -30,7 +28,7 @@ pub(in crate::runtime) struct UnreadableLetters {
     /// A published ledger or a pane's unreadable reason moved; the tick looks
     /// only then.
     dirty: bool,
-    /// Letters whose sender was told, while they stay pending.
+    /// Letters whose sender's cell says they are held so, now.
     noted: BTreeSet<String>,
 }
 
@@ -51,9 +49,10 @@ impl Runtime {
             .and_then(|observation| observation.unreadable.as_deref())
     }
 
-    /// Tells each sender whose pending letter waits on a session Hide cannot
-    /// read, once per letter. Run by the coordinator's tick; a tick with
-    /// nothing moved is one flag test.
+    /// Keeps the cell of each sender whose pending letter waits on a session
+    /// Hide cannot read, standing while it does, and takes it back once the
+    /// letter is no longer held so. Run by the coordinator's tick; a tick
+    /// with nothing moved is one flag test.
     pub(crate) fn drive_unreadable_letters(&mut self) {
         if !self.unreadable_letters.dirty || self.effects_held() {
             return;
@@ -62,21 +61,11 @@ impl Runtime {
             return;
         };
         self.unreadable_letters.dirty = false;
-        let pending = ledger
-            .letters
-            .iter()
-            .filter(|letter| letter.state == State::Pending)
-            .map(|letter| letter.id.as_str())
-            .collect::<BTreeSet<_>>();
-        self.unreadable_letters
-            .noted
-            .retain(|id| pending.contains(id.as_str()));
+        let mut held = BTreeSet::new();
         let mut notes = Vec::new();
         for letter in &ledger.letters {
-            if letter.state != State::Pending
-                || letter.forced
-                || self.unreadable_letters.noted.contains(&letter.id)
-            {
+            // Hide's own roles and the operator read no cells.
+            if letter.state != State::Pending || letter.forced || letter.sender.code_owned() {
                 continue;
             }
             let Some(reason) = self
@@ -85,35 +74,45 @@ impl Runtime {
             else {
                 continue;
             };
-            self.unreadable_letters.noted.insert(letter.id.clone());
-            // Hide's own roles and the operator read no letters.
-            if letter.sender.code_owned() {
-                continue;
-            }
             let Some(target) = self
                 .delivery_observations
                 .get(&letter.sender.pane_id)
                 .filter(|observation| observation.actor.same_identity(&letter.sender))
                 .cloned()
             else {
-                crate::diagnostic!(json!({
-                    "component": "delivery", "kind": "delivery.unreadable_note_unsent",
-                    "letter_id": letter.id, "code": "sender_unavailable",
-                }));
+                if !self.unreadable_letters.noted.contains(&letter.id) {
+                    crate::diagnostic!(json!({
+                        "component": "delivery", "kind": "delivery.unreadable_note_unsent",
+                        "letter_id": letter.id, "code": "sender_unavailable",
+                    }));
+                }
                 continue;
             };
-            crate::diagnostic!(json!({
-                "component": "delivery", "kind": "delivery.recipient_unreadable",
-                "letter_id": letter.id, "pane_id": letter.recipient.pane_id, "reason": &reason,
-            }));
+            if !self.unreadable_letters.noted.contains(&letter.id) {
+                crate::diagnostic!(json!({
+                    "component": "delivery", "kind": "delivery.recipient_unreadable",
+                    "letter_id": letter.id, "pane_id": letter.recipient.pane_id, "reason": &reason,
+                }));
+            }
+            held.insert(letter.id.clone());
             notes.push((
                 target.actor,
                 super::status_cells::letter_subject(&letter.id),
                 note_body(&letter.recipient.name, &letter.kind, &letter.id, &reason),
             ));
         }
+        let gone: Vec<String> = self
+            .unreadable_letters
+            .noted
+            .difference(&held)
+            .cloned()
+            .collect();
+        for id in gone {
+            self.retract_standing_status(&super::status_cells::letter_subject(&id));
+        }
+        self.unreadable_letters.noted = held;
         for (sender, subject, body) in notes {
-            self.post_status(&sender, subject, body, true);
+            self.post_status(&sender, subject, body, false);
         }
     }
 }

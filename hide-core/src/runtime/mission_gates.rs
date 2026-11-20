@@ -443,6 +443,8 @@ impl Runtime {
                 answer.as_str(),
                 via.as_str()
             )),
+            since_unix_ms: None,
+            notified: false,
         };
         let mut wakes = vec![gate_wake(None)];
         // The words reach the node's worker themselves, so a gate answered

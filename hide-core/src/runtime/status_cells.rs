@@ -180,6 +180,25 @@ impl Runtime {
             "component": "status", "kind": "status.posted",
             "recipient": key, "subject": subject, "news": news,
         }));
+        let fresh = !cells.posted.contains_key(&(key.clone(), subject.clone()));
+        if fresh && cells.posted.len() >= POSTED_LIMIT {
+            // A cell whose receiver ended is finished: it goes first, and only
+            // a full set of live cells refuses the new one (engineering #15).
+            let ledger = self.delivery_ledger.clone().ok();
+            let observations = &self.delivery_observations;
+            let cells = &mut self.status_cells;
+            cells
+                .posted
+                .retain(|(to, _), _| receiver_live(ledger.as_deref(), observations, to));
+            if cells.posted.len() >= POSTED_LIMIT {
+                crate::diagnostic!(json!({
+                    "component": "status", "kind": "status.posted_refused_full",
+                    "recipient": key, "subject": subject, "cap": POSTED_LIMIT,
+                }));
+                return;
+            }
+        }
+        let cells = &mut self.status_cells;
         cells.posted.insert(
             (key, subject.clone()),
             Posted {
@@ -192,17 +211,6 @@ impl Runtime {
                 },
             },
         );
-        while cells.posted.len() > POSTED_LIMIT {
-            let Some(oldest) = cells
-                .posted
-                .iter()
-                .min_by_key(|(_, posted)| posted.cell.revision)
-                .map(|(key, _)| key.clone())
-            else {
-                break;
-            };
-            cells.posted.remove(&oldest);
-        }
     }
 
     /// Takes back every posted cell about `subject`: its cause is gone.
@@ -210,6 +218,14 @@ impl Runtime {
         self.status_cells
             .posted
             .retain(|(_, about), _| about != subject);
+    }
+
+    /// Takes back the standing cell about `subject`, leaving news a later
+    /// fact about it posted (a letter's undelivered end after its hold).
+    pub(in crate::runtime) fn retract_standing_status(&mut self, subject: &str) {
+        self.status_cells
+            .posted
+            .retain(|(_, about), posted| about != subject || posted.cell.news);
     }
 
     /// Every cell standing now, one per recipient and subject, the newest
@@ -309,6 +325,11 @@ impl Runtime {
         };
         let pane = crate::address::named_pane_id(self.node.as_str(), device, pane);
         let actor = self.delivery_observations.get(&pane)?.actor.clone();
+        // A prompt hook that cannot hand the agent context (Grok) takes
+        // nothing: the agent reads its cells with `hide inbox` (B11, B12).
+        if room.is_some() && !crate::delivery::mailbox::prompt_hook(&actor.kind) {
+            return None;
+        }
         let ledger = self.delivery_ledger.clone().ok();
         let recipient = recipient_key(ledger.as_deref(), &actor);
         Some(self.take_status_of(&recipient, ledger.as_deref(), room))
@@ -369,18 +390,7 @@ impl Runtime {
         }
         self.drop_seen_news(recipient, &given);
         // Only a registration's seen cells outlast the core.
-        if !recipient.starts_with("pane:")
-            && let Some(client) = self.delivery_client.clone()
-            && let Err(code) = client.post(crate::delivery::worker::Effect::StatusSeen {
-                recipient: recipient.to_owned(),
-                seen: kept,
-            })
-        {
-            crate::diagnostic!(json!({
-                "component": "status", "kind": "status.seen_unsaved",
-                "recipient": recipient, "code": code,
-            }));
-        }
+        self.save_seen(recipient, kept);
         given
     }
 
@@ -430,8 +440,12 @@ impl Runtime {
     /// The receivers to ring once now: each with a cell whose subject it has
     /// neither seen nor been rung for, and an identity a bell can reach.
     pub(crate) fn status_rings_due(&mut self) -> Vec<StatusRing> {
+        if self.status_quiet() {
+            return Vec::new();
+        }
         let ledger = self.delivery_ledger.clone().ok();
         let cells = self.status_cells(ledger.as_deref());
+        self.prune_status(&cells);
         let mut fresh: BTreeMap<String, (Actor, Vec<Cell>)> = BTreeMap::new();
         let seen = self.status_seen().clone();
         let rung = &self.status_cells.rung;
@@ -508,20 +522,87 @@ impl Runtime {
     /// The doorbell rang `recipient` for `subjects`: none of them rings it
     /// again. Subjects no cell stands for any more are forgotten.
     pub(crate) fn status_rung(&mut self, recipient: &str, subjects: &[String]) {
-        let ledger = self.delivery_ledger.clone().ok();
-        let standing: BTreeSet<(String, String)> = self
-            .status_cells(ledger.as_deref())
-            .into_iter()
-            .map(|addressed| (addressed.recipient, addressed.cell.subject))
-            .collect();
-        let rung = &mut self.status_cells.rung;
-        rung.entry(recipient.to_owned())
+        self.status_cells
+            .rung
+            .entry(recipient.to_owned())
             .or_default()
             .extend(subjects.iter().cloned());
+    }
+
+    /// Whether no cell can stand and nothing is remembered of one: the
+    /// doorbell's pass then reads nothing more.
+    fn status_quiet(&self) -> bool {
+        self.status_cells.posted.is_empty()
+            && self.status_cells.rung.is_empty()
+            && self
+                .status_cells
+                .seen
+                .as_ref()
+                .is_some_and(BTreeMap::is_empty)
+            && self
+                .missions
+                .book
+                .missions
+                .iter()
+                .all(|mission| mission.wakes.is_empty())
+            && self.delivery_ledger.as_ref().map_or(true, |ledger| {
+                ledger.watches.iter().all(|watch| watch.warning_count == 0)
+            })
+    }
+
+    /// Forgets what was seen of and rung for a subject no cell stands for
+    /// any more, so a cell that resolved and comes back is a new cell that
+    /// rings again, while an update of one still standing is not (B10, B12).
+    /// A receiver with nothing standing keeps nothing, an ended one too, so
+    /// the memory is bounded by the cells standing; what a registration saw
+    /// is written behind to the ledger when it changed.
+    fn prune_status(&mut self, cells: &[Addressed]) {
+        let standing: BTreeSet<(&str, &str)> = cells
+            .iter()
+            .map(|addressed| {
+                (
+                    addressed.recipient.as_str(),
+                    addressed.cell.subject.as_str(),
+                )
+            })
+            .collect();
+        let rung = &mut self.status_cells.rung;
         for (to, subjects) in rung.iter_mut() {
-            subjects.retain(|subject| standing.contains(&(to.clone(), subject.clone())));
+            subjects.retain(|subject| standing.contains(&(to.as_str(), subject.as_str())));
         }
         rung.retain(|_, subjects| !subjects.is_empty());
+        let mut changed = Vec::new();
+        let seen = self.status_seen();
+        for (to, subjects) in seen.iter_mut() {
+            let before = subjects.len();
+            subjects.retain(|subject, _| standing.contains(&(to.as_str(), subject.as_str())));
+            if subjects.len() != before {
+                changed.push((to.clone(), subjects.clone()));
+            }
+        }
+        seen.retain(|_, subjects| !subjects.is_empty());
+        for (recipient, kept) in changed {
+            self.save_seen(&recipient, kept);
+        }
+    }
+
+    /// Writes what registration `recipient` saw behind to the ledger; a
+    /// pane's is memory only.
+    fn save_seen(&self, recipient: &str, seen: BTreeMap<String, u64>) {
+        if recipient.starts_with("pane:") {
+            return;
+        }
+        if let Some(client) = self.delivery_client.clone()
+            && let Err(code) = client.post(crate::delivery::worker::Effect::StatusSeen {
+                recipient: recipient.to_owned(),
+                seen,
+            })
+        {
+            crate::diagnostic!(json!({
+                "component": "status", "kind": "status.seen_unsaved",
+                "recipient": recipient, "code": code,
+            }));
+        }
     }
 }
 
@@ -561,6 +642,28 @@ fn wake_recipient(
         .clone()
         .or_else(|| mission.conductor.agent_id.clone())
         .unwrap_or_else(|| recipient_key(ledger, &mission.conductor.actor))
+}
+
+/// Whether the receiver keyed `to` still lives: a registration not ended,
+/// or a pane Hide observes.
+fn receiver_live(
+    ledger: Option<&Ledger>,
+    observations: &std::collections::HashMap<String, super::delivery::Observation>,
+    to: &str,
+) -> bool {
+    match to.strip_prefix("pane:") {
+        Some(rest) => rest.split_once(':').is_some_and(|(device, pane)| {
+            observations
+                .get(pane)
+                .is_some_and(|observation| observation.actor.device_id == device)
+        }),
+        None => ledger.is_some_and(|ledger| {
+            ledger
+                .agents
+                .iter()
+                .any(|record| record.id == to && !record.ended)
+        }),
+    }
 }
 
 /// The identity of live registration `agent`.

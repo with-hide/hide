@@ -603,13 +603,13 @@ pub struct SafetyNetView {
     pub nodes: Vec<HeldNodeView>,
 }
 
-/// One node the safety net holds: its raise's reason and since when it
-/// stands.
+/// One node the safety net holds: what its unresolved cell is (its raise's
+/// reason, or the standing cell's typed fact) and since when it stands.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HeldNodeView {
     pub key: String,
     pub title: String,
-    pub reason: crate::missions::AttentionReason,
+    pub reason: crate::mission_health::HeldReason,
     pub pr: Option<u32>,
     pub since_unix_ms: u64,
 }
@@ -1536,6 +1536,8 @@ fn wake_about(
         ci: None,
         line: None,
         key,
+        since_unix_ms: None,
+        notified: false,
     }
 }
 
@@ -1594,6 +1596,19 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
             }));
             return None;
         }
+    }
+    // A standing fact that updates the node's standing cell keeps when the
+    // cell began and whether the operator was told of it (D-23).
+    if standing {
+        let before = mission
+            .wakes
+            .iter()
+            .find(|kept| kept.same_cell(&wake) && kept.standing());
+        wake.since_unix_ms = wake
+            .since_unix_ms
+            .or_else(|| before.and_then(|kept| kept.since_unix_ms))
+            .or_else(|| Some(super::unix_milliseconds()));
+        wake.notified |= before.is_some_and(|kept| kept.notified);
     }
     mission.wakes.retain(|kept| {
         if !kept.same_cell(&wake) {
@@ -1753,8 +1768,15 @@ impl Runtime {
                 settle_closed_refusals(&mut book);
                 // A raise whose letter an earlier build sent stands as a
                 // cell again (`runtime::status_cells`).
+                // A standing cell from before cells counts its time from now.
+                let now = super::unix_milliseconds();
                 for mission in &mut book.missions {
                     super::mission_health::ensure_raise_cells(mission);
+                    for wake in &mut mission.wakes {
+                        if wake.standing() && wake.since_unix_ms.is_none() {
+                            wake.since_unix_ms = Some(now);
+                        }
+                    }
                 }
                 self.missions.book = book;
             }
@@ -4972,13 +4994,14 @@ impl Runtime {
                         .iter()
                         .filter_map(|&at| {
                             let node = &mission.nodes[at];
-                            let attention = node.attention.as_ref()?;
+                            let (reason, since_unix_ms, pr) =
+                                crate::mission_health::held_of(mission, node)?;
                             Some(HeldNodeView {
                                 key: node.key.clone(),
                                 title: node.title.clone(),
-                                reason: attention.reason,
-                                pr: attention.pr,
-                                since_unix_ms: attention.since_unix_ms,
+                                reason,
+                                pr,
+                                since_unix_ms,
                             })
                         })
                         .collect(),

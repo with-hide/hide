@@ -830,6 +830,17 @@ pub struct PendingWake {
     /// intent names `seq`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Since when the node's cell has stood unresolved: set when a standing
+    /// fact is recorded and kept while another standing fact of the node
+    /// updates it, so the safety net counts the cell's 20 minutes, not the
+    /// last update's (PRD letters-missions-simplify D-23, B15). None for
+    /// news, and for a book from before cells until its load sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_unix_ms: Option<u64>,
+    /// The operator was told of this standing cell by the safety net's
+    /// notice, as a raise's `Attention::notified` says for a raise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notified: bool,
 }
 
 impl PendingWake {
