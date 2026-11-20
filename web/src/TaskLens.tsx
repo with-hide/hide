@@ -123,7 +123,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
   const asks = filter ? ownAsks : everyAsk;
   const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
   const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
-  // Another machine's rows and panes are listed with this computer's, so a list with nothing of its own still draws them (PRD device-connect-iroh B10, B49).
+  // Another machine's rows and panes are listed with this computer's, so a list with nothing of its own, or a computer with no project yet, still draws them (PRD device-connect-iroh B10, B49).
   const otherMachines = useShellStore((s) => (s.rest?.navigator?.guest_panes?.length ?? 0) > 0 || (s.rest?.navigator?.peer_work ?? []).some((peer) => (peer.rows?.length ?? 0) > 0));
   const noProject = rest !== null && projects.every((project) => project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
@@ -140,7 +140,7 @@ export function TaskLens({ actions }: { actions: Actions }) {
           <span className="min-w-0 truncate">{t("taskLens.unresponsive", { device: unresponsive })}</span>
         </p>
       ) : null}
-      {rest === null || !scope ? <TaskSkeleton /> : noProject ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 && !otherMachines ? <NoTasks actions={actions} /> : (
+      {rest === null || !scope ? <TaskSkeleton /> : noProject && !otherMachines ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 && !otherMachines ? <NoTasks actions={actions} /> : (
         <TaskGroups list={list} view={view} showProject={view === "status" && !filter} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
       )}
     </div>
