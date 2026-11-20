@@ -195,22 +195,19 @@ function LaneMenu() {
 /**
  * The lane's two columns (B1, B6, B9, B14, B17): the viewing column at the
  * left, the tool column at the right, a divider between them while both are
- * drawn; beside a standing desk the tool floats over its right edge instead
- * (D-50), and a press on the desk under it closes the tool
- * (`pressOutside`). The desk stays mounted while folded, so its tabs, scroll and
+ * drawn. The desk stays mounted while folded, so its tabs, scroll and
  * previews are as they were when it comes back, laid out out of sight at its
  * own width (`documents`).
  */
-export function Lane({ view, frame, documents, sizes, checkout, actions, pressOutside }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; sizes: LaneSizes; checkout: Checkout; actions: Actions; pressOutside?: () => void }) {
+export function Lane({ view, frame, documents, sizes, checkout, actions }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; sizes: LaneSizes; checkout: Checkout; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [body, setBody] = useState<HTMLElement | null>(null);
   const [guide, setGuide] = useState<number | null>(null);
-  const over = frame.toolOver === true;
-  const both = frame.view !== null && frame.tool !== null && !over;
+  const both = frame.view !== null && frame.tool !== null;
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1">
       {frame.view !== null ? (
-        <div className={cn("relative flex min-h-0 min-w-0 flex-col", both ? "shrink-0" : "flex-1")} style={both ? { width: frame.view.width } : undefined} onPointerDownCapture={over ? pressOutside : undefined} data-lane-column="view">
+        <div className={cn("relative flex min-h-0 min-w-0 flex-col", both ? "shrink-0" : "flex-1")} style={both ? { width: frame.view.width } : undefined} data-lane-column="view">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card" role="region" aria-label={t("panes.lane.documents")} data-view-area="true">
             <ViewAreas actions={actions} />
           </div>
@@ -223,13 +220,7 @@ export function Lane({ view, frame, documents, sizes, checkout, actions, pressOu
       )}
       {both ? <LaneDivider kind="column" label={t("panes.lane.resizeColumns")} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} /> : null}
       {frame.tool !== null && view.tool !== null ? (
-        over ? (
-          <div className="absolute inset-y-0 right-0 z-10 flex border-l border-border bg-card shadow-overlay" style={{ width: frame.tool.width }} data-lane-tool-over="true">
-            <ToolColumn tool={view.tool} width={null} checkout={checkout} actions={actions} />
-          </div>
-        ) : (
-          <ToolColumn tool={view.tool} width={both ? frame.tool.width : null} checkout={checkout} actions={actions} />
-        )
+        <ToolColumn tool={view.tool} width={both ? frame.tool.width : null} checkout={checkout} actions={actions} />
       ) : null}
       {guide !== null ? <DividerGuide left={guide} /> : null}
     </div>

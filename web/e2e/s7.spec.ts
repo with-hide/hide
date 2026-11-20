@@ -1353,9 +1353,10 @@ test("a restart brings the View areas back as they were, and a file gone meanwhi
 
     // The same Workspace, not Main: the tree, ratios, order, preview, each
     // area's view, the area in use, and the lane with the Explorer
-    // beside the documents (B14; PRD right-lane B22; lane-two-columns B17).
+    // beside the documents, the desk standing, since whether it floated with
+    // the Explorer is not kept (B14; PRD right-lane B22; lane-two-columns B17; D-50).
     const workspace = page.locator("[data-workspace-screen]");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay", { timeout: 20_000 });
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked", { timeout: 20_000 });
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     await expect(workspace).toHaveAttribute("data-lane-shows", "explorer");
     await expect(page.locator("[data-main-screen]")).toHaveCount(0);
@@ -1453,7 +1454,7 @@ test("a broken or unknown Views file is kept aside for Main and a fresh layout, 
     await expect(workspace).toHaveAttribute("data-lane-mode", "closed", { timeout: 20_000 });
     await expect(page.locator('[data-lane-tool="documents"] [data-lane-badge]')).toHaveText("3");
     await showDocuments(page);
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await expect.poll(() => shape(page), { timeout: 15_000 }).toBe("@(a.txt >b.txt c.txt*)");
     await expect(editor(page, 0)).toContainText("b text");
     await expect.poll(() => stack.diagnostics.has("workspace_views.migrated")).toBe(true);
@@ -1535,7 +1536,7 @@ test("the rail, tools, kind marks and an open while the lane is closed keep work
     await expect(page.locator('[data-lane="changes"]')).toBeVisible();
     await page.locator('[data-lane-tool="changes"]').click();
     await expect(workspace).toHaveAttribute("data-lane-shows", "none");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await page.locator('[data-lane-tool="explorer"]').click();
     await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
     expect(laneSent()).toBe(toolsBefore + 3);

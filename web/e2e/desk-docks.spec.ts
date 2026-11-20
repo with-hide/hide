@@ -132,13 +132,17 @@ test("the Explorer floats over the panes; a file opened from it floats with it, 
     await expect.poll(() => resizes(stack)).toBe(before + 2);
     await screenshot(page, "desk-docks-settled");
 
-    // The Explorer opened beside the standing desk floats over its right edge
-    // and moves no pane; a press on a pane closes it and the desk stays.
+    // The Explorer opened beside the standing desk floats at the right edge
+    // with the desk on its left, one layer, and moves no pane; a press on a
+    // pane closes it and the desk takes its place again.
     const standing = await widths(stack);
     await showTool(page, "explorer");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
-    await expect(page.locator("[data-lane-tool-over]")).toBeVisible();
+    const desk = (await page.locator('[data-lane-column="view"]').boundingBox())!;
+    const tree = (await page.locator('[data-lane-column="tool"]').boundingBox())!;
+    expect(desk.x + desk.width).toBeLessThanOrEqual(tree.x);
     expect(await widths(stack)).toEqual(standing);
+    await screenshot(page, "desk-docks-explorer-beside-standing-desk");
     await page.locator(`[data-pane-view="${left}"]`).click();
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");

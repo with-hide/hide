@@ -53,8 +53,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     }
     const view = basis.view ? { ...basis.view, width: patch[basis.view.field] ?? basis.view.width } : null;
     const tool = basis.tool ? { ...basis.tool, width: patch[basis.tool.field] ?? basis.tool.width } : null;
-    // A standing desk's tool floats over it, so the lane's width is the desk's (D-50).
-    const width = kind === "lane" ? (basis.mode === "docked" ? view?.width ?? 0 : (view?.width ?? 0) + (tool?.width ?? 0) + (view && tool ? sizes.divider : 0)) : basis.width;
+    const width = kind === "lane" ? (view?.width ?? 0) + (tool?.width ?? 0) + (view && tool ? sizes.divider : 0) : basis.width;
     return { ...basis, view, tool, width };
   };
   // Where the divider's left edge stands, from its origin's left edge.

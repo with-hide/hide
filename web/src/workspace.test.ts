@@ -35,9 +35,9 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(frame({ view: "none", tool: null, body: 1200 })).toMatchObject({ mode: "closed", agents: 1200 });
   });
 
-  it("stands a shown desk at the body's right, Agent Views narrowing beside it and a tool floating over its right edge (PRD lane-desk-pair-view D-50)", () => {
+  it("stands a shown desk at the body's right, Agent Views narrowing beside it, and lifts it beside a tool opened meanwhile, Agent Views keeping that width (PRD lane-desk-pair-view D-50)", () => {
     expect(frame({ view: "documents", body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 520 - 8, width: 520, view: column("document_width", 520, 360), tool: null });
-    expect(frame({ view: "documents", tool: "explorer", body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 520 - 8, width: 520, view: column("document_width", 520, 360), tool: column("explorer_width", 240, 180), toolOver: true });
+    expect(frame({ view: "documents", tool: "explorer", body: 1200 })).toMatchObject({ mode: "docked", agents: 1200 - 520 - 8, width: 520 + 8 + 240, view: column("document_width", 520, 360), tool: column("explorer_width", 240, 180), stacked: false });
     // The desk gives way down to its minimum so Agent Views keeps 480px.
     expect(frame({ view: "documents", documentWidth: 900, body: 1000 })).toMatchObject({ mode: "docked", agents: 480, width: 1000 - 8 - 480 });
     expect(frame({ view: "documents", body: 480 + 8 + 360 })).toMatchObject({ mode: "docked", agents: 480, width: 360 });
@@ -100,10 +100,10 @@ describe("the right lane's two columns (PRD lane-two-columns)", () => {
     expect(laneLanding({ x: 1600 - 400 - 8 - 100, body: 1600, frame: frame({ tool: "project", documentWidth: 900, body: 1600 }), sizes })).toEqual({ panel_width: 500 });
   });
 
-  it("lands a standing desk's divider as its width, Agent Views keeping its minimum and a tool over it ignored (D-50)", () => {
+  it("lands a standing desk's divider as its width, Agent Views keeping its minimum, a tool beside it keeping its own (D-50)", () => {
     const docked = frame({ view: "documents", tool: "explorer", body: 1600 });
     expect(docked.mode).toBe("docked");
-    expect(laneLanding({ x: 1600 - 520 - 8 - 100, body: 1600, frame: docked, sizes })).toEqual({ document_width: 620 });
+    expect(laneLanding({ x: 1600 - 768 - 8 - 100, body: 1600, frame: docked, sizes })).toEqual({ document_width: 620 });
     expect(laneLanding({ x: 0, body: 1600, frame: docked, sizes })).toEqual({ document_width: 1600 - 8 - 480 });
     expect(laneLanding({ x: 1590, body: 1600, frame: docked, sizes })).toEqual({ document_width: 360 });
   });

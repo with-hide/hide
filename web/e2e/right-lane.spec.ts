@@ -51,7 +51,8 @@ async function openFile(lane: Lane, paneId: string, name: string): Promise<void>
 /**
  * Opens `name` from the pane the operator watches: it waits on this tab's
  * desk with the lane closed, counted on the documents button (PRD
- * lane-desk-pair-view B2, D-29), and the button brings the desk up.
+ * lane-desk-pair-view B2, D-29), and the button stands the desk beside the
+ * panes (D-50).
  */
 async function openOnDesk(lane: Lane, name: string): Promise<void> {
   const page = lane.page;
@@ -59,12 +60,12 @@ async function openOnDesk(lane: Lane, name: string): Promise<void> {
   await expect(railTool(page, "documents")).toBeEnabled();
   await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
   await railTool(page, "documents").click();
-  await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+  await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
 }
 
 const resizes = (lane: Lane) => lane.sent.get("terminal_resize") ?? 0;
 
-test("an opened file comes up over Agent Views without resizing a terminal, stays through a terminal click, and Escape puts it away with its document (PRD right-lane B1, B3, B4, B16; lane-two-columns B6, B11, B17, B20) @platform", async ({ page }) => {
+test("an opened file stands beside the panes, each terminal resizing once as the desk comes, goes or its divider lands, stays through a terminal click, and Escape puts it away with its document (PRD right-lane B1, B3, B4; lane-two-columns B6, B11, B17; lane-desk-pair-view D-50) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-overlay");
   try {
@@ -73,51 +74,62 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await expect(railTool(page, "documents")).toBeDisabled();
     await expect(pane(page, lane.fixture.panes[0]!)).toBeVisible();
     await quietFor(page, 500, "the first fit has landed before the lane opens");
-    const before = resizes(lane);
+    const shown = lane.fixture.panes.length;
+    let before = resizes(lane);
+    // Each terminal follows its new width once, and nothing follows.
+    const resizedOnce = async (what: string) => {
+      await expect.poll(() => resizes(lane)).toBe(before + shown);
+      await quietFor(page, 300, what);
+      expect(resizes(lane)).toBe(before + shown);
+      before = resizes(lane);
+    };
 
     // The open waits on the desk with the lane closed, and the documents
-    // button brings it up over the agents (PRD lane-desk-pair-view B2, D-29).
+    // button stands it beside the panes (PRD lane-desk-pair-view B2, D-29, D-50).
     await openOnDesk(lane, "a.md");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
     await expect(railTool(page, "documents")).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("[data-lane-header]")).toHaveCount(0);
+    await resizedOnce("the desk stood up");
     await screenshot(page, "right-lane-overlay");
 
-    // The divider at the overlay's left edge widens the documents by what it
-    // is dragged, lands once on release, and resizes no terminal (B17).
-    const laneBox = (await page.locator('[data-lane-frame="overlay"]').boundingBox())!;
-    const grip = page.locator('[data-lane-frame="overlay"] [data-lane-divider="lane"]');
+    // The divider at the desk's left edge widens it by what it is dragged,
+    // moving only a guide meanwhile, and lands once on release (B17, D-50).
+    const laneBox = (await page.locator('[data-lane-frame="docked"]').boundingBox())!;
+    const grip = page.locator('[data-lane-frame="docked"] [data-lane-divider="lane"]');
     await expect(grip).toHaveAttribute("aria-valuenow", String(Math.round(laneBox.width)));
     const gripBox = (await grip.boundingBox())!;
     await page.mouse.move(gripBox.x + gripBox.width / 2, gripBox.y + 200);
     await page.mouse.down();
     await page.mouse.move(gripBox.x + gripBox.width / 2 - 120, gripBox.y + 200, { steps: 6 });
     await expect(page.locator("[data-lane-guide]")).toHaveCount(1);
+    expect(resizes(lane)).toBe(before);
     await page.mouse.up();
     await expect(page.locator("[data-lane-guide]")).toHaveCount(0);
     // The pointer lands on a whole pixel, so the width grows by the drag within a pixel.
-    const widened = () => page.locator('[data-lane-frame="overlay"]').boundingBox().then((box) => Math.round(box!.width));
+    const widened = () => page.locator('[data-lane-frame="docked"]').boundingBox().then((box) => Math.round(box!.width));
     await expect.poll(async () => Math.abs((await widened()) - (laneBox.width + 120))).toBeLessThanOrEqual(1);
     await expect(grip).toHaveAttribute("aria-valuenow", String(await widened()));
+    await resizedOnce("the divider landed");
     const wide = await widened();
     await screenshot(page, "right-lane-documents-wide");
 
-    // A tool opens beside the documents at a width of its own: the wide
-    // document leaves the Project tool at the default, the column divider
-    // trades width between the two, and the tool's × leaves the documents at
-    // the width that trade left them (B14, B17).
+    // A tool floats at the right edge at a width of its own with the desk on
+    // its left at its width, the two one layer over the panes, so no
+    // terminal resizes; the column divider trades width between the two, and
+    // the tool's × puts the desk back in its place; the trade's landing
+    // narrows the desk's place, each terminal following once (B14, B17, D-50).
+    const desk = () => documentArea(page).boundingBox().then((box) => Math.round(box!.width));
     await railTool(page, "project").click();
     await expect(page.locator("[data-lane-header]")).toContainText("fixture");
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "project");
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
     const memory = () => page.locator('[data-lane-column="tool"]').boundingBox().then((box) => Math.round(box!.width));
     await expect.poll(memory).toBe(400);
-    expect(Math.abs((await documentArea(page).boundingBox())!.width - wide)).toBeLessThanOrEqual(1);
+    expect(Math.abs((await desk()) - wide)).toBeLessThanOrEqual(1);
     await screenshot(page, "right-lane-project-beside");
-    // The divider between the columns trades width between them; the lane keeps its own.
-    const laneWide = await widened();
     const columnGrip = page.locator('[data-lane-divider="column"]');
     const columnBox = (await columnGrip.boundingBox())!;
     await page.mouse.move(columnBox.x + columnBox.width / 2, columnBox.y + 200);
@@ -125,18 +137,16 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     await page.mouse.move(columnBox.x + columnBox.width / 2 - 60, columnBox.y + 200, { steps: 6 });
     await page.mouse.up();
     await expect.poll(memory).toBe(460);
-    expect(await widened()).toBe(laneWide);
     await page.locator('[data-lane-tool-close="project"]').click();
     await expect(screen(page)).toHaveAttribute("data-lane-shows", "none");
     await expect.poll(widened).toBe(wide - 60);
-    await expect(pane(page, lane.fixture.panes[0]!)).toBeVisible();
-    expect(resizes(lane)).toBe(before);
+    await resizedOnce("the trade's landing moved the desk's place once");
 
-    // A terminal click takes the keyboard and leaves the unpinned lane up:
-    // only the operator takes it down (PRD right-lane B4).
+    // A terminal click takes the keyboard and leaves the desk up: only the
+    // operator takes it down (PRD right-lane B4).
     await pane(page, lane.fixture.panes[0]!).click();
     await expect(pane(page, lane.fixture.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
     // Escape in the lane closes it as ⌘E does; the keyboard goes back to the pane.
@@ -144,19 +154,18 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     // (PRD lane-desk-pair-view B30), so the lane closes from the tab strip.
     await documentArea(page).locator(".cm-content").click();
     await page.keyboard.press("Escape");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await front(page).focus();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await expect(pane(page, lane.fixture.panes[0]!).locator(".xterm-helper-textarea")).toBeFocused();
     await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
-    await quietFor(page, 500, "no terminal was fitted again while the lane came and went");
-    expect(resizes(lane)).toBe(before);
+    await resizedOnce("the desk went away");
 
     // Escape on the rail closes it too (the press leaves the keyboard on the
     // desk's front tab, whose Escape closes it as well: lane-desk.spec.ts).
     await railTool(page, "documents").click();
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await railTool(page, "documents").focus();
     await page.keyboard.press("Escape");
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
@@ -164,7 +173,7 @@ test("an opened file comes up over Agent Views without resizing a terminal, stay
     // The rail's documents button, pressed while they show, folds them; with
     // no tool column the lane has nothing left and closes (B11, B12).
     await railTool(page, "documents").click();
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await railTool(page, "documents").click();
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await expect(page.locator('[data-lane-badge="1"]')).toBeVisible();
@@ -244,7 +253,7 @@ test("closing the last view closes the lane when no tool shows, hands the keyboa
   }
 });
 
-test("the Explorer opens beside the document without narrowing it, stays through a tool switch and the last view closing, and its chord closes the column alone (B4, B5, B7, B8, B12, B14) @platform", async ({ page }) => {
+test("the Explorer floats beside the standing desk without narrowing it, stays through a tool switch and the last view closing, and its chord closes the column alone (B4, B5, B7, B8, B12, B14; D-50) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-explorer");
   try {
@@ -278,16 +287,18 @@ test("the Explorer opens beside the document without narrowing it, stays through
     await expect(railTool(page, "documents")).toBeDisabled();
     await screenshot(page, "right-lane-explorer-alone");
 
-    // Picking a file opens it beside the same Explorer (B6); the chord
-    // closes the Explorer column alone, the document staying (B14).
+    // Picking a file opens it floating beside the same Explorer (B6, D-50);
+    // the chord closes the Explorer column alone, and the desk stands (B14).
     await page.locator('[data-lane="explorer"]').evaluate((column) => { (column as HTMLElement).dataset.probe = "kept"; });
     await page.locator('[data-explorer-row$="/b.md"]').dblclick();
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     await expect(page.locator('[data-lane="explorer"][data-probe="kept"]')).toBeVisible();
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
     await page.locator('[data-lane-frame] [data-view-area="true"] .cm-content').click();
     await page.keyboard.press(chord("toggle_lane_explorer"));
     await expect(page.locator('[data-lane="explorer"]')).toHaveCount(0);
     await expect(screen(page)).toHaveAttribute("data-lane-view", "documents");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await expect(front(page)).toHaveAttribute("aria-label", /\/b\.md/);
     // The chord opens it again beside the document.
     await page.keyboard.press(chord("toggle_lane_explorer"));
@@ -299,12 +310,12 @@ test("the Explorer opens beside the document without narrowing it, stays through
   }
 });
 
-test("expand takes the whole body and returns on Escape without resizing a terminal (PRD right-lane B8; lane-two-columns B15) @platform", async ({ page }) => {
+test("expand takes the whole body over the standing desk and returns on Escape without resizing a terminal (PRD right-lane B8; lane-two-columns B15; D-50) @platform", async ({ page }) => {
   test.setTimeout(120_000);
   const lane = await startLane(page, "lane-expand");
   try {
     await openOnDesk(lane, "a.md");
-    await quietFor(page, 500, "the overlay has settled");
+    await quietFor(page, 500, "the standing desk has settled");
     const before = resizes(lane);
     await page.locator("[data-lane-more]").click();
     await page.locator('[data-lane-menu-item="expand"]').click();
@@ -314,12 +325,12 @@ test("expand takes the whole body and returns on Escape without resizing a termi
     await screenshot(page, "right-lane-expanded");
     await page.locator('[data-lane-frame] [data-view-area="true"] .cm-content').click();
     await page.keyboard.press("Escape");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     // The pane zoom's chord, pressed in the document, expands the lane and back; no pane zooms.
     await page.keyboard.press(chord("toggle_zoom"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "expanded");
     await page.keyboard.press(chord("toggle_zoom"));
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await quietFor(page, 500, "no terminal was fitted again while the lane expanded");
     expect(resizes(lane)).toBe(before);
     expect(lane.sent.get("toggle_zoom") ?? 0).toBe(0);

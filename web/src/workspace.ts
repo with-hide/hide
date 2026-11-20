@@ -147,7 +147,9 @@ export type LaneSizes = {
  *
  * - `closed`: no column; Agent Views has the body.
  * - `docked`: the desk stands at the body's right and Agent Views narrows
- *   beside it; a tool floats over the desk's right edge.
+ *   beside it; a tool opened meanwhile floats at the right edge with the
+ *   desk on its left, the two one layer over the agents, which keep the
+ *   width the desk left them.
  * - `overlay`: a tool, or the desk floating with it, drawn over Agent Views,
  *   which keeps its width; in a body too narrow for the desk to stand, the
  *   desk floats here too.
@@ -178,8 +180,6 @@ export type LaneFrame = {
   tool: LaneColumn | null;
   /** Both columns exist but the body holds only one at a time, the front one drawn (B19). */
   stacked: boolean;
-  /** The tool floats over the standing desk's right edge rather than beside it (`docked`, D-50). */
-  toolOver?: boolean;
   /** In pair view, the paired pane's width left of the divider (D-47). */
   pane?: number;
 };
@@ -238,10 +238,12 @@ function fitColumns(view: Want, tool: Want, room: number, divider: number): { vi
 
 /**
  * The standing desk (D-50): the desk at its stored width at the body's right,
- * giving way down to its minimum so Agent Views keeps `agentMin` beside it,
- * and the tool, if any, over its right edge at the tool's width. Null when
- * the desk floats with the tool, or when even its minimum would leave Agent
- * Views under `agentMin`: the desk then floats as it did before.
+ * giving way down to its minimum so Agent Views keeps `agentMin` beside it.
+ * A tool opened meanwhile floats at the right edge with the desk on its left,
+ * the two laid out as a floating lane's columns, while Agent Views keeps the
+ * width the desk left it, so the tool opening and closing resizes nothing.
+ * Null when the desk floats with the tool, or when even its minimum would
+ * leave Agent Views under `agentMin`: the desk then floats as it did before.
  */
 function standing(input: LaneInput, view: Want | null, tool: Want | null): LaneFrame | null {
   const { body, sizes } = input;
@@ -249,15 +251,12 @@ function standing(input: LaneInput, view: Want | null, tool: Want | null): LaneF
   const room = body - sizes.divider - sizes.agentMin;
   if (room < view.min) return null;
   const width = Math.min(view.want, room);
-  return {
-    mode: "docked",
-    agents: body - width - sizes.divider,
-    width,
-    view: { field: view.field, width, min: view.min },
-    tool: tool ? { field: tool.field, width: Math.min(tool.want, body), min: tool.min } : null,
-    stacked: false,
-    ...(tool ? { toolOver: true } : {}),
-  };
+  const agents = body - width - sizes.divider;
+  const desk = { field: view.field, width, min: view.min };
+  if (!tool) return { mode: "docked", agents, width, view: desk, tool: null, stacked: false };
+  const fit = fitColumns({ ...view, want: width }, tool, body, sizes.divider);
+  if (!fit) return { mode: "docked", agents, width: Math.min(tool.want, body), view: null, tool: { field: tool.field, width: Math.min(tool.want, body), min: tool.min }, stacked: true };
+  return { mode: "docked", agents, width: fit.view + sizes.divider + fit.tool, view: { ...desk, width: fit.view }, tool: { field: tool.field, width: fit.tool, min: tool.min }, stacked: false };
 }
 
 /**
@@ -344,12 +343,11 @@ export function laneLanding(input: { x: number; body: number; frame: LaneFrame; 
   const { x, body, frame, sizes } = input;
   const edge = edgeColumn(frame);
   if (!edge) return {};
-  // A standing desk's tool floats over it, so only the desk is beside Agent
-  // Views, which keeps its minimum (D-50).
-  if (frame.mode === "docked") return { [edge.field]: clamp(body - x - sizes.divider, edge.min, body - sizes.divider - sizes.agentMin) };
   const other = frame.view && frame.tool ? frame.tool.width + sizes.divider : 0;
   const width = body - x - sizes.divider - other;
-  return { [edge.field]: clamp(width, edge.min, body - sizes.divider - other) };
+  // A standing desk keeps Agent Views at its minimum beside it (D-50).
+  const max = frame.mode === "docked" ? body - sizes.divider - sizes.agentMin : body - sizes.divider - other;
+  return { [edge.field]: clamp(width, edge.min, max) };
 }
 
 /**

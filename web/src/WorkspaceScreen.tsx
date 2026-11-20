@@ -43,9 +43,9 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // A shown desk stands at the body's right and Agent Views narrows beside it,
 // every pane kept, so each terminal resizes once as it opens, closes or its
 // divider lands (PRD lane-desk-pair-view D-50); a tool floats over the
-// agents, or over a standing desk's right edge, and resizes nothing, and a
-// View opened from a floating tool floats with it until the tool closes
-// (`tray.floats`). A terminal click or an agent chosen leaves the desk up, a
+// agents at the right edge with the desk, if shown, on its left, the two one
+// layer, and resizes nothing; when it closes, the desk stands, so a View
+// opened from a floating tool settles then (`tray.floats`). A terminal click or an agent chosen leaves the desk up, a
 // press outside a floating tool closes the tool, and ⌘E or Escape closes the
 // lane (PRD right-lane B4; operator decision 2026-10-23); a drag moves only a
 // guide until it lands.
@@ -112,7 +112,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // at, with only the log saying so.
   const pageWiden = useUiStore((s) => s.pageWiden);
   const front = view ? workspaceKey(view) : null;
-  const beside = frame.view && frame.tool && !frame.toolOver ? frame.tool.width : null;
+  const beside = frame.view && frame.tool ? frame.tool.width : null;
   useLayoutEffect(() => {
     if (pageWiden === null || width <= 0) return;
     useUiStore.getState().setPageWiden(null);
@@ -266,8 +266,8 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
         <div
           // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its
           // outer edge, so the divider is where the landing math puts it; elsewhere the frame draws the line itself.
-          // A standing desk is part of the body, so it casts no shadow; what floats does.
-          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode === "expanded" && "border-l border-border", (frame.mode === "overlay" || frame.mode === "expanded") && "shadow-overlay", placed)}
+          // A standing desk is part of the body, so it casts no shadow; what floats does, a standing desk lifted beside a tool included.
+          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode === "expanded" && "border-l border-border", (frame.mode === "overlay" || frame.mode === "expanded" || (frame.mode === "docked" && frame.tool !== null)) && "shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}
@@ -279,7 +279,7 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
             // Pair view's divider between the paired pane and the desk (D-47): it lands the mode's one ratio.
             <LaneDivider kind="pair" edge label={t("panes.pair.resize")} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
-          <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} pressOutside={pressOutside} />
+          <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} />
         </div>
       ) : null}
       {guide !== null ? <DividerGuide left={guide} pair={frame.mode === "pair"} /> : null}

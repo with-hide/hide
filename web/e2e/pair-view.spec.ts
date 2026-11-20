@@ -87,6 +87,9 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     await page.locator(`[data-pane-views="${other}"]`).click();
     await page.getByRole("menuitem", { name: /b\.md/ }).click();
     await expect(deskTabs(page)).toHaveCount(2);
+    // The desk stands beside the panes; closed, they have the body before pair view as after it, which closes the desk (D-44, D-50).
+    await page.keyboard.press(chord("toggle_lane"));
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "closed");
     await quietFor(page, 500, "every pane's first fit has landed");
 
     // The keyboard goes to the shell, so ◧ is pressed on a pane that does not hold it.
@@ -360,14 +363,14 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await expect(pairPane).toBeVisible();
     await expect.poll(async () => (await pairPane.boundingBox())!.width).toBe(dragged);
 
-    // Off is off: on the usual screen, ⌘E opening the lane and a desk tab pressed keep the desk floating over the agents, with no pair view.
+    // Off is off: on the usual screen, ⌘E opening the lane and a desk tab pressed keep the desk standing beside the agents, with no pair view (D-50).
     await page.keyboard.press(chord("pair_view"));
     await expect(strip(page)).toHaveCount(0);
     await page.keyboard.press(chord("toggle_lane"));
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await front(page).click();
     await quietFor(page, 300, "a hidden pair view would have been drawn by now");
-    await expect(screen(page)).toHaveAttribute("data-lane-mode", "overlay");
+    await expect(screen(page)).toHaveAttribute("data-lane-mode", "docked");
     await expect(strip(page)).toHaveCount(0);
   } finally {
     daemon?.stop();

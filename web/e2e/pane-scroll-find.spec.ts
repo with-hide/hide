@@ -44,7 +44,9 @@ async function laneWithDocument(page: Page, label: string, use: (lane: LaneUp) =
     await enterWorkspace(page, "fixture");
     for (const pane of fixture.panes) await expect.poll(() => paneText(page, pane), { timeout: 15_000 }).toContain("row-160");
 
-    // The lane comes up over the agents (PRD lane-desk-pair-view B16).
+    // The Explorer floats over the agents and the file opened from it floats
+    // beside it; the press on the pane closes the Explorer, and the desk
+    // stands beside the panes (PRD lane-desk-pair-view D-50).
     await showExplorer(page);
     const workspace = page.locator("[data-workspace-screen]");
     await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
@@ -52,6 +54,7 @@ async function laneWithDocument(page: Page, label: string, use: (lane: LaneUp) =
     await expect(page.locator("[data-view-area]")).toBeVisible();
     await page.locator(`[data-pane-view="${focused}"] [data-terminal-host]`).click({ position: { x: 40, y: 60 } });
     await expect(page.locator(`[data-pane-view="${focused}"]`)).toHaveAttribute("data-focused", "true");
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     await use({ page, daemon, fixture, focused, workspace, sent, last });
   } finally {
     daemon?.stop();
@@ -114,6 +117,7 @@ test("closing the last view leaves the Explorer alone in the lane", async ({ pag
     // Closing the last view keeps the lane with the Explorer alone in
     // its column, so the next file brings the View areas back beside it (PRD
     // lane-two-columns B12).
+    await showExplorer(page);
     await expect(workspace).toHaveAttribute("data-lane-view", "documents");
     const viewTab = page.locator('[data-view-tab-bar] [role="tab"][data-display]').first();
     await viewTab.hover();

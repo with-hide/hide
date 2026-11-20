@@ -176,7 +176,8 @@ test("Main, Overview and a Workspace with its lane and tools", async ({ page }) 
     await expect.poll(() => last.get("focus_pane")).toMatchObject({ pane_id: parent, origin: "operator" });
     await page.keyboard.type("typed beside the lane");
     await expect.poll(() => fs.readFileSync(fixture.inputLogs[0], "utf8"), { timeout: 10_000 }).toContain("typed beside the lane");
-    await expect(workspace).toHaveAttribute("data-lane-mode", "overlay");
+    // The press on the pane closed the floating Explorer, and the desk stands beside the panes (D-50).
+    await expect(workspace).toHaveAttribute("data-lane-mode", "docked");
     const mouseReports = await trackMouse(daemon!, parent, fixture.inputLogs[0]);
     const reportsBefore = mouseReports();
     await liveHost.click({ position: { x: 40, y: 60 } });
