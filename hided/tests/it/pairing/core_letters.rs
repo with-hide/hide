@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::Value;
 
 use super::guest_work::{Machine, PROGRAMS, WITHIN, free_port, pair, place_build};
-use super::{GUEST, Terminal, Window};
+use super::{GUEST, Terminal};
 use crate::support::remote_delivery::{
     Agent, Environment, PaneOutput, SHIM, quote, ready_panes, successful, wait_within,
 };
@@ -162,6 +162,14 @@ async fn agents_of_two_paired_hides_write_read_and_report_across() {
             hide: at("p").join("hide"),
             direct,
             project,
+            // The daemon starts a pane's shell and finds an agent's program
+            // as the account does: from its login shell and its `PATH`,
+            // whatever shell runs the tests.
+            account: environment
+                .values()
+                .into_iter()
+                .filter(|(name, _)| name == "SHELL" || name == "PATH")
+                .collect(),
         }
     };
     let mini = machine(&mini_env, "ms", MINI, format!("127.0.0.1:{}", free_port()));
@@ -329,10 +337,9 @@ async fn agents_of_two_paired_hides_write_read_and_report_across() {
     // Its mission is the Mac mini's, and closing it reports to the
     // MacBook's agent that asked, once, under the Mac mini's name.
     // The Conductor's worktree is a checkout its core reads after the
-    // start answers, and a core reads its checkouts only while a window
-    // draws them, so the Mac mini's window is open here, as its app's is.
+    // start answers, with no window open on the Mac mini, as on a machine
+    // nobody sits at; `hide mission create` says to ask again until then.
     let screen = mini.machine.screen();
-    let _window = Window::open_at(screen.port, &screen.token, "web").await;
     let checkout = lead["project"].as_str().unwrap().to_owned();
     let mut read = Value::Null;
     wait_within("the Mac mini's read of the new checkout", WITHIN, || {
