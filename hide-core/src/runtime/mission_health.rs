@@ -9,7 +9,6 @@
 //! answers' counts, the ledger and the workers asleep with what the last
 //! evaluation read, which costs a few comparisons while nothing moved.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -194,6 +193,11 @@ pub(super) fn raise_for(
                 ci: None,
                 line: None,
                 key: Some(raise_key.clone()),
+                // A raise that takes over the node's standing cell (a
+                // warning that stood) keeps when that cell began (B15).
+                since_unix_ms: None,
+                notified: false,
+                opened_seq: None,
             },
         );
     }
@@ -210,17 +214,6 @@ pub(super) fn raise_for(
     event.pr = pr;
     event.id = Some(raise_key);
     vec![event]
-}
-
-/// A key naming `attention`'s raise, its letter or its reaching the
-/// operator: a stall's carries the raise's count, since the same stall that
-/// went and stands again is a new one (`AttentionReason::stall`).
-fn stall_named(key: String, attention: &crate::missions::Attention) -> String {
-    if attention.reason.stall() {
-        format!("{key}:{}", attention.key)
-    } else {
-        key
-    }
 }
 
 /// Takes off each `not_started` raise of `mission` and its waiting letter,
@@ -250,12 +243,12 @@ pub(super) fn lower_not_started(mission: &mut Mission, now: u64) -> bool {
     lowered
 }
 
-/// A Conductor that took the mission over is told each raise of the
-/// Conductor's that stands, as its predecessor was: the letter's key is the
-/// raise's, and the letters keep one per recipient, so the new session gets
-/// each once. Its own safety-net time starts at its arrival
-/// (`Runtime::note_conductor_arrived`).
-pub(super) fn tell_new_conductor(mission: &mut Mission) {
+/// Gives each raise of the Conductor's that stands on `mission` its cell
+/// (`runtime::status_cells`), as a raise made now gets one: a book from
+/// before raises stood as cells, whose raise letters already went, and a
+/// mission a new Conductor takes over. A raise that has its cell keeps it,
+/// with what its Conductor saw of it. Whether one was added.
+pub(super) fn ensure_raise_cells(mission: &mut Mission) -> bool {
     let mut asked = Vec::new();
     for node in &mission.nodes {
         let Some(attention) = node
@@ -265,13 +258,25 @@ pub(super) fn tell_new_conductor(mission: &mut Mission) {
         else {
             continue;
         };
-        let key = stall_named(
-            act_key(node, &format!("raise:{}", attention.cause())),
-            attention,
-        );
-        asked.push((node.key.clone(), attention.pr, attention.reason, key));
+        if mission.wakes.iter().any(|wake| {
+            wake.to.is_none() && wake.node == node.key && wake.event == WakeEvent::Attention
+        }) {
+            continue;
+        }
+        let mut key = act_key(node, &format!("raise:{}", attention.cause()));
+        if attention.reason.stall() {
+            key = format!("{key}:{}", attention.key);
+        }
+        asked.push((
+            node.key.clone(),
+            attention.pr,
+            attention.reason,
+            key,
+            attention.since_unix_ms,
+        ));
     }
-    for (node, pr, reason, key) in asked {
+    let added = !asked.is_empty();
+    for (node, pr, reason, key, since) in asked {
         mission.wake_seq += 1;
         super::missions::push_wake(
             mission,
@@ -289,9 +294,13 @@ pub(super) fn tell_new_conductor(mission: &mut Mission) {
                 ci: None,
                 line: None,
                 key: Some(key),
+                since_unix_ms: Some(since),
+                notified: false,
+                opened_seq: None,
             },
         );
     }
+    added
 }
 
 /// Takes what waited on `node` as settled by `by` (B17): its raise goes
@@ -403,6 +412,9 @@ fn tell_warnings(mission: &mut Mission, now: u64) -> bool {
                 ci: None,
                 line: None,
                 key: Some(act_key(target, &fact)),
+                since_unix_ms: None,
+                notified: false,
+                opened_seq: None,
             };
             // A full queue refuses the rest too; it is logged once a pass.
             if super::missions::push_wake(mission, wake).is_none() {
@@ -836,7 +848,6 @@ impl Runtime {
             .retain(|(of, ..), _| book.iter().any(|mission| mission.id == *of));
         if changed {
             self.save_missions();
-            self.flush_mission_wakes();
         }
         changed | clock_moved
     }
@@ -1001,7 +1012,6 @@ impl Runtime {
         self.missions.stall_clock = clock;
         if changed {
             self.save_missions();
-            self.flush_mission_wakes();
         }
         changed
     }
@@ -1228,7 +1238,6 @@ impl Runtime {
                     mission.updated_at_unix_ms = now;
                 }
                 self.save_missions();
-                self.flush_mission_wakes();
             }
             return lines_moved;
         }
@@ -1314,9 +1323,6 @@ impl Runtime {
         }
         if close {
             changed |= self.hide_close(id, now);
-        }
-        if changed {
-            self.flush_mission_wakes();
         }
         changed
     }
@@ -1521,11 +1527,19 @@ impl Runtime {
                 ci: None,
                 line: None,
                 key: Some(act.clone()),
+                since_unix_ms: None,
+                notified: false,
+                opened_seq: None,
             },
         );
         if pushed.is_none() {
             return false;
         }
+        // The cell wakes its worker asleep (`agent_sleep::letters`).
+        self.letter_wakes.touch();
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return false;
+        };
         let node = &mut mission.nodes[at];
         node.woken
             .retain(|woken| !(woken.pr == pr && woken.why == why));
@@ -1596,6 +1610,9 @@ impl Runtime {
                         ci: None,
                         line: None,
                         key: Some(wake_key),
+                        since_unix_ms: None,
+                        notified: false,
+                        opened_seq: None,
                     },
                 );
                 vec![MissionEvent::new(now, EventKind::HideClosed)]
@@ -1672,7 +1689,6 @@ impl Runtime {
         }
         self.save_missions();
         self.follow_mission_outside(id);
-        self.flush_mission_wakes();
         true
     }
 
@@ -1950,6 +1966,9 @@ impl Runtime {
                     ci: None,
                     line: None,
                     key: None,
+                    since_unix_ms: None,
+                    notified: false,
+                    opened_seq: None,
                 },
             );
         }
@@ -1978,40 +1997,7 @@ impl Runtime {
         if closes {
             self.hide_close(&payload.mission, now);
         }
-        self.flush_mission_wakes();
         Ok(true)
-    }
-
-    /// Takes the worker wakes whose letter was refused out of the record
-    /// and raises each to the Conductor (B10).
-    pub(crate) fn mission_wakes_refused(&mut self, refused: &[(String, u64)]) {
-        if refused.is_empty() {
-            return;
-        }
-        let now = super::memory::now_ms();
-        let mut events: HashMap<String, Vec<MissionEvent>> = HashMap::new();
-        for (id, seq) in refused {
-            let Some(mission) = self.missions.book.get_mut(id) else {
-                continue;
-            };
-            let Some(at) = mission.wakes.iter().position(|wake| wake.seq == *seq) else {
-                continue;
-            };
-            let wake = mission.wakes.remove(at);
-            let raised = raise(
-                mission,
-                &wake.node,
-                AttentionReason::WakeRefused,
-                wake.pr,
-                now,
-            );
-            events.entry(id.clone()).or_default().extend(raised);
-        }
-        for (id, events) in events {
-            self.stage_mission_events(&id, events);
-        }
-        self.save_missions();
-        self.flush_mission_wakes();
     }
 
     /// Asks the GitHub read of `id`'s project again within the read's own
@@ -2131,19 +2117,13 @@ impl Runtime {
             let Some(net) = self.mission_safety_net(mission, now) else {
                 continue;
             };
-            let told = net.nodes.iter().any(|&index| {
-                mission.nodes[index]
-                    .attention
-                    .as_ref()
-                    .is_some_and(|attention| attention.notified)
-            });
+            let told = net
+                .nodes
+                .iter()
+                .any(|&index| crate::mission_health::held_notified(mission, index));
             if told {
                 for index in net.nodes {
-                    if mission.nodes[index]
-                        .attention
-                        .as_ref()
-                        .is_some_and(|attention| !attention.notified)
-                    {
+                    if !crate::mission_health::held_notified(mission, index) {
                         inherited.push((at, index));
                     }
                 }
@@ -2155,12 +2135,7 @@ impl Runtime {
             return Vec::new();
         }
         for (at, index) in inherited {
-            if let Some(attention) = self.missions.book.missions[at].nodes[index]
-                .attention
-                .as_mut()
-            {
-                attention.notified = true;
-            }
+            crate::mission_health::mark_held_notified(&mut self.missions.book.missions[at], index);
         }
         let mut notices = Vec::new();
         for (at, nodes, kind) in claims {
@@ -2169,9 +2144,7 @@ impl Runtime {
                 continue;
             };
             for &index in &nodes {
-                if let Some(attention) = mission.nodes[index].attention.as_mut() {
-                    attention.notified = true;
-                }
+                crate::mission_health::mark_held_notified(mission, index);
             }
             let node = &mission.nodes[first];
             crate::diagnostic!(json!({

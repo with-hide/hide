@@ -198,14 +198,13 @@ pub(crate) fn finished_oldest_first(ledger: &Ledger) -> Vec<usize> {
 
 /// Each finished letter a full ledger may drop as `(when it finished, where
 /// it stands)`, which orders them by when they finished, ties by the
-/// earlier sent: one whose escalation may still be owed stays
-/// (`Letter::escalation_owed`).
+/// earlier sent.
 fn finished(ledger: &Ledger) -> impl Iterator<Item = (u64, usize)> + '_ {
     ledger
         .letters
         .iter()
         .enumerate()
-        .filter(|(_, letter)| !letter.open() && !letter.escalation_owed())
+        .filter(|(_, letter)| !letter.open())
         .map(|(index, letter)| {
             (
                 letter

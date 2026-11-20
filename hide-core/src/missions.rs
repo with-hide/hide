@@ -826,6 +826,51 @@ pub struct PendingWake {
     /// intent names `seq`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Since when the node's cell has stood unresolved: set when a standing
+    /// fact is recorded and kept while another standing fact of the node
+    /// updates it, so the safety net counts the cell's 20 minutes, not the
+    /// last update's (PRD letters-missions-simplify D-23, B15). None for
+    /// news, and for a book from before cells until its load sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_unix_ms: Option<u64>,
+    /// The operator was told of this standing cell by the safety net's
+    /// notice, as a raise's `Attention::notified` says for a raise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notified: bool,
+    /// The `seq` of the first wake of the node's cell for this recipient
+    /// that still stands with it: the cell's episode, kept while a fact
+    /// updates it, new once every wake of the cell went (a recurrence,
+    /// which rings again). None on a book from before it: its own `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_seq: Option<u64>,
+}
+
+impl PendingWake {
+    /// Whether the wake tells a state that stands until its cause goes (a
+    /// raise, a warning, a CI that did not pass, a review asking for
+    /// changes, an outside pull request closed unmerged), rather than news
+    /// its receiver reads once (`runtime::status_cells`). A worker's wake is
+    /// news: it asks the worker to act, and the worker's own move answers it.
+    pub(crate) fn standing(&self) -> bool {
+        self.to.is_none()
+            && match self.event {
+                WakeEvent::Attention
+                | WakeEvent::Warning
+                | WakeEvent::ChangesRequested
+                | WakeEvent::OutsideFailed => true,
+                WakeEvent::Ci => self
+                    .ci
+                    .as_ref()
+                    .is_some_and(|ci| ci.result != CiResult::Passed),
+                _ => false,
+            }
+    }
+
+    /// Whether `other` is about the same subject for the same receiver: the
+    /// node (or the mission itself) and the worker it goes to, if any.
+    pub(crate) fn same_cell(&self, other: &Self) -> bool {
+        self.node == other.node && self.to == other.to
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
