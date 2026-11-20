@@ -163,12 +163,18 @@ async fn agents_of_two_paired_hides_write_read_and_report_across() {
             direct,
             project,
             // The daemon starts a pane's shell and finds an agent's program
-            // as the account does: from its login shell and its `PATH`,
-            // whatever shell runs the tests.
+            // as the account does, whatever shell runs the tests: from its
+            // login shell and its `PATH`, and with no global completion
+            // setup, which on Linux asks the pane a question about the
+            // runner's folders before the shell's first prompt.
             account: environment
                 .values()
                 .into_iter()
-                .filter(|(name, _)| name == "SHELL" || name == "PATH")
+                .filter(|(name, _)| {
+                    ["SHELL", "PATH", "skip_global_compinit"]
+                        .iter()
+                        .any(|session| name == *session)
+                })
                 .collect(),
         }
     };
