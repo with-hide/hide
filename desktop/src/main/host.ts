@@ -642,15 +642,15 @@ export class DesktopHost {
       if (window && !window.isDestroyed() && this.isDaemonUrl(window.webContents.getURL())) window.webContents.send(WHATS_NEW_STATE_CHANNEL, state);
     });
     ipcMain.handle(WHATS_NEW_STATE_GET_CHANNEL, (event: IpcMainInvokeEvent) => (this.fromShell(event) ? whatsNew.state() : null));
-    ipcMain.on(WHATS_NEW_REFRESH_CHANNEL, (event: IpcMainEvent) => {
-      if (this.fromShell(event)) void whatsNew.refresh();
+    ipcMain.on(WHATS_NEW_REFRESH_CHANNEL, (event: IpcMainEvent, always: unknown) => {
+      if (this.fromShell(event)) void whatsNew.refresh(always === true);
     });
     ipcMain.on(WHATS_NEW_SAVE_CHANNEL, (event: IpcMainEvent, update: unknown) => {
       if (!this.fromShell(event) || typeof update !== "object" || update === null) return;
-      const { shown, seen } = update as { shown?: unknown; seen?: unknown };
-      whatsNew.save({ shown, seen });
+      const { shown, seen, opened } = update as { shown?: unknown; seen?: unknown; opened?: unknown };
+      whatsNew.save({ shown, seen, opened });
     });
-    whatsNew.start();
+    void whatsNew.start();
   }
 
   /** The last window closed: true when a ready macOS update should be installed by quitting now. */

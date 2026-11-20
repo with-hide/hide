@@ -148,8 +148,15 @@ export function historyVersions(feed: ReleaseFeed, appVersion: string, ready: st
   return feed.versions.filter((row) => !app || compareVersions(parseVersion(row.version)!, app) <= 0 || row.version === ready);
 }
 
-/** What the host remembers: the last version whose window closed, and the newest version opened in the history. */
-export type WhatsNewRecord = { shown: string | null; seen: string | null };
+/**
+ * What the host remembers: the last version whose window closed (`shown`),
+ * and which versions the history has opened, as a version at or below which
+ * every version counts as opened (`seen`) and the opened ones above it
+ * (`opened`, newest first, at most `VERSION_LIMIT`).
+ */
+export type WhatsNewRecord = { shown: string | null; seen: string | null; opened: string[] };
+/** What the shell asks the host to add to the record. */
+export type RecordUpdate = { shown?: string; seen?: string; opened?: string };
 
 export type OfferHighlight = Highlight & { version: string };
 export type Offer = { from: string | null; to: string; highlights: OfferHighlight[]; changes: Change[] };
@@ -162,33 +169,63 @@ export type Offer = { from: string | null; to: string; highlights: OfferHighligh
  *   `quiet` nothing to show for this version, and nothing ever will be:
  *           record it as shown (`save`) so a later version does not reach back;
  *   `show`  the offer, after which the record says this version was shown.
- * `record` null means no record was ever written: a new install when the
- * first run is not done (the first-run wizard introduces Hide), an app from
- * before this window when it is (only this version is offered).
+ * `record` null means no record was ever written though the app ran before:
+ * an app from before this window, offered only this version. A new install
+ * never reaches here without one: the host records its first version at
+ * launch, so the first-run wizard alone introduces Hide (B8).
  */
 export function whatsNewOffer(
   feed: ReleaseFeed,
   appVersion: string,
   record: WhatsNewRecord | null,
-  firstRunDone: boolean,
-): { kind: "none" } | { kind: "quiet"; save: WhatsNewRecord } | { kind: "show"; offer: Offer; save: WhatsNewRecord } {
+): { kind: "none" } | { kind: "quiet"; save: RecordUpdate } | { kind: "show"; offer: Offer; save: RecordUpdate } {
   if (!announces(appVersion)) return { kind: "none" };
   const current = feed.versions.find((row) => row.version === appVersion);
   if (!current) return { kind: "none" };
-  const earlier = feed.versions.filter((row) => order(row.version, appVersion) < 0);
-  if (record === null && !firstRunDone) return { kind: "quiet", save: { shown: appVersion, seen: appVersion } };
   if (record !== null && record.shown !== null && isStable(record.shown) && order(record.shown, appVersion) >= 0) return { kind: "none" };
   const since = record?.shown && isStable(record.shown) ? record.shown : null;
   const rows = record === null ? [current] : feed.versions.filter((row) => order(row.version, appVersion) <= 0 && (since === null ? row === current : order(row.version, since) > 0));
-  // Seen stays where it was, except on the first record, where only this version is new.
-  const save: WhatsNewRecord = { shown: appVersion, seen: record === null ? (earlier[0]?.version ?? null) : record.seen };
+  // On the first record only this version is new in the history; the versions before it count as opened.
+  const before = record === null ? feed.versions.find((row) => order(row.version, appVersion) < 0)?.version : undefined;
+  const save: RecordUpdate = before === undefined ? { shown: appVersion } : { shown: appVersion, seen: before };
   const highlights = rows.flatMap((row) => row.highlights.map((item) => ({ ...item, version: row.version }))).slice(0, HIGHLIGHT_LIMIT);
   if (highlights.length === 0) return { kind: "quiet", save };
   return { kind: "show", offer: { from: rows.length > 1 ? since : null, to: appVersion, highlights, changes: rows.flatMap((row) => row.changes) }, save };
 }
 
-/** Whether `version` carries the history's NEW mark: newer than the newest version opened there; no mark before any record exists. */
+/**
+ * The record after `update`, moved forward only, or why the update is
+ * refused: a value that is no release version, or one past the version the
+ * app runs (a buggy page could otherwise silence every later window). An
+ * opened version joins `opened`; `seen` then climbs over every version of
+ * `feed` that has been opened in a row, so `opened` keeps only the gaps.
+ */
+export function mergeRecord(
+  before: WhatsNewRecord | null,
+  update: { shown?: unknown; seen?: unknown; opened?: unknown },
+  feed: ReleaseFeed | null,
+  appVersion: string,
+): { record: WhatsNewRecord } | { refused: "version" | "ahead" } {
+  const values = [update.shown, update.seen, update.opened].filter((value) => value !== undefined);
+  if (!values.every(isStable)) return { refused: "version" };
+  if (parseVersion(appVersion) && values.some((value) => order(value as string, appVersion) > 0)) return { refused: "ahead" };
+  const newer = (a: string | null, b: unknown): string | null => (typeof b !== "string" ? a : a === null || order(b, a) > 0 ? b : a);
+  const record = before ?? { shown: null, seen: null, opened: [] };
+  let seen = newer(record.seen, update.seen);
+  const opened = new Set([...record.opened, ...(typeof update.opened === "string" ? [update.opened] : [])]);
+  const above = (version: string) => seen === null || order(version, seen) > 0;
+  for (const row of [...(feed?.versions ?? [])].reverse()) {
+    if (!above(row.version)) continue;
+    if (!opened.has(row.version)) break;
+    seen = row.version;
+  }
+  const kept = [...opened].filter(above).sort((a, b) => order(b, a)).slice(0, VERSION_LIMIT);
+  return { record: { shown: newer(record.shown, update.shown), seen, opened: kept } };
+}
+
+/** Whether `version` carries the history's NEW mark: not opened there yet; no mark before any record exists. */
 export function unseen(version: string, record: WhatsNewRecord | null): boolean {
   if (record === null) return false;
+  if (record.opened.includes(version)) return false;
   return record.seen === null || !isStable(record.seen) || order(version, record.seen) > 0;
 }

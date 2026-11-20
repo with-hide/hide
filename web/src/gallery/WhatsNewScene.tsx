@@ -34,7 +34,7 @@ export function WhatsNewScene({ params }: { params: URLSearchParams }) {
   let body = null;
   if (state.startsWith("dialog")) {
     const from = params.get("from") ?? feed.versions[feed.versions.findIndex((row) => row.version === version) + 2]?.version ?? null;
-    const result = whatsNewOffer(feed, version, { shown: state === "dialog-skip" ? from : (feed.versions[feed.versions.findIndex((row) => row.version === version) + 1]?.version ?? null), seen: null }, true);
+    const result = whatsNewOffer(feed, version, { shown: state === "dialog-skip" ? from : (feed.versions[feed.versions.findIndex((row) => row.version === version) + 1]?.version ?? null), seen: null, opened: [] });
     body = result.kind === "show" ? (
       <Dialog open>
         <WhatsNewDialogBody offer={result.offer} language={language} auto={false} open={state === "dialog-more"} onTry={noop} onHistory={noop} onClose={noop} />
@@ -45,7 +45,7 @@ export function WhatsNewScene({ params }: { params: URLSearchParams }) {
   } else {
     const ready = state === "history-ready" ? version : null;
     const app = ready ? (feed.versions[feed.versions.findIndex((row) => row.version === version) + 1]?.version ?? version) : version;
-    const record = { shown: app, seen: feed.versions[feed.versions.findIndex((row) => row.version === app) + 1]?.version ?? null };
+    const record = { shown: app, seen: feed.versions[feed.versions.findIndex((row) => row.version === app) + 1]?.version ?? null, opened: [] };
     const rows = state === "history-loading" || state === "history-failed" ? [] : historyRows(historyVersions(feed, app, ready), record, ready);
     body = (
       <Dialog open>

@@ -6,6 +6,7 @@
 
 import { useSyncExternalStore } from "react";
 import { hostBridge, type WhatsNewState } from "./host";
+import type { RecordUpdate } from "./releases";
 import { releaseNotesUrl } from "./updates";
 
 let current: WhatsNewState | null = null;
@@ -67,11 +68,11 @@ export function closeUpdateHistory(): void {
 
 /** Fetches again now, whatever the age of the kept copy (the history's Try again). */
 export function retryUpdateHistory(): void {
-  hostBridge()?.whatsNew.refresh();
+  hostBridge()?.whatsNew.refresh(true);
 }
 
 /** Moves the host's record forward: a version's window closed, or a version opened in the history. */
-export function saveWhatsNew(update: { shown?: string; seen?: string }): void {
+export function saveWhatsNew(update: RecordUpdate): void {
   hostBridge()?.whatsNew.save(update);
 }
 

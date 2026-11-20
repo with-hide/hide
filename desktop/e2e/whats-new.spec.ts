@@ -4,6 +4,9 @@
 // once for the version the app runs, and its close and the history's open are
 // kept apart in the profile. A development app reports its package version,
 // `0.1.0`, which the served file names as the version just updated to.
+// End to end because what is proved crosses the three owners no cheaper layer
+// holds together: the host's fetch and profile files, the shell's decision and
+// drawing, and the practice window the host opens on Try it.
 
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
@@ -60,7 +63,7 @@ test.beforeEach(async () => {
   // The app ran 0.0.9 before this launch and closed that version's window.
   const profile = run.env.HIDE_DESKTOP_USER_DATA_DIR!;
   fs.mkdirSync(profile, { recursive: true });
-  fs.writeFileSync(path.join(profile, "whats-new.json"), JSON.stringify({ shown: "0.0.9", seen: "0.0.9" }));
+  fs.writeFileSync(path.join(profile, "whats-new.json"), JSON.stringify({ shown: "0.0.9", seen: "0.0.9", opened: [] }));
 });
 
 test.afterEach(async () => {
@@ -73,7 +76,7 @@ test.afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-const record = () => JSON.parse(fs.readFileSync(path.join(run.env.HIDE_DESKTOP_USER_DATA_DIR!, "whats-new.json"), "utf8")) as { shown: string | null; seen: string | null };
+const record = () => JSON.parse(fs.readFileSync(path.join(run.env.HIDE_DESKTOP_USER_DATA_DIR!, "whats-new.json"), "utf8")) as { shown: string | null; seen: string | null; opened: string[] };
 
 test("the window opens once for the version just updated to, its close and the history's open are kept apart, and Try it opens the practice card", async () => {
   let page;
@@ -100,7 +103,7 @@ test("the window opens once for the version just updated to, its close and the h
   // B5: OK closes it and the record says this version's window closed; the history's record stays.
   await dialog.locator("[data-whats-new-ok]").click();
   await expect(dialog).toHaveCount(0);
-  await expect.poll(record).toEqual({ shown: APP_VERSION, seen: "0.0.9" });
+  await expect.poll(record).toEqual({ shown: APP_VERSION, seen: "0.0.9", opened: [] });
 
   // B15, B16, B17: Help opens the history on the running version, marked NEW until it is opened.
   await page.locator("[data-help-menu-trigger]").click();
@@ -109,7 +112,7 @@ test("the window opens once for the version just updated to, its close and the h
   await expect(history.locator(`[data-update-history-entry="${APP_VERSION}"]`)).toBeVisible();
   await expect(history.locator("[data-update-history-version]")).toHaveCount(2);
   await expect(history.locator('[data-update-history-version="0.0.9"]')).toHaveAttribute("data-major", "false");
-  await expect.poll(record).toEqual({ shown: APP_VERSION, seen: APP_VERSION });
+  await expect.poll(record).toEqual({ shown: APP_VERSION, seen: APP_VERSION, opened: [] });
   await expect(history.locator("[data-update-history-new]")).toHaveCount(0);
   await screenshot(page, "whats-new-history");
 

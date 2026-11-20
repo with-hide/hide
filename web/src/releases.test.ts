@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyVersions, parseReleaseFeed, unseen, whatsNewOffer, type ReleaseFeed } from "./releases";
+import { historyVersions, mergeRecord, parseReleaseFeed, unseen, whatsNewOffer, type ReleaseFeed, type WhatsNewRecord } from "./releases";
 
 const words = (title: string) => ({ en: { title, line: `${title} line` } });
 const version = (v: string, highlights: string[], changes = 1) => ({
@@ -45,21 +45,23 @@ describe("parseReleaseFeed", () => {
   });
 });
 
+const rec = (shown: string | null, seen: string | null, opened: string[] = []): WhatsNewRecord => ({ shown, seen, opened });
+
 describe("whatsNewOffer", () => {
   const feed = feedOf(version("1.2.8", ["eight"]), version("1.2.9", ["nine"]), version("1.2.10", ["ten-a", "ten-b"]), version("1.2.11", ["eleven"]), version("1.2.12", [], 2));
 
   it("offers the new version's main features once, after a one-step update (B1)", () => {
-    const result = whatsNewOffer(feed, "1.2.11", { shown: "1.2.10", seen: "1.2.10" }, true);
-    expect(result).toMatchObject({ kind: "show", offer: { from: null, to: "1.2.11", highlights: [{ version: "1.2.11", text: { en: { title: "eleven" } } }] }, save: { shown: "1.2.11", seen: "1.2.10" } });
-    expect(whatsNewOffer(feed, "1.2.11", { shown: "1.2.11", seen: "1.2.10" }, true)).toEqual({ kind: "none" });
+    const result = whatsNewOffer(feed, "1.2.11", rec("1.2.10", "1.2.10"));
+    expect(result).toMatchObject({ kind: "show", offer: { from: null, to: "1.2.11", highlights: [{ version: "1.2.11", text: { en: { title: "eleven" } } }] }, save: { shown: "1.2.11" } });
+    expect(whatsNewOffer(feed, "1.2.11", rec("1.2.11", "1.2.10"))).toEqual({ kind: "none" });
   });
 
   it("opens nothing for a version with no main features and records it, so a later version does not reach back (B6)", () => {
-    expect(whatsNewOffer(feed, "1.2.12", { shown: "1.2.11", seen: "1.2.11" }, true)).toEqual({ kind: "quiet", save: { shown: "1.2.12", seen: "1.2.11" } });
+    expect(whatsNewOffer(feed, "1.2.12", rec("1.2.11", "1.2.11"))).toEqual({ kind: "quiet", save: { shown: "1.2.12" } });
   });
 
   it("merges skipped versions newest first, at most three, with the version it came from (B9)", () => {
-    const result = whatsNewOffer(feed, "1.2.11", { shown: "1.2.8", seen: "1.2.8" }, true);
+    const result = whatsNewOffer(feed, "1.2.11", rec("1.2.8", "1.2.8"));
     expect(result.kind).toBe("show");
     if (result.kind !== "show") return;
     expect(result.offer.from).toBe("1.2.8");
@@ -68,21 +70,45 @@ describe("whatsNewOffer", () => {
   });
 
   it("opens nothing on a preview or development build (B7)", () => {
-    expect(whatsNewOffer(feed, "1.2.11-rc.1", null, true)).toEqual({ kind: "none" });
-    expect(whatsNewOffer(feed, "0.4.0-main.f77c2a43", null, true)).toEqual({ kind: "none" });
-  });
-
-  it("leaves a new install to the first-run wizard and never offers that version later (B8)", () => {
-    expect(whatsNewOffer(feed, "1.2.11", null, false)).toEqual({ kind: "quiet", save: { shown: "1.2.11", seen: "1.2.11" } });
+    expect(whatsNewOffer(feed, "1.2.11-rc.1", null)).toEqual({ kind: "none" });
+    expect(whatsNewOffer(feed, "0.4.0-main.f77c2a43", null)).toEqual({ kind: "none" });
   });
 
   it("offers an app from before this window only its own version, marking only it new (B8)", () => {
-    const result = whatsNewOffer(feed, "1.2.11", null, true);
+    const result = whatsNewOffer(feed, "1.2.11", null);
     expect(result).toMatchObject({ kind: "show", offer: { from: null, highlights: [{ version: "1.2.11" }] }, save: { shown: "1.2.11", seen: "1.2.10" } });
   });
 
   it("waits while the file does not have the running version yet (B11)", () => {
-    expect(whatsNewOffer(feed, "1.2.13", { shown: "1.2.12", seen: "1.2.12" }, true)).toEqual({ kind: "none" });
+    expect(whatsNewOffer(feed, "1.2.13", rec("1.2.12", "1.2.12"))).toEqual({ kind: "none" });
+  });
+});
+
+describe("mergeRecord", () => {
+  const feed = feedOf(version("1.2.8", []), version("1.2.9", []), version("1.2.10", []), version("1.2.11", []));
+  const merged = (before: WhatsNewRecord | null, update: Record<string, unknown>) => mergeRecord(before, update, feed, "1.2.11");
+
+  it("moves the closed window forward only and keeps the history's record apart", () => {
+    expect(merged(rec("1.2.10", "1.2.9"), { shown: "1.2.11" })).toEqual({ record: rec("1.2.11", "1.2.9") });
+    expect(merged(rec("1.2.11", "1.2.9"), { shown: "1.2.10", seen: "1.2.8" })).toEqual({ record: rec("1.2.11", "1.2.9") });
+  });
+
+  it("takes NEW off only the version opened, and folds a run of opened versions into seen (B17)", () => {
+    const skipped = rec("1.2.11", "1.2.8");
+    const first = merged(skipped, { opened: "1.2.11" });
+    expect(first).toEqual({ record: rec("1.2.11", "1.2.8", ["1.2.11"]) });
+    if (!("record" in first)) return;
+    expect(["1.2.9", "1.2.10", "1.2.11"].map((v) => unseen(v, first.record))).toEqual([true, true, false]);
+    const second = merged(first.record, { opened: "1.2.9" });
+    expect(second).toEqual({ record: rec("1.2.11", "1.2.9", ["1.2.11"]) });
+    if (!("record" in second)) return;
+    expect(merged(second.record, { opened: "1.2.10" })).toEqual({ record: rec("1.2.11", "1.2.11") });
+  });
+
+  it("refuses a value that is no release version, or one past the version the app runs", () => {
+    expect(merged(rec("1.2.10", null), { shown: "../../etc" })).toEqual({ refused: "version" });
+    expect(merged(rec("1.2.10", null), { opened: "1.2.11-rc.1" })).toEqual({ refused: "version" });
+    expect(merged(rec("1.2.10", null), { shown: "99.0.0" })).toEqual({ refused: "ahead" });
   });
 });
 
@@ -104,9 +130,10 @@ describe("historyVersions", () => {
 });
 
 describe("unseen", () => {
-  it("marks versions newer than the newest opened in the history, and none before any record (B17)", () => {
-    expect(unseen("1.2.11", { shown: "1.2.11", seen: "1.2.10" })).toBe(true);
-    expect(unseen("1.2.10", { shown: "1.2.11", seen: "1.2.10" })).toBe(false);
+  it("marks versions not opened in the history yet, and none before any record exists (B17)", () => {
+    expect(unseen("1.2.11", rec("1.2.11", "1.2.10"))).toBe(true);
+    expect(unseen("1.2.10", rec("1.2.11", "1.2.10"))).toBe(false);
+    expect(unseen("1.2.11", rec("1.2.11", "1.2.9", ["1.2.11"]))).toBe(false);
     expect(unseen("1.2.11", null)).toBe(false);
   });
 });

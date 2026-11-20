@@ -2,15 +2,19 @@
 // Update history): the file withhide.dev serves (`site/public/app/releases.json`),
 // fetched at launch and again when the history opens on a copy an hour old,
 // kept in the profile so the history reads offline, and the record of which
-// version's window closed (`shown`) and which version was opened in the
-// history (`seen`), kept apart (operator decision m228). It shows nothing
+// version's window closed (`shown`) and which versions the history opened
+// (`seen`, `opened`), kept apart (operator decision m228). A profile no
+// earlier launch wrote to is a new install: its version is recorded at once,
+// so the first-run wizard alone introduces Hide (B8). It shows nothing
 // itself: the shell decides and draws (`web/src/whatsNew.ts`). A failure is
 // an event in the host's log and a `failed` flag the history's empty state
 // reads; nothing else on screen changes.
 
+import fs from "node:fs";
 import path from "node:path";
 import type { WhatsNewState } from "../../../web/src/host";
-import { compareVersions, parseReleaseFeed, parseVersion, type ReleaseFeed, type WhatsNewRecord } from "../../../web/src/releases";
+import { announces, mergeRecord, parseReleaseFeed, parseVersion, VERSION_LIMIT, type ReleaseFeed, type WhatsNewRecord } from "../../../web/src/releases";
+import { fetchBoundedJson, type FetchImpl } from "./boundedJson";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLog } from "./log";
 
@@ -24,6 +28,8 @@ export const REFETCH_AFTER_MS = 60 * 60 * 1000;
 
 export const releasesCacheFile = (userData: string) => path.join(userData, "releases.json");
 export const whatsNewRecordFile = (userData: string) => path.join(userData, "whats-new.json");
+/** Files every earlier launch leaves in the profile; none of them before the window opens on a new install. */
+const EARLIER_LAUNCH_FILES = ["window-state.json", "cli-path.json"];
 
 export type WhatsNewIo = {
   fetch: () => Promise<unknown>;
@@ -32,10 +38,12 @@ export type WhatsNewIo = {
   writeCache: (value: { fetchedAt: number; file: unknown }) => void;
   readRecord: () => unknown;
   writeRecord: (record: WhatsNewRecord) => void;
+  /** An earlier launch left files in the profile: false on a new install. */
+  earlierLaunch: boolean;
 };
 
 const release = (value: unknown): string | null => (typeof value === "string" && parseVersion(value) ? value : null);
-const newer = (a: string | null, b: string | null): string | null => (a === null ? b : b === null ? a : compareVersions(parseVersion(a)!, parseVersion(b)!) >= 0 ? a : b);
+const detail = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
 export class WhatsNew {
   private feed: ReleaseFeed | null = null;
@@ -54,9 +62,13 @@ export class WhatsNew {
     this.launchedAt = io.now();
   }
 
-  /** Reads the kept copy and the record, then fetches. */
-  start(): void {
+  /** Reads the kept copy and the record, then fetches; the promise settles when that fetch has. */
+  start(): Promise<void> {
     this.record = this.readRecord();
+    if (this.record === null && !this.io.earlierLaunch && announces(this.appVersion) && this.io.readRecord() === null) {
+      this.log.event("whats_new.new_install", { version: this.appVersion });
+      this.keep({ shown: this.appVersion, seen: this.appVersion, opened: [] });
+    }
     const cached = this.io.readCache();
     if (cached !== null) {
       const kept = typeof cached === "object" && cached !== null ? (cached as { fetchedAt?: unknown; file?: unknown }) : {};
@@ -69,7 +81,7 @@ export class WhatsNew {
       }
     }
     this.emit();
-    void this.refresh(true);
+    return this.refresh(true);
   }
 
   state(): WhatsNewState {
@@ -86,21 +98,28 @@ export class WhatsNew {
    */
   async refresh(always = false): Promise<void> {
     if (this.fetching) return;
-    if (!always && this.fetchedAt !== null && this.io.now() - this.fetchedAt < REFETCH_AFTER_MS) return;
+    // A copy dated ahead of the clock (the clock was set back) counts as old.
+    const age = this.fetchedAt === null ? null : this.io.now() - this.fetchedAt;
+    if (!always && age !== null && age >= 0 && age < REFETCH_AFTER_MS) return;
     this.fetching = true;
     this.emit();
     try {
       const file = await this.io.fetch();
       const feed = this.parse(file);
       const fetchedAt = this.io.now();
-      this.io.writeCache({ fetchedAt, file });
       this.feed = feed;
       this.fetchedAt = fetchedAt;
       this.failed = false;
       this.log.event("whats_new.fetched", { versions: feed.versions.length });
+      // A copy that cannot be kept leaves this launch's file in use.
+      try {
+        this.io.writeCache({ fetchedAt, file });
+      } catch (error) {
+        this.log.event("whats_new.cache_write_failed", { detail: detail(error) });
+      }
     } catch (error) {
       this.failed = true;
-      this.log.event("whats_new.fetch_failed", { detail: (error instanceof Error ? error.message : String(error)).slice(0, 300) });
+      this.log.event("whats_new.fetch_failed", { detail: detail(error) });
     } finally {
       this.fetching = false;
       this.emit();
@@ -108,18 +127,26 @@ export class WhatsNew {
   }
 
   /** Moves the record forward, never back: a version's window closed, or a version opened in the history. */
-  save(update: { shown?: unknown; seen?: unknown }): void {
-    const shown = update.shown === undefined ? undefined : release(update.shown);
-    const seen = update.seen === undefined ? undefined : release(update.seen);
-    if (shown === null || seen === null) {
-      this.log.event("whats_new.save_refused", { reason: "version" });
+  save(update: { shown?: unknown; seen?: unknown; opened?: unknown }): void {
+    const merged = mergeRecord(this.record, update, this.feed, this.appVersion);
+    if ("refused" in merged) {
+      this.log.event("whats_new.save_refused", { reason: merged.refused });
       return;
     }
-    const before = this.record ?? { shown: null, seen: null };
-    const next: WhatsNewRecord = { shown: shown === undefined ? before.shown : newer(before.shown, shown), seen: seen === undefined ? before.seen : newer(before.seen, seen) };
-    if (this.record !== null && next.shown === before.shown && next.seen === before.seen) return;
-    this.io.writeRecord(next);
-    this.record = next;
+    const next = merged.record;
+    const before = this.record;
+    if (before !== null && next.shown === before.shown && next.seen === before.seen && next.opened.join() === before.opened.join()) return;
+    this.keep(next);
+  }
+
+  /** Holds `record` for this launch and writes it; a write that fails is the log's, and this launch still keeps it. */
+  private keep(record: WhatsNewRecord): void {
+    this.record = record;
+    try {
+      this.io.writeRecord(record);
+    } catch (error) {
+      this.log.event("whats_new.record_write_failed", { detail: detail(error) });
+    }
     this.emit();
   }
 
@@ -137,7 +164,8 @@ export class WhatsNew {
       this.log.event("whats_new.record_unreadable", { detail: String(row.unreadable).slice(0, 200) });
       return null;
     }
-    return { shown: release(row.shown), seen: release(row.seen) };
+    const opened = Array.isArray(row.opened) ? row.opened.map(release).filter((value): value is string => value !== null).slice(0, VERSION_LIMIT) : [];
+    return { shown: release(row.shown), seen: release(row.seen), opened };
   }
 
   private emit(): void {
@@ -147,20 +175,8 @@ export class WhatsNew {
 }
 
 /** The file over Electron's network stack (the system's proxy), bounded in time and size. */
-export async function fetchReleasesFile(url: string, fetchImpl: (url: string, init: RequestInit) => Promise<Response>): Promise<unknown> {
-  const response = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(RELEASES_TIMEOUT_MS) });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`releases file answered HTTP ${response.status}`);
-  }
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > RELEASES_BYTES_CAP) {
-    await response.body?.cancel();
-    throw new Error("releases file exceeds 1 MiB");
-  }
-  const body = await response.arrayBuffer();
-  if (body.byteLength > RELEASES_BYTES_CAP) throw new Error("releases file exceeds 1 MiB");
-  return JSON.parse(new TextDecoder().decode(body));
+export function fetchReleasesFile(url: string, fetchImpl: FetchImpl): Promise<unknown> {
+  return fetchBoundedJson(fetchImpl, url, { headers: { Accept: "application/json" }, cap: RELEASES_BYTES_CAP, timeoutMs: RELEASES_TIMEOUT_MS, what: "releases file" });
 }
 
 /** The io a packaged app uses, files in `userData`. */
@@ -172,5 +188,6 @@ export function whatsNewIo(userData: string, fetch: () => Promise<unknown>): Wha
     writeCache: (value) => writeJsonFile(releasesCacheFile(userData), value),
     readRecord: () => readJsonFile(whatsNewRecordFile(userData)),
     writeRecord: (record) => writeJsonFile(whatsNewRecordFile(userData), record),
+    earlierLaunch: EARLIER_LAUNCH_FILES.some((file) => fs.existsSync(path.join(userData, file))),
   };
 }

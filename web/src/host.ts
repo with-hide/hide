@@ -7,7 +7,7 @@
 // Factory's notifications with their clicks back; the shell
 // never reaches the host any other way (desktop PRD B11).
 
-import type { ReleaseFeed, WhatsNewRecord } from "./releases";
+import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
 
@@ -294,10 +294,10 @@ export type WhatsNewState = {
 export type WhatsNewBridge = {
   /** Delivers the state at once and on every change; returns the unsubscribe. */
   onState(listener: (state: WhatsNewState) => void): () => void;
-  /** Fetches again when the kept copy is an hour old (the history opening). */
-  refresh(): void;
-  /** Moves the record forward: a version's window closed (`shown`), a version opened in the history (`seen`). */
-  save(update: { shown?: string; seen?: string }): void;
+  /** Fetches again when the kept copy is an hour old (the history opening), or now with `always` (its Try again). */
+  refresh(always?: boolean): void;
+  /** Moves the record forward: a version's window closed (`shown`), a version opened in the history (`opened`). */
+  save(update: RecordUpdate): void;
 };
 
 /**

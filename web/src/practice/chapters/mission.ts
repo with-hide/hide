@@ -28,6 +28,7 @@ export default chapter<MissionModel>({
   number: 3,
   next: "overview",
   version: 18,
+  since: "1.2.7",
   world: MISSION_WORLD,
   quest: true,
   preview: "mission",

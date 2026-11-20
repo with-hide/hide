@@ -13,6 +13,8 @@ import { CHAPTERS } from "./practice/chapters";
 import { parseReleaseFeed, RELEASE_DRAWINGS } from "./releases";
 
 const FILE = path.resolve(__dirname, "../../site/public/app/releases.json");
+/** The version a release is about to publish, set by `scripts/check-releases-entry.sh`; unset on an ordinary run. */
+const RELEASING = process.env.HIDE_RELEASE_ENTRY;
 const raw: unknown = JSON.parse(fs.readFileSync(FILE, "utf8"));
 const { feed, dropped } = parseReleaseFeed(raw);
 
@@ -31,6 +33,19 @@ describe("site/public/app/releases.json", () => {
         if (highlight.chapter !== null) expect(chapters.has(highlight.chapter), `${row.version} chapter ${highlight.chapter}`).toBe(true);
       }
     }
+  });
+
+  it("marks every practice chapter a main feature opens with the version it came with", () => {
+    for (const row of feed.versions) {
+      for (const highlight of row.highlights) {
+        if (highlight.chapter === null) continue;
+        expect(CHAPTERS.find((chapter) => chapter.id === highlight.chapter)?.since, `chapter ${highlight.chapter} since`).toBeDefined();
+      }
+    }
+  });
+
+  it.runIf(RELEASING !== undefined)("has the version being released as its newest entry (B29)", () => {
+    expect(feed.versions[0]?.version, `the releases file's newest entry, for release ${RELEASING}`).toBe(RELEASING);
   });
 
   it("gives every line in every interface language", () => {

@@ -17,7 +17,7 @@ import { openPractice } from "../practice/channel";
 import { CHAPTERS } from "../practice/chapters";
 import type { PracticePreviewKind } from "../practice/chapter";
 import { PracticePreview, PREVIEW_CSS } from "../practice/PracticePreview";
-import { historyVersions, inLanguage, RELEASE_DRAWINGS, unseen, type ReleaseDrawing, whatsNewOffer, type Change, type Offer, type OfferHighlight, type ReleaseEntry, type WhatsNewRecord } from "../releases";
+import { historyVersions, inLanguage, RELEASE_DRAWINGS, unseen, type ReleaseDrawing, whatsNewOffer, type Change, type Offer, type OfferHighlight, type RecordUpdate, type ReleaseEntry, type WhatsNewRecord } from "../releases";
 import { releaseNotesUrl, useUpdateStatus, readyVersion } from "../updates";
 import { chooseUpdateHistoryVersion, closeUpdateHistory, openUpdateHistory, retryUpdateHistory, saveWhatsNew, useUpdateHistory, useWhatsNewState } from "../whatsNew";
 import type { Actions } from "../actions";
@@ -41,6 +41,7 @@ const chapterKnown = (id: string | null): id is string => id !== null && CHAPTER
 
 /** A drawing or chapter the release names that this app does not have: shown without it, and noted for the log (B14). */
 function noteMissing(highlight: { drawing: string; chapter: string | null }): void {
+  if (isDrawing(highlight.drawing) && (highlight.chapter === null || chapterKnown(highlight.chapter))) return;
   const note = useShellStore.getState().noteDiagnostic;
   if (!isDrawing(highlight.drawing)) note(`whats_new: no drawing ${highlight.drawing}`);
   if (highlight.chapter !== null && !chapterKnown(highlight.chapter)) note(`whats_new: no practice chapter ${highlight.chapter}`);
@@ -109,7 +110,7 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
     return () => window.clearTimeout(timer);
   }, [advancing, chosen, offer.highlights.length]);
   useEffect(() => {
-    for (const row of offer.highlights) if (!isDrawing(row.drawing) || (row.chapter !== null && !chapterKnown(row.chapter))) noteMissing(row);
+    for (const row of offer.highlights) noteMissing(row);
   }, [offer.highlights]);
   const current = offer.highlights[chosen]!;
   const several = offer.from !== null;
@@ -202,6 +203,9 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
   const list = useRef<(HTMLButtonElement | null)[]>([]);
   const entry = rows.find((row) => row.version === chosen) ?? rows[0] ?? null;
   const at = entry ? rows.indexOf(entry) : -1;
+  useEffect(() => {
+    for (const row of entry?.highlights ?? []) noteMissing(row);
+  }, [entry]);
   if (state === "failed" && rows.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-md p-xl text-center" data-update-history-failed>
@@ -323,12 +327,11 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
   const { i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const state = useWhatsNewState();
-  const firstRun = useShellStore((s) => s.rest?.ui_state?.first_run);
   const restIn = useShellStore((s) => s.rest !== null);
   const history = useUpdateHistory();
   const updates = useUpdateStatus();
   const ready = readyVersion(updates);
-  const [offer, setOffer] = useState<{ offer: Offer; save: WhatsNewRecord } | null>(null);
+  const [offer, setOffer] = useState<{ offer: Offer; save: RecordUpdate } | null>(null);
   const decided = useRef(false);
 
   useEffect(() => {
@@ -338,16 +341,16 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
       return;
     }
     if (!state.feed) return;
-    const result = whatsNewOffer(state.feed, state.appVersion, state.record, firstRun?.step === "done");
+    const result = whatsNewOffer(state.feed, state.appVersion, state.record);
     if (result.kind === "none") return;
     decided.current = true;
-    if (result.kind === "quiet") saveWhatsNew({ shown: result.save.shown ?? undefined, seen: result.save.seen ?? undefined });
+    if (result.kind === "quiet") saveWhatsNew(result.save);
     else setOffer({ offer: result.offer, save: result.save });
-  }, [state, restIn, firstRun?.step]);
+  }, [state, restIn]);
 
   const close = () => {
     if (!offer) return;
-    saveWhatsNew({ shown: offer.save.shown ?? undefined, seen: offer.save.seen ?? undefined });
+    saveWhatsNew(offer.save);
     setOffer(null);
   };
   const tryChapter = (chapter: string) => {
@@ -361,7 +364,7 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
   // Opening a version in the history is what takes its NEW mark away (B17).
   const shownVersion = rows.find((row) => row.version === chosen) ?? null;
   useEffect(() => {
-    if (history.open && shownVersion && !shownVersion.isReady && shownVersion.isNew) saveWhatsNew({ seen: shownVersion.version });
+    if (history.open && shownVersion && !shownVersion.isReady && shownVersion.isNew) saveWhatsNew({ opened: shownVersion.version });
   }, [history.open, shownVersion]);
 
   return (
@@ -386,7 +389,7 @@ export function WhatsNewHost({ actions }: { actions: Actions }) {
               appVersion={state.appVersion}
               chosen={chosen}
               language={language}
-              state={rows.length ? "ready" : state.failed && !state.fetching ? "failed" : "loading"}
+              state={rows.length ? "ready" : state.fetching ? "loading" : "failed"}
               onChoose={chooseUpdateHistoryVersion}
               onTry={tryChapter}
               onRetry={retryUpdateHistory}

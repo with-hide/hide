@@ -37,6 +37,7 @@ import path from "node:path";
 import type { AppUpdater } from "electron-updater";
 import type { UpdatePhase, UpdateStatus } from "../../../web/src/host";
 import { compareVersions, parseVersion, type Version } from "../../../web/src/releases";
+import { fetchBoundedJson, type FetchImpl } from "./boundedJson";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLog } from "./log";
 
@@ -445,23 +446,13 @@ function errorDetail(error: unknown): string {
 }
 
 /** GitHub's release list over Electron's network stack (the system's proxy), bounded in time and size. */
-export async function fetchReleases(fetchImpl: (url: string, init: RequestInit) => Promise<Response>): Promise<unknown> {
-  const response = await fetchImpl(RELEASES_API, {
+export function fetchReleases(fetchImpl: FetchImpl): Promise<unknown> {
+  return fetchBoundedJson(fetchImpl, RELEASES_API, {
     headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
-    signal: AbortSignal.timeout(RELEASES_TIMEOUT_MS),
+    cap: RELEASES_BYTES_CAP,
+    timeoutMs: RELEASES_TIMEOUT_MS,
+    what: "GitHub's release list",
   });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`GitHub answered the release list with HTTP ${response.status}`);
-  }
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > RELEASES_BYTES_CAP) {
-    await response.body?.cancel();
-    throw new Error("GitHub's release list exceeds 8 MiB");
-  }
-  const body = await response.arrayBuffer();
-  if (body.byteLength > RELEASES_BYTES_CAP) throw new Error("GitHub's release list exceeds 8 MiB");
-  return JSON.parse(new TextDecoder().decode(body));
 }
 
 /** The Linux package type electron-builder writes beside the app (`resources/package-type`), or null. */
