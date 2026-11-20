@@ -1870,6 +1870,7 @@ pub(super) enum Event {
     HerdrImport(HerdrImportPayload),
     Desk(super::desk::DeskEvent),
     Access(super::access::AccessEvent),
+    Automation(crate::automations::Call),
     FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
@@ -2342,6 +2343,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "browser_state" => decode!(BrowserStatePayload, BrowserState),
         "external_open" => decode!(ExternalOpenPayload, ExternalOpen),
+        automation if super::automations::EVENT_KINDS.contains(&automation) => {
+            super::automations::decode_event(automation, payload)
+                .map(Event::Automation)
+                .ok_or_else(|| invalid_payload(&kind))
+        }
         access if super::access::AccessEvent::KINDS.contains(&access) => {
             super::access::AccessEvent::decode(access, payload)
                 .map(Event::Access)
@@ -4325,6 +4331,7 @@ impl Runtime {
             Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
             Event::Access(event) => self.access_event(event),
+            Event::Automation(call) => self.automation_event(call),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),

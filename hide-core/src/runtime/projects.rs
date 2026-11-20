@@ -5563,6 +5563,22 @@ impl Runtime {
     /// A row whose last pane is closing, registered so the project stays
     /// listed once the engine's workspace is gone.
     fn retain_registration(&mut self, registration: crate::model::WorkspaceRegistration) -> bool {
+        let line = format!(
+            "Registered {} at {} so closing its last pane keeps the project listed",
+            registration.label, registration.path
+        );
+        self.register_without_workspace(registration, "workspace.retained", line)
+    }
+
+    /// Registers a project with no workspace in the engine and no pane: a
+    /// closing row's, or an automation's own folder, which its runs start in
+    /// (PRD automations D-08). Whether it was added.
+    pub(super) fn register_without_workspace(
+        &mut self,
+        registration: crate::model::WorkspaceRegistration,
+        kind: &str,
+        line: String,
+    ) -> bool {
         if self
             .snapshot
             .ui_state
@@ -5572,13 +5588,7 @@ impl Runtime {
         {
             return false;
         }
-        self.push_diagnostic(
-            "workspace.retained",
-            format!(
-                "Registered {} at {} so closing its last pane keeps the project listed",
-                registration.label, registration.path
-            ),
-        );
+        self.push_diagnostic(kind, line);
         let registration_id = registration.id.clone();
         self.snapshot
             .ui_state

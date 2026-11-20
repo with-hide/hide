@@ -33,7 +33,7 @@ use tokio::sync::mpsc;
 use super::conversation::{self, Tail, Transcript};
 use super::looks;
 use super::pane::{self, Input, PaneError};
-use super::projection::{AgentKey, PhoneMissions, PhonePrs, Projection};
+use super::projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use super::prs;
 use super::store::{ApnsRegistration, FcmRegistration, Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
@@ -312,6 +312,17 @@ fn prs_frame(prs: &PhonePrs) -> Value {
     json!({
         "type": "prs", "projects": prs.projects, "items": prs.items,
         "feedback": prs.feedback, "omitted": prs.omitted,
+    })
+}
+
+/// The automations the phone lists (PRD automations B34, B35): the core's
+/// section trimmed to the list and each one's records, republished when it
+/// changes.
+fn automations_frame(automations: &PhoneAutomations) -> Value {
+    json!({
+        "type": "automations", "items": automations.items, "omitted": automations.omitted,
+        "zone": automations.zone, "asks": automations.asks,
+        "unreadable": automations.unreadable,
     })
 }
 
@@ -807,6 +818,7 @@ async fn run(
     let mut projection = mobile.subscribe_projection();
     let mut missions = mobile.subscribe_missions();
     let mut prs = mobile.subscribe_prs();
+    let mut automations = mobile.subscribe_automations();
     let mut meta = mobile.subscribe_meta();
     let (frames_tx, mut frames) = mpsc::channel::<Value>(8);
     let mut open = Open::default();
@@ -836,6 +848,7 @@ async fn run(
         agents,
         missions_frame(&missions.borrow_and_update()),
         prs_frame(&prs.borrow_and_update()),
+        automations_frame(&automations.borrow_and_update()),
     ];
     for frame in &first {
         if !send_frame(socket, frame, phone_id).await {
@@ -863,6 +876,11 @@ async fn run(
             changed = prs.changed() => {
                 if changed.is_err() { return; }
                 let frame = prs_frame(&prs.borrow_and_update());
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = automations.changed() => {
+                if changed.is_err() { return; }
+                let frame = automations_frame(&automations.borrow_and_update());
                 if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
@@ -1029,6 +1047,7 @@ async fn handle(
         "read_pr" | "merge_pr" | "read_pr_feedback" => {
             Some(pr_request(mobile, phone_id, kind, message).await)
         }
+        "automation" => Some(automation_request(mobile, phone_id, message).await),
         "delegate_pr" => {
             let busy = json!({"type": "start_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight"});
             // Answered once the core says how the start went, like a start from the sheet.
@@ -1212,6 +1231,7 @@ fn operator_action(kind: &str) -> bool {
             | "ask_mission_material"
             | "reopen_mission_view"
             | "merge_pr"
+            | "automation"
             | "delegate_pr"
             | "wake_sleeping_session"
             | "start_agent"
@@ -1652,6 +1672,71 @@ async fn dispatch_action(
     match dispatched {
         Ok(result) => result,
         Err(_) => Err("unavailable"),
+    }
+}
+
+/// What a phone's `automation` press asks, once it names a listed
+/// automation: the one `automation_run`, `automation_pause` or
+/// `automation_resume` event the desktop's buttons send (PRD automations
+/// B34). A run while one goes is refused here as the desktop's button is off
+/// (B19); the core refuses it too.
+fn automation_event(message: &Value, listed: &PhoneAutomations) -> Result<Vec<u8>, &'static str> {
+    let action = match message.get("action").and_then(Value::as_str) {
+        Some(action @ ("run" | "pause" | "resume")) => action,
+        _ => return Err("invalid_request"),
+    };
+    let id = message.get("id").and_then(Value::as_str);
+    let Some(automation) = id.and_then(|id| listed.find(id)) else {
+        return Err("gone");
+    };
+    if action == "run" && automation.running {
+        return Err("running");
+    }
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": format!("automation_{action}"),
+        "payload": {"id": automation.id},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// A phone's [지금 실행], [멈춤] or [다시 켜기]: claimed by its request id
+/// and dispatched as a mission answer is, so a repeat of the same press, on
+/// this socket or another, reaches the core once (B36). What the core then
+/// did comes back on the automation in the `automations` frame; this answers
+/// only whether hided sent it.
+async fn automation_request(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let action = message.get("action").and_then(Value::as_str);
+    let id = message.get("id").and_then(Value::as_str);
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "automation_result", "action": action, "id": id, "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "automation_result", "request_id": request_id, "action": action,
+            "id": id, "ok": ok, "reason": reason,
+        })
+    };
+    // An id this phone already sent is answered from its claim before the
+    // automation is judged again, so the repeat of a run that started is `ok`
+    // and never `running`.
+    if let Some(state) = mobile.claimed_input(phone_id, request_id) {
+        return claim_answer(&answer, state);
+    }
+    let bytes = match automation_event(message, &mobile.automations()) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("automation:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
     }
 }
 
@@ -3226,6 +3311,102 @@ mod tests {
         let mut gone = material(json!({"mission": "mission-9"}));
         gone["request_id"] = json!("g");
         let refused = ask_mission_material(&mobile, &phone, &gone).await;
+        assert_eq!(reason(&refused), Some("gone"));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "g"),
+            Reservation::Write
+        ));
+    }
+
+    fn listed_automations(running: bool) -> PhoneAutomations {
+        PhoneAutomations {
+            asks: Vec::new(),
+            unreadable: false,
+            items: vec![hide_core::agent_state::phone::PhoneAutomation {
+                id: "auto-1".into(),
+                name: "Morning issues".into(),
+                schedule: serde_json::from_value(json!({"kind": "daily", "time": "09:00"}))
+                    .unwrap(),
+                next_run_at_unix_ms: Some(1),
+                paused: None,
+                running,
+                unseen: 0,
+                recent_spend: None,
+                records: Vec::new(),
+                records_omitted: 0,
+            }],
+            omitted: 0,
+            zone: None,
+        }
+    }
+
+    /// A phone's [지금 실행], [멈춤] and [다시 켜기] are the desktop's own
+    /// `automation_*` events, claimed once per press, and an automation the
+    /// phone's list does not hold, a run while one goes, or an action the
+    /// phone has no button for is refused before anything is claimed.
+    #[tokio::test]
+    async fn a_phone_automation_press_is_the_desktop_event_claimed_once_per_press() {
+        let press = |action: &str, id: &str, request: &str| json!({"type": "automation", "request_id": request, "action": action, "id": id});
+        let listed = listed_automations(false);
+        for action in ["run", "pause", "resume"] {
+            let event: Value = serde_json::from_slice(
+                &automation_event(&press(action, "auto-1", "r"), &listed).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(event["kind"], format!("automation_{action}"));
+            assert_eq!(event["payload"], json!({"id": "auto-1"}));
+        }
+        assert_eq!(
+            automation_event(&press("remove", "auto-1", "r"), &listed),
+            Err("invalid_request")
+        );
+        assert_eq!(
+            automation_event(&press("run", "auto-9", "r"), &listed),
+            Err("gone")
+        );
+        assert_eq!(
+            automation_event(&press("run", "auto-1", "r"), &listed_automations(true)),
+            Err("running")
+        );
+        assert!(
+            automation_event(&press("pause", "auto-1", "r"), &listed_automations(true)).is_ok()
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.automations.send_replace(Arc::new(listed));
+        let phone = paired(&mobile);
+        let first = automation_request(&mobile, &phone, &press("run", "auto-1", "a")).await;
+        assert_eq!(
+            (
+                first["type"].as_str(),
+                first["request_id"].as_str(),
+                first["action"].as_str(),
+                first["ok"].as_bool()
+            ),
+            (
+                Some("automation_result"),
+                Some("a"),
+                Some("run"),
+                Some(true)
+            ),
+            "{first}"
+        );
+        assert!(matches!(
+            mobile.reserve_input(&phone, "a"),
+            Reservation::Seen(InputState::Written)
+        ));
+        // The run started: a repeat of the same press is answered from its
+        // claim before the list, which now says it is running, is read.
+        mobile
+            .automations
+            .send_replace(Arc::new(listed_automations(true)));
+        let again = automation_request(&mobile, &phone, &press("run", "auto-1", "a")).await;
+        assert_eq!(again["ok"], true, "{again}");
+        let new_press = automation_request(&mobile, &phone, &press("run", "auto-1", "b")).await;
+        assert_eq!(reason(&new_press), Some("running"));
+        let refused = automation_request(&mobile, &phone, &press("run", "auto-9", "g")).await;
         assert_eq!(reason(&refused), Some("gone"));
         assert!(matches!(
             mobile.reserve_input(&phone, "g"),

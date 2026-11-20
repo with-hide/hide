@@ -7,7 +7,7 @@
 // same way and a remote action can never be built from a local id.
 
 import type { TFunction } from "i18next";
-import type { AgentRow, Checkout, Device, RemotePaneLayout, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
+import { listedWorkspaces, type AgentRow, type Checkout, type Device, type RemotePaneLayout, type RemoteSession, type RemoteStatus, type SnapshotRest, type Tab, type Workspace } from "./snapshot";
 import { findArea } from "./areaLayout";
 import type { WorkspaceView } from "./workspace";
 import { machineName } from "./screenMachine";
@@ -144,10 +144,10 @@ export function contextAgents(rest: SnapshotRest | null, localAgents: AgentRow[]
   return context ? (context.session?.agents ?? NO_AGENTS) : localAgents;
 }
 
-/** The projects the sidebar lists: the selected host's engine workspaces, or this machine's projects. */
+/** The projects the sidebar lists: the selected host's engine workspaces, or this machine's projects, an automation's own folder left out (PRD automations B30). */
 export function contextWorkspaces(rest: SnapshotRest | null): Workspace[] {
   const context = remoteContext(rest);
-  return context ? (context.session?.workspaces ?? NO_WORKSPACES) : (rest?.navigator?.workspaces ?? NO_WORKSPACES);
+  return listedWorkspaces(context ? (context.session?.workspaces ?? NO_WORKSPACES) : (rest?.navigator?.workspaces ?? NO_WORKSPACES));
 }
 
 const NO_AGENTS: AgentRow[] = [];

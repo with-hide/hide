@@ -14,7 +14,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import { PR_LOOK } from "./prMark";
 import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
-import type { AgentRow, Checkout, Device, GithubSearchResult, PrState, PullRequest, SessionWorkSearch, SnapshotRest, Task, WorkSession, Workspace } from "./snapshot";
+import { listedWorkspaces, type AgentRow, type Checkout, type Device, type GithubSearchResult, type PrState, type PullRequest, type SessionWorkSearch, type SnapshotRest, type Task, type WorkSession, type Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
 import { askSubjectText } from "./askSubject";
 
@@ -171,13 +171,14 @@ export function searchDevices(rest: SnapshotRest): SearchDevice[] {
   for (const device of devices) {
     const named = { name: listed?.length ? machineName(listed, device.id, translate) : translate(thisMachineKey(null)), own: device.id === own };
     if (device.id === localDeviceId(rest)) {
-      const all = rest.navigator?.workspaces ?? [];
+      // An automation's own folder is no project to find (PRD automations B30).
+      const all = listedWorkspaces(rest.navigator?.workspaces ?? []);
       rows.push({ agentScope: rest.navigator?.devices?.find((d) => d.id === device.id)?.agent_scope ?? rest.navigator?.agent_scope, device, ...named, agents: rest.navigator?.agents ?? [], workspaces: all, local: true });
       continue;
     }
     const status = rest.status?.remote?.find((row) => row.target_id === device.id);
     const session = status?.state === "connected" ? status.session : null;
-    rows.push({ agentScope: device.agent_scope, device, ...named, agents: session?.agents ?? [], workspaces: session?.workspaces ?? [], local: false });
+    rows.push({ agentScope: device.agent_scope, device, ...named, agents: session?.agents ?? [], workspaces: listedWorkspaces(session?.workspaces ?? []), local: false });
   }
   return rows;
 }

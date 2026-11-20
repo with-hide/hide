@@ -51,6 +51,8 @@ import { useUiStore } from "./ui";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 import { DeskScreen } from "./DeskScreen";
 import { MissionScreen } from "./MissionScreen";
+import { AutomationScreen } from "./AutomationScreen";
+import { configureAutomationCalls } from "./automationCall";
 import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
 
@@ -77,6 +79,7 @@ export function App() {
     });
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);
+    configureAutomationCalls(session.dispatch);
     configurePaneVisits(actions.paneVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {
@@ -419,7 +422,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
   return (
     <>
       <OpeningStatus actions={actions} />
-      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : <OverviewPage actions={actions} />}
+      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : screen.kind === "automations" ? <AutomationScreen actions={actions} /> : <OverviewPage actions={actions} />}
     </>
   );
 }

@@ -13,6 +13,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_definitions;
 mod agent_profiles;
+pub(crate) mod automations;
 pub(crate) use agent_definitions::settle_and_hand_off;
 mod add_project;
 mod agent_groups;
@@ -1497,6 +1498,7 @@ pub struct Runtime {
     desk: desk::Desk,
     /// External tools' connections (PRD hide-external-control).
     access: access::AccessRuntime,
+    automations: automations::AutomationsRuntime,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -2547,6 +2549,7 @@ impl Runtime {
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             access: access::AccessRuntime::default(),
+            automations: automations::AutomationsRuntime::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),

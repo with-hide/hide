@@ -22,7 +22,7 @@ import { ageWords } from "./overviewLens";
 import { allAgents } from "./paneAgents";
 import { hasPullRequests, prListModel } from "./prWork";
 import { projectRepository, settingsTarget } from "./projectSettings";
-import { COSTLY_SHOWN, costPrefix, dayHeights, durationWords, frontProject, missedCount, projectCost, removableDisk, strayParts, strayView, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
+import { COSTLY_SHOWN, costPrefix, dayHeights, durationWords, frontProject, missedCount, pricedUsd, projectCost, removableDisk, strayParts, strayView, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
 import { machineName } from "./screenMachine";
 import { catalogWorkspaces, localDeviceId, sameDetailItem, type DetailItem, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
@@ -377,7 +377,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
         <SectionHead title={t("projectTool.week")} />
         <div className="grid grid-cols-2 gap-xs px-xs">
           <Figure label={t("projectTool.week.merged")} value={String(week.merged_prs)} note={t("projectTool.week.open", { count: week.open_prs })} kind="merged" />
-          {perPr ? <Figure label={t("projectTool.week.perPrCost")} value={`${perPr.unpriced ? "≥ " : ""}${usd(perPr.micro_usd, language)}`} note={t("projectTool.week.tokens", { tokens: tokenWords(language, perPr.tokens) })} kind="per-pr-cost" /> : <Figure label={t("projectTool.week.perPrCost")} empty={t("projectTool.week.whenMerged")} kind="per-pr-cost" />}
+          {perPr ? <Figure label={t("projectTool.week.perPrCost")} value={pricedUsd(perPr, language) ?? t("projectTool.cost.noPrice")} note={t("projectTool.week.tokens", { tokens: tokenWords(language, perPr.tokens) })} kind="per-pr-cost" /> : <Figure label={t("projectTool.week.perPrCost")} empty={t("projectTool.week.whenMerged")} kind="per-pr-cost" />}
           {perPr ? <Figure label={t("projectTool.week.perPrTime")} value={durationWords(language, perPr.elapsed_ms)} note={t("projectTool.week.worked", { time: durationWords(language, perPr.worked_ms) })} kind="per-pr-time" /> : <Figure label={t("projectTool.week.perPrTime")} empty={t("projectTool.week.whenMerged")} kind="per-pr-time" />}
           {week.missions > 0 ? <Figure label={t("projectTool.week.missions")} value={String(week.missions)} note={week.mission_reopened > 0 ? t("projectTool.week.reopened", { count: week.mission_reopened }) : null} kind="missions" /> : <Figure label={t("projectTool.week.missions")} empty={t("projectTool.week.noMission")} kind="missions" />}
         </div>
@@ -397,7 +397,7 @@ function Week({ project, actions }: { project: Workspace; actions: Actions }) {
         {week.no_result_tasks > 0 ? (
           <Button variant="text" size="inline" className="mx-xs mt-xs flex min-w-0 items-center gap-xs text-caption text-muted-foreground" onClick={() => openTable("none")} data-week-no-result={week.no_result_tasks}>
             <span className="truncate">{t("projectTool.week.noResult")}</span>
-            <span className="shrink-0 tabular-nums text-warning">{t("projectTool.week.noResultValue", { count: week.no_result_tasks, cost: `${week.no_result_unpriced ? "≥ " : ""}${usd(week.no_result_micro_usd, language)}` })}</span>
+            <span className="shrink-0 tabular-nums text-warning">{t("projectTool.week.noResultValue", { count: week.no_result_tasks, cost: pricedUsd({ micro_usd: week.no_result_micro_usd, unpriced: week.no_result_unpriced }, language) ?? t("projectTool.cost.noPrice") })}</span>
             <span className="min-w-0 flex-1" />
             <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-subtle-foreground" />
           </Button>
@@ -534,7 +534,7 @@ function CostlyRow({ task, name, projectId, onPress }: { task: TaskCost; name: s
         <span className="flex w-(--size-task-column) shrink-0 items-center overflow-hidden" data-costly-result="true"><TaskResultMark task={task} projectId={projectId} numbered /></span>
         <span className="min-w-0 flex-1 truncate text-caption text-foreground" title={name}>{name}</span>
         {children > 0 ? <span aria-hidden="true" className="shrink-0 text-micro tabular-nums text-muted-foreground">{t("projectTool.task.children", { count: children })}</span> : null}
-        <span className="shrink-0 text-right font-mono text-micro tabular-nums text-foreground">{task.unpriced ? "≥ " : ""}{usd(task.micro_usd, language)}</span>
+        <span className="shrink-0 text-right font-mono text-micro tabular-nums text-foreground">{pricedUsd(task, language) ?? t("projectTool.cost.noPrice")}</span>
         <span className="min-w-(--size-control) shrink-0 whitespace-nowrap text-right text-micro tabular-nums text-muted-foreground">{durationWords(language, task.elapsed_ms)}</span>
       </span>
     </li>

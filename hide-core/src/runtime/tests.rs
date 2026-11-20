@@ -36,6 +36,8 @@ mod agent_update;
 mod agents_settings_remote;
 #[path = "tests/appearance.rs"]
 mod appearance;
+#[path = "tests/automations.rs"]
+mod automations;
 #[path = "tests/backlog.rs"]
 mod backlog;
 #[path = "tests/beside_spawn.rs"]
@@ -833,6 +835,7 @@ pub(super) fn workspace(
         last_activity_unix_ms: None,
         checkouts,
         pinned: false,
+        unlisted: false,
         inactive_checkouts: Default::default(),
         session_folds: Default::default(),
         removal: Default::default(),
