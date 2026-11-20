@@ -216,6 +216,12 @@ fn span_words(ms: u64) -> String {
     }
 }
 
+/// Its last push as a fact, when Hide read one: `push 12분 전`.
+fn push_words(node: &Value, now: u64) -> Option<String> {
+    let at = node["pushed_at_unix_ms"].as_u64()?;
+    Some(format!("push {}", minutes_ago(now, at)))
+}
+
 /// What the node waits on that its Conductor set (`Mission::wait_of`), as
 /// the map says it: `기다리는 중 · <why> · <left> 남음`, the time gone once
 /// its end has passed and Hide has not lifted it yet.
@@ -426,6 +432,7 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
         let mut fields = vec![text(node, "key").to_owned(), node_status(node)];
         fields.extend(time_words(node, now));
         fields.extend(review_words(node));
+        fields.extend(push_words(node, now));
         fields.extend(wait_words(node, now));
         fields.extend(stop_words(node, now));
         fields.extend(pr_words(node));
@@ -626,6 +633,9 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(time) = time_words(node, now) {
         let _ = writeln!(out, "시간 {time}");
     }
+    if let Some(push) = push_words(node, now) {
+        let _ = writeln!(out, "{push}");
+    }
     if let Some(wait) = wait_words(node, now) {
         let _ = writeln!(out, "{wait}");
     }
@@ -771,8 +781,8 @@ mod tests {
     /// with-hide/hide-private#552 c1: the head says the title, the state,
     /// how many nodes finished of those left in the plan, the open decision
     /// and the warnings; each node is one line with its state, where its
-    /// time went (mission-82), its review rounds of the limit, the wait its
-    /// Conductor set, pull request and CI, what it waits on, and `⚠` on the line and on
+    /// time went (mission-82), its review rounds of the limit, last push,
+    /// the wait its Conductor set, pull request and CI, what it waits on, and `⚠` on the line and on
     /// each fact that warns. A done node of a book from before the time's
     /// stamp says no time rather than an empty one.
     #[test]
@@ -781,8 +791,8 @@ mod tests {
             draw(&mission(), NOW).unwrap(),
             "mission-33 · Show summary · 진행 중 · 끝 1/4 · 빠짐 1 · 열린 결정 1 · 경고 1\n\
              결정 · Merge order?\n\
-             ⚠ show · 작업 중 · 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h · ⚠리뷰 3/3라운드 · #7 실패 · CI 실패 · 기다림 작업자\n\
-             \x20 ci · 작업 중 · #8 대기 · CI 통과 · 기다림 운영자 결정\n\
+             ⚠ show · 작업 중 · 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h · ⚠리뷰 3/3라운드 · push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
+             \x20 ci · 작업 중 · push 12분 전 · #8 대기 · CI 통과 · 기다림 운영자 결정\n\
              \x20 docs · 끝 · #6 머지됨 외 1\n\
              \x20 later · 계획 · 기다리는 중 · disk · 40m 남음 · 기다림 show\n\
              \x20 old · 빠짐\n"
@@ -924,6 +934,14 @@ mod tests {
             text.contains("  later · 계획 · 기다리는 중 · disk · 기다림 show\n"),
             "{text}"
         );
+        // A node Hide read no push of says nothing of pushes: there is no
+        // missing-push mark (D-32).
+        value["mission"]["nodes"][1]["pushed_at_unix_ms"] = Value::Null;
+        let text = draw(&value, NOW).unwrap();
+        assert!(
+            text.contains("  ci · 작업 중 · #8 대기 · CI 통과 · 기다림 운영자 결정\n"),
+            "{text}"
+        );
     }
 
     /// mission-56: a worker stopped with nothing to wait on reads on its
@@ -940,7 +958,9 @@ mod tests {
             "since_unix_ms": NOW - MINUTE, "told_unix_ms": NOW - MINUTE, "cause": cause}]);
         let drawn = draw(&value, NOW).unwrap();
         assert!(
-            drawn.contains("⚠ ci · 작업 중 · ⚠멈춤 6분 전 · 사용 한도 · resets 4pm · #8 대기"),
+            drawn.contains(
+                "⚠ ci · 작업 중 · push 12분 전 · ⚠멈춤 6분 전 · 사용 한도 · resets 4pm · #8 대기"
+            ),
             "{drawn}"
         );
         let answer = json!({"mission_id": "mission-33", "node": value["mission"]["nodes"][1].clone(),
@@ -959,7 +979,7 @@ mod tests {
         assert!(
             draw(&value, NOW)
                 .unwrap()
-                .contains(" ci · 작업 중 · 멈춤 6분 전 · 보고 없음 · #8")
+                .contains(" ci · 작업 중 · push 12분 전 · 멈춤 6분 전 · 보고 없음 · #8")
         );
     }
 
@@ -973,7 +993,7 @@ mod tests {
     }
 
     /// with-hide/hide-private#552 c1: one node in full: its state, worker,
-    /// pull requests, warnings, every line with its evidence and each
+    /// pull requests, last push, warnings, every line with its evidence and each
     /// checker's answer, its worker's newest letters, and the letters its
     /// checkers wrote to the Conductor, each with the id `hide request show`
     /// reads it by (with-hide/hide-private#668).
@@ -1007,6 +1027,7 @@ mod tests {
              PR #7 실패 · https://github.com/acme/hide/pull/7\n\
              브랜치 feat/show\n\
              시간 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h\n\
+             push 95분 전\n\
              경고 ⚠ 리뷰 3/3라운드 · 한도 도달, 보통 이하는 후속 이슈로 · 지휘자에게 알림 20분 전\n\
              완료 줄 1/3\n\
              \x20 c1 통과 · show reads as text · 근거 unit test · w 30분 전\n\

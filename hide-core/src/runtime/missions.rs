@@ -1749,6 +1749,20 @@ fn settle_typed_answers(book: &mut crate::missions::MissionBook) {
 /// (with-hide/hide#2518) may hold one on a mission its Conductor closed,
 /// where nothing could take it off: it is settled now, as that close
 /// settles it today.
+/// A delay a build from before `Mission::delay_until_unix_ms` kept has no
+/// end: it is given one `DELAY_LIMIT_MINUTES` from `now`, when the book is
+/// read, before any view, watch or warning reads the wait (`Mission::wait_of`),
+/// so a delayed node is a waiting node from the first judgment (PRD
+/// letters-missions-simplify B22). It is written with the mission's next save.
+pub(super) fn settle_endless_delays(book: &mut crate::missions::MissionBook, now: u64) {
+    let limit = u64::from(crate::missions::DELAY_LIMIT_MINUTES) * 60_000;
+    for mission in &mut book.missions {
+        if mission.delay.is_some() && mission.delay_until_unix_ms.is_none() {
+            mission.delay_until_unix_ms = Some(now + limit);
+        }
+    }
+}
+
 fn settle_closed_refusals(book: &mut crate::missions::MissionBook) {
     for mission in &mut book.missions {
         if !matches!(
@@ -1771,6 +1785,7 @@ impl Runtime {
             Restored::Read(mut book) | Restored::Moving(mut book) => {
                 settle_typed_answers(&mut book);
                 settle_closed_refusals(&mut book);
+                settle_endless_delays(&mut book, super::unix_milliseconds());
                 self.missions.book = book;
             }
             Restored::Unreadable(reason) => {
@@ -2599,7 +2614,7 @@ impl Runtime {
                 // A hold set or lifted is the Conductor's move on the node:
                 // whatever stood before it is counted again from now.
                 if patch.hold.is_some() {
-                    self.restart_stall_clock(&id, Some(&node));
+                    self.wait_moved(&id, Some(&node));
                 }
                 // What the Conductor just did may follow a pull request it
                 // pushed: its project is read again within the read's own
@@ -2934,7 +2949,7 @@ impl Runtime {
         target.delay_until_unix_ms = until;
         if changed {
             target.updated_at_unix_ms = now;
-            self.restart_stall_clock(&id, None);
+            self.wait_moved(&id, None);
             self.save_missions();
         }
         Ok((json!({"mission": self.mission_view_of(&id)}), changed))

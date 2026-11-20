@@ -673,6 +673,17 @@ fn node_works(mission: &Mission, node: &MissionNode) -> bool {
         && node.kind != NodeKind::External
 }
 
+/// Whether `node` may carry a warning now, the one rule every warning reads
+/// (PRD letters-missions-simplify B22, B23): it is at work in a running
+/// mission (`node_works`), it does not wait on purpose (`Mission::wait_of`),
+/// and its worker is not asleep, a sleeping worker's card saying asleep
+/// rather than warning. `fact` is none where no worker facts were read.
+fn warns(mission: &Mission, node: &MissionNode, fact: Option<&NodeFacts>) -> bool {
+    node_works(mission, node)
+        && mission.wait_of(node).is_none()
+        && fact.is_none_or(|fact| fact.worker != Some(WorkerLife::Asleep))
+}
+
 /// A change to the warnings a node carries.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WarnAct {
@@ -698,7 +709,8 @@ pub(crate) enum WarnAct {
 /// or ends, or the node waits on someone. A node that waits on purpose
 /// (`Mission::wait_of`) carries no warning of any kind: one standing goes
 /// and none rises until the wait ends, and a stop is timed from then (PRD
-/// letters-missions-simplify B22). There is no warning about pushes (D-32):
+/// letters-missions-simplify B22), and neither does one whose worker sleeps
+/// (B23; `warns`). There is no warning about pushes (D-32):
 /// a stopped worker is told by its stop, and one that goes round in circles
 /// by its review's round limit. `facts` and `operator_waits` hold one entry
 /// per node, in the record's order.
@@ -711,12 +723,12 @@ pub(crate) fn warn_acts(
 ) -> Vec<WarnAct> {
     let mut acts = Vec::new();
     for (at, node) in mission.nodes.iter().enumerate() {
-        let waits = mission.wait_of(node).is_some();
-        let works = node_works(mission, node) && !waits;
-        let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
         let fact = facts.get(at);
-        let stopped =
-            fact.and_then(|fact| stopped_worker(mission, node, fact, pulls, operator_waits));
+        let works = warns(mission, node, fact);
+        let standing = |kind| node.warnings.iter().find(|warning| warning.kind == kind);
+        let stopped = fact
+            .filter(|_| works)
+            .and_then(|fact| stopped_worker(mission, node, fact, pulls, operator_waits));
         match standing(WarningKind::Stopped) {
             Some(_) if stopped.is_none() => acts.push(WarnAct::Clear {
                 node: at,
@@ -1805,13 +1817,16 @@ mod tests {
         );
     }
 
-    /// B23: a sleeping worker is no wait and gets no warning: its stop is
-    /// read only while its program runs.
+    /// B23: a sleeping worker is no wait and gets no warning of any kind:
+    /// its review failed at the limit raises none while it sleeps, one
+    /// standing goes, and it rises again once the worker wakes.
     #[test]
     fn a_sleeping_worker_gets_no_warning_and_is_no_wait() {
-        let m = reviewed();
-        let asleep = NodeFacts {
-            worker: Some(WorkerLife::Asleep),
+        let mut m = reviewed();
+        m.nodes[0].criteria[1].rounds = 3;
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
+        let life = |life| NodeFacts {
+            worker: Some(life),
             stopped: Some(WorkerStopped {
                 since_unix_ms: 0,
                 cause: None,
@@ -1819,8 +1834,29 @@ mod tests {
             ..NodeFacts::default()
         };
         let pulls = listed(Vec::new());
-        assert!(warn_acts(&m, Some(&pulls), &[asleep], &[false], 600 * MINUTE).is_empty());
+        let now = 600 * MINUTE;
+        let acts =
+            |m: &Mission, life_now| warn_acts(m, Some(&pulls), &[life(life_now)], &[false], now);
+        assert!(acts(&m, WorkerLife::Asleep).is_empty());
         assert_eq!(m.wait_of(&m.nodes[0]), None);
+        m.nodes[0].warnings = vec![warn(WarningKind::ReviewFails, 5)];
+        assert_eq!(
+            acts(&m, WorkerLife::Asleep),
+            [WarnAct::Clear {
+                node: 0,
+                kind: WarningKind::ReviewFails,
+            }]
+        );
+        m.nodes[0].warnings.clear();
+        assert!(
+            acts(&m, WorkerLife::Running).contains(&WarnAct::Raise {
+                node: 0,
+                kind: WarningKind::ReviewFails,
+                from: 5,
+                cause: None,
+            }),
+            "awake, it warns again"
+        );
     }
 
     /// with-hide/hide-private#552: a pull request that only waits on CI, a

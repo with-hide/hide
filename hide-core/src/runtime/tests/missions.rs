@@ -11204,6 +11204,13 @@ fn a_delay_takes_a_stop_warning_away_and_the_stop_counts_again_from_its_end() {
         json!({"op": "delay", "line": "usage", "for_minutes": 60}),
     )
     .unwrap();
+    // The delay takes the standing warning off at once, before any
+    // judgment (review of with-hide/hide#2750, S2).
+    assert_eq!(
+        warnings_of(&runtime),
+        (vec![], vec![]),
+        "taken off when set"
+    );
     // Its end on the stop's clock, as a delay set then would have it.
     let until = STOPPED_SINCE + 60 * MINUTE;
     runtime
@@ -11212,8 +11219,8 @@ fn a_delay_takes_a_stop_warning_away_and_the_stop_counts_again_from_its_end() {
         .get_mut("mission-1")
         .unwrap()
         .delay_until_unix_ms = Some(until);
-    assert!(runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
-    assert_eq!(warnings_of(&runtime), (vec![], vec![]), "the wait takes it");
+    assert!(!runtime.warn_missions(STOPPED_SINCE + 6 * MINUTE));
+    assert_eq!(warnings_of(&runtime), (vec![], vec![]), "none rises");
     runtime.warn_missions(until - MINUTE);
     assert_eq!(warnings_of(&runtime).0, []);
 
@@ -11229,6 +11236,83 @@ fn a_delay_takes_a_stop_warning_away_and_the_stop_counts_again_from_its_end() {
     let (kinds, letters) = warnings_of(&runtime);
     assert_eq!(kinds, [WarningKind::Stopped]);
     assert_eq!(letters.len(), 1, "{letters:?}");
+}
+
+/// Review of with-hide/hide#2750 (S2): a delay set and cleared between two
+/// warning judgments still counts a worker's stop again from then: the
+/// stop seen before it is not reused, so it warns five minutes after the
+/// second judgment, not at once.
+#[test]
+fn a_delay_set_and_cleared_between_judgments_counts_the_stop_again() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    for line in [
+        json!({"op": "delay", "line": "usage", "for_minutes": 60}),
+        json!({"op": "delay", "line": null}),
+    ] {
+        command(&mut runtime, "sender", line).unwrap();
+    }
+    runtime.warn_missions(STOPPED_SINCE + 2 * MINUTE);
+    runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE);
+    assert_eq!(
+        warnings_of(&runtime).0,
+        [],
+        "not timed from before the wait"
+    );
+    assert!(runtime.warn_missions(STOPPED_SINCE + 7 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
+}
+
+/// Review of with-hide/hide#2750 (S2): a hold set and lifted on another
+/// node leaves a worker's stop where it was: only the held node's clocks
+/// start again, so the stop still warns five minutes after it was seen.
+#[test]
+fn a_hold_on_another_node_keeps_a_workers_stop_time() {
+    use crate::missions::WarningKind;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2"}}),
+    )
+    .unwrap();
+    let worker = runtime.delivery_observations["recipient"].actor.clone();
+    let mut row = shown_row("recipient", "recipient", "working");
+    row.lineage_session = worker.session.clone();
+    row.activity = "stopped".into();
+    row.changed_at_unix_ms = Some(STOPPED_SINCE);
+    runtime.snapshot.navigator.agents = vec![row];
+    runtime.warn_missions(STOPPED_SINCE);
+    for patch in [
+        json!({"hold": {"why": "tonight", "for_minutes": 30}}),
+        json!({"hold": null}),
+    ] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "docs", "patch": patch}),
+        )
+        .unwrap();
+    }
+    assert!(runtime.warn_missions(STOPPED_SINCE + 5 * MINUTE));
+    assert_eq!(warnings_of(&runtime).0, [WarningKind::Stopped]);
 }
 
 /// PRD letters-missions-simplify D-07, B21: a mission's delay and a node's
@@ -14473,11 +14557,26 @@ fn a_mission_delay_ends_by_itself() {
     assert_eq!(delay(&runtime).0.as_deref(), Some("disk"));
     assert!(runtime.stall_missions(until));
     assert_eq!(delay(&runtime), (None, None));
-    // A delay kept with no end is given a day.
-    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    mission.delay = Some("usage".into());
-    assert!(runtime.stall_missions(until + minute));
-    assert_eq!(delay(&runtime).1, Some(until + minute + 24 * 60 * minute));
+    // A delay a build before its end kept is given a day when the book is
+    // read, so its nodes wait from the first judgment: a review failed at
+    // its limit warns nothing (review of with-hide/hide#2750, S3).
+    let mut book = runtime.missions.book.clone();
+    let kept = &mut book.missions[0];
+    kept.delay = Some("usage".into());
+    kept.delay_until_unix_ms = None;
+    kept.nodes[0].status = crate::missions::NodeStatus::Working;
+    let review = kept.nodes[0]
+        .criteria
+        .iter_mut()
+        .find(|line| line.key == "review")
+        .unwrap();
+    review.rounds = 3;
+    review.state = crate::mission_criteria::CriterionState::Fail;
+    super::super::missions::settle_endless_delays(&mut book, until);
+    let kept = &book.missions[0];
+    assert_eq!(kept.delay_until_unix_ms, Some(until + 24 * 60 * minute));
+    assert!(kept.wait_of(&kept.nodes[0]).is_some());
+    assert!(crate::mission_health::warn_acts(kept, None, &[], &[], until).is_empty());
     // A delay with no end is refused.
     assert!(
         command(

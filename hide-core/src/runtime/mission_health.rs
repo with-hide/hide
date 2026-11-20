@@ -841,21 +841,52 @@ impl Runtime {
         changed | clock_moved
     }
 
-    /// Ends each delay that ran out, gives an end to one a build before
-    /// `Mission::delay_until_unix_ms` set, and raises each node that stood
+    /// Ends each delay that ran out and raises each node that stood
     /// where a move did not come (`mission_health::stalls`) for as long as
     /// its reason allows (`stall_after`), counted from the first judgment
     /// that saw it stand: a hold lifted, a place freed, a decision answered
     /// or a restart starts its clock again. Run in the minute decision, the
     /// only clock a stall needs. A mission whose device does not answer is
     /// left as it is (B29). Whether the book changed.
-    /// A hold set, lifted or ended is a move on the mission (`node` none)
-    /// or on one node: whatever stood before it is counted again from the
-    /// next judgment, even when no judgment ran while it held.
-    pub(super) fn restart_stall_clock(&mut self, mission: &str, node: Option<&str>) {
+    /// A wait set, lifted or ended (a mission's delay, a node's hold) is a
+    /// move on the mission (`node` none) or on one node, taken at the
+    /// change itself rather than at the next judgment (PRD
+    /// letters-missions-simplify B22): whatever stood before it, a stall or
+    /// a worker's stop, is counted again from the next judgment, even when
+    /// none ran while it held; and a node the change leaves waiting
+    /// (`Mission::wait_of`) carries no warning from now, its letter not yet
+    /// sent going with it.
+    pub(super) fn wait_moved(&mut self, mission: &str, node: Option<&str>) {
+        let of = |at: &str| node.is_none_or(|node| node == at);
         self.missions
             .stall_clock
-            .retain(|(of, at, _), _| of != mission || node.is_some_and(|node| at != node));
+            .retain(|(id, at, _), _| id != mission || !of(at));
+        self.missions
+            .stop_clock
+            .retain(|(id, at, _), _| id != mission || !of(at));
+        let Some(target) = self.missions.book.get_mut(mission) else {
+            return;
+        };
+        let waiting: Vec<String> = target
+            .nodes
+            .iter()
+            .filter(|one| of(&one.key) && !one.warnings.is_empty())
+            .filter(|one| target.wait_of(one).is_some())
+            .map(|one| one.key.clone())
+            .collect();
+        for key in &waiting {
+            if let Some(held) = target.nodes.iter_mut().find(|one| one.key == *key) {
+                for warning in held.warnings.drain(..) {
+                    crate::diagnostic!(json!({
+                        "component": "missions", "kind": "mission.warning_cleared",
+                        "mission": mission, "node": key, "warning": warning.kind.as_str(),
+                    }));
+                }
+            }
+        }
+        target
+            .wakes
+            .retain(|wake| wake.event != WakeEvent::Warning || !waiting.contains(&wake.node));
     }
 
     pub(crate) fn stall_missions(&mut self, now: u64) -> bool {
@@ -866,29 +897,20 @@ impl Runtime {
         for index in 0..self.missions.book.missions.len() {
             let mission = &mut self.missions.book.missions[index];
             let mut delay_ended = false;
-            if mission.delay.is_some() {
-                let moved = match mission.delay_until_unix_ms {
-                    None => {
-                        let limit = u64::from(crate::missions::DELAY_LIMIT_MINUTES) * 60_000;
-                        mission.delay_until_unix_ms = Some(now + limit);
-                        true
-                    }
-                    Some(until) if now >= until => {
-                        crate::diagnostic!(json!({
-                            "component": "missions", "kind": "mission.delay_ended",
-                            "mission": mission.id,
-                        }));
-                        mission.delay = None;
-                        mission.delay_until_unix_ms = None;
-                        delay_ended = true;
-                        true
-                    }
-                    Some(_) => false,
-                };
-                if moved {
-                    mission.updated_at_unix_ms = now;
-                    changed = true;
-                }
+            if mission.delay.is_some()
+                && mission
+                    .delay_until_unix_ms
+                    .is_some_and(|until| now >= until)
+            {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.delay_ended",
+                    "mission": mission.id,
+                }));
+                mission.delay = None;
+                mission.delay_until_unix_ms = None;
+                mission.updated_at_unix_ms = now;
+                delay_ended = true;
+                changed = true;
             }
             // A node's hold ends by itself too.
             let mut lifted = Vec::new();
@@ -912,10 +934,10 @@ impl Runtime {
             }
             let id = mission.id.clone();
             if delay_ended {
-                self.restart_stall_clock(&id, None);
+                self.wait_moved(&id, None);
             }
             for key in &lifted {
-                self.restart_stall_clock(&id, Some(key));
+                self.wait_moved(&id, Some(key));
             }
             let mission = &self.missions.book.missions[index];
             if self.mission_stale(mission) {
