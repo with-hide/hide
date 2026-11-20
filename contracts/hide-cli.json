@@ -1875,13 +1875,17 @@
                 "devices": {
                     "type": "object"
                 },
+                "guest_panes": {
+                    "type": "object"
+                },
                 "peers": {
                     "type": "object"
                 }
             },
             "required": [
                 "devices",
-                "peers"
+                "peers",
+                "guest_panes"
             ],
             "type": "object"
         },
@@ -1912,6 +1916,17 @@
                 "device_id",
                 "name",
                 "paired"
+            ],
+            "type": "object"
+        },
+        "device_projects_listed": {
+            "properties": {
+                "projects": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "projects"
             ],
             "type": "object"
         },
@@ -1957,6 +1972,21 @@
             "required": [
                 "link",
                 "expires_unix_ms"
+            ],
+            "type": "object"
+        },
+        "device_switched": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "switch": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "switch"
             ],
             "type": "object"
         },
@@ -3366,6 +3396,21 @@
             "title": "PurposeSet",
             "type": "object"
         },
+        "queued": {
+            "properties": {
+                "intent": {
+                    "type": "string"
+                },
+                "queued": {
+                    "const": true
+                }
+            },
+            "required": [
+                "queued",
+                "intent"
+            ],
+            "type": "object"
+        },
         "spawn_show": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -3985,6 +4030,13 @@
             ],
             "title": "WorktreeRemoved",
             "type": "object"
+        }
+    },
+    "away": {
+        "refusals": {
+            "outbox_full": "Too many letters wait for the Hide this work belongs to; send again once it has reconnected",
+            "outbox_unavailable": "This machine could not keep the letter; send again once the Hide this work belongs to has reconnected",
+            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide request send) is kept and delivered once it is back"
         }
     },
     "commands": [
@@ -5173,6 +5225,7 @@
             ],
             "arguments": [],
             "command": "device share",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5255,6 +5308,7 @@
             ],
             "arguments": [],
             "command": "device allow",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5282,6 +5336,7 @@
                 }
             ],
             "command": "device pause",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5341,6 +5396,7 @@
                 }
             ],
             "command": "device resume",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5464,6 +5520,7 @@
                 }
             ],
             "command": "device request",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5502,6 +5559,7 @@
                 }
             ],
             "command": "device address",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5558,10 +5616,63 @@
         },
         {
             "answers": [
+                "device_switched"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device switch",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--install",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "switch_unsupported",
+                "switch_running",
+                "switch_not_connected",
+                "ssh_core_not_started",
+                "ssh_not_reached",
+                "ssh_busy",
+                "ssh_mac_from_mac_only",
+                "ssh_mac_signed_out",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "device_already_connected"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "device_looked"
             ],
             "arguments": [],
             "command": "device look-ssh",
+            "hidden": true,
             "options": [],
             "refusals": [
                 "hide_unavailable",
@@ -5576,6 +5687,7 @@
             ],
             "arguments": [],
             "command": "device accept-ssh",
+            "hidden": true,
             "options": [
                 {
                     "name": "--request",
@@ -5614,6 +5726,14 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--helper",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "refusals": [
@@ -5621,6 +5741,30 @@
                 "invalid_request",
                 "device_already_connected",
                 "device_limit"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_projects_listed"
+            ],
+            "arguments": [],
+            "command": "device projects-ssh",
+            "hidden": true,
+            "needs_one_of": [
+                "--project"
+            ],
+            "options": [
+                {
+                    "name": "--project",
+                    "repeats_at_most": 32,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5693,7 +5837,8 @@
             "refusals": [
                 "pane_required",
                 "lines_out_of_range",
-                "pane_unavailable"
+                "pane_unavailable",
+                "guest_pane_read"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5776,7 +5921,8 @@
                 "composer_not_empty",
                 "keys_not_sent",
                 "send_unconfirmed",
-                "operator_typing"
+                "operator_typing",
+                "guest_pane_keys"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5925,7 +6071,8 @@
         },
         {
             "answers": [
-                "letter"
+                "letter",
+                "queued"
             ],
             "arguments": [
                 {
@@ -5992,6 +6139,8 @@
                 "force_target_asleep",
                 "intent_conflict",
                 "no_parent",
+                "outbox_full",
+                "outbox_unavailable",
                 "participant_registering"
             ],
             "repeats_at_most": null,
@@ -6414,6 +6563,9 @@
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
                 "mission_dependency_cycle",
+                "mission_dependency_line_unknown",
+                "mission_dependency_stack_split",
+                "mission_merge_order_stack",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -7951,7 +8103,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:0fb4c42e7b7d582751fb66e6be83747d9a7c6c3ef79e442b30f5794cb76b16b0",
+    "digest": "sha256:8f49ae7b3a6cb71da71e7265ad3b8b1da6eedc091de40f85459aaadbdca14661",
     "envelopes": {
         "access": {
             "answer": "value",

@@ -2,6 +2,7 @@ pub mod access;
 pub mod access_cli;
 pub mod agent_cli;
 pub mod agent_exec;
+pub mod always_on;
 pub mod attach;
 pub mod attachments;
 pub mod automation_cli;
@@ -19,6 +20,7 @@ pub mod build_order;
 pub mod cli;
 pub mod cli_contract;
 pub mod core;
+pub mod core_install;
 pub mod core_move;
 pub mod core_update;
 pub mod delivery_cli;
@@ -53,13 +55,17 @@ pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
 
+pub mod guest_node;
+pub mod guests;
 mod hook_request;
 pub mod node_panes;
 pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_dial;
 pub mod peer_host;
+pub mod peer_inbox;
 pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
@@ -478,8 +484,28 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let node_panes = Arc::new(node_panes::NodePanes::new(tokio::runtime::Handle::current()));
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
+    // How the core opens its node on a machine it is paired with; the
+    // endpoint it uses is handed in below, once it exists.
+    let this_build = build_order::Release::of_this_build();
+    let peer_dial = peer_dial::Dialer::new(
+        tokio::runtime::Handle::current(),
+        this_build.version.clone(),
+        this_build
+            .is_official()
+            .then(|| this_build.commit.clone())
+            .flatten()
+            .map(|commit| hide_peer::protocol::manage::Release {
+                commit,
+                order: this_build.order,
+            }),
+        env.state_dir.clone(),
+    );
     seat.starting("core.owner");
-    let core = Arc::new(CoreHandle::spawn(options, Arc::clone(&pane_events))?);
+    let core = Arc::new(CoreHandle::spawn(
+        options,
+        Arc::clone(&pane_events),
+        Some(Arc::clone(&peer_dial) as Arc<dyn hide_node::ssh::host::peer::PeerDial>),
+    )?);
     seat.starting("core.services");
     if effects_held {
         let mut open = move_gate.subscribe();
@@ -575,15 +601,50 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             device: peer_device.clone(),
             release: build_order::Release::of_this_build().is_official(),
             direct: env.peer_direct,
+            device_connect: env.device_connect,
         },
         shutdown.clone(),
     );
+    peer_dial.attach(Arc::clone(&peers));
+    peer_dial.take_events(Arc::new(peer_inbox::Letters::new(Arc::clone(&core))));
     // Each stream kind's owner hands its handler in here, before the
     // endpoint opens. The start is not held for the endpoint: a machine
     // whose network is down still starts, and the reason is in the log.
+    //
+    // Other machines' work here: each guest's node runs from that guest's
+    // build, and a guest of this build runs from the programs beside this
+    // one.
+    let guests = guests::Guests::new(
+        env.state_dir.clone(),
+        env.home.clone(),
+        hide_node::ssh::host::HelperPackages::new(
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+            cli::RELEASE,
+        ),
+        Some(guests::Screens {
+            core: Arc::clone(&core),
+        }),
+    );
+    // A build that does not offer connections between two Hides takes no
+    // other machine's work: no guest's stream is handled and no guest node
+    // is started again from the folders a development build left.
+    if env.device_connect {
+        guests.serve(&peers, shutdown.clone());
+    }
+    // A paired machine's login item follows the peer records (PRD
+    // device-connect-iroh D-41).
+    let always_on = always_on::Follower::new(
+        env.home.clone(),
+        env.state_dir.clone(),
+        env.starter_program.is_some(),
+        env.device_connect,
+    );
     let pairing = pairing::Pairing::new(
         Arc::clone(&peers),
         Arc::clone(&core),
+        always_on.clone(),
         hide_peer::pairing::Me {
             name: host_name()
                 .as_deref()
@@ -597,7 +658,10 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         },
         shutdown.clone(),
     );
-    {
+    pairing.follow_guests(Arc::clone(&guests));
+    // A build that does not offer connections between two Hides opens no
+    // endpoint and lists no paired machine, whatever records are on disk.
+    if env.device_connect {
         let peers = Arc::clone(&peers);
         let pairing = Arc::clone(&pairing);
         tokio::spawn(async move {
@@ -606,7 +670,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 // with what was not settled.
                 Ok(Some(_)) => pairing.started().await,
                 // Nothing to dial: a machine a host dropped is still listed.
-                Ok(None) => pairing.rested().await,
+                // No grant is saved either, so no machine is a guest here.
+                Ok(None) => {
+                    guests.granted(Vec::new());
+                    pairing.rested().await;
+                }
                 Err(error) => hide_core::diagnostic!(serde_json::json!({
                     "component": "peer_host",
                     "kind": "peer_host.open_failed",
@@ -672,6 +740,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "keep_alive": env.keep_alive,
             "idle_secs": env.idle_secs,
             "core_instance": core_instance(),
+            // Whether this build offers connections between two Hides: the
+            // window shows pairing only where it does.
+            "device_connect": env.device_connect,
         })),
         mobile: Arc::clone(&mobile),
         peers: Arc::clone(&peers),
@@ -724,6 +795,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         shutdown.clone(),
     ));
     let idle = server::mount(&seat, app);
+    // A paired machine's login item is put in, or an unpaired one's taken
+    // out, as the peer records stand now: the pairing tells it of a change
+    // only once its endpoint is open, which a machine unpaired since its
+    // last start never opens.
+    always_on.peers_changed();
     // The save the core offers on the screen is imported when the operator
     // asks, and the core role starts again with it (PRD
     // engine-bundle-4-herdr-removal D-7, D-8).
@@ -871,7 +947,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             clients: Arc::clone(&daemon.state.clients),
             last_client_gone: Arc::clone(&daemon.state.last_client_gone),
             shutdown: shutdown.clone(),
-            live_panes: Arc::new(move || {
+            live_work: Arc::new(move || {
                 hide_kit::panes::Panes::open(
                     &node_home,
                     &hide_kit::layout::device_node_state(&node_home),

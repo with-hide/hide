@@ -116,7 +116,7 @@ export function AddDeviceScene({ params }: { params: URLSearchParams }) {
       ? { remote: ssh.map((row) => ({ target_id: row.id, state: row.sign_in ? "connecting" : "unavailable", message: null })) }
       : view === "devices" ? { remote: [WSL_ID, "studio"].map((id) => ({ target_id: id, state: "connected", message: null })) } : { ssh_hosts: HOSTS };
     const navigator = ssh ? { devices: [local, ...ssh], focused_device_id: local.id, workspaces: [] } : view === "devices" ? { devices: DEVICES, focused_device_id: WSL_ID, workspaces: [] } : undefined;
-    useShellStore.setState({ connection: "live", pairing: NOTHING_UNDER_WAY, rest: { navigator, status, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } } } as never);
+    useShellStore.setState({ connection: "live", daemon: { device_connect: true }, pairing: NOTHING_UNDER_WAY, rest: { navigator, status, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } } } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [theme, lang, view, windows]);

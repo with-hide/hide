@@ -7,7 +7,8 @@
 //! machine's own window (B52).
 //!
 //! The two endpoints bind loopback with no relay (`HIDE_PEER_DIRECT`), so
-//! nothing leaves the machine.
+//! nothing leaves the machine. Both builds offer connections between two
+//! Hides (`HIDE_DEVICE_CONNECT=1`); one that does not refuses all of it.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,9 @@ use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+#[cfg(unix)]
+mod guest_work;
+
 /// The machine id the guest daemon runs under, so one host is two machines.
 const GUEST: &str = "pairing-guest";
 
@@ -32,7 +36,7 @@ const WITHIN: Duration = Duration::from_secs(40);
 fn host_env(root: &Path) -> Env {
     let state = root.join("host-state");
     hide_platform::fs::private::create_dir_all(&state).unwrap();
-    std::fs::create_dir_all(root.join("host-home")).unwrap();
+    crate::fixtures::fixture_home(&root.join("host-home"));
     Env {
         home: root.join("host-home"),
         state_dir: state,
@@ -53,6 +57,7 @@ fn host_env(root: &Path) -> Env {
         tailscale_bin: Some(root.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: Some("127.0.0.1:0".parse().unwrap()),
+        device_connect: true,
         search_path: None,
     }
 }
@@ -62,19 +67,21 @@ struct Window(Socket);
 
 impl Window {
     async fn open(running: &hided::RunningDaemon, kind: &str) -> Self {
-        let mut request = format!("ws://127.0.0.1:{}/ws", running.port)
+        Self::open_at(running.port, &running.token, kind).await
+    }
+
+    /// A screen of `kind` on the daemon that listens on `port`.
+    async fn open_at(port: u16, token: &str, kind: &str) -> Self {
+        let mut request = format!("ws://127.0.0.1:{port}/ws")
             .into_client_request()
             .unwrap();
-        request.headers_mut().insert(
-            ORIGIN,
-            format!("http://127.0.0.1:{}", running.port)
-                .parse()
-                .unwrap(),
-        );
+        request
+            .headers_mut()
+            .insert(ORIGIN, format!("http://127.0.0.1:{port}").parse().unwrap());
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
         socket
             .send(Message::Text(
-                json!({"token": running.token, "schema_version": 2, "client_kind": kind})
+                json!({"token": token, "schema_version": 2, "client_kind": kind})
                     .to_string()
                     .into(),
             ))
@@ -132,7 +139,26 @@ struct Terminal {
 }
 
 impl Terminal {
+    /// A terminal of the machine whose HOME is `home`, which is made a
+    /// fixture's (`fixtures::fixture_home`).
+    fn new(home: PathBuf, state: PathBuf, machine: Option<&'static str>) -> Self {
+        crate::fixtures::fixture_home(&home);
+        Self {
+            home,
+            state,
+            machine,
+        }
+    }
+
     fn command_of(&self, program: &Path, args: &[&str]) -> Command {
+        // A `hide` here may start the machine's daemon, which under a HOME
+        // that is no fixture's reaches the account's login items once it is
+        // paired. A cleanup that runs while the test fails is let through.
+        assert!(
+            std::thread::panicking() || hide_kit::layout::fixture_home(&self.home),
+            "{} is not a fixture HOME: make the terminal with `Terminal::new`",
+            self.home.display()
+        );
         let mut command = Command::new(program);
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().to_uppercase().starts_with("HIDE_") {
@@ -151,6 +177,7 @@ impl Terminal {
             .env("HIDE_TAILSCALE_BIN", self.home.join("no-tailscale"))
             .env("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws")
             .env("HIDE_PEER_DIRECT", "127.0.0.1:0")
+            .env(hided::env::HIDE_DEVICE_CONNECT, "1")
             .env("LANG", "en_US.UTF-8")
             .env_remove("LC_ALL")
             .env_remove("LC_MESSAGES")
@@ -323,19 +350,18 @@ fn words_printed(ran: &Ran) -> Vec<String> {
 // thread of it, so it needs threads of its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::fixtures::fixture_root("hp");
     let running = hided::start_daemon(host_env(root.path())).await.unwrap();
-    let host = Terminal {
-        home: root.path().join("host-home"),
-        state: root.path().join("host-state"),
-        machine: None,
-    };
-    let guest = Terminal {
-        home: root.path().join("guest-home"),
-        state: root.path().join("guest-state"),
-        machine: Some(GUEST),
-    };
-    std::fs::create_dir_all(&guest.home).unwrap();
+    let host = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
     let _stop = StopOnDrop(&guest);
     let connected = guest.run(&["connect"]);
     assert!(connected.ok, "the guest daemon: {}", connected.text());
@@ -343,7 +369,7 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
     // A machine paired with nothing lists nothing, and looking opens no
     // endpoint (D-83).
     assert!(host.peers().is_empty());
-    assert!(!hided::peer_host::endpoint_wanted(&host.state).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&host.state, true).unwrap());
 
     // What is the operator's alone is refused where an agent runs: by this
     // command's own environment, and by what the kernel says of the caller.
@@ -596,18 +622,18 @@ async fn two_hides_pair_by_a_link_and_stop_each_direction_apart() {
 async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     use crate::support::sshd::Sshd;
 
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::fixtures::fixture_root("hp");
     let _running = hided::start_daemon(host_env(root.path())).await.unwrap();
-    let target = Terminal {
-        home: root.path().join("host-home"),
-        state: root.path().join("host-state"),
-        machine: None,
-    };
-    let guest = Terminal {
-        home: root.path().join("guest-home"),
-        state: root.path().join("guest-state"),
-        machine: Some(GUEST),
-    };
+    let target = Terminal::new(
+        root.path().join("host-home"),
+        root.path().join("host-state"),
+        None,
+    );
+    let guest = Terminal::new(
+        root.path().join("guest-home"),
+        root.path().join("guest-state"),
+        Some(GUEST),
+    );
     // What an SSH login to the target's account finds: its home, its state
     // folder, and the `hide` command its own Hide linked.
     let ssh = Sshd::start(
@@ -615,6 +641,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         &[
             (hided::env::HOME.into(), target.home.clone().into()),
             ("HIDE_STATE_DIR".into(), target.state.clone().into()),
+            (hided::env::HIDE_DEVICE_CONNECT.into(), "1".into()),
         ],
     )
     .unwrap();
@@ -637,7 +664,7 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
         "{}",
         looked.text()
     );
-    assert!(!hided::peer_host::endpoint_wanted(&target.state).unwrap());
+    assert!(!hided::peer_host::endpoint_wanted(&target.state, true).unwrap());
 
     // One command pairs: no link, no words.
     let added = guest.run(&["device", "add", "studio", "--json"]);
@@ -688,4 +715,64 @@ async fn a_machine_reached_over_ssh_pairs_with_the_hide_it_already_runs() {
     ]);
     assert!(removed.ok, "{}", removed.text());
     ssh.stop().unwrap();
+}
+
+/// A build that does not offer connections between two Hides (no
+/// `HIDE_DEVICE_CONNECT`, every build until that feature ships) says so in
+/// its hello, so its window shows no pairing, and refuses every pairing ask
+/// from a window and from a terminal, opening nothing, and its help leaves
+/// the pairing verbs out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_build_without_connections_between_hides_refuses_pairing_and_says_so_to_its_window() {
+    let root = crate::fixtures::fixture_root("hp");
+    let running = hided::start_daemon(Env {
+        device_connect: false,
+        ..host_env(root.path())
+    })
+    .await
+    .unwrap();
+    let host = Terminal {
+        home: root.path().join("host-home"),
+        state: root.path().join("host-state"),
+        machine: None,
+    };
+
+    let mut window = Window::open(&running, "web").await;
+    let hello = window
+        .frame("the daemon frame", |frame| frame["type"] == "daemon")
+        .await;
+    assert_eq!(hello["payload"]["device_connect"], false, "{hello}");
+    window
+        .send(
+            "pairing_share",
+            json!({"request_id": "s1", "language": "en"}),
+        )
+        .await;
+    let refused = window.result("share").await;
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["reason"], "device_connect_unavailable", "{refused}");
+
+    // The terminal's own build refuses before it asks; one that offers
+    // pairing hears the daemon's refusal, which is the same.
+    let mut off = host.command(&["device", "share", "--json"]);
+    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    Ran::of(off.output().unwrap()).refused("device_connect_unavailable");
+    host.run(&["device", "pause", "studio", "--json"])
+        .refused("device_connect_unavailable");
+
+    // Its help leaves the pairing verbs out; a build that offers them
+    // lists them.
+    let help = |command: &mut std::process::Command| {
+        let out = command.output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let mut off = host.command(&["--help"]);
+    off.env_remove(hided::env::HIDE_DEVICE_CONNECT);
+    assert!(!help(&mut off).contains("hide device share"));
+    assert!(help(&mut host.command(&["--help"])).contains("hide device share"));
+
+    // Nothing was opened for it.
+    assert!(!hided::peer_host::endpoint_wanted(&host.state, false).unwrap());
+    assert!(!hide_kit::layout::machine_key(&host.state).exists());
 }

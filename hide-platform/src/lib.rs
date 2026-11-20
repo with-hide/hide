@@ -5,6 +5,7 @@
 //! a default. `tests/` states each module's contract in terms a caller can
 //! observe and runs unchanged on all three systems.
 
+pub mod firewall;
 pub mod fs;
 pub mod host;
 pub mod ipc;

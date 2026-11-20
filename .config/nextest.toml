@@ -55,6 +55,15 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary_id(hide-platform::it) & test(=resident::a_resident_child_keeps_nothing_of_its_starter)'
 success-output = "final"
 
+# A guest's hook entries cost every agent event on its host one start of the
+# guest's helper. The Windows lane prints what that start took, with and
+# without the shell Codex runs a hook in; the guest cap
+# (hide_peer_protocol::launch::MAX_GUEST_NODES) was set from those lines, so
+# CI shows them on a passing run too.
+[[profile.ci.overrides]]
+filter = 'binary_id(hide-agent-hooks::it) & (test(=windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each) | test(=other_install::a_guests_entries_say_nothing_anywhere_but_in_that_guests_panes))'
+success-output = "final"
+
 # The pane holder's memory and idle tests print what each system charged a
 # holder and how often it ran; the pull request's evidence reads those lines
 # from passing runs too (docs/TESTING.md, The pane holder).

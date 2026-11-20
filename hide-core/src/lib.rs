@@ -46,6 +46,7 @@ mod github;
 mod github_poll;
 mod github_store;
 pub mod global_instruction;
+pub mod guest_panes;
 mod handle;
 pub mod herdr_import;
 pub mod input_gate;
@@ -126,5 +127,6 @@ pub use model::{
 };
 pub use runtime::WorkspaceRemoteRoute;
 pub use runtime::core_move::{MoveProject, MoveSource, MoveSourceRefusal, ReleaseSource};
+pub use runtime::device_switch::{DeviceSwitchSource, SWITCHED_PROJECTS};
 pub use runtime::serialize_snapshot_delta;
 pub use view_layout::DisplayKind;

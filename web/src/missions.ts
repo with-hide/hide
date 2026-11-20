@@ -274,9 +274,20 @@ export function nodeTone(mission: Pick<Mission, "status">, node: MissionNodeBrie
  */
 export type CellTone = Exclude<NodeTone, "dropped"> | "review";
 
+/** One `depends_on` entry as the plan wrote it (`missions::Dependency`): another node, or one finish line of it, `<node>:<line>`; a node key has no `:`. */
+export function missionDependency(entry: string): { node: string; line: string | null } {
+  const at = entry.indexOf(":");
+  return at < 0 ? { node: entry, line: null } : { node: entry.slice(0, at), line: entry.slice(at + 1) };
+}
+
+/** The keys of the nodes a node waits on, once each, whether on the node or on one of its lines. */
+export function dependencyNodes(node: Pick<MissionNodeBrief, "depends_on">): string[] {
+  return [...new Set(node.depends_on.map((entry) => missionDependency(entry).node))];
+}
+
 /** The nodes top down by what they wait on, a dropped node where it stood (B17). */
 export function orderedNodes<N extends MissionNodeBrief>(mission: { nodes: readonly N[] }): N[] {
-  return orderByDependencies(mission.nodes, (node) => node.key, (node) => node.depends_on).map(({ item }) => item);
+  return orderByDependencies(mission.nodes, (node) => node.key, dependencyNodes).map(({ item }) => item);
 }
 
 /** The chip's and the head's bar (B8, B24): one cell per node in the plan, in order. */
@@ -660,9 +671,22 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
     return text ? { text, attention: false } : null;
   }
   if (node.blocked) return { text: nodeLine(node, t), attention: true };
-  const before = waitingFor(mission, node).map((dep) => (dep.pr != null ? `#${dep.pr}` : dep.title));
-  if (before.length > 0) return { text: t("mission.line.waitsFor", { names: before.join(" ") }), attention: false };
+  const wait = plannedWait(mission, node, t);
+  if (wait) return { text: wait, attention: false };
   return node.line ? { text: node.line, attention: false } : null;
+}
+
+/**
+ * What a planned node waits on before its start, in the words its card and
+ * line say it: the nodes before it by pull request or title, a finish line
+ * after its node (`#11 c1`), or, free to start on a line of another, where it
+ * stacks (`출발 가능 · Core 위에 쌓기`); null when it waits on nothing named.
+ */
+export function plannedWait(mission: Mission, node: MissionNode, t: TFunction<"translation">): string | null {
+  const before = waitingFor(mission, node).map(({ node: dep, line }) => [dep.pr != null ? `#${dep.pr}` : dep.title, line].filter(Boolean).join(" "));
+  if (before.length > 0) return t("mission.line.waitsFor", { names: before.join(" ") });
+  const below = node.stack && node.waiting_on?.kind === "start" ? mission.nodes.find((other) => other.key === node.stack!.on) : undefined;
+  return below ? t("mission.line.stackOn", { name: below.title }) : null;
 }
 
 /** The changes left to merge or join, in the order the core gives them (B18, B25). */
@@ -837,6 +861,8 @@ function waitingOnWord(on: MissionWaitingOn, t: TFunction<"translation">): strin
       return t(`mission.attention.to.${on.to}`);
     case "nodes":
       return on.keys.join(", ");
+    case "below":
+      return t("mission.work.on.below", { node: on.node });
     default:
       return t(`mission.work.on.${on.kind}`);
   }
@@ -1300,8 +1326,12 @@ export function reportLine(plain: string, title: string): string | null {
   return first === title.trim() && second !== undefined ? second : first;
 }
 
-/** The nodes the core says a planned node still waits for (`waiting_on`, B28), which its line names by pull request or title. */
-export function waitingFor(mission: Mission, node: MissionNode): MissionNode[] {
+/** What the core says a planned node still waits for (`waiting_on`, B28): each node, with the finish line of it the node waits on when it waits on one. */
+export function waitingFor(mission: Mission, node: MissionNode): { node: MissionNode; line: string | null }[] {
   if (node.waiting_on?.kind !== "nodes") return [];
-  return node.waiting_on.keys.flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
+  return node.waiting_on.keys.flatMap((key) => {
+    const { node: wanted, line } = missionDependency(key);
+    const found = mission.nodes.find((other) => other.key === wanted);
+    return found ? [{ node: found, line }] : [];
+  });
 }

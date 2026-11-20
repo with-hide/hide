@@ -128,6 +128,10 @@ pub struct MemoryContext {
     /// receipt line, in their own slot outside Memory's quota and whether or
     /// not Memory answered (docs/status-model.md, A question still waiting).
     pub asks: Option<String>,
+    /// The Project's other sessions a session start gives its agent, in
+    /// their own slot outside Memory's quota and whether or not Memory
+    /// answered (docs/agent-hooks.md, The Project's other sessions).
+    pub sessions: Option<String>,
 }
 
 impl MemoryContext {
@@ -137,13 +141,14 @@ impl MemoryContext {
             outcome,
             global: None,
             asks: None,
+            sessions: None,
         }
     }
 
-    /// The global instruction first, then Memory's context, then the open
-    /// questions, or none.
+    /// The global instruction first, then Memory's context, then the
+    /// Project's other sessions, then the open questions, or none.
     pub fn joined(&self) -> Option<String> {
-        let parts = [&self.global, &self.context, &self.asks];
+        let parts = [&self.global, &self.context, &self.sessions, &self.asks];
         parts.iter().any(|part| part.is_some()).then(|| {
             parts
                 .iter()
@@ -236,6 +241,7 @@ pub fn memory_context_until(
         outcome: answer.outcome.into(),
         global: answer.global,
         asks: answer.asks,
+        sessions: answer.sessions,
     }
 }
 
@@ -292,34 +298,49 @@ mod tests {
     use super::*;
 
     /// B1, D-31: the global instruction rides beside Memory's context, first,
-    /// and alone when Memory gave nothing; a prompt's open questions come
-    /// last, and alone too.
+    /// and alone when Memory gave nothing; a start's other sessions follow
+    /// Memory, a prompt's open questions come last, and each comes alone too.
     #[test]
     fn the_global_instruction_comes_before_memory_and_without_it() {
-        let both = MemoryContext {
-            context: Some("<memory/>\n".into()),
+        let parts = |context: Option<&str>,
+                     global: Option<&str>,
+                     sessions: Option<&str>,
+                     asks: Option<&str>| MemoryContext {
+            context: context.map(Into::into),
             outcome: HookMemoryOutcome::Empty,
-            global: Some("<global/>\n".into()),
-            asks: Some("<asks/>\n".into()),
+            global: global.map(Into::into),
+            asks: asks.map(Into::into),
+            sessions: sessions.map(Into::into),
         };
         assert_eq!(
-            both.joined().as_deref(),
-            Some("<global/>\n<memory/>\n<asks/>\n")
+            parts(
+                Some("<memory/>\n"),
+                Some("<global/>\n"),
+                Some("<sessions/>\n"),
+                Some("<asks/>\n")
+            )
+            .joined()
+            .as_deref(),
+            Some("<global/>\n<memory/>\n<sessions/>\n<asks/>\n")
         );
-        let alone = MemoryContext {
-            context: None,
-            outcome: HookMemoryOutcome::Unavailable,
-            global: Some("<global/>\n".into()),
-            asks: None,
-        };
-        assert_eq!(alone.joined().as_deref(), Some("<global/>\n"));
-        let asks = MemoryContext {
-            context: None,
-            outcome: HookMemoryOutcome::Unavailable,
-            global: None,
-            asks: Some("<asks/>\n".into()),
-        };
-        assert_eq!(asks.joined().as_deref(), Some("<asks/>\n"));
+        assert_eq!(
+            parts(None, Some("<global/>\n"), None, None)
+                .joined()
+                .as_deref(),
+            Some("<global/>\n")
+        );
+        assert_eq!(
+            parts(None, None, None, Some("<asks/>\n"))
+                .joined()
+                .as_deref(),
+            Some("<asks/>\n")
+        );
+        assert_eq!(
+            parts(None, None, Some("<sessions/>\n"), None)
+                .joined()
+                .as_deref(),
+            Some("<sessions/>\n")
+        );
         assert_eq!(
             MemoryContext::without(HookMemoryOutcome::Disabled).joined(),
             None

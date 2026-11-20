@@ -7,6 +7,12 @@
 //! and [`Prepared::run`] makes the engine calls on the caller's task, off the
 //! lock. They reach every pane of the machine they name, as the engine's commands
 //! did; a bare pane id is a pane of the caller's own machine.
+//!
+//! A guest's pane on this machine (`guest:<device id>:pane:<id>`, PRD
+//! device-connect-iroh D-77 (5)) is no pane of any engine the core has: a
+//! send types its text and Enter into it through the guest's tap, as this
+//! machine's screen does, and everything that would read the pane (a read,
+//! a named key, a paste) is refused with its reason.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -221,7 +227,13 @@ pub fn next_action(code: &str) -> Option<&'static str> {
         "purpose_invalid" => "Write the purpose as one line of text",
         "purpose_too_long" => "Write the purpose in 40 characters or fewer",
         "pane_unavailable" => {
-            "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, and a pane of another machine is remote:<device id>:pane:<id> (the device id is in hide device list)"
+            "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, a pane of another machine is remote:<device id>:pane:<id>, and another machine's work running on this one is guest:<device id>:pane:<id> (hide device list shows the device ids and the guest panes)"
+        }
+        "guest_pane_read" => {
+            "This pane is another machine's work running here: this machine draws it in the Hide window but keeps no text of it. Read it on the machine it belongs to"
+        }
+        "guest_pane_keys" => {
+            "This pane is another machine's work running here: it takes text and --enter from this machine; a named key is encoded by the pane's own machine, so press it there or in the Hide window"
         }
         "agent_unavailable" => {
             "Run hide ps for the agents there are, their names and panes; an agent of another machine is named by its registration id from hide agent list, a pane that is no registered agent by remote:<device id>:pane:<id>"
@@ -325,6 +337,14 @@ pub(crate) enum Step {
         enter: bool,
         paste: bool,
     },
+    /// A send into a guest's pane of this machine: its text and Enter, to
+    /// the guest's node through the routes this machine's screens type by.
+    GuestSend {
+        pane: String,
+        terminals: std::sync::Arc<dyn hide_node_link::terminal::TerminalRoutes>,
+        text: Option<String>,
+        enter: bool,
+    },
     Open {
         caller: String,
         cwd: String,
@@ -344,7 +364,9 @@ pub(crate) enum Step {
 
 /// A command the runtime admitted, run off its lock.
 pub struct Prepared {
-    pub(crate) engine: SharedEngine,
+    /// The engine of the machine the command acts on; none for a guest's
+    /// pane, which no engine of this core runs.
+    pub(crate) engine: Option<SharedEngine>,
     pub(crate) step: Step,
     /// The pane a send types into as the core names it: noted as input
     /// routed to it only once a write was taken, since a failed or unknown
@@ -374,9 +396,20 @@ impl Prepared {
             agent_kind,
             runtime,
         } = self;
+        let step = match step {
+            Step::GuestSend {
+                pane,
+                terminals,
+                text,
+                enter,
+            } => return send_to_guest(terminals.as_ref(), &caller, pane, text, enter),
+            step => step,
+        };
+        let engine = engine.ok_or_else(|| "engine_unavailable".to_owned())?;
         let engine = engine.as_ref();
         let wait = Wait::Each(CALL_WAIT);
         let value = match step {
+            Step::GuestSend { .. } => unreachable!("answered above"),
             Step::ReadScreen { pane, raw } => {
                 let read = engine
                     .read_screen(wait, &raw)
@@ -558,6 +591,46 @@ enum Fence {
 struct Landed {
     text: bool,
     keys: bool,
+}
+
+/// Types `text` and then Enter into the guest's pane `pane`, once the
+/// guest's node is there to take them. The bytes go as keys typed on this
+/// machine's screen go; nothing here reads the pane, so a send's checks of
+/// what is in it (a person's draft, someone typing) are not made, and the
+/// answer says what was handed to the node.
+fn send_to_guest(
+    terminals: &dyn hide_node_link::terminal::TerminalRoutes,
+    caller: &str,
+    pane: String,
+    text: Option<String>,
+    enter: bool,
+) -> Result<Value, String> {
+    let mut bytes = text.clone().map(String::into_bytes).unwrap_or_default();
+    if enter {
+        bytes.push(b'\r');
+    }
+    let permitted = hide_node_link::terminal::wait_for_input_permit(terminals, &pane, bytes.len());
+    crate::diagnostic!(
+        json!({"component":"pane_command","kind":"pane_command.sent",
+        "caller":caller,"pane_id":pane,
+        "text_bytes":text.as_ref().map_or(0, String::len),"keys":0,
+        "enter":enter,"paste":false,
+        "outcome":if permitted.is_ok() { "sent" } else { "pane_unavailable" },
+        "text_landed":permitted.is_ok() && text.is_some(),"keys_landed":permitted.is_ok() && enter})
+    );
+    permitted.map_err(|_| "pane_unavailable".to_owned())?;
+    terminals.key(
+        hide_node_link::terminal::KeyTarget::Pane(pane.clone()),
+        bytes,
+        crate::observed::now_unix_ms(),
+    );
+    serde_json::to_value(PaneSent {
+        pane,
+        text_sent: text.is_some(),
+        keys_sent: Vec::new(),
+        enter_sent: enter,
+    })
+    .map_err(|error| error.to_string())
 }
 
 /// The refusals of a send that may have landed part of itself; each carries
@@ -886,6 +959,8 @@ mod tests {
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_read",
+            "guest_pane_keys",
         ] {
             assert!(next_action(code).is_some(), "{code}");
         }

@@ -11,11 +11,14 @@ import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
+import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { Note, Row, Status, Value } from "../components/settings-rows";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
-import { directionKey, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
+import { directionKey, guestPaneCount, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
 import { useShellStore } from "../store";
+import { DeviceNeedsLine, DeviceNotCarriedLine } from "./DeviceSwitch";
+import { askForFirewallOnce, useFirewall } from "./firewall";
 
 /** The time now, read again each second while `ticking`. */
 export function useNow(ticking: boolean): number {
@@ -88,7 +91,10 @@ export function ShareRow({ actions }: { actions: Actions }) {
       }
     >
       {offer ? null : (
-        <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => actions.pairing("share", { language: i18n.language })}>
+        <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => {
+          actions.pairing("share", { language: i18n.language });
+          void askForFirewallOnce();
+        }}>
           {t("pairing.share.make")}
         </Button>
       )}
@@ -125,6 +131,8 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
             <span className="text-body text-muted-foreground" data-peer-direction="true">{t(directionKey(peer))}</span>
           </div>
           {asked ? <Note tone={request?.state === "waiting" ? "pending" : "warn"} data-peer-request={request?.state}>{t(asked)}</Note> : null}
+          <DeviceNotCarriedLine deviceId={device} />
+          <DeviceNeedsLine deviceId={device} actions={actions} />
         </>
       }
     >
@@ -190,19 +198,65 @@ export function PeerRow({ peer, request, actions, own, onRemove }: { peer: Peer;
 }
 
 /**
- * What becomes of the work a removed machine ran on this computer (B26).
- * Today there is one answer, the default: it stays, and shows on this
- * computer's screen only. Ending that machine's panes instead (B26's
- * second choice, B60) is the guest node's to do: that choice goes here
- * beside this one, and the removal then carries which was chosen.
+ * Windows lets same-network machines reach this PC directly only through
+ * its firewall rules; while they are missing the line says the connection
+ * goes through the relay, and [Allow] asks Windows again (B32).
  */
-function RemovedWork() {
+export function FirewallRow({ asking, onAllow }: { asking: boolean; onAllow: () => void }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="space-y-xs" data-peer-remove-work="keep">
+    <Row
+      data-pair-firewall="missing"
+      label={
+        <>
+          <Status tone="warn">{t("pairing.firewall.blocked")}</Status>
+          <Note>{t("pairing.firewall.caption")}</Note>
+        </>
+      }
+    >
+      <Button variant="secondary" size="sm" data-pair-firewall-allow="true" disabled={asking} onClick={onAllow}>
+        {t("pairing.firewall.allow")}
+      </Button>
+    </Row>
+  );
+}
+
+/**
+ * What becomes of the work a removed machine ran on this computer (B26,
+ * B60). It stays by default and shows on this computer's screen only; while
+ * that machine has terminals here (`navigator.guest_panes`) the operator
+ * may end them with the removal instead, which needs no connection to that
+ * machine. With none there is nothing to end, and the one answer is said.
+ */
+function RemovedWork({ panes, end, onEnd }: { panes: number; end: boolean; onEnd: (end: boolean) => void }) {
+  const { t } = useInterfaceTranslation();
+  if (panes === 0) {
+    return (
+      <div className="space-y-xs" data-peer-remove-work="keep">
+        <div className="text-body text-subtle-foreground">{t("pairing.remove.workTitle")}</div>
+        <div className="text-body text-foreground">{t("pairing.remove.workKeep")}</div>
+        <Note>{t("pairing.remove.workKeepNote")}</Note>
+      </div>
+    );
+  }
+  const choices = [
+    { value: "keep", label: t("pairing.remove.workKeep"), note: t("pairing.remove.workKeepNote") },
+    { value: "end", label: t("pairing.remove.workEnd"), note: t("pairing.remove.workEndNote", { count: panes }) },
+  ];
+  return (
+    <div className="space-y-xs" data-peer-remove-work={end ? "end" : "keep"}>
       <div className="text-body text-subtle-foreground">{t("pairing.remove.workTitle")}</div>
-      <div className="text-body text-foreground">{t("pairing.remove.workKeep")}</div>
-      <Note>{t("pairing.remove.workKeepNote")}</Note>
+      <RadioGroup value={end ? "end" : "keep"} onValueChange={(value) => onEnd(value === "end")} aria-label={t("pairing.remove.workTitle")} className="gap-xs">
+        {choices.map((choice) => (
+          <label key={choice.value} className="flex cursor-pointer items-start gap-sm" data-peer-remove-choice={choice.value}>
+            <RadioGroupItem value={choice.value} aria-label={choice.label} className="mt-xxs" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-body text-foreground">{choice.label}</span>
+              <Note>{choice.note}</Note>
+            </span>
+          </label>
+        ))}
+      </RadioGroup>
     </div>
   );
 }
@@ -216,10 +270,16 @@ export function PairedRows({ actions }: { actions: Actions }) {
   const own = useShellStore((s) => ownWindow(s.pairing));
   const peers = useShellStore((s) => pairedMachines(s.rest));
   const requests = useShellStore((s) => s.pairing?.requests);
-  const [removing, setRemoving] = useState<{ peer: Peer; direction: Direction } | null>(null);
+  const sharing = useShellStore((s) => s.pairing?.offer != null);
+  const [removing, setRemoving] = useState<{ peer: Peer; direction: Direction; end: boolean } | null>(null);
+  // The terminals the machine being removed runs on this computer.
+  const removingPanes = useShellStore((s) => (removing ? guestPaneCount(s.rest, removing.peer.key) : 0));
+  const opened = sharing || peers.length > 0;
+  const firewall = useFirewall(own && opened);
   return (
     <>
       {own ? <ShareRow actions={actions} /> : null}
+      {own && opened && firewall.state === "missing" ? <FirewallRow asking={firewall.asking} onAllow={firewall.allow} /> : null}
       {peers.map((peer) => (
         <PeerRow
           key={peer.key}
@@ -227,7 +287,7 @@ export function PairedRows({ actions }: { actions: Actions }) {
           request={requests?.find((request) => request.key === peer.key)}
           actions={actions}
           own={own}
-          onRemove={(target, direction) => setRemoving({ peer: target, direction })}
+          onRemove={(target, direction) => setRemoving({ peer: target, direction, end: false })}
         />
       ))}
       {removing ? (
@@ -237,12 +297,21 @@ export function PairedRows({ actions }: { actions: Actions }) {
               <AlertDialogTitle>{t(removing.direction === "incoming" ? "pairing.remove.incomingTitle" : "pairing.remove.outgoingTitle", { name: removing.peer.name })}</AlertDialogTitle>
               <AlertDialogDescription className="break-keep">{t(removing.direction === "incoming" ? "pairing.remove.incomingDescription" : "pairing.remove.outgoingDescription")}</AlertDialogDescription>
             </AlertDialogHeader>
-            {removing.direction === "incoming" ? <RemovedWork /> : null}
+            {removing.direction === "incoming" ? (
+              <RemovedWork panes={removingPanes} end={removing.end} onEnd={(end) => setRemoving({ ...removing, end })} />
+            ) : null}
             <AlertDialogFooter>
               <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
               <AlertDialogAction
                 data-peer-remove-go="true"
-                onClick={() => actions.pairing("remove", { device: removing.peer.key, direction: removing.direction })}
+                onClick={() =>
+                  actions.pairing("remove", {
+                    device: removing.peer.key,
+                    direction: removing.direction,
+                    // Sent only when chosen while there is work to end.
+                    ...(removing.direction === "incoming" && removing.end && removingPanes > 0 ? { end_work: true } : {}),
+                  })
+                }
               >
                 {t("pairing.remove.go")}
               </AlertDialogAction>

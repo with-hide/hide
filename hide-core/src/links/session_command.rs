@@ -232,6 +232,35 @@ fn answer(
             "Check hide session arguments: --limit 1-200, --events 1-40, one of --request or --from",
         ));
     }
+    let (caller, store, members) = scoped(scope)?;
+    match command {
+        SessionCommand::List { since_ms, limit } => {
+            list(&store, scope, caller, &members, *since_ms, *limit, host)
+        }
+        SessionCommand::Record { id } => {
+            let session = resolve(&store, &members, host, id, scope)?;
+            *device = Some(session.device_id.clone());
+            record(&store, scope, &members, &session, host)
+        }
+        SessionCommand::Read {
+            id,
+            request,
+            from,
+            events,
+        } => {
+            let session = resolve(&store, &members, host, id, scope)?;
+            *device = Some(session.device_id.clone());
+            read(&store, scope, &session, *request, *from, *events)
+        }
+    }
+}
+
+/// The caller's Project, the record opened read-only, and the sessions of
+/// the scope (D-09): what every read of the Project's sessions starts from,
+/// a command's and a session start's (`session_brief`).
+pub(super) fn scoped(
+    scope: &SessionScope,
+) -> Result<(&ScopeProject, LinkStore, BTreeSet<SessionIdentity>), Refusal> {
     let caller = scope
         .projects
         .iter()
@@ -260,26 +289,7 @@ fn answer(
     })?;
     let keys = scope_keys(scope, caller);
     let members = store.scope_members(&keys).map_err(failed)?;
-    match command {
-        SessionCommand::List { since_ms, limit } => {
-            list(&store, scope, caller, &members, *since_ms, *limit, host)
-        }
-        SessionCommand::Record { id } => {
-            let session = resolve(&store, &members, host, id, scope)?;
-            *device = Some(session.device_id.clone());
-            record(&store, scope, &members, &session, host)
-        }
-        SessionCommand::Read {
-            id,
-            request,
-            from,
-            events,
-        } => {
-            let session = resolve(&store, &members, host, id, scope)?;
-            *device = Some(session.device_id.clone());
-            read(&store, scope, &session, *request, *from, *events)
-        }
-    }
+    Ok((caller, store, members))
 }
 
 fn core_gone() -> Refusal {
@@ -289,7 +299,7 @@ fn core_gone() -> Refusal {
     )
 }
 
-fn failed(code: String) -> Refusal {
+pub(super) fn failed(code: String) -> Refusal {
     crate::diagnostic!(
         json!({"component": "session_cli", "kind": "store.read_failed", "code": code})
     );
@@ -419,7 +429,7 @@ fn device_value(scope: &SessionScope, id: &str) -> Value {
 /// Free text from a session (a title, a request, an agent's own words, a
 /// summary) as another agent may read it: masked like everything `read`
 /// shows, since the reader may be on another device (D-07).
-fn masked(text: &str) -> String {
+pub(super) fn masked(text: &str) -> String {
     session_excerpt::mask(text)
 }
 
@@ -454,7 +464,7 @@ fn project_value(project: &ScopeProject) -> Value {
 /// The title as the record screen names a session (`recordTitle`): the
 /// operator's own title, else the main flow with summaries on (`[원문]` when
 /// a `/goal` named it), else the agent's title, else its product's name.
-fn title(
+pub(super) fn title(
     manual: Option<&str>,
     main_flow: Option<(&str, bool)>,
     native: Option<&str>,

@@ -70,11 +70,16 @@ fn copy_tree(from: &Path, to: &Path) {
 pub(crate) fn started(fixture: &Path) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     copy_tree(fixture, dir.path());
-    let marker = json(dir.path(), MARKER_FILE);
-    let node = NodeId::parse(marker["node"].as_str().unwrap()).unwrap();
+    let node = node_of(dir.path());
     convert(dir.path(), &node).unwrap();
     name_devices(dir.path(), &node).unwrap();
     dir
+}
+
+/// The node the core of a released folder ran as, which a start of this
+/// build runs as too.
+pub(crate) fn node_of(state: &Path) -> NodeId {
+    NodeId::parse(json(state, MARKER_FILE)["node"].as_str().unwrap()).unwrap()
 }
 
 fn json(state: &Path, name: &str) -> Value {

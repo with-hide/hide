@@ -36,8 +36,8 @@ use crate::live::PaneResizeDirection;
 use crate::model::{PaneLayoutDirection, PaneLayoutNodeSnapshot};
 use crate::recent_closed::{ClosedLayout, ClosedLayoutNode, ClosedSplitDirection};
 use crate::session_sync::{
-    NotResumed, ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace, ProjectedWorktree,
-    ProjectionState,
+    NotCarried, NotResumed, ProjectedAgent, ProjectedPane, ProjectedTab, ProjectedWorkspace,
+    ProjectedWorktree, ProjectionState,
 };
 use crate::sidebar::{
     SessionAgentSessionPayload, SessionLayoutPayload, SessionLayoutRect, SessionTabFocus,
@@ -73,6 +73,9 @@ pub(super) struct Topology {
     /// The engine's count of agent state changes, kept in memory only: a
     /// sequence is compared only with one this engine gave.
     agent_seq: u64,
+    /// The panes the restore after a device's switch closed, once it ended
+    /// (`ProjectionState::not_carried`); kept in memory only.
+    not_carried: Option<Vec<NotCarried>>,
 }
 
 /// The shown tab's moves and the last of them, kept in memory only: a new
@@ -1127,6 +1130,7 @@ impl Topology {
             agents: Vec::new(),
             resting: Vec::new(),
             not_resumed: Vec::new(),
+            not_carried: self.not_carried.clone(),
             settles_at: self.next_start_change(now),
         };
         for workspace in &self.workspaces {
@@ -1302,6 +1306,7 @@ impl Topology {
             workspace_numbers: saved.workspace_numbers,
             shown: Shown::default(),
             agent_seq: 0,
+            not_carried: None,
         };
         for workspace in saved.workspaces {
             if ids::workspace_of(&workspace.id).is_none() || !seen.insert(workspace.id.clone()) {
@@ -1861,6 +1866,12 @@ impl Topology {
     /// answers whether the pane is there to keep it.
     pub(super) fn rest(&mut self, pane: &str, agent: PaneAgent) -> bool {
         self.restore_leaves(pane, Restored::Resting(agent))
+    }
+
+    /// The restore after a device's switch ended, having closed `panes`
+    /// for want of a holder on the new link.
+    pub(super) fn left_uncarried(&mut self, panes: Vec<NotCarried>) {
+        self.not_carried = Some(panes);
     }
 
     /// Says that no resume will be typed into `pane` and why: the agent is

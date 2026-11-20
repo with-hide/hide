@@ -161,6 +161,15 @@ impl Runtime {
                 "Saving this device's new name; it connects once the save is done".to_owned(),
             );
         }
+        // A registration rewritten to its machine's connection dials
+        // nothing until the save holds it (`device_switch`): its helper
+        // link is still the device's, and a link that dropped meanwhile is
+        // not made again as the machine's.
+        if self.device_switch_saving.contains_key(&registration.id) {
+            return Some(
+                "Saving this device's new connection; it connects once the save is done".to_owned(),
+            );
+        }
         match registration.origin.naming() {
             Some(DeviceNaming::Legacy) if bound_machine(registration).is_some() => {
                 Some(if self.device_machine_bound.contains(&registration.id) {

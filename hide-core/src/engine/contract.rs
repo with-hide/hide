@@ -722,6 +722,7 @@ fn a_restart_after_the_machine_went_down_brings_each_pane_back_under_its_id_and_
             windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
+            switched: false,
         };
         let panes = super::own::link_panes(node);
         let engine =
@@ -882,6 +883,7 @@ fn a_restored_tab_whose_pane_is_in_a_subfolder_stays_in_the_folder_its_workspace
             windows: cfg!(windows),
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
+            switched: false,
         };
         let panes = super::own::link_panes(node);
         let engine =
@@ -1347,6 +1349,7 @@ fn resumes_through_the_nodes_file(shell: &str) {
             windows: cfg!(windows),
             definitions: Arc::clone(&definitions),
             launches: Arc::default(),
+            switched: false,
         };
         let panes = super::own::link_panes(node);
         let engine =
@@ -1505,6 +1508,7 @@ fn a_restart_after_every_holder_is_gone_resumes_claude_and_codex_in_their_own_co
             windows: false,
             definitions: Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
             launches: Arc::default(),
+            switched: false,
         };
         let panes = super::own::link_panes(node);
         let engine =

@@ -33,13 +33,17 @@ use crate::limits;
 const EVENTS_FILE: &str = "events.jsonl";
 const CURSOR_FILE: &str = "cursor.json";
 
-/// What applying an event came to. Both are final: the event is not
-/// applied again.
+/// What applying an event came to. `Done` and `Unappliable` are final: the
+/// event is not applied again.
 pub enum Applied {
     Done,
     /// Nothing here can take the event (an unknown kind, a target that is
     /// gone). It was acknowledged; it is logged and left.
     Unappliable(String),
+    /// What takes the event is not known yet (the host's panes are still
+    /// being read again). The event stays recorded, and it and every one
+    /// after it are applied at the next call.
+    Later,
 }
 
 /// Applies one event to the product. It must be safe to call twice for one
@@ -176,6 +180,11 @@ impl Inbox {
         (&self.cursor.outbox, self.recorded)
     }
 
+    /// How many recorded events are not applied yet.
+    pub fn unapplied(&self) -> usize {
+        self.waiting.len()
+    }
+
     /// Appends `event` and syncs it, when it is the next of its box.
     pub fn record(&mut self, event: Event) -> io::Result<Recorded> {
         if event.outbox != self.cursor.outbox {
@@ -219,15 +228,18 @@ impl Inbox {
     pub fn apply_recorded(&mut self, apply: &mut dyn Apply) -> io::Result<usize> {
         let mut count = 0;
         while let Some(event) = self.waiting.front() {
-            if let Applied::Unappliable(why) = apply.apply(event) {
-                crate::diagnostic!(json!({
+            match apply.apply(event) {
+                Applied::Done => {}
+                Applied::Unappliable(why) => crate::diagnostic!(json!({
                     "component": "peer_inbox",
                     "event": "event.unappliable",
                     "outbox": event.outbox,
                     "seq": event.seq,
                     "kind": event.kind,
                     "reason": why,
-                }));
+                })),
+                // Order holds: nothing after it is applied before it.
+                Applied::Later => return Ok(count),
             }
             let applied = event.seq;
             self.waiting.pop_front();
@@ -420,6 +432,40 @@ mod tests {
             "the next event is not held up"
         );
         assert_eq!(Inbox::open(dir.path()).unwrap().position(), ("box", 2));
+    }
+
+    #[test]
+    fn an_event_whose_target_is_not_there_yet_waits_with_every_one_after_it() {
+        struct Target {
+            there: bool,
+            applied: Vec<u64>,
+        }
+        impl Apply for Target {
+            fn apply(&mut self, event: &Event) -> Applied {
+                if !self.there {
+                    return Applied::Later;
+                }
+                self.applied.push(event.seq);
+                Applied::Done
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = Target {
+            there: false,
+            applied: Vec::new(),
+        };
+        {
+            let mut inbox = Inbox::open(dir.path()).unwrap();
+            inbox.record(event("box", 1)).unwrap();
+            inbox.record(event("box", 2)).unwrap();
+            assert_eq!(inbox.apply_recorded(&mut target).unwrap(), 0);
+            assert_eq!(inbox.position(), ("box", 2), "both stay acknowledged");
+        }
+        // The next connection finds them recorded and applies them in order.
+        let mut inbox = Inbox::open(dir.path()).unwrap();
+        target.there = true;
+        assert_eq!(inbox.apply_recorded(&mut target).unwrap(), 2);
+        assert_eq!(target.applied, [1, 2]);
     }
 
     #[test]

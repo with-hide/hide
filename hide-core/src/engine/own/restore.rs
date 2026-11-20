@@ -60,7 +60,7 @@ use crate::agent_start::{ShellStart, StartError};
 use crate::model::PaneLaunch;
 use crate::node_access::{NodeLink, call_as};
 use crate::runtime::agent_choice::{choice_arguments, launch_describes};
-use crate::session_sync::NotResumed;
+use crate::session_sync::{NotCarried, NotResumed};
 use crate::start_prompt::ByName;
 
 /// How long the restore waits for the node to finish judging its records.
@@ -396,7 +396,7 @@ impl OwnEngine<'static> {
     fn adopt(&self, saved: &BTreeSet<String>, recovery: &HolderRecovery) -> Vec<Resume> {
         let present: BTreeSet<&str> = recovery.present.iter().map(String::as_str).collect();
         let home = self.home().ok();
-        let (finished, restarts, orphans, adopted_agents) = {
+        let (finished, restarts, orphans, adopted_agents, uncarried) = {
             let mut topology = self.topology();
             topology.count_past(
                 recovery
@@ -415,13 +415,45 @@ impl OwnEngine<'static> {
                 .filter(|id| saved.contains(*id) && topology.remove_pane(id).is_ok())
                 .cloned()
                 .collect();
+            // The open after a device's switch: a saved pane this link
+            // holds no holder for closes too, and is named with its saved
+            // agent, so the core keeps its conversation for 이어가기 where a
+            // new shell under its id would start a second copy of it
+            // (D-49, B36).
+            let uncarried: Vec<String> = if self
+                .shared
+                .place
+                .as_ref()
+                .is_some_and(|place| place.switched)
+            {
+                let gone: Vec<NotCarried> = topology
+                    .panes()
+                    .filter(|(id, _)| saved.contains(*id) && !present.contains(id))
+                    .map(|(id, pane)| NotCarried {
+                        pane_id: id.to_owned(),
+                        cwd: pane.cwd.clone(),
+                        agent: pane.agent.as_ref().map(|agent| agent.kind.clone()),
+                        name: pane.agent.as_ref().and_then(|agent| agent.name.clone()),
+                        session: pane.agent.as_ref().and_then(|agent| agent.session.clone()),
+                    })
+                    .collect();
+                let gone: Vec<NotCarried> = gone
+                    .into_iter()
+                    .filter(|left| topology.remove_pane(&left.pane_id).is_ok())
+                    .collect();
+                let ids = gone.iter().map(|left| left.pane_id.clone()).collect();
+                topology.left_uncarried(gone);
+                ids
+            } else {
+                Vec::new()
+            };
             // Existence is durable before the coalesced layout save. Gather
             // those recorded IDs before selecting the one bounded restart set.
             let missing = recovery
                 .recoverable
                 .iter()
                 .filter_map(|record| {
-                    if topology.pane(&record.pane).is_ok() {
+                    if topology.pane(&record.pane).is_ok() || uncarried.contains(&record.pane) {
                         return None;
                     }
                     record
@@ -476,8 +508,10 @@ impl OwnEngine<'static> {
                 .filter(|id| !placed.contains(*id))
                 .cloned()
                 .collect();
-            (finished, restarts, orphans, adopted_agents)
+            (finished, restarts, orphans, adopted_agents, uncarried)
         };
+        // Their records end with them, so no later restore starts them.
+        let _ = self.end_panes(&uncarried);
         // Asked of each holder off the topology lock.
         let (idle, busy): (Vec<String>, Vec<String>) = adopted_agents
             .into_iter()
@@ -646,6 +680,7 @@ impl OwnEngine<'static> {
             "kind": "engine.restored",
             "adopted": present.len().saturating_sub(orphans.len()),
             "closed": finished,
+            "uncarried": uncarried,
             "started": restarts.len(),
             "idle": idle.len(),
             "gathered": orphans.len(),

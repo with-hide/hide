@@ -641,6 +641,10 @@ fn publish_session(
                 let tokens =
                     guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
                 guard.end_unresumed(target_id, None, &payload, not_resumed);
+                // The restore after the device's switch said what it closed.
+                if let Some(left) = &session.published_state().not_carried {
+                    guard.settle_switch_open(target_id, left);
+                }
                 tokens
             }
             Err(_) => return false,

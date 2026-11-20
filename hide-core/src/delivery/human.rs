@@ -16,10 +16,8 @@ pub(super) fn claim(ledger: &mut Ledger, now: u64) -> Vec<HumanNotice> {
             continue;
         };
         // Code-owned observers handle their own escalation.
-        if letter.recipient.code_owned()
-            || warning.ordinal != 1
+        if !letter.escalation_owed()
             || now.saturating_sub(letter.created_at_unix_ms) < super::SECOND_WARNING_MS
-            || matches!(letter.state, State::Acknowledged | State::Cancelled)
             || ledger.letters.iter().any(|answer| {
                 answer.reply_to.as_deref() == Some(&letter.id)
                     && answer.sender.same_identity(&letter.recipient)

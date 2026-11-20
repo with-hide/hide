@@ -1120,6 +1120,49 @@ fn each_installation_keeps_its_own_entry_in_every_agents_file() {
     }
 }
 
+/// A guest's installation owns only the entries that carry its own name
+/// ([`crate::route::owns_entry`]): one an earlier build of the account's own
+/// Hide wrote without naming an installation stays through the guest's pass
+/// and through its removal, in every agent's file.
+#[test]
+fn a_guests_installation_leaves_an_entry_that_names_no_installation() {
+    for agent in GuidanceAgent::LIVE
+        .into_iter()
+        .filter(|agent| agent.supported_here().is_ok())
+    {
+        let fixture = Fixture::new(agent);
+        let state = fixture.home().join("state");
+        let nameless = HookTarget::new(&fixture.helper, &state).unwrap();
+        super::install(agent, fixture.home(), nameless).unwrap();
+        assert!(
+            matches_install(agent, fixture.home(), nameless),
+            "{agent:?}"
+        );
+        let before = fixture.read(agent);
+
+        let root = state.join("g").join("0123456789abcdef").join("i");
+        let guest_helper = root.join("current").join("hide-agent-hooks");
+        fs::create_dir_all(guest_helper.parent().unwrap()).unwrap();
+        fs::write(&guest_helper, b"binary").unwrap();
+        let name = crate::route::install_of_guest_root(&root);
+        let guest = HookTarget::new(&guest_helper, &state)
+            .unwrap()
+            .of_install(&name)
+            .unwrap();
+
+        super::install(agent, fixture.home(), guest).unwrap();
+        // Everything the file held is still there, and the guest's own
+        // entries are beside it.
+        let added = crate::install::strings_added(&before, &fixture.read(agent));
+        assert!(!added.is_empty(), "{agent:?}");
+        assert!(matches_install(agent, fixture.home(), guest), "{agent:?}");
+
+        let removed = super::remove(agent, fixture.home(), Some(&name)).unwrap();
+        assert!(removed.removed_entries > 0, "{agent:?}");
+        assert_eq!(fixture.read(agent), before, "{agent:?}");
+    }
+}
+
 /// with-hide/hide-private#318: Grok's and agy's Windows commands run no
 /// command but the helper, as Claude Code's and Codex's do
 /// (`install::tests::a_windows_guard_calls_no_cmdlet`).

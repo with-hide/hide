@@ -8,7 +8,7 @@ use crate::delivery::correspondence::Correspondence;
 use crate::delivery::doorbell::Turn;
 use crate::delivery::ledger::{BELLS, Ledger};
 use crate::delivery::mailbox::Exchange;
-use crate::delivery::worker::{Authority, Client, Prepared, PreparedHuman};
+use crate::delivery::worker::{Authority, Client, Prepared, PreparedHuman, Proven};
 use crate::delivery::{Actor, Command};
 use crate::labels::overlay::LabelOverlay;
 use crate::sidebar::SessionSnapshotPayload;
@@ -1471,7 +1471,7 @@ impl Runtime {
         caller: &str,
         expected: &Context,
         hint: Option<&str>,
-        mut command: Command,
+        command: Command,
     ) -> Result<Prepared, String> {
         // The engine numbers panes per machine and an agent learns the numbers from
         // its own machine's engine, so a bare pane id names a pane on the
@@ -1524,6 +1524,88 @@ impl Runtime {
         if context != *expected {
             return Err("caller_context_changed".into());
         }
+        self.prepare_as(device, caller, context, Proven::Now, actor, command)
+    }
+
+    /// A letter a guest's node kept while this core was away (PRD
+    /// device-connect-iroh D-66, B12), as the command its sender would have
+    /// run had the core been there. The node proved, when the letter was
+    /// written, that its caller ran in the terminal `terminal` of `pane` on
+    /// `device`; the agent that is, is this core's own knowledge: the one it
+    /// observes in that terminal now, else the one it last registered
+    /// there. The second holds whether or not the pane still runs, so a
+    /// report written before its pane closed still reaches its recipient.
+    pub(crate) fn prepare_kept_letter(
+        &mut self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        mut command: Command,
+    ) -> Result<Prepared, String> {
+        let Command::Send { target, .. } = &mut command else {
+            return Err("invalid_request".into());
+        };
+        let pane_id = crate::address::pane_id_on(self.node.as_str(), device, pane);
+        let observed = self
+            .delivery_observations
+            .get(&pane_id)
+            .filter(|observation| observation.terminal_id.as_deref() == Some(terminal))
+            .map(|observation| observation.actor.clone());
+        let ledger = self.delivery_state()?;
+        // The terminal names one life of one pane, so the last agent
+        // registered in it is the one that wrote from it.
+        let registered = ledger.agents.iter().rev().find(|record| {
+            record.actor.device_id == device && record.terminal_id.as_deref() == Some(terminal)
+        });
+        let actor = observed
+            .or_else(|| registered.map(|record| record.actor.clone()))
+            .ok_or("sender_unknown")?;
+        // `parent` is read here, from the registration whether or not it
+        // ended: a sender whose pane closed has no live one to ask.
+        if target == crate::coordination::PARENT {
+            *target = ledger
+                .agents
+                .iter()
+                .rev()
+                .filter(|record| record.actor.same_identity(&actor))
+                .min_by_key(|record| record.ended)
+                .ok_or("participant_unavailable")?
+                .parent
+                .clone()
+                .ok_or("no_parent")?;
+        }
+        // No pane's context holds this authority: it was proven when the
+        // letter was written.
+        let context = Context {
+            device_id: device.to_owned(),
+            workspace_id: actor.pane_id.clone(),
+            checkout_id: actor.pane_id.clone(),
+            checkout_path: String::new(),
+        };
+        let caller = actor.pane_id.clone();
+        self.prepare_as(
+            device,
+            &caller,
+            context,
+            Proven::WhenWritten,
+            actor,
+            command,
+        )
+    }
+
+    /// What a delivery command of `actor` does, once who that is has been
+    /// settled.
+    fn prepare_as(
+        &mut self,
+        device: &str,
+        caller: &str,
+        context: Context,
+        proven: Proven,
+        actor: Actor,
+        mut command: Command,
+    ) -> Result<Prepared, String> {
+        let node = self.node.as_str().to_owned();
+        let qualify = |pane: &str| crate::address::named_pane_id(&node, device, pane);
         // A machine named by a dialed device's SSH alias is that device's id
         // from here on (`machine_named`).
         if let Command::Agents {
@@ -1903,6 +1985,7 @@ impl Runtime {
                 caller: caller.to_owned(),
                 context,
                 also_reads,
+                proven,
             },
             actor,
             target,
@@ -2313,6 +2396,7 @@ impl Runtime {
                 caller: actor.pane_id.clone(),
                 context,
                 also_reads: Vec::new(),
+                proven: crate::delivery::worker::Proven::Now,
             },
             actor,
         ))
@@ -2337,6 +2421,7 @@ impl Runtime {
                 caller: actor.pane_id.clone(),
                 context,
                 also_reads: Vec::new(),
+                proven: crate::delivery::worker::Proven::Now,
             },
             actor,
         ))
@@ -2636,6 +2721,7 @@ impl Runtime {
                 caller: pane.into(),
                 context,
                 also_reads: Vec::new(),
+                proven: crate::delivery::worker::Proven::Now,
             },
             actor,
         ))
@@ -2928,6 +3014,7 @@ pub(crate) mod tests {
                 checkout_path: "/checkouts/fixture".into(),
             },
             also_reads: Vec::new(),
+            proven: crate::delivery::worker::Proven::Now,
         }
     }
 
@@ -3841,6 +3928,120 @@ pub(crate) mod tests {
         assert_eq!(
             ask(&checkout, Some("sender"), "agent-7").err().as_deref(),
             Some("agent_pane_required")
+        );
+        drop(worker);
+    }
+
+    /// A worker on another machine wrote its report while this core was
+    /// away, and its pane closed before the core came back (PRD
+    /// device-connect-iroh D-66, B12). The node that kept the letter proved
+    /// the terminal it was written in, and the core registered its worker
+    /// in that terminal, so the report is the worker's and reaches its
+    /// parent; a second delivery of the same event is the same letter, and
+    /// a terminal the core never knew an agent in names no sender.
+    #[test]
+    fn a_kept_report_reaches_the_parent_after_its_senders_pane_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, _, _, path) = fixture(root.path());
+        let agent = |pane: &str| {
+            json!({"id":pane,"pane_id":pane,"agent":"codex","agent_status":"idle","state_change_seq":1,
+                "lineage_session":crate::engine::tokens::session_digest(&format!("{pane}-session"))})
+        };
+        let observed = |guard: &mut Runtime, panes: &[&str]| {
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({
+                "agents": panes.iter().map(|pane| agent(pane)).collect::<Vec<_>>(),
+                "panes": panes.iter().map(|pane| json!({"pane_id": pane, "terminal_id": format!("{pane}-terminal")})).collect::<Vec<_>>(),
+            }))
+            .unwrap();
+            guard.observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &payload,
+                Some("fixture-scope"),
+                None,
+            );
+        };
+        {
+            let mut guard = runtime.lock().unwrap();
+            observed(&mut guard, &["sender", "recipient"]);
+            let mut ledger = crate::delivery::ledger::Ledger::default();
+            for (id, pane, parent) in [
+                ("agent-1", "recipient", None),
+                ("agent-2", "sender", Some("agent-1")),
+            ] {
+                ledger.agents.push(crate::coordination::AgentRecord {
+                    id: id.into(),
+                    name: Some(format!("{pane}-agent")),
+                    machine: crate::node::TEST_NODE.into(),
+                    host_scope: "fixture-scope".into(),
+                    native_machine: "fixture-machine".into(),
+                    session: format!("{pane}-session"),
+                    instance: format!("terminal-{pane}"),
+                    pane: pane.into(),
+                    parent: parent.map(str::to_owned),
+                    origin: None,
+                    project: None,
+                    actor: guard.delivery_observations[pane].actor.clone(),
+                    ended: false,
+                    terminal_id: Some(format!("{pane}-terminal")),
+                    forked: false,
+                });
+            }
+            ledger.next_id = 3;
+            ledger.validate().unwrap();
+            crate::delivery::ledger::save(&path, &ledger).unwrap();
+            guard.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::load(&path).unwrap()));
+        }
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        runtime.lock().unwrap().install_delivery_client(client);
+        let kept = |terminal: &str, intent: &str| {
+            let prepared = runtime.lock().unwrap().prepare_kept_letter(
+                crate::node::TEST_NODE,
+                "sender",
+                terminal,
+                report_to("parent", intent),
+            )?;
+            prepared.run(Duration::from_secs(5))
+        };
+        // While the pane runs the letter is its agent's, as any send is.
+        let live = kept("sender-terminal", "while-running").unwrap();
+        assert_eq!(live["recipient"]["pane_id"], "recipient");
+
+        // The host closed the pane, and the core has read that.
+        observed(&mut runtime.lock().unwrap(), &["recipient"]);
+        assert!(
+            !runtime
+                .lock()
+                .unwrap()
+                .delivery_observations
+                .contains_key("sender")
+        );
+        let report = kept("sender-terminal", "after-close").unwrap();
+        assert_eq!(report["recipient"]["pane_id"], "recipient");
+        let letters = crate::delivery::ledger::load(&path).unwrap().letters;
+        let written = letters
+            .iter()
+            .find(|letter| letter.intent == "after-close")
+            .expect("the report is recorded");
+        assert_eq!(written.sender.pane_id, "sender");
+        assert_eq!(
+            written.sender.session,
+            crate::engine::tokens::session_digest("sender-session")
+        );
+        assert_eq!(written.recipient.pane_id, "recipient");
+        // The event applied again is the letter it was.
+        assert_eq!(
+            kept("sender-terminal", "after-close").unwrap()["id"],
+            report["id"]
+        );
+        // A pane that took the same id later is another terminal.
+        assert_eq!(
+            kept("another-terminal", "from-no-one").err().as_deref(),
+            Some("sender_unknown")
         );
         drop(worker);
     }

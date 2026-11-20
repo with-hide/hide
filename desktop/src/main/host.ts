@@ -17,7 +17,7 @@ import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-update
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
@@ -60,6 +60,8 @@ import { externalLink } from "./externalLink";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
 import { frameOptions, hidesTitleBar, windowChrome } from "./windowChrome";
+import type { FirewallAnswer, FirewallState } from "../../../web/src/host";
+import { allowFirewall, firewallState } from "./firewall";
 import { NOTIFICATION_SETTINGS_URL, NotificationPermissionReader } from "./notificationPermission";
 import { fromPage, toPage, WirePathError } from "./wirePath";
 import { AppUpdates, fetchReleases, macosLocation, readPackageType, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
@@ -143,6 +145,8 @@ export class DesktopHost {
   /** Set when the status page file would not load; every later status screen is the plain one (`statusPage.ts`). */
   private statusPageBroken = false;
   private readonly runner = new ChildRunner();
+  /** The firewall ask's own runner: its prompt may stay open for minutes, and must not hold the CLI's line. */
+  private readonly firewallRunner = new ChildRunner();
   /** Every CLI child runs through this chain, so the runner's cap of one is never crossed. */
   private cliChain: Promise<unknown> = Promise.resolve();
   private discovering: Promise<void> | null = null;
@@ -455,6 +459,20 @@ export class DesktopHost {
         closed += 1;
       }
       this.log.event("notify.withdrawn", { asked: ids.length, closed });
+    });
+    ipcMain.handle(FIREWALL_STATE_CHANNEL, (event: IpcMainInvokeEvent): Promise<FirewallState> | FirewallState => {
+      if (!this.fromShell(event) || !this.cli) return "unknown";
+      return firewallState(process.platform, this.cli.path, (file, args, timeoutMs) => this.runCli(file, args, timeoutMs));
+    });
+    ipcMain.handle(FIREWALL_ALLOW_CHANNEL, async (event: IpcMainInvokeEvent): Promise<FirewallAnswer> => {
+      if (!this.fromShell(event) || !this.cli) return "failed";
+      const answer = await allowFirewall(process.platform, this.cli.path, (file, args, timeoutMs) =>
+        this.firewallRunner.run(file, args, timeoutMs, this.childEnvironment()).catch(
+          (error: unknown): ChildResult => ({ code: null, signal: null, stdout: "", stderr: "", timedOut: false, spawnError: String(error) }),
+        ),
+      );
+      this.log.event("firewall.asked", { answer });
+      return answer;
     });
     ipcMain.handle(NOTIFY_PERMISSION_CHANNEL, (event: IpcMainInvokeEvent) => {
       if (!this.fromShell(event)) {

@@ -8,9 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hide_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
-use hide_node::ssh::session::SshTarget;
 use hide_node::ssh::transfer::FileCopy;
-use hide_node::ssh::upstream::Upstream;
 use hide_node_link::device::{SignIn, SshProblem};
 use serde_json::{Value, json};
 
@@ -24,17 +22,11 @@ const STEP_OUTPUT_CAP: usize = 64 * 1024;
 /// waits up to 30 s for it to take links.
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The other machine, reached through one owned `ssh` for the move, signed
-/// in once and kept for its later steps and copies. The connection ends
-/// when this is dropped, on every way a move's turn ends.
+/// The other machine of a move: the owned `ssh` an install or an update
+/// goes over too (`core_install::remote`), with a move's steps and its
+/// failures read from it.
 pub struct Remote {
-    /// Dialed by the first step that reaches the peer: `ssh` reads the
-    /// alias then, and a dial that fails is the peer not reached, which a
-    /// wait asks again, so an alias that does not resolve at a start never
-    /// keeps the daemon from it.
-    upstream: Upstream,
-    program: String,
-    state_dir: Option<String>,
+    over: crate::core_install::remote::Remote,
     /// This machine's build: the only build whose answers it reads.
     build: String,
 }
@@ -43,15 +35,13 @@ impl Remote {
     /// Reads and dials nothing yet: the first step does.
     pub fn new(home: &Path, alias: &str, program: &str, build: &str) -> Self {
         Self {
-            upstream: Upstream::new(SshTarget::new(home, alias)),
-            program: program.to_owned(),
-            state_dir: None,
+            over: crate::core_install::remote::Remote::new(home, alias, program),
             build: build.to_owned(),
         }
     }
 
     pub fn with_state_dir(mut self, state_dir: &str) -> Self {
-        self.state_dir = Some(state_dir.to_owned());
+        self.over = self.over.with_state_dir(state_dir);
         self
     }
 
@@ -59,32 +49,23 @@ impl Remote {
     /// sign-in of the press that started them, in the move dialog (D-06,
     /// B33); a later dial of the move asks nobody.
     pub fn may_ask(&self, press: Option<Arc<dyn SignIn>>) {
-        self.upstream.may_ask(press);
+        self.over.may_ask(press);
     }
 
     /// What `ssh` stopped on at the last dial; none when it signed in.
     pub fn ssh_problem(&self) -> Option<SshProblem> {
-        self.upstream.ssh_problem()
+        self.over.ssh_problem()
     }
 
     /// Installs this machine's build from `packages` beside the `hided` it
-    /// runs there, through the core update's install (the version folder
-    /// under the same helper root, at most two builds kept), and answers
-    /// the installed `hided`.
+    /// runs there, and answers the installed `hided`.
     pub fn install_build(&self, packages: &Path) -> Result<String, MoveFailure> {
-        let root = hide_kit::build_of(&self.program)
-            .map_err(|reason| MoveFailure::Local { reason })?
-            .root;
-        self.upstream
-            .install_build(
-                &hide_node::ssh::host::HelperPackages::new(
-                    Some(packages.to_path_buf()),
-                    crate::cli::RELEASE,
-                ),
-                &root,
-            )
-            .map_err(|error| MoveFailure::Copy {
-                reason: error.to_string(),
+        use crate::core_install::remote::InstallFailure;
+        self.over
+            .install_build(packages)
+            .map_err(|failure| match failure {
+                InstallFailure::Local(reason) => MoveFailure::Local { reason },
+                InstallFailure::Copy(reason) => MoveFailure::Copy { reason },
             })
     }
 
@@ -92,20 +73,9 @@ impl Remote {
     /// another build is `OtherBuild`, a refusal `Refused` (`Load` for a
     /// file the verify could not load), and a busy answer `Busy`.
     pub fn step(&self, step: &str, args: &[(&str, &str)]) -> Result<StepAnswer, MoveFailure> {
-        let mut command = vec![
-            self.program.clone(),
-            "core-move".to_owned(),
-            step.to_owned(),
-        ];
-        if let Some(state_dir) = &self.state_dir {
-            command.extend(["--state-dir".to_owned(), state_dir.clone()]);
-        }
-        for (flag, value) in args {
-            command.extend([format!("--{flag}"), (*value).to_owned()]);
-        }
         let output = self
-            .upstream
-            .run(&command, STEP_OUTPUT_CAP, STEP_TIMEOUT)
+            .over
+            .hided(&["core-move", step], args, STEP_OUTPUT_CAP, STEP_TIMEOUT)
             .map_err(|error| {
                 if error.never_reached_server() || error.a_move_can_change() {
                     MoveFailure::Unreachable {
@@ -141,7 +111,7 @@ impl Remote {
         files: &[FileCopy],
         sent: &(dyn Fn(u64) + Sync),
     ) -> Result<(), MoveFailure> {
-        self.upstream
+        self.over
             .upload(files, sent)
             .map_err(|error| MoveFailure::Copy {
                 reason: error.to_string(),
@@ -155,7 +125,7 @@ impl Remote {
         files: &[FileCopy],
         received: &(dyn Fn(u64) + Sync),
     ) -> Result<(), MoveFailure> {
-        self.upstream
+        self.over
             .download(into, files, received)
             .map_err(|error| MoveFailure::Copy {
                 reason: error.to_string(),

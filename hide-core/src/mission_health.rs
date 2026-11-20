@@ -14,8 +14,8 @@
 //! answer (B29).
 
 use crate::missions::{
-    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionStatus, NodeKind,
-    NodeStatus, StopCause, WarningKind, cause_key,
+    AttentionReason, CiResult, Delivery, FixReason, LinesNow, Mission, MissionNode, MissionStatus,
+    NodeKind, NodeStatus, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
     CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
@@ -96,6 +96,8 @@ pub(crate) struct Facts<'a> {
     pub nodes: Vec<NodeFacts>,
     /// The mission's device does not answer.
     pub device_stale: bool,
+    /// Each node's lines as they show now (`Runtime::lines_now`).
+    pub lines: Vec<LinesNow>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -500,7 +502,7 @@ fn still_holds(
         {
             false
         }
-        AttentionReason::NotStarted => could_start(mission, node),
+        AttentionReason::NotStarted => could_start(mission, node, &facts.lines),
         AttentionReason::WarningStood => {
             node.status == NodeStatus::Working
                 && node.warnings.iter().any(|warning| warning.kind.stalls())
@@ -831,6 +833,7 @@ pub(crate) fn stalls(
     pulls: Option<&GithubProjectSnapshot>,
     cap_full: bool,
     operator_waits: &[bool],
+    lines: &[LinesNow],
 ) -> Vec<Stall> {
     if mission.status != MissionStatus::Running || operator_waits.len() != mission.nodes.len() {
         return Vec::new();
@@ -846,7 +849,7 @@ pub(crate) fn stalls(
             pr,
             head: None,
         };
-        if could_start(mission, node) {
+        if could_start(mission, node, lines) {
             if !cap_full {
                 out.push(stall(AttentionReason::NotStarted, None));
             }
@@ -1002,16 +1005,16 @@ pub(crate) fn safety_net_due(
 }
 
 /// Whether `node` could start and was not: not started (`started`), the
-/// mission's own work, and every node it depends on done.
-pub(crate) fn could_start(mission: &Mission, node: &MissionNode) -> bool {
+/// mission's own work, and every dependency met
+/// (`Mission::dependency_met`, against `lines` as they show now): a node it
+/// depends on done, or the finish line of it it names met.
+pub(crate) fn could_start(mission: &Mission, node: &MissionNode, lines: &[LinesNow]) -> bool {
     !node.started()
         && node.kind != NodeKind::External
-        && node.depends_on.iter().all(|key| {
-            mission
-                .nodes
-                .iter()
-                .any(|other| &other.key == key && other.status == NodeStatus::Done)
-        })
+        && node
+            .depends_on
+            .iter()
+            .all(|key| mission.dependency_met(key, lines).is_some())
 }
 
 /// The node's current pull request while it waits on CI, a review or the
@@ -1160,6 +1163,7 @@ mod tests {
             pulls,
             nodes,
             device_stale: false,
+            lines: Vec::new(),
         }
     }
 
@@ -1846,24 +1850,24 @@ mod tests {
     fn a_node_that_could_start_stands_unless_its_move_is_excused() {
         let m = startable();
         assert_eq!(
-            stalls(&m, None, false, &NONE_WAITS),
+            stalls(&m, None, false, &NONE_WAITS, &[]),
             [stall(1, AttentionReason::NotStarted, None)]
         );
-        assert!(stalls(&m, None, true, &NONE_WAITS).is_empty());
-        assert!(stalls(&m, None, false, &[false, true]).is_empty());
+        assert!(stalls(&m, None, true, &NONE_WAITS, &[]).is_empty());
+        assert!(stalls(&m, None, false, &[false, true], &[]).is_empty());
         let mut delayed = startable();
         delayed.delay = Some("disk".into());
-        assert!(stalls(&delayed, None, false, &NONE_WAITS).is_empty());
+        assert!(stalls(&delayed, None, false, &NONE_WAITS, &[]).is_empty());
         let mut asked = startable();
         asked.decision = Some("which way?".into());
-        assert!(stalls(&asked, None, false, &NONE_WAITS).is_empty());
+        assert!(stalls(&asked, None, false, &NONE_WAITS, &[]).is_empty());
         let mut upstream = startable();
         upstream.nodes[0].status = NodeStatus::Working;
-        let found = stalls(&upstream, None, false, &NONE_WAITS);
+        let found = stalls(&upstream, None, false, &NONE_WAITS, &[]);
         assert!(!found.iter().any(|found| found.node == 1), "{found:?}");
         let mut named = startable();
         named.nodes[1].agent_id = Some("agent-b".into());
-        assert!(stalls(&named, None, false, &NONE_WAITS).is_empty());
+        assert!(stalls(&named, None, false, &NONE_WAITS, &[]).is_empty());
     }
 
     /// A gate's question holds the mission only once its node owes nothing
@@ -1895,11 +1899,11 @@ mod tests {
             material_asked: false,
         });
         assert_eq!(
-            stalls(&m, None, false, &NONE_WAITS),
+            stalls(&m, None, false, &NONE_WAITS, &[]),
             [stall(1, AttentionReason::NotStarted, None)],
             "the gate asks while its node still owes its checks"
         );
-        assert!(stalls(&m, None, false, &[true, false]).is_empty());
+        assert!(stalls(&m, None, false, &[true, false], &[]).is_empty());
     }
 
     /// A warning stands as a stall only once its Conductor was told it: one
@@ -1910,13 +1914,13 @@ mod tests {
         let mut untold = warn(WarningKind::NoPush, 90 * MINUTE);
         untold.told_unix_ms = None;
         m.nodes[0].warnings.push(untold);
-        assert!(stalls(&m, None, false, &[false]).is_empty());
+        assert!(stalls(&m, None, false, &[false], &[]).is_empty());
         m.nodes[0].warnings[0].told_unix_ms = Some(95 * MINUTE);
         assert_eq!(
-            stalls(&m, None, false, &[false]),
+            stalls(&m, None, false, &[false], &[]),
             [stall(0, AttentionReason::WarningStood, None)]
         );
-        assert!(stalls(&m, None, false, &[true]).is_empty());
+        assert!(stalls(&m, None, false, &[true], &[]).is_empty());
     }
 
     /// A failed review warns the Conductor and stops there: while the worker
@@ -1937,7 +1941,7 @@ mod tests {
             evaluate(m, &facts(Some(&pulls), vec![NodeFacts::default()]))
                 .contains(&Act::Clear { node: 0 })
         };
-        assert!(stalls(&failed(), None, false, &[false]).is_empty());
+        assert!(stalls(&failed(), None, false, &[false], &[]).is_empty());
         let mut raised = failed();
         raised.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
         assert!(cleared(&raised));
@@ -1947,7 +1951,7 @@ mod tests {
             .warnings
             .push(warn(WarningKind::Stopped, 5));
         assert_eq!(
-            stalls(&stopped, None, false, &[false]),
+            stalls(&stopped, None, false, &[false], &[]),
             [stall(0, AttentionReason::WarningStood, None)]
         );
         stopped.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
@@ -1963,12 +1967,12 @@ mod tests {
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
         let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
         assert_eq!(
-            stalls(&m, Some(&waiting), false, &[false]),
+            stalls(&m, Some(&waiting), false, &[false], &[]),
             [stall(0, AttentionReason::WaitStood, Some(7))]
         );
-        assert!(stalls(&m, None, false, &[false]).is_empty());
+        assert!(stalls(&m, None, false, &[false], &[]).is_empty());
         let merged = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
-        assert!(stalls(&m, Some(&merged), false, &[false]).is_empty());
+        assert!(stalls(&m, Some(&merged), false, &[false], &[]).is_empty());
     }
 
     /// A stall goes once its move came, or once none is owed: the node

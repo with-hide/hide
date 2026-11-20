@@ -1226,6 +1226,17 @@ pub trait DeviceConnector: Send + Sync {
         Err("WSL distributions can be connected only from the Windows app".to_owned())
     }
 
+    /// The transport for the device `node`, another machine that runs Hide
+    /// and is paired with this one under the connection key `key` (PRD
+    /// device-connect-iroh D-61); nothing connects until it is used.
+    fn peer_transport(
+        &self,
+        _node: &str,
+        _key: &str,
+    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
+        Err("This Hide connects no paired machine".to_owned())
+    }
+
     /// This PC's WSL distributions, for Add device. Blocking and bounded;
     /// it starts no `wsl.exe`.
     fn wsl_distributions(&self) -> WslListing {

@@ -105,6 +105,24 @@ pub(crate) struct NotResumed {
     pub(crate) why: String,
 }
 
+/// A saved pane the restore after a device's switch closed, because the
+/// new link held no holder for it (PRD device-connect-iroh D-49, B36).
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(Default, serde::Deserialize))]
+#[cfg_attr(test, serde(default))]
+pub(crate) struct NotCarried {
+    /// The engine's own id of the pane.
+    pub(crate) pane_id: String,
+    /// The folder it was in.
+    pub(crate) cwd: String,
+    /// Its saved agent's definition id; `None` for a shell.
+    pub(crate) agent: Option<String>,
+    /// The name the agent was started under, when the engine started it.
+    pub(crate) name: Option<String>,
+    /// The conversation it ran, when the save knew it.
+    pub(crate) session: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(Default, serde::Deserialize))]
 #[cfg_attr(test, serde(default))]
@@ -135,6 +153,11 @@ pub(crate) struct ProjectionState {
     /// core ends the registration of each while it is named
     /// (`Runtime::end_unresumed`). None runs, so none is among `agents`.
     pub(crate) not_resumed: Vec<NotResumed>,
+    /// On the engine a device's switch opened (`own::Place::switched`),
+    /// once its restore ended: the saved panes the new link held no holder
+    /// for, which it closed (`Runtime::settle_switch_open`). `None` on
+    /// every other engine and until then.
+    pub(crate) not_carried: Option<Vec<NotCarried>>,
     /// The next moment an agent start this read has pending (`launch_pending`)
     /// can end with nothing the engine reports changing: its settle passing
     /// while its screen already rests, or its deadline. The coordinator that

@@ -31,6 +31,13 @@ pub const PROMPT: &str = "fixture-ready> ";
 /// The device's id, as the fixture registers it.
 pub const DEVICE: &str = "remote";
 
+/// What keeps a daemon's connection to another Hide on this machine: its
+/// endpoint binds loopback and reaches no relay.
+pub const LOOPBACK_PEERS: [(&str, &str); 2] = [
+    ("HIDE_RELAY_URL", "ws://127.0.0.1:9/ws"),
+    ("HIDE_PEER_DIRECT", "127.0.0.1:0"),
+];
+
 /// The Claude Code version `Fixture::journey_installed` installs on the device,
 /// and the one the core's composer checks hold as passed.
 pub const FIXTURE_VERSION: &str = "2.1.319";
@@ -628,7 +635,7 @@ impl PaneOutput {
 /// Each pane's program session is ended by the pid and start time its record
 /// names, and its holder ends with it; a holder still running after
 /// [`HOLDER_END`] fails the stop.
-fn end_holders(state_dir: &Path) -> Result<()> {
+pub fn end_holders(state_dir: &Path) -> Result<()> {
     let folder = hide_kit::layout::pane_records(state_dir);
     if !folder.exists() {
         return Ok(());
@@ -814,11 +821,24 @@ impl Fixture {
         hide_platform::fs::private::create_dir_all(&device_state)?;
         let state = ipc.path().join("s");
         hide_platform::fs::private::create_dir_all(&state)?;
-        let mut local_env = Environment::new(&root.join("l"), None)?;
         // The device reports a checkout by its real path, which the journey
         // compares with the one it made, and `/tmp` is a link on macOS.
-        let device_root = ipc.path().canonicalize()?.join("r");
-        let mut remote_env = Environment::new(&device_root, Some(&device_state))?;
+        let accounts = ipc.path().canonicalize()?;
+        // Both accounts are fixture HOMEs (`hide_kit::layout::fixture_home`:
+        // under `/tmp`, with the marker), so nothing either daemon does
+        // reaches this account's real login items: a journey that pairs the
+        // two machines would otherwise have each put its core's login item
+        // in the session that runs the tests (`always_on`).
+        let mut local_env = Environment::new(&accounts.join("l"), None)?;
+        let mut remote_env = Environment::new(&accounts.join("r"), Some(&device_state))?;
+        for environment in [&local_env, &remote_env] {
+            fs::write(
+                environment.home.join(hide_kit::layout::FIXTURE_HOME_MARKER),
+                "",
+            )?;
+        }
+        // What the local agent's pane runs for a journey stays with the run.
+        fs::create_dir_all(root.join("l"))?;
         // The device installs shipped executables, which carry no debug
         // data. Stage this candidate's code with the same property: hashing
         // and uploading a CI debug image can exhaust helper setup's bound.
@@ -863,6 +883,18 @@ impl Fixture {
         // first connects, so it is added by its alias and connects as
         // `DEVICE`.
         remote_env.set(hide_platform::host::MACHINE_ID_VARIABLE, DEVICE);
+        // A Hide of the account's own, when a journey starts one, keeps
+        // its connection on this machine too, and reads no Tailscale.
+        for (name, value) in LOOPBACK_PEERS {
+            remote_env.set(name, value);
+        }
+        // Both machines are builds that offer connections between two Hides,
+        // which a journey that pairs or switches them needs.
+        remote_env.set(hided::env::HIDE_DEVICE_CONNECT, "1");
+        remote_env.set(
+            "HIDE_TAILSCALE_BIN",
+            remote_env.home.join("absent-tailscale").into_os_string(),
+        );
         let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
         fs::write(
             local_env.home.join(".ssh/config"),
@@ -870,6 +902,7 @@ impl Fixture {
         )?;
         local_env.set("HIDE_STATE_DIR", state.as_os_str());
         local_env.set("HIDE_KEEP_ALIVE", "1");
+        local_env.set(hided::env::HIDE_DEVICE_CONNECT, "1");
         local_env.set("HIDE_OPEN_COMMAND", "/usr/bin/true");
         local_env.set(
             "HIDE_HOST_HELPER_ROOT",
@@ -883,6 +916,11 @@ impl Fixture {
             "HIDE_TAILSCALE_BIN",
             local_env.home.join("absent-tailscale").into_os_string(),
         );
+        // A journey that pairs the two machines keeps their connection on
+        // this one: both endpoints bind loopback and name no relay.
+        for (name, value) in LOOPBACK_PEERS {
+            local_env.set(name, value);
+        }
         // Claude Code `FIXTURE_VERSION`'s composer was checked on a screen
         // that read empty, as an earlier run of the daemon left it
         // (`composer-checks.json`, docs/delivery.md, Catching an agent's

@@ -59,6 +59,7 @@ The daily agent canary measures each CLI's latest release in place of these pins
 
 `hide-cli.json` is what `hide contract --json` exports: the commands other tools call (`hide agent`, `request`, `inbox`, `watch`), their options, and the JSON Schema of each answer ([docs/delivery.md](../docs/delivery.md#the-contract-a-calling-tool-checks)).
 The build is the writer; `hided/src/cli_contract.rs`'s `the_committed_contract_is_the_exported_one` fails until this file matches what it exports.
+A command marked `"hidden": true` is one the CLI admits but does not offer yet, such as the `hide device` verbs that pair two Hides, which `hide --help` lists only where `HIDE_DEVICE_CONNECT=1`; a calling tool does not offer it either.
 Regenerate it after a change to those commands, and review the diff as the change callers see:
 
 ```sh
@@ -75,11 +76,15 @@ A new platform is one entry here, a runner that builds it, and its row in [docs/
 
 # Peer link
 
-`peer-link.json` is what two machines that each run Hide say to each other on their one connection ([docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-peer-connection)): the ALPN, the spelling of a key, the hello and the link versions this build speaks, every stream kind with its tag, its priority and whether it needs a grant, the close codes, the pairing, revoke and management messages, the event a core hands another and the limits of the box that keeps it, a guest node's launch contract (its arguments, its folder and socket names with the longest socket tail they make, its ready and idle lines and exit codes), the tap's frames and its cap, and the list of panes a guest keeps.
+`peer-link.json` is what two machines that each run Hide say to each other on their one connection ([docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-peer-connection)): the ALPN, the spelling of a key, the hello and the link versions this build speaks, every stream kind with its tag, its priority and whether it needs a grant, the close codes, the pairing, revoke and management messages, the event a core hands another and the limits of the box that keeps it, a guest node's launch contract (its arguments, its folder and socket names with the longest socket tail they make, its ready and idle lines and exit codes, how many guests a host has at work at once, and how a guest's installation is named in the host account's agent settings, where the guest's build writes its hook entries and the host's build takes them out), the tap's frames and its cap, and the list of panes a guest keeps.
 `hide-peer-protocol` is the writer: `contract::shape` builds the file's content from the crate's own constants and types, and its test `the_committed_contract_is_what_the_code_speaks` fails until this file matches.
 The crate also includes the file in its source, and a build that is not a release sends the file's hash in its hello, so two development builds of different contracts refuse each other instead of misreading one another.
 A change to it is a change to what a peer of another build reads: add a field or a message type an older reader skips, and raise the link version (`hello::NEWEST_LINK`) for anything an older reader would misread.
-Regenerate it from that crate alone, so the keys come out in one order whatever else the build selects, and never edit it by hand:
+`fixtures/peer-link/event-box.jsonl` is a guest node's box as recorded: its first line as this build writes one, its second with fields a later build of the same guest might add.
+A `letter` event's body is the guest's own build's on both ends (`pane`, the `terminal` the node proved its sender in, and the `command`), so the peer contract names only the line around it.
+The node's tests read it as the box an earlier node left (`hided/src/guest_node/event_box.rs`, `hided/tests/it/guest_node.rs`): every line goes to the guest's core as it was written, and this build's own line matches the first field for field, so the build before and the build after read the same box.
+Add a line when a build starts writing a field; never change a recorded one.
+Regenerate `peer-link.json` from that crate alone, so the keys come out in one order whatever else the build selects, and never edit it by hand:
 
 ```sh
 bash scripts/verify-cargo.sh build -p hide-peer-protocol --example export_contract

@@ -13,9 +13,10 @@ use std::ffi::OsString;
 pub enum Role<'a> {
     /// The daemon on the state folder its environment names.
     Daemon,
-    /// The daemon as a moved core's login item starts it
-    /// (`login_item::before_core_at_login` first).
-    CoreLogin,
+    /// The daemon as a login item starts it, on the folder its
+    /// `--state-dir` names or, for an item an earlier build put in, its
+    /// environment names (`login_item::at_login` first).
+    CoreLogin(Option<&'a OsString>),
     /// A pane's entry point that becomes its shell in this process.
     ShellExec(&'a [OsString]),
     /// The node on a device, over the link that started it.
@@ -36,8 +37,9 @@ pub enum Role<'a> {
 
 pub const USAGE: &str = "usage: hided [--version | --help]
   hided                   the daemon on the state folder HIDE_STATE_DIR names (hide connect starts it)
-  hided core-login        the daemon, as a moved core's login item starts it
-  hided node serve|--version
+  hided core-login [--state-dir <absolute dir>]
+                          the daemon, as the core's login item starts it
+  hided node serve [--guest <folder>]|--version
   hided attach [--state-dir <absolute dir>]
   hided core-move <step> ...
   hided core-update ...
@@ -65,12 +67,26 @@ pub fn parse(args: &[OsString]) -> Result<Role<'_>, String> {
         Some("core-move") => Ok(Role::CoreMove(rest)),
         Some("core-update") => Ok(Role::CoreUpdate(rest)),
         Some("--open-helper") => Ok(Role::OpenHelper(args)),
-        Some("core-login") => only(Role::CoreLogin),
+        Some("core-login") => core_login(rest),
         Some("--version") => only(Role::Version),
         Some("--help" | "-h" | "help") => only(Role::Help),
         _ => Err(format!(
             "hided does not know {:?}\n{USAGE}",
             first.to_string_lossy()
+        )),
+    }
+}
+
+/// `core-login`'s words: none, or the absolute state folder after
+/// `--state-dir`.
+fn core_login(rest: &[OsString]) -> Result<Role<'_>, String> {
+    match rest {
+        [] => Ok(Role::CoreLogin(None)),
+        [flag, dir] if flag == "--state-dir" && std::path::Path::new(dir).is_absolute() => {
+            Ok(Role::CoreLogin(Some(dir)))
+        }
+        _ => Err(format!(
+            "hided core-login takes only --state-dir <absolute dir>\n{USAGE}"
         )),
     }
 }
@@ -115,7 +131,18 @@ mod tests {
         assert_eq!(parse(&node), Ok(Role::Node(&node[1..])));
         let helper = words(&["--open-helper", "3", "/usr/bin/open", "x"]);
         assert_eq!(parse(&helper), Ok(Role::OpenHelper(&helper[..])));
-        assert_eq!(parse(&words(&["core-login"])), Ok(Role::CoreLogin));
+        assert_eq!(parse(&words(&["core-login"])), Ok(Role::CoreLogin(None)));
+        let dir = OsString::from(if cfg!(windows) { "C:\\s" } else { "/s" });
+        assert_eq!(
+            parse(&[
+                OsString::from("core-login"),
+                OsString::from("--state-dir"),
+                dir.clone()
+            ]),
+            Ok(Role::CoreLogin(Some(&dir)))
+        );
+        assert!(parse(&words(&["core-login", "--state-dir", "relative"])).is_err());
+        assert!(parse(&words(&["core-login", "--state-dir"])).is_err());
         assert_eq!(parse(&words(&["--version"])), Ok(Role::Version));
         assert_eq!(parse(&words(&["-h"])), Ok(Role::Help));
     }
