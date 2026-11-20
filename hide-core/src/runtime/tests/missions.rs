@@ -15598,21 +15598,41 @@ fn a_put_away_mission_row_comes_back_only_for_a_newer_raise() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     let now = crate::runtime::unix_milliseconds();
-    five_raised(&mut runtime, AttentionReason::WorkerEnded, false, now - MINUTE);
+    five_raised(
+        &mut runtime,
+        AttentionReason::WorkerEnded,
+        false,
+        now - MINUTE,
+    );
     assert!(operator_turn(&mut runtime).mission_item);
 
     assert!(runtime.mission_put_away_event("mission-1"));
     let turn = operator_turn(&mut runtime);
-    assert_eq!((turn.mission_item, turn.safety_net), (false, Some(5)), "the map keeps its safety net");
+    assert_eq!(
+        (turn.mission_item, turn.safety_net),
+        (false, Some(5)),
+        "the map keeps its safety net"
+    );
     // The same raises, read again, keep it away.
     runtime.drive_mission_health(now);
     assert!(!operator_turn(&mut runtime).mission_item);
 
     // A node raised after the put-away asks the operator again.
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
-    mission.nodes.iter_mut().find(|node| node.key == "n1").unwrap().attention = None;
+    mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "n1")
+        .unwrap()
+        .attention = None;
     let later = crate::runtime::unix_milliseconds() + MINUTE;
-    let raised = crate::runtime::mission_health::raise(mission, "n1", AttentionReason::PrClosed, Some(8), later);
+    let raised = crate::runtime::mission_health::raise(
+        mission,
+        "n1",
+        AttentionReason::PrClosed,
+        Some(8),
+        later,
+    );
     assert!(!raised.is_empty());
     runtime.save_missions();
     assert!(operator_turn(&mut runtime).mission_item);

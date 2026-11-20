@@ -5473,7 +5473,9 @@ impl Runtime {
                         .book
                         .get(&mission.id)
                         .and_then(|record| record.put_away_unix_ms);
-                    if put_away.is_some_and(|at| newest_ask_since(mission).is_some_and(|newest| newest <= at)) {
+                    if put_away.is_some_and(|at| {
+                        newest_ask_since(mission).is_some_and(|newest| newest <= at)
+                    }) {
                         continue;
                     }
                     waiting.entry(mission.device_id.clone())
