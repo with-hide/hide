@@ -545,6 +545,8 @@ enum Answer {
 struct Starts {
     /// Each start's intent and first prompt, in order.
     asked: Vec<(String, Option<String>)>,
+    /// Each start's folder and branch, in order.
+    places: Vec<(String, Option<String>)>,
     answers: HashMap<String, VecDeque<Answer>>,
 }
 
@@ -882,12 +884,22 @@ fn scripted_start(
     ledger_path: PathBuf,
 ) -> Start {
     Arc::new(move |_, command| {
-        let crate::coordination::Command::Spawn { intent, brief, .. } = &command else {
+        let crate::coordination::Command::Spawn {
+            intent,
+            brief,
+            repo,
+            branch,
+            ..
+        } = &command
+        else {
             panic!("an automation starts its agent with a spawn");
         };
         let answer = {
             let mut starts = starts.lock().unwrap();
             starts.asked.push((intent.clone(), brief.clone()));
+            starts
+                .places
+                .push((repo.clone().unwrap_or_default(), branch.clone()));
             let queue = starts.answers.entry(intent.clone()).or_default();
             if queue.len() > 1 {
                 queue.pop_front()
@@ -1531,10 +1543,36 @@ fn a_run_starts_in_a_folder_the_catalog_last_read_as_gone() {
     harness.runtime.lock().unwrap().catalog_paths = crate::runtime::tests::path_read(FOLDER, None);
     harness.tick(1);
     assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    assert_eq!(
+        harness.starts.lock().unwrap().places,
+        [(FOLDER.to_owned(), None)]
+    );
     assert_eq!(harness.run(&id).0, "running");
     let mut runtime = harness.runtime.lock().unwrap();
     assert!(show(&mut runtime, &id).get("paused").is_none());
     assert!(needs_you(&mut runtime).0.is_empty());
+}
+
+/// B23, D-08: the same stale read makes a Git project's row look like a
+/// plain folder's, and an automation that asked for a new worktree per run
+/// still starts in one, never in the project's own folder.
+#[test]
+fn a_worktree_run_the_catalog_last_read_as_gone_still_starts_in_a_new_worktree() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    {
+        let mut runtime = harness.runtime.lock().unwrap();
+        runtime.snapshot.navigator.workspaces[0].is_git = false;
+        runtime.catalog_paths = crate::runtime::tests::path_read(REPO, None);
+    }
+    harness.tick(1);
+    assert_eq!(harness.asked(), [intent(&id, 1, 1)]);
+    assert_eq!(
+        harness.starts.lock().unwrap().places,
+        [(REPO.to_owned(), Some(format!("automation/{id}-r1")))]
+    );
+    assert_eq!(harness.run(&id).0, "running");
 }
 
 /// B23: an agent whose program this machine does not find stops the
