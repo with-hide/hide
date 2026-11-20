@@ -595,16 +595,18 @@ function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest 
     return { mission, rest };
   }
   const raised = mission.nodes.filter((one) => one.status === "working" || one.status === "planned").slice(0, 5);
+  // Each cell names its node's own pull request where it is about one.
   const cells = [
-    { reason: "wake_refused", pr: null },
-    { reason: "ci_failed", pr: 2741 },
-    { reason: "worker_ended", pr: null },
-    { reason: "changes_requested", pr: 2738 },
-    { reason: "warning_no_push", pr: null },
+    { reason: "wake_refused", pr: false },
+    { reason: "ci_failed", pr: true },
+    { reason: "worker_ended", pr: false },
+    { reason: "changes_requested", pr: true },
+    { reason: "warning_no_push", pr: false },
   ] as const;
   const held = raised.map((one, index) => {
     const since = now - (25 - index) * MINUTE;
-    const cell = cells[index % cells.length]!;
+    const at = cells[index % cells.length]!;
+    const cell = { reason: at.reason, pr: at.pr ? one.pr : null };
     // A raise stands on its node; any other standing cell is the Conductor's alone.
     if (MISSION_ATTENTION_REASONS.some((reason) => reason === cell.reason)) {
       one.attention = { reason: cell.reason as MissionAttentionReason, pr: cell.pr, to: "conductor", since_unix_ms: since, on_row: false, item: false, choices: ["leave", "drop"] };
