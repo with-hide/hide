@@ -15845,7 +15845,19 @@ fn a_put_away_mission_row_comes_back_only_for_a_newer_raise() {
     runtime.drive_mission_health(now);
     assert!(!operator_turn(&mut runtime).mission_item);
 
-    // A node raised after the put-away asks the operator again.
+    // A node raised after the put-away asks the operator again. Its cell
+    // starts on the clock, so the raise waits for the clock to pass the
+    // put-away's millisecond (#2760).
+    let put_away = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .put_away_unix_ms
+        .unwrap();
+    while crate::runtime::unix_milliseconds() <= put_away {
+        std::hint::spin_loop();
+    }
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
     mission
         .nodes
