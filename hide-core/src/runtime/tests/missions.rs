@@ -18930,3 +18930,176 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
     );
     assert!(runtime.claim_mission_notices().is_empty(), "not told again");
 }
+
+/// A blocked child's cell its parent read is not handed again by a core
+/// started after a restart while the child stays blocked: the cell's
+/// revision is the block's own date, which the restart keeps, never the
+/// moment it was posted. The child moving and blocking again is a new fact,
+/// given once (B10, B12).
+#[test]
+fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
+    const SESSION: &str = "parent-native-session";
+    const CHILD_SESSION: &str = "child-native-session";
+    const STOPPED: u64 = 1_700_000_000_000;
+    // The session as the engine reports it: the parent, and its delegated
+    // child in `child_status` since `child_changed`.
+    let rows = |runtime: &mut Runtime, child_status: &str, child_changed: u64| {
+        let digest = crate::engine::tokens::session_digest(SESSION).unwrap();
+        let agent = |pane: &str, status: &str, changed: u64| {
+            json!({"id": format!("agent-{pane}"), "pane_id": pane, "agent": "claude",
+                "agent_status": status, "state_change_seq": 1, "cwd": "/fixture",
+                "workspace_label": "hide", "tokens": {"task": format!("Task {pane}")},
+                "changed_at_unix_ms": changed})
+        };
+        let mut parent = agent("w1:p1", "idle", STOPPED);
+        parent["lineage_session"] = json!(digest);
+        let mut child = agent("w1:p2", child_status, child_changed);
+        child["declared_parent_session"] = json!(digest);
+        child["spawned_from_pane_id"] = json!("w1:p1");
+        let layout = |index: usize, pane: &str| {
+            json!({"workspace_id":"w1","tab_id":format!("t{index}"),"zoomed":false,
+                "area":{"x":0,"y":0,"width":120,"height":40},"focused_pane_id":pane,
+                "panes":[{"pane_id":pane,"rect":{"x":0,"y":0,"width":120,"height":40}}],
+                "splits":[]})
+        };
+        // The panes' agents are observed before the session lays them, as a
+        // running core has them.
+        let child_digest = crate::engine::tokens::session_digest(CHILD_SESSION).unwrap();
+        let observed: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"agent-w1:p1","pane_id":"w1:p1","agent":"claude","agent_status":"idle","state_change_seq":1,"lineage_session":digest},
+            {"id":"agent-w1:p2","pane_id":"w1:p2","agent":"claude","agent_status":child_status,"state_change_seq":1,"lineage_session":child_digest},
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+        runtime.ingest_session(Ok(crate::sidebar::owned_label_fixture(json!({
+            "agents": [parent, child],
+            "panes": [{"pane_id":"w1:p1","cwd":"/fixture"},{"pane_id":"w1:p2","cwd":"/fixture"}],
+            "tabs": [{"workspace_id":"w1","tab_id":"t0","label":""},{"workspace_id":"w1","tab_id":"t1","label":""}],
+            "layouts": [layout(0, "w1:p1"), layout(1, "w1:p2")],
+        }))
+        .unwrap()));
+        let child_digest = crate::engine::tokens::session_digest(CHILD_SESSION).unwrap();
+        let observed: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+            {"id":"agent-w1:p1","pane_id":"w1:p1","agent":"claude","agent_status":"idle","state_change_seq":1,"lineage_session":digest},
+            {"id":"agent-w1:p2","pane_id":"w1:p2","agent":"claude","agent_status":child_status,"state_change_seq":1,"lineage_session":child_digest},
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+        (
+            runtime.delivery_observations["w1:p1"].actor.clone(),
+            runtime.delivery_observations["w1:p2"].actor.clone(),
+        )
+    };
+    let root = tempfile::tempdir().unwrap();
+    let (runtime, _, _, path) = fixture(root.path());
+    let (actor, _) = rows(&mut runtime.lock().unwrap(), "blocked", STOPPED + 5);
+    let (worker, client) =
+        Worker::spawn(Arc::downgrade(&runtime), ChangeNotifier::noop(), path).unwrap();
+    runtime
+        .lock()
+        .unwrap()
+        .install_delivery_client(client.clone());
+    // The parent registers from its own pane, in the tab the session laid.
+    let register = |actor: &Actor, session: &str| {
+        let context = runtime
+            .lock()
+            .unwrap()
+            .workspace_control_query(
+                &actor.device_id,
+                &actor.pane_id,
+                crate::workspace_control::Query::Info,
+            )
+            .unwrap()
+            .context;
+        let record = crate::coordination::AgentRecord {
+            id: String::new(),
+            name: None,
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: session.into(),
+            instance: format!("terminal-{}", actor.pane_id),
+            pane: actor.pane_id.clone(),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+        };
+        let registered = client
+            .submit(
+                crate::delivery::worker::Effect::Agents {
+                    authority: crate::delivery::worker::Authority {
+                        context,
+                        ..authority(actor)
+                    },
+                    actor: actor.clone(),
+                    mutation: Box::new(crate::coordination::Mutation::Register {
+                        record,
+                        check: false,
+                    }),
+                },
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap();
+        let id = registered["id"].as_str().unwrap().to_owned();
+        super::wait_for("the store published the registration", || {
+            runtime
+                .lock()
+                .unwrap()
+                .delivery_state()
+                .is_ok_and(|ledger| ledger.agents.iter().any(|record| record.id == id))
+        });
+        id
+    };
+    let agent = register(&actor, SESSION);
+    rows(&mut runtime.lock().unwrap(), "blocked", STOPPED + 5);
+    let take = |runtime: &mut Runtime| {
+        runtime.drive_blocked_notes();
+        let ledger = runtime.delivery_state().ok();
+        runtime
+            .take_status_of(&agent, ledger.as_deref(), None)
+            .into_iter()
+            .map(|cell| cell.subject)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        take(&mut runtime.lock().unwrap()),
+        ["child:w1:p2"],
+        "the parent reads it"
+    );
+    super::wait_for("the store kept what the parent saw", || {
+        runtime
+            .lock()
+            .unwrap()
+            .delivery_state()
+            .is_ok_and(|ledger| ledger.status_seen.contains_key(&agent))
+    });
+    drop(worker);
+    drop(runtime);
+
+    // The core starts again on the same store; the child is still blocked.
+    let (fresh, _, _, path) = fixture(root.path());
+    let (_worker, client) =
+        Worker::spawn(Arc::downgrade(&fresh), ChangeNotifier::noop(), path).unwrap();
+    let mut guard = fresh.lock().unwrap();
+    guard.install_delivery_client(client);
+    rows(&mut guard, "blocked", STOPPED + 5);
+    assert!(
+        guard
+            .delivery_state()
+            .is_ok_and(|ledger| ledger.status_seen.contains_key(&agent)),
+        "the ledger read from disk keeps what it saw"
+    );
+    assert!(take(&mut guard).is_empty(), "the same block, read before");
+    assert!(take(&mut guard).is_empty());
+
+    // The child works, then blocks again: a new fact, given once.
+    rows(&mut guard, "working", STOPPED + 20_000);
+    assert!(take(&mut guard).is_empty(), "moving takes the cell back");
+    rows(&mut guard, "blocked", STOPPED + 40_000);
+    assert_eq!(take(&mut guard), ["child:w1:p2"], "the new block");
+    assert!(take(&mut guard).is_empty());
+}

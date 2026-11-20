@@ -23,9 +23,12 @@
 //! rung for in its episode (`status_rings_due`, `delivery::doorbell`), never
 //! for an update of one.
 //!
-//! Every revision grows with the fact it stands for: a mission's wake count
-//! for a node's cell, the time the fact was made otherwise, so "changed" is
-//! a revision past the one seen. A cell's episode is the revision it began
+//! Every revision is the fact's own and grows with it: a mission's wake
+//! count for a node's cell, a watch warning's start, and for a posted cell
+//! what its producer names (`post_status`): a blocked child's stop as the
+//! engine dated it, a held letter's creation, a news event's moment. Never
+//! the clock at posting, so a fact posted again after a restart is the
+//! revision its receiver saw, and "changed" is a revision past that. A cell's episode is the revision it began
 //! with, kept while facts update it and new once it went and comes back (a
 //! recurrence), so a recurrence rings and is given again whatever was seen
 //! of the episode before, with no pass between the two needed.
@@ -137,8 +140,6 @@ pub(in crate::runtime) struct StatusCells {
     /// The episode of each subject each recipient was rung for since this
     /// core started.
     rung: BTreeMap<String, BTreeMap<String, u64>>,
-    /// The last revision a post took, so two posts in one millisecond differ.
-    last_revision: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -198,13 +199,16 @@ fn cut(text: &str) -> String {
 impl Runtime {
     /// Posts `line` as `recipient`'s cell about `subject`: a pass that judges
     /// a fact kept in memory only (a blocked child, a letter that could not
-    /// go). The same line again is no change; another one updates the cell.
+    /// go). `revision` is the fact's own, from its producer: the same fact
+    /// posted again, such as by a core started after a restart, is the same
+    /// revision and no change; another fact updates the cell.
     pub(crate) fn post_status(
         &mut self,
         recipient: &Actor,
         subject: String,
         line: String,
         news: bool,
+        revision: u64,
     ) -> Result<(), StatusFull> {
         let key = recipient_key(self.delivery_ledger.as_deref().ok(), recipient);
         let line = cut(&line);
@@ -212,13 +216,14 @@ impl Runtime {
         let mut episode = None;
         if let Some(posted) = cells.posted.get_mut(&(key.clone(), subject.clone())) {
             posted.actor = recipient.clone();
-            if posted.cell.line == line && posted.cell.news == news {
+            if posted.cell.line == line
+                && posted.cell.news == news
+                && posted.cell.revision == revision
+            {
                 return Ok(());
             }
             episode = Some(posted.cell.episode);
         }
-        let revision = super::unix_milliseconds().max(cells.last_revision + 1);
-        cells.last_revision = revision;
         crate::diagnostic!(json!({
             "component": "status", "kind": "status.posted",
             "recipient": key, "subject": subject, "news": news,

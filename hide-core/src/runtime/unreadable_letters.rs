@@ -99,6 +99,8 @@ impl Runtime {
                 target.actor,
                 super::status_cells::letter_subject(&letter.id),
                 note_body(&letter.recipient.name, &letter.kind, &letter.id, &reason),
+                // The held letter is the fact: its revision is the letter's.
+                letter.created_at_unix_ms,
             ));
         }
         let gone: Vec<String> = self
@@ -111,9 +113,12 @@ impl Runtime {
             self.retract_standing_status(&super::status_cells::letter_subject(&id));
         }
         self.unreadable_letters.noted = held;
-        for (sender, subject, body) in notes {
+        for (sender, subject, body, revision) in notes {
             // Refused for room: the next pass tries again.
-            if self.post_status(&sender, subject, body, false).is_err() {
+            if self
+                .post_status(&sender, subject, body, false, revision)
+                .is_err()
+            {
                 self.unreadable_letters.dirty = true;
             }
         }

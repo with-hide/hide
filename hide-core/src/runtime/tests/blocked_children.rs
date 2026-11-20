@@ -275,7 +275,13 @@ fn a_parent_is_rung_once_for_a_new_cell_and_given_only_what_changed() {
 
     // An update of the same subject rings nothing.
     runtime
-        .post_status(&actor, "child:w1:p2".into(), "still blocked".into(), false)
+        .post_status(
+            &actor,
+            "child:w1:p2".into(),
+            "still blocked".into(),
+            false,
+            crate::runtime::unix_milliseconds() + 1_000,
+        )
         .unwrap();
     assert!(
         runtime.status_rings_due().is_empty(),
@@ -299,6 +305,7 @@ fn a_parent_is_rung_once_for_a_new_cell_and_given_only_what_changed() {
             "letter:9".into(),
             "your letter 9 ended".into(),
             true,
+            1,
         )
         .unwrap();
     let due = runtime.status_rings_due();
@@ -348,17 +355,17 @@ fn a_cell_that_resolves_and_comes_back_rings_again() {
     };
 
     runtime
-        .post_status(&actor, subject.clone(), "blocked once".into(), false)
+        .post_status(&actor, subject.clone(), "blocked once".into(), false, 1)
         .unwrap();
     assert_eq!(ring(&mut runtime), std::slice::from_ref(&subject));
     runtime
-        .post_status(&actor, subject.clone(), "still blocked".into(), false)
+        .post_status(&actor, subject.clone(), "still blocked".into(), false, 2)
         .unwrap();
     assert!(ring(&mut runtime).is_empty(), "an update rings nothing");
     // It resolves and comes back in one drive, no pass between: a new cell.
     runtime.retract_status(&subject);
     runtime
-        .post_status(&actor, subject.clone(), "blocked again".into(), false)
+        .post_status(&actor, subject.clone(), "blocked again".into(), false, 3)
         .unwrap();
     assert_eq!(
         ring(&mut runtime),
@@ -379,6 +386,7 @@ fn a_cell_that_resolves_and_comes_back_rings_again() {
             subject.clone(),
             "blocked a third time".into(),
             false,
+            4,
         )
         .unwrap();
     assert_eq!(ring(&mut runtime), [subject]);
@@ -404,6 +412,7 @@ fn a_prompt_hook_that_carries_no_context_takes_no_cells() {
             "letter:7".into(),
             "your letter 7 ended".into(),
             true,
+            1,
         )
         .unwrap();
     let node = crate::node::TEST_NODE;
@@ -479,6 +488,7 @@ fn a_prompt_pull_and_the_inbox_hand_the_agent_its_changed_cells() {
                 "letter:7".into(),
                 "your letter 7 ended".into(),
                 true,
+                1,
             )
             .unwrap();
         let first = prompt();
@@ -528,6 +538,7 @@ fn a_cell_refused_for_room_lands_once_there_is_room() {
             format!("letter:{filled}"),
             "a letter ended".into(),
             true,
+            filled as u64 + 1,
         )
         .is_ok()
     {
@@ -573,7 +584,13 @@ fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
     let ledger = runtime.delivery_state().ok();
     let recipient = crate::runtime::status_recipient(ledger.as_deref(), &actor);
     runtime
-        .post_status(&actor, "letter:standing".into(), "CI failed".into(), false)
+        .post_status(
+            &actor,
+            "letter:standing".into(),
+            "CI failed".into(),
+            false,
+            1,
+        )
         .unwrap();
     let ledger = runtime.delivery_state().ok();
     let given = runtime.take_status_of(&recipient, ledger.as_deref(), None);
@@ -586,7 +603,13 @@ fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
     );
     for index in 0..300 {
         runtime
-            .post_status(&actor, format!("letter:news-{index}"), "ended".into(), true)
+            .post_status(
+                &actor,
+                format!("letter:news-{index}"),
+                "ended".into(),
+                true,
+                index + 2,
+            )
             .unwrap();
         let ledger = runtime.delivery_state().ok();
         let given = runtime.take_status_of(&recipient, ledger.as_deref(), None);

@@ -234,9 +234,12 @@ impl Runtime {
                 ),
             ));
         }
+        let now = crate::runtime::unix_milliseconds();
         for (id, sender, subject, body) in notes {
             // Refused for room: the note stays owed and the next pass tries.
-            if self.post_status(&sender, subject, body, true).is_err()
+            // News, posted once (its record says it went) and gone once
+            // given: the moment it was found is the fact.
+            if self.post_status(&sender, subject, body, true, now).is_err()
                 && let Some(spent) = self.spent_bells.failed.get_mut(&id)
             {
                 spent.noted = false;

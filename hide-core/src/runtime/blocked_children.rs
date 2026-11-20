@@ -55,6 +55,10 @@ struct Start {
 
 struct Owed {
     key: String,
+    /// The block as the engine dated it: the moment the child last changed
+    /// state, which a restart keeps (`labels::store`), else when this core
+    /// first read the block. The parent's cell's revision.
+    fact: u64,
     parent: String,
     /// The parent session the child's lineage was written for.
     parent_session: Option<String>,
@@ -115,11 +119,13 @@ impl BlockedChildren {
             .filter_map(|row| {
                 let since = row.blocked_since_unix_ms?;
                 let key = format!("{}:{since}", row.pane_id);
+                let fact = row.changed_at_unix_ms.unwrap_or(since);
                 (told.get(&row.pane_id) != Some(&key)).then(|| {
                     Some((
                         row.pane_id.clone(),
                         Owed {
                             key,
+                            fact,
                             parent: row.lineage_parent_pane_id.clone()?,
                             parent_session: row.declared_parent_session.clone(),
                             label: row.identity_label.clone(),
@@ -168,6 +174,7 @@ impl Runtime {
                 super::status_cells::child_subject(&pane),
                 note_body(&child, &pane),
                 false,
+                owed.fact,
             ) {
                 Ok(()) => {
                     self.blocked_children.told.insert(pane, owed.key);

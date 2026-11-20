@@ -1324,8 +1324,16 @@ fn send_input_notice(
             .map_err(|_| "delivery_unavailable".to_owned())?;
         // A cell refused for room is not recorded as sent: the notice is
         // tried again after its wait, as a failed send is.
+        // News, recorded as sent once posted: the moment it was found is the
+        // fact.
         guard
-            .post_status(&notice.target.actor, subject, notice.body.clone(), true)
+            .post_status(
+                &notice.target.actor,
+                subject,
+                notice.body.clone(),
+                true,
+                crate::runtime::unix_milliseconds(),
+            )
             .map_err(|_| "status_full".to_owned())?;
         guard.hide_delivery(super::typed::INPUT_ROLE)?
     };
@@ -5716,11 +5724,11 @@ mod tests {
         // The fixture's letter is answered: only the cell can ring.
         bell.ack(&bell.letter);
         let recipient = observed(&bell.runtime.lock().unwrap(), "recipient").actor;
-        let post = |line: &str| {
+        let post = |line: &str, fact: u64| {
             bell.runtime
                 .lock()
                 .unwrap()
-                .post_status(&recipient, "child:w1:p9".into(), line.into(), false)
+                .post_status(&recipient, "child:w1:p9".into(), line.into(), false, fact)
                 .unwrap();
         };
         let mut doorbell = Doorbell::default();
@@ -5728,12 +5736,12 @@ mod tests {
         let typed = |bell: &Bell| -> Vec<String> {
             bell.typed().iter().map(|call| call.to_string()).collect()
         };
-        post("child blocked once");
+        post("child blocked once", 1);
         bell.pass(&mut doorbell, start);
         let first = typed(&bell);
         assert_eq!(first.len(), 1, "{first:?}");
         assert!(first[0].contains("child blocked once"), "{first:?}");
-        post("child still blocked");
+        post("child still blocked", 2);
         bell.pass(&mut doorbell, start + 1_000);
         assert_eq!(typed(&bell).len(), 1, "an update rings nothing");
         // Resolved and back within one drive, with no pass between.
@@ -5746,6 +5754,7 @@ mod tests {
                     "child:w1:p9".into(),
                     "child blocked again".into(),
                     false,
+                    3,
                 )
                 .unwrap();
         }
