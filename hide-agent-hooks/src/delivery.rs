@@ -16,9 +16,9 @@ use crate::hook_request::{Caller, HookCommand, PullPoint, Timing};
 
 const CONTEXT_LIMIT: usize = 8 * 1024;
 const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
-/// How long a letter waits to be taken before the core ends it; named below
-/// the core so a confirmation a hook owes ([`crate::owed`]) is kept no longer
-/// than its letters can still be taken.
+/// How long a hook keeps a confirmation it owes the core ([`crate::owed`])
+/// before it drops it: a letter whose confirmation was dropped stays its
+/// recipient's until its agent ends, which ends it delivered.
 pub const DELIVERY_EXPIRY_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Deserialize)]

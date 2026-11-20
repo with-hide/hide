@@ -124,35 +124,6 @@ impl Hold {
         }
     }
 
-    /// Whether the hold is a state of the recipient the doorbell still sees
-    /// in its pane, one that ends once it works, rests or the operator acts,
-    /// so its letter keeps its place past the delivery deadline rather than
-    /// ending undelivered (`Ledger::renew_present`). A pane or device not
-    /// seen, another session or agent there, or bells spent with none taken
-    /// is no such state: those letters end at their deadline as before.
-    pub(crate) fn recipient_present(self) -> bool {
-        match self {
-            Self::Absent | Self::Session | Self::Identity | Self::Exhausted => false,
-            Self::Kind
-            | Self::Working
-            | Self::Blocked
-            | Self::AwaitingOperator
-            | Self::SessionUnread
-            | Self::Status
-            | Self::Draft
-            | Self::Quiet
-            | Self::NotReady
-            | Self::Unprojected
-            | Self::Announced
-            | Self::Launching
-            | Self::Moved
-            | Self::Input
-            | Self::Letter
-            | Self::CorePending
-            | Self::ComposerUnread => true,
-        }
-    }
-
     fn code(self) -> &'static str {
         match self {
             Self::Kind => "kind_not_belled",
@@ -532,9 +503,7 @@ impl Doorbell {
             .letters
             .iter()
             .filter(|letter| {
-                letter.state == State::Pending
-                    && (letter.handed || letter.tool_handovers > 0)
-                    && letter.within_deadline(&ledger.node_clocks, now)
+                letter.state == State::Pending && (letter.handed || letter.tool_handovers > 0)
             })
             .collect();
         self.owed
@@ -694,28 +663,12 @@ impl Doorbell {
             .filter(|letter| {
                 // A letter its recipient took is never belled again
                 // (`Letter::handed`), even without the hook's confirmation.
-                letter.state == State::Pending
-                    && !letter.handed
-                    && letter.within_deadline(&ledger.node_clocks, now)
+                letter.state == State::Pending && !letter.handed
             })
             .collect();
         end_interrupted(client, &pending);
         let ids: HashSet<_> = pending.iter().map(|letter| letter.id.as_str()).collect();
-        // A letter past its deadline is rung no more, but its last reason
-        // stays published until the store's upkeep has judged it: a
-        // recipient still in its pane renews it (`Ledger::renew_present`),
-        // whichever of the two passes runs first after the deadline.
-        let overdue: HashSet<_> = ledger
-            .letters
-            .iter()
-            .filter(|letter| {
-                letter.state == State::Pending
-                    && !letter.handed
-                    && letter.intake_overdue(&ledger.node_clocks, now)
-            })
-            .map(|letter| letter.id.as_str())
-            .collect();
-        self.forget(&ledger, &ids, &overdue, now);
+        self.forget(&ids);
         self.rung.retain(|pane, _| {
             pending
                 .iter()
@@ -1121,32 +1074,9 @@ impl Doorbell {
         }
     }
 
-    /// Drops what the doorbell kept for letters that left the pass, except
-    /// the last reason of a letter past its deadline that the store has not
-    /// judged yet (`overdue`). A letter that reached its deadline while held
-    /// is logged with the reason it last waited for once it leaves, so an
-    /// undelivered letter names its cause.
-    fn forget(
-        &mut self,
-        ledger: &super::ledger::Ledger,
-        ids: &HashSet<&str>,
-        overdue: &HashSet<&str>,
-        now: u64,
-    ) {
-        for (id, reason) in &self.held {
-            if ids.contains(id.as_str()) || overdue.contains(id.as_str()) {
-                continue;
-            }
-            if let Some(letter) = ledger.letters.iter().find(|letter| &letter.id == id)
-                && matches!(letter.state, State::Pending | State::Undelivered)
-                && !letter.within_deadline(&ledger.node_clocks, now)
-            {
-                crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.expired",
-                    "letter_id":id,"pane_id":letter.recipient.pane_id,"reason":reason.code()}));
-            }
-        }
-        self.held
-            .retain(|id, _| ids.contains(id.as_str()) || overdue.contains(id.as_str()));
+    /// Drops what the doorbell kept for letters that left the pass.
+    fn forget(&mut self, ids: &HashSet<&str>) {
+        self.held.retain(|id, _| ids.contains(id.as_str()));
         self.tried.retain(|id, _| ids.contains(id.as_str()));
     }
 
@@ -1192,6 +1122,7 @@ fn send_input_notice(
             context: authority.context.clone(),
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
         },
         actor.clone(),
         Some(notice.target.clone()),
@@ -1767,10 +1698,9 @@ pub(crate) const INTERRUPTED: &str = "bell_interrupted";
 /// between passes is one an earlier core left or one whose result the store
 /// did not take, and either may have been typed. Recorded as lost, each
 /// letter goes on as after any lost bell: the next bell reads the composer
-/// for its line (`after_lost`), and a letter with none left is judged by its
-/// record (`Runtime::drive_spent_bells`) instead of waiting for its
-/// deadline. A result the store does not take now is tried again the next
-/// pass.
+/// for its line (`after_lost`), and a letter with none left waits for its
+/// agent's own hooks or `hide inbox`. A result the store does not take now
+/// is tried again the next pass.
 fn end_interrupted(client: &Client, pending: &[&Letter]) {
     for letter in pending.iter().filter(|letter| letter.bell_in_flight()) {
         crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.interrupted",
@@ -4397,6 +4327,7 @@ mod tests {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
         assert_eq!(
             line(&ledger, &letter),

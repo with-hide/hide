@@ -621,6 +621,11 @@ pub struct AgentRecord {
     /// the operator's roots has a parent and carries no mark.
     #[serde(default)]
     pub forked: bool,
+    /// The registration that took this one's place when it ended: the next
+    /// agent in its pane (PRD letters-missions-simplify D-02, B2), which was
+    /// handed its pending letters, children, watches and mission roles
+    /// (`succeed`). An answer to this agent goes there (`live_successor`).
+    pub successor: Option<String>,
 }
 
 /// `AgentRecord` as the ledger file spells it, with the wire name in `name`.
@@ -644,6 +649,8 @@ struct AgentRecordOnDisk {
     ended: bool,
     #[serde(default)]
     forked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    successor: Option<String>,
 }
 
 impl From<AgentRecord> for AgentRecordOnDisk {
@@ -664,6 +671,7 @@ impl From<AgentRecord> for AgentRecordOnDisk {
             actor: record.actor,
             ended: record.ended,
             forked: record.forked,
+            successor: record.successor,
         }
     }
 }
@@ -689,6 +697,7 @@ impl From<AgentRecordOnDisk> for AgentRecord {
             actor: disk.actor,
             ended: disk.ended,
             forked: disk.forked,
+            successor: disk.successor,
         };
         record.forget_pane_name();
         record
@@ -1298,6 +1307,33 @@ pub(crate) fn registered_id(ledger: &Ledger, actor: &Actor) -> Option<String> {
         .map(|record| record.id.clone())
 }
 
+/// Where registration `id` stands now: the live registration that runs in its
+/// place, itself or the last of its successors (`succeed`), or, when that
+/// line ended with no agent after it, the last registration in it. None for
+/// an id the ledger does not hold.
+pub(crate) fn live_successor<'a>(
+    ledger: &'a Ledger,
+    id: &str,
+) -> Option<Result<&'a AgentRecord, &'a AgentRecord>> {
+    let mut record = ledger.agents.iter().find(|record| record.id == id)?;
+    // Each step goes to a later registration; the count bounds a ledger
+    // edited by hand into a loop.
+    for _ in 0..ledger.agents.len() {
+        if !record.ended {
+            return Some(Ok(record));
+        }
+        match record
+            .successor
+            .as_deref()
+            .and_then(|next| ledger.agents.iter().find(|record| record.id == next))
+        {
+            Some(next) => record = next,
+            None => break,
+        }
+    }
+    Some(Err(record))
+}
+
 /// The live registration [`resolve_registered`] finds, whole.
 pub(crate) fn registered_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
     record_by(ledger, |record| {
@@ -1705,6 +1741,11 @@ pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
             || record.parent.as_ref().is_some_and(|parent| {
                 parent == &record.id || !ledger.agents.iter().any(|record| &record.id == parent)
             })
+            // Only an ended registration has a successor, and never itself.
+            || record
+                .successor
+                .as_ref()
+                .is_some_and(|successor| !record.ended || successor == &record.id || !key(successor))
         {
             return Err("ledger_unavailable".into());
         }
@@ -2769,6 +2810,20 @@ fn insert_record(
     Ok(view(&record, ledger, &RegistrationFacts::NONE))
 }
 
+/// Registers the agent of `record`, a party of a letter about to be kept,
+/// unless it has a live registration already (`Authority::registers`). Two
+/// letters between the same agents converge on the one record.
+pub(crate) fn register_party(
+    ledger: &mut Ledger,
+    record: &AgentRecord,
+    holds: &dyn Holds,
+) -> Result<(), String> {
+    if registered_id(ledger, &record.actor).is_some() {
+        return Ok(());
+    }
+    insert_record(ledger, record, false, holds).map(drop)
+}
+
 /// Whether `actor` is an external tool whose connection `connections`, the
 /// ids the access list holds, no longer has (PRD hide-external-control
 /// D-23). A View only connection is still held: its tool keeps what it has.
@@ -2844,8 +2899,10 @@ pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u
     true
 }
 
-/// Ends a registration, the watches on it and the answer waits of the letters
-/// it sent or received, in one transition. Returns whether it was live.
+/// Ends a registration that no agent took over, the watches on it, the
+/// letters still waiting for it (`no_recipient`, B2) and the answer waits of
+/// the letters it sent or received, in one transition. Returns whether it was
+/// live. An agent that takes its pane over ends it through [`succeed`].
 fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
     let Some(record) = ledger.agents.iter_mut().find(|record| record.id == id) else {
         return false;
@@ -2857,6 +2914,7 @@ fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
         .watches
         .retain(|watch| !watch.target.same_identity(&target));
     if live {
+        ledger.end_letters_to(id, &target, now);
         ledger.end_answer_waits_of(&target, now);
     }
     live
@@ -3024,7 +3082,10 @@ pub(crate) struct Rebind {
 /// Points each registration at the pane that woke it, with the letters,
 /// watches and spawn receipt that address it. Only a live registration still
 /// held by `from` moves, and never onto a pane another registration holds.
-/// Returns the registrations it moved.
+/// The letters follow the registration by its id (`Letter::to`, `from`); a
+/// letter an older build wrote with none follows the agent it named. A letter
+/// whose bells were spent gets them again: its agent runs anew. Returns the
+/// registrations it moved.
 pub(crate) fn rebind(
     ledger: &mut Ledger,
     rebinds: &std::collections::BTreeMap<String, Rebind>,
@@ -3052,10 +3113,14 @@ pub(crate) fn rebind(
         record.terminal_id.clone_from(&rebind.terminal_id);
         record.actor = rebind.to.clone();
         for letter in &mut ledger.letters {
-            for party in [&mut letter.sender, &mut letter.recipient] {
-                if party.same_identity(&rebind.from) {
-                    *party = rebind.to.clone();
+            if names(letter.to.as_deref(), &letter.recipient, id, &rebind.from) {
+                letter.recipient = rebind.to.clone();
+                if letter.state == crate::delivery::ledger::State::Pending {
+                    letter.renew_bells();
                 }
+            }
+            if names(letter.from.as_deref(), &letter.sender, id, &rebind.from) {
+                letter.sender = rebind.to.clone();
             }
             if let Some(warning) = letter.watch_warning.as_mut()
                 && warning.target.same_identity(&rebind.from)
@@ -3079,6 +3144,192 @@ pub(crate) fn rebind(
         moved.push((id.clone(), rebind.from.clone()));
     }
     moved
+}
+
+/// Whether a letter's party, kept as registration `party` and `actor`, is
+/// the registration `id` that ran as `as_actor`: by the id the letter names,
+/// or, for a letter written with none, by the agent.
+fn names(party: Option<&str>, actor: &Actor, id: &str, as_actor: &Actor) -> bool {
+    match party {
+        Some(party) => party == id,
+        None => actor.same_identity(as_actor),
+    }
+}
+
+/// A registration whose pane runs another conversation now, as the runtime
+/// read it (`Runtime::observe_successions`): a new one started in the same
+/// pane, or one resumed under another session. The agent there takes its
+/// place (PRD letters-missions-simplify D-02, B2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Succession {
+    /// The agent the pane runs now, as a registration of it reads
+    /// (`executor::registration`): its live record when it has one, else
+    /// this one is made for it.
+    pub(crate) successor: AgentRecord,
+}
+
+/// Hands each registration in `successions` over to the agent its pane runs
+/// now, in one place for every way an agent ends with another after it in
+/// its pane: the old registration ends naming its successor, and the next
+/// agent takes its pending letters (rung and handed to it afresh), the
+/// answers its open letters wait for, its children and their spawn
+/// receipts, and the watches it kept or that were kept on it. A successor
+/// with no parent of its own answers to the old one's parent. A letter the
+/// old agent took in and still owed an answer to ends that wait, since the
+/// new conversation never read it. The runtime moves mission roles once the
+/// ledger shows the successor (`Runtime::follow_successors`). Only a live
+/// registration in the same pane of the same machine is taken over, by
+/// another agent; a ledger with no room for the successor's record leaves
+/// the old one as it is, to be taken over by a later pass. Returns the pairs
+/// it handed over.
+pub(crate) fn succeed(
+    ledger: &mut Ledger,
+    successions: &std::collections::BTreeMap<String, Succession>,
+    now: u64,
+    holds: &dyn Holds,
+) -> Vec<(String, String)> {
+    let mut succeeded = Vec::new();
+    for (former, succession) in successions {
+        let Some(old) = ledger
+            .agents
+            .iter()
+            .find(|record| &record.id == former && !record.ended)
+            .cloned()
+        else {
+            continue;
+        };
+        let next = &succession.successor;
+        if next.machine != old.machine
+            || next.pane != old.pane
+            || next.actor.same_identity(&old.actor)
+            || next.actor.require_native_identity().is_err()
+        {
+            continue;
+        }
+        let Some(successor) = successor_of(ledger, &old, next, holds) else {
+            continue;
+        };
+        hand_over(ledger, &old, &successor, now);
+        succeeded.push((former.clone(), successor));
+    }
+    succeeded
+}
+
+/// The id of the registration that takes `old`'s place: the live record of
+/// `next`'s agent, given `old`'s parent when it has none of its own, or one
+/// made for it so. `old` is ended first, so the next agent may take its name;
+/// none, with `old` left live, when the ledger has no room for a new record.
+fn successor_of(
+    ledger: &mut Ledger,
+    old: &AgentRecord,
+    next: &AgentRecord,
+    holds: &dyn Holds,
+) -> Option<String> {
+    let set_ended = |ledger: &mut Ledger, ended: bool| {
+        if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == old.id) {
+            record.ended = ended;
+        }
+    };
+    set_ended(ledger, true);
+    if let Some(existing) = ledger
+        .agents
+        .iter_mut()
+        .find(|record| !record.ended && record.actor.same_identity(&next.actor))
+    {
+        if existing.parent.is_none() && existing.origin.is_none() && !existing.forked {
+            existing.parent.clone_from(&old.parent);
+            existing.origin.clone_from(&old.origin);
+        }
+        return Some(existing.id.clone());
+    }
+    let mut record = next.clone();
+    if record.parent.is_none() && record.origin.is_none() {
+        record.parent.clone_from(&old.parent);
+        record.origin.clone_from(&old.origin);
+    }
+    record.project = record.project.or_else(|| old.project.clone());
+    record.ended = false;
+    record.successor = None;
+    let id = room::for_agent(ledger, holds)
+        .and_then(|()| allocate(ledger, "agent"))
+        .inspect_err(|code| {
+            crate::diagnostic!(json!({"component":"coordination","kind":"agent.succession_refused",
+                "agent_id":old.id,"pane_id":old.pane,"code":code}));
+        })
+        .ok();
+    let Some(id) = id else {
+        set_ended(ledger, false);
+        return None;
+    };
+    record.id = id.clone();
+    ledger.agents.push(record);
+    Some(id)
+}
+
+/// Gives `successor` what the ended registration `old` held (`succeed`).
+fn hand_over(ledger: &mut Ledger, old: &AgentRecord, successor: &str, now: u64) {
+    let Some(heir) = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == successor)
+        .map(|record| record.actor.clone())
+    else {
+        return;
+    };
+    let heir = named(ledger, &heir);
+    if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == old.id) {
+        record.successor = Some(successor.to_owned());
+    }
+    human_turn::end(ledger, &old.id);
+    for letter in &mut ledger.letters {
+        if letter.state == crate::delivery::ledger::State::Pending
+            && names(letter.to.as_deref(), &letter.recipient, &old.id, &old.actor)
+        {
+            letter.hand_to(successor, heir.clone());
+        }
+        if letter.open() && names(letter.from.as_deref(), &letter.sender, &old.id, &old.actor) {
+            letter.from = Some(successor.to_owned());
+            letter.sender = heir.clone();
+        }
+    }
+    // A request the old agent took in and owed an answer to was read by a
+    // conversation that is over.
+    ledger.end_answer_waits_of(&old.actor, now);
+    let intents: Vec<String> = ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.parent == successor)
+        .map(|spawn| spawn.intent.clone())
+        .collect();
+    for spawn in &mut ledger.spawns {
+        // A start the successor asked under the same intent keeps its own.
+        if spawn.parent == old.id && !intents.contains(&spawn.intent) {
+            spawn.parent = successor.to_owned();
+        }
+    }
+    for record in &mut ledger.agents {
+        if record.id == successor {
+            continue;
+        }
+        if record.parent.as_deref() == Some(old.id.as_str()) {
+            record.parent = Some(successor.to_owned());
+        }
+        if record.origin.as_deref() == Some(old.id.as_str()) {
+            record.origin = Some(successor.to_owned());
+        }
+    }
+    for watch in &mut ledger.watches {
+        let mut moved = false;
+        for party in [&mut watch.parent, &mut watch.target] {
+            if party.same_identity(&old.actor) {
+                *party = heir.clone();
+                moved = true;
+            }
+        }
+        if moved {
+            watch.generation = watch.generation.saturating_add(1);
+        }
+    }
 }
 
 fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
@@ -3118,6 +3369,7 @@ mod tests {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         }
     }
     fn register(ledger: &mut Ledger, record: AgentRecord, caller: &Actor) -> String {
@@ -3162,6 +3414,7 @@ mod tests {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         };
         let gone_id = register(&mut ledger, tool_record(&gone), &gone);
         let kept_id = register(&mut ledger, tool_record(&kept), &kept);

@@ -59,6 +59,7 @@ fn registration(id: &str, pane: &str, parent: Option<&str>) -> AgentRecord {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     }
 }
 

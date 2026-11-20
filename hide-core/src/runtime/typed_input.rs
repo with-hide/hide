@@ -388,11 +388,7 @@ impl Runtime {
                 }
                 Reread::Wait => continue,
             }
-            // A letter whose bells are spent ends undelivered with its own
-            // letter to the sender, the only one it gets for its last bell.
-            if !typed::notice_due(&input)
-                || self.spent_bells_tell(letter, &observation.actor.pane_id)
-            {
+            if !typed::notice_due(&input) {
                 continue;
             }
             let Some(target) = self.observed_sender(&letter.sender) else {
@@ -921,6 +917,7 @@ pub(crate) mod tests {
                     ended: false,
                     terminal_id: None,
                     forked: false,
+                    successor: None,
                 },
                 check: false,
             },

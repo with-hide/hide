@@ -332,6 +332,7 @@ pub(crate) fn mutate(
                 context: authority.context.clone(),
                 also_reads: Vec::new(),
                 proven: crate::delivery::worker::Proven::Now,
+                registers: Vec::new(),
             },
             actor: actor.clone(),
             mutation: Box::new(mutation),
@@ -754,6 +755,7 @@ pub(crate) fn registration(
         ended: false,
         terminal_id: native.terminal_id,
         forked: false,
+        successor: None,
     }
 }
 
@@ -1008,6 +1010,7 @@ fn register_code_owned(
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let registered = mutate(
         client,
@@ -1588,6 +1591,7 @@ fn spawn(
                     context: authority.context.clone(),
                     also_reads: Vec::new(),
                     proven: crate::delivery::worker::Proven::Now,
+                    registers: Vec::new(),
                 },
                 actor: actor.clone(),
                 spawn: reserved.id.clone(),
@@ -3369,6 +3373,7 @@ mod tests {
                         ended: false,
                         terminal_id: None,
                         forked: false,
+                        successor: None,
                         actor: actor.clone(),
                     },
                     check: false,
@@ -3603,6 +3608,7 @@ mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
                 actor: Actor {
                     pane_id: "sender".into(),
                     name: "sender".into(),
@@ -3715,6 +3721,7 @@ mod tests {
                 ended: false,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             };
             let child_id = super::super::apply(
                 &mut state,

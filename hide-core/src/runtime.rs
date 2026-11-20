@@ -113,7 +113,6 @@ mod session_command;
 mod session_state;
 mod session_thread;
 mod snapshot_delta;
-mod spent_bells;
 mod ssh_hosts;
 pub(crate) mod start_hook;
 mod strays;
@@ -1172,6 +1171,25 @@ pub(crate) struct DeviceGithubRead {
     links: Vec<crate::issues::IssueReference>,
 }
 
+/// Whether `actor` is one of Hide's own roles that writes notices rather
+/// than hands work: what it writes is its recipient's status now, never a
+/// letter (PRD letters-missions-simplify D-03, D-16), so a letter of one an
+/// earlier build kept waiting ends `expired` (`Ledger::address_letters`).
+/// Desk, Memory and automations hand work, and their letters stay letters.
+pub(crate) fn hide_notice(actor: &crate::delivery::Actor) -> bool {
+    actor.hide_itself()
+        && [
+            unreadable_letters::DELIVERY_ROLE,
+            agent_sleep::letters::WAKE_ROLE,
+            blocked_children::BLOCKED_ROLE,
+            transition_letters::TRANSITION_ROLE,
+            crate::delivery::typed::INPUT_ROLE,
+            missions::CONDUCTOR_ROLE,
+        ]
+        .into_iter()
+        .any(|role| actor.pane_id.strip_prefix(crate::delivery::HIDE_PREFIX) == Some(role))
+}
+
 pub struct Runtime {
     snapshot: Snapshot,
     delivery_ledger: Result<Arc<crate::delivery::ledger::Ledger>, String>,
@@ -1226,6 +1244,10 @@ pub struct Runtime {
     /// store to point at the woken pane; an entry leaves once the published
     /// ledger shows the registration moved.
     registration_rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
+    /// The registrations whose pane runs another agent's conversation now,
+    /// with that agent's registration, which the delivery store hands them
+    /// over to (`Runtime::observe_successions`, `coordination::succeed`).
+    registration_successions: std::collections::BTreeMap<String, crate::coordination::Succession>,
     /// Archive deletes whose record lines the link worker is removing.
     archive_deletes_sent: HashSet<crate::session_archive::ArchiveId>,
     /// What the session archive last handed the link worker.
@@ -1271,10 +1293,6 @@ pub struct Runtime {
     /// 다시 볼 것 changes waiting on their save; `None` removes the mark.
     pending_revisit: BTreeMap<String, Option<crate::agent_state::sessions::RevisitMark>>,
     delivery_holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
-    /// The pending letters whose recipient the doorbell's last pass saw in
-    /// its pane (`Hold::recipient_present`), whose deadline the delivery
-    /// upkeep renews. Memory only, as the holds are.
-    delivery_present: std::collections::HashSet<String>,
     /// The panes whose letters the operator is shown waiting on a possible
     /// draft, with how many (`doorbell::letters_waiting`).
     letters_waiting: BTreeMap<String, u32>,
@@ -1952,9 +1970,8 @@ pub struct Runtime {
     /// whose agent has not appeared by the start's deadline failed.
     agent_wake_started: HashMap<String, u64>,
     /// The wakes letters to sleeping agents ask for, and the letters a
-    /// failed one leaves undelivered (PRD mission-worker-sleep).
+    /// failed one leaves waiting (PRD mission-worker-sleep).
     letter_wakes: agent_sleep::letters::LetterWakes,
-    spent_bells: spent_bells::SpentBells,
     /// The letters held on a session Hide cannot read whose senders were told.
     unreadable_letters: unreadable_letters::UnreadableLetters,
     /// The letters owed to agents whose turn a move or a machine restart cut
@@ -2459,6 +2476,7 @@ impl Runtime {
             delivery_panes: HashMap::new(),
             registrations_gone: std::collections::BTreeMap::new(),
             registration_rebinds: std::collections::BTreeMap::new(),
+            registration_successions: std::collections::BTreeMap::new(),
             archive_deletes_sent: HashSet::new(),
             archive_retention_sent: Arc::default(),
             recorded_pulls: Default::default(),
@@ -2645,7 +2663,6 @@ impl Runtime {
             failed_session_resolutions: BTreeMap::new(),
             pending_revisit: BTreeMap::new(),
             delivery_holds: BTreeMap::new(),
-            delivery_present: std::collections::HashSet::new(),
             letters_waiting: BTreeMap::new(),
             session_window_deadline_unix_ms: 0,
             #[cfg(test)]
@@ -2734,7 +2751,6 @@ impl Runtime {
             memory_pressure: HashMap::new(),
             agent_wake_started: HashMap::new(),
             letter_wakes: Default::default(),
-            spent_bells: Default::default(),
             unreadable_letters: Default::default(),
             transition_letters: Default::default(),
             blocked_children: Default::default(),

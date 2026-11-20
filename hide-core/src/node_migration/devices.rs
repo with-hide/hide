@@ -1049,7 +1049,6 @@ mod tests {
                     {"id": "agent-1", "machine": ALIAS, "actor": actor(ALIAS, &pane(ALIAS)), "host_scope": ALIAS, "pane": "w1:p1"},
                 ],
                 "spawns": [{"id": "spawn-2", "parent": "agent-0", "machine": ALIAS, "pane": "w1:p1"}],
-                "node_clocks": {ALIAS: {"connected_ms": 60_000, "since": null}},
             }),
         );
         // A spawn made for a step of the plan of a session on the device.
@@ -1324,10 +1323,6 @@ mod tests {
         assert_eq!(ledger["agents"][1]["host_scope"], MACHINE);
         assert_eq!(ledger["agents"][0]["host_scope"], "/tmp/engine.sock");
         assert_eq!(ledger["spawns"][0]["machine"], MACHINE);
-        assert_eq!(
-            ledger["node_clocks"],
-            json!({MACHINE: {"connected_ms": 60_000, "since": null}})
-        );
         assert_eq!(
             read(state, LABELS)["devices"],
             json!({crate::labels::device_target(MACHINE): {"w1:p1": {"owner": "v1:b"}}})

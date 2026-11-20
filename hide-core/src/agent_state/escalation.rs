@@ -14,8 +14,6 @@ use crate::model::SidebarAgentSnapshot;
 pub enum Cause {
     ParentBlocked,
     Draft,
-    BellExhausted,
-    Undelivered,
     ChildBlocked,
     ObserverUnconfirmed,
     /// Hide typed the child's brief, or a letter's bell, and the child never
@@ -33,29 +31,8 @@ pub struct Escalation {
     pub cause: Cause,
     pub letter_id: Option<String>,
     pub since_unix_ms: Option<u64>,
-    /// The existing delivery human notice already announces these two causes.
+    /// The existing delivery human notice already announces this cause.
     pub human_notice: bool,
-}
-
-/// A later waiting reason is not a receipt or successful bell. The worker
-/// removes a hold after ringing (or retiring) the letter; until then retain
-/// the cause that already raised it. This table remains bounded by the
-/// worker's current pending letters and is never used for doorbell verdicts.
-pub(crate) fn retain_raised_holds(
-    previous: &BTreeMap<String, Hold>,
-    mut current: BTreeMap<String, Hold>,
-) -> BTreeMap<String, Hold> {
-    for (id, old) in previous {
-        // The holds the operator has to lift (`held::held_for`), named in
-        // that one place, so a hold the doorbell adds is kept or dropped
-        // here as it is shown.
-        if held_for(*old).is_some()
-            && let Some(next) = current.get_mut(id)
-        {
-            *next = *old;
-        }
-    }
-    current
 }
 
 /// How long a delegated child stays blocked before its lineage root is raised:
@@ -157,26 +134,20 @@ pub(crate) fn of(
             {
                 continue;
             }
-            if letter.state == State::Undelivered {
-                Cause::Undelivered
-            } else if letter.state == State::Pending {
-                match holds.get(&letter.id).copied().and_then(held_for) {
-                    Some(HeldFor::Approval) => Cause::ParentBlocked,
-                    Some(HeldFor::Draft) => Cause::Draft,
-                    Some(HeldFor::Unanswered) => Cause::BellExhausted,
-                    // A parent pane Hide cannot reach is the parent's
-                    // device or session, not the child's to raise.
-                    Some(HeldFor::Unreachable) | None => continue,
-                }
-            } else {
+            if letter.state != State::Pending {
                 continue;
+            }
+            match holds.get(&letter.id).copied().and_then(held_for) {
+                Some(HeldFor::Approval) => Cause::ParentBlocked,
+                Some(HeldFor::Draft) => Cause::Draft,
+                None => continue,
             }
         };
         return Some(Escalation {
             cause,
             letter_id: Some(letter.id.clone()),
             since_unix_ms: Some(letter.created_at_unix_ms),
-            human_notice: matches!(cause, Cause::Undelivered | Cause::ObserverUnconfirmed),
+            human_notice: cause == Cause::ObserverUnconfirmed,
         });
     }
     None
@@ -224,7 +195,6 @@ impl Cause {
         match self {
             Cause::ChildBlocked => Some(Verb::Approval),
             Cause::InputUnconfirmed | Cause::HumanTurn => Some(Verb::Answer),
-            Cause::Undelivered | Cause::BellExhausted => Some(Verb::Answer),
             Cause::ObserverUnconfirmed => Some(Verb::Confirm),
             Cause::Draft => Some(Verb::Draft),
             Cause::ParentBlocked => None,
@@ -572,9 +542,9 @@ mod tests {
     }
 
     /// During a blocked child's grace the other causes keep their own clocks:
-    /// a request the child sent its parent that never reached it rises as
-    /// undelivered at once, and a person's turn the child declared rises
-    /// before every other cause.
+    /// a request the child sent its parent held on the parent's approval
+    /// rises at once, and a person's turn the child declared rises before
+    /// every other cause.
     #[test]
     fn within_its_grace_a_blocked_child_still_rises_for_another_cause() {
         let mut row = child();
@@ -593,11 +563,11 @@ mod tests {
             1_000,
         )
         .unwrap();
-        ledger.letters[0].state = State::Undelivered;
-        let raised = of(&row, Some(&ledger), &BTreeMap::new(), 1_001).expect("undelivered");
-        assert_eq!(raised.cause, Cause::Undelivered);
+        let holds = BTreeMap::from([(ledger.letters[0].id.clone(), Hold::Blocked)]);
+        let raised = of(&row, Some(&ledger), &holds, 1_001).expect("parent blocked");
+        assert_eq!(raised.cause, Cause::ParentBlocked);
         declare(&mut row, human_turn("agent-3.1"), 1_000);
-        let raised = of(&row, Some(&ledger), &BTreeMap::new(), 1_001).expect("person's turn");
+        let raised = of(&row, Some(&ledger), &holds, 1_001).expect("person's turn");
         assert_eq!(raised.cause, Cause::HumanTurn);
     }
 
@@ -1071,10 +1041,8 @@ mod tests {
             first: false,
         };
         let cases = [
-            (State::Undelivered, None, Cause::Undelivered),
             (State::Pending, Some(Hold::Blocked), Cause::ParentBlocked),
             (State::Pending, Some(Hold::Draft), Cause::Draft),
-            (State::Pending, Some(Hold::Exhausted), Cause::BellExhausted),
         ];
         for (state, hold, cause) in cases {
             for requester in [Requester::Agent, Requester::Operator] {
@@ -1180,7 +1148,7 @@ mod tests {
     }
 
     #[test]
-    fn session_child_escalates_only_for_a_current_parent_hold_or_undelivered_letter() {
+    fn session_child_escalates_only_for_a_parent_hold_the_operator_lifts() {
         let mut child = child();
         let actor = |pane: &str| Actor {
             pane_id: pane.into(),
@@ -1207,7 +1175,6 @@ mod tests {
             (Hold::Blocked, Cause::ParentBlocked),
             (Hold::AwaitingOperator, Cause::ParentBlocked),
             (Hold::Draft, Cause::Draft),
-            (Hold::Exhausted, Cause::BellExhausted),
         ] {
             let holds = BTreeMap::from([(id.clone(), hold)]);
             assert_eq!(
@@ -1215,14 +1182,21 @@ mod tests {
                 cause
             );
         }
-        ledger.letters[0].state = State::Undelivered;
-        assert!(
-            of(&child, Some(&ledger), &BTreeMap::new(), LATER)
-                .unwrap()
-                .human_notice
-        );
-        child.activity = "working".into();
+        // Bells not taken, an unreachable parent pane or another session
+        // there are Hide's to settle, never the operator's (B14).
+        for hold in [Hold::Exhausted, Hold::Absent, Hold::Session] {
+            let holds = BTreeMap::from([(id.clone(), hold)]);
+            assert!(of(&child, Some(&ledger), &holds, LATER).is_none(), "{hold:?}");
+        }
+        // A letter that ended with no recipient raises nothing (B7).
+        ledger.letters[0].state = State::NoRecipient;
+        ledger.letters[0].waiting_answer = false;
         assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());
+        ledger.letters[0].state = State::Pending;
+        ledger.letters[0].waiting_answer = true;
+        let holds = BTreeMap::from([(id.clone(), Hold::Draft)]);
+        child.activity = "working".into();
+        assert!(of(&child, Some(&ledger), &holds, LATER).is_none());
         child.activity = "stopped".into();
         ledger.letters[0].recipient.session = Some("replacement-parent".into());
         assert!(of(&child, Some(&ledger), &BTreeMap::new(), LATER).is_none());

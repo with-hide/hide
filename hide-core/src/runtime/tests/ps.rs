@@ -39,6 +39,7 @@ fn record(
         ended,
         terminal_id: None,
         forked: false,
+        successor: None,
     }
 }
 

@@ -10825,17 +10825,12 @@ mod wire_enum_tests {
             checked.insert("mission_answer_failure");
             use crate::delivery::held::HeldFor;
             let held = [
-                HeldFor::Unreachable,
                 HeldFor::Approval,
                 HeldFor::Draft,
-                HeldFor::Unanswered,
             ];
             for variant in held {
                 match variant {
-                    HeldFor::Unreachable
-                    | HeldFor::Approval
-                    | HeldFor::Draft
-                    | HeldFor::Unanswered => {}
+                    HeldFor::Approval | HeldFor::Draft => {}
                 }
             }
             assert_wire(&contract, "mission_letters_held_for", &held);

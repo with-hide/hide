@@ -877,15 +877,6 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Device,
     ),
-    // A machine's clock follows its id; the clock of the machine that becomes
-    // the owner is ended by the new core's store, which keeps each letter's
-    // wait (`Ledger::observe_reach`).
-    (
-        DELIVERY_LEDGER,
-        "/node_clocks/{key}",
-        Mechanism::Rewritten,
-        Moves::Device,
-    ),
     (
         DELIVERY_LEDGER,
         "/agents/*/native_machine",
@@ -2189,7 +2180,6 @@ mod tests {
                          "parent_session": {"device_id": NODE, "agent": "claude", "session_id": "s"}}}))],
             "identity_waits": [{"id": "wait-8", "machine": "local", "pane": "w1:p3", "name": "fork-w1-p1-1-1", "kind": "codex",
                                 "owed": {"for": "fork", "origin": "agent-1"}}],
-            "node_clocks": {"mini": {"connected_ms": 60_000, "since": null}},
         });
         crate::delivery::ledger::from_bytes(&serde_json::to_vec(&ledger).unwrap())
             .expect("the legacy ledger is one the core loads");

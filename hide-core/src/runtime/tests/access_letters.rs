@@ -600,6 +600,7 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let registered = client
         .submit(
@@ -609,6 +610,7 @@ fn register_origin(fixture: &Fixture, connection: &str) -> String {
                     context: crate::access::access_context(crate::node::TEST_NODE, connection),
                     also_reads: Vec::new(),
                     proven: crate::delivery::worker::Proven::Now,
+                    registers: Vec::new(),
                 },
                 actor,
                 mutation: Box::new(crate::coordination::Mutation::Register {

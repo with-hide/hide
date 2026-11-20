@@ -291,6 +291,7 @@ fn registered(
                     actor: record.clone(),
                     ended: false,
                     forked: false,
+                    successor: None,
                 },
                 check: false,
             },
@@ -374,6 +375,7 @@ impl Ending {
             crate::delivery::worker::Authority {
                 context: self.context.clone(),
                 ..authority(&self.actor)
+                registers: Vec::new(),
             },
             self.actor.clone(),
             Command::End {

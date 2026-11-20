@@ -1666,10 +1666,6 @@ mod tests {
                     "id": format!("wait-{index}"), "machine": machine, "pane": format!("w{}:p3", index + 1),
                     "name": format!("fork-{index}"), "kind": "codex", "owed": {"for": "fork", "origin": "agent-1"},
                 }))).collect::<Vec<_>>(),
-                "node_clocks": {
-                    ALIAS: {"connected_ms": 600_000, "since": null},
-                    X: {"connected_ms": 60_000, "since": null},
-                },
         });
         // Each machine's session is the main of a plan step's spawn.
         for (index, spawn) in ledger["spawns"]

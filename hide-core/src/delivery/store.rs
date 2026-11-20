@@ -8,7 +8,7 @@
 //! and spawn record is a row of its own table, the record's JSON encoding
 //! keyed by its number in the ledger's one id sequence, so rows read back in
 //! the order they were made. The rest of the ledger (its next id, watches,
-//! machine clocks, identity waits and declared turns, each bounded by the
+//! identity waits and declared turns, each bounded by the
 //! records) is one row. A write is the rows that changed between the ledger
 //! the file holds and the one to keep, in one transaction
 //! ([`LedgerStore::write`]): a sent letter is one new row, not a new file.
@@ -23,7 +23,10 @@
 //! `delivery-ledger.json` in the transaction that makes the tables (D-08,
 //! D-20): a start cut short before it commits imports again, and the old file
 //! is only ever read, so an older build started on the same folder finds the
-//! ledger as it was before the update (B27). A file that fails its integrity
+//! ledger as it was before the update (B27). A file of the first version,
+//! whose letters were addressed to agents rather than their registrations,
+//! is brought to this one in one transaction (`upgrade`, PRD
+//! letters-missions-simplify B25), as is the ledger an import reads. A file that fails its integrity
 //! check, or that a newer build made, is refused and kept as it is, never
 //! made again by guess: the core then refuses every letter until it is fixed,
 //! as it did for a JSON file it could not read.
@@ -37,7 +40,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::ledger::{Ledger, Letter, NodeClock, SaveError, StoreFailure};
+use super::ledger::{Ledger, Letter, SaveError, StoreFailure};
 use super::watch::Watch;
 use super::{FILE_LIMIT, LETTER_LIMIT};
 use crate::coordination::human_turn::HumanTurn;
@@ -45,8 +48,9 @@ use crate::coordination::identity_wait::IdentityWait;
 use crate::coordination::{AGENT_LIMIT, AgentRecord, SPAWN_LIMIT, SpawnRecord};
 
 /// The tables this build makes and reads. A file of a higher version was
-/// made by a newer build and is refused.
-pub const SCHEMA_VERSION: i64 = 1;
+/// made by a newer build and is refused; one of version 1 is upgraded
+/// (`upgrade`).
+pub const SCHEMA_VERSION: i64 = 2;
 
 const PAGE_BYTES: usize = 4_096;
 
@@ -77,6 +81,8 @@ pub enum Opened {
     Imported,
     /// The file was made empty: there was no `delivery-ledger.json`.
     Fresh,
+    /// The file held version 1's tables, brought to this build's.
+    Upgraded,
 }
 
 /// The writer's connection to the ledger's file. One per open; the core's
@@ -130,6 +136,7 @@ impl LedgerStore {
         let opened = match version {
             SCHEMA_VERSION => Opened::Existing,
             0 => import(&mut connection, path)?,
+            1 => upgrade(&mut connection, path)?,
             _ => return Err(refused(path, "newer")),
         };
         Ok((Self { connection }, opened))
@@ -191,7 +198,8 @@ fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
     transaction
         .execute_batch(SCHEMA)
         .map_err(|error| failed(path, &error))?;
-    let ledger = imported.clone().unwrap_or_default();
+    let mut ledger = imported.clone().unwrap_or_default();
+    upgraded(&mut ledger, 0);
     Changes::all(&ledger)
         .write(&transaction)
         .map_err(|error| refused(path, error.code()))?;
@@ -210,6 +218,42 @@ fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
     })
 }
 
+/// Brings a file of version 1 to this build's version in one transaction:
+/// its ledger read as that version wrote it, its letters addressed to the
+/// registrations they are between (`upgraded`), and every row written again.
+/// A start cut short before it commits finds version 1 again.
+fn upgrade(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| failed(path, &error))?;
+    let mut ledger = read_records(&transaction).map_err(|code| refused(path, &code))?;
+    upgraded(&mut ledger, 1);
+    // The rest row of version 1 also kept the machines' clocks, which
+    // nothing reads now; every row is written again from the ledger.
+    transaction
+        .execute_batch(
+            "DELETE FROM ledger; DELETE FROM letters; DELETE FROM agents; DELETE FROM spawns;",
+        )
+        .map_err(|error| failed(path, &error))?;
+    Changes::all(&ledger)
+        .write(&transaction)
+        .map_err(|error| refused(path, error.code()))?;
+    transaction
+        .pragma_update(None, "user_version", SCHEMA_VERSION)
+        .map_err(|error| failed(path, &error))?;
+    transaction.commit().map_err(|error| failed(path, &error))?;
+    Ok(Opened::Upgraded)
+}
+
+/// Addresses the letters of a ledger version `from` kept (`0` for the JSON
+/// file) as this build does (`Ledger::address_letters`), and says so.
+fn upgraded(ledger: &mut Ledger, from: i64) {
+    let addressed = ledger.address_letters(crate::runtime::hide_notice, super::worker::now());
+    crate::diagnostic!(json!({"component":"delivery","kind":"ledger.upgraded",
+        "from_version":from,"to_version":SCHEMA_VERSION,"letters":ledger.letters.len(),
+        "no_recipient":addressed.no_recipient,"expired":addressed.expired}));
+}
+
 /// `delivery-ledger.json` beside the store at `path`: where builds before it
 /// kept the ledger.
 pub fn legacy_path(path: &Path) -> PathBuf {
@@ -221,13 +265,19 @@ pub fn legacy_path(path: &Path) -> PathBuf {
 /// ledger. A core move asks it of the copy it is about to place
 /// (`node_migration::copy::check_loadable`).
 pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
-    let unavailable = |_| "ledger_unavailable".to_owned();
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(unavailable)?;
+        .map_err(|_| "ledger_unavailable".to_owned())?;
     if version != SCHEMA_VERSION {
         return Err("ledger_unavailable".into());
     }
+    read_records(connection)
+}
+
+/// The ledger `connection`'s tables hold, whichever version wrote them, under
+/// the rules [`read_from`] reads them by.
+fn read_records(connection: &Connection) -> Result<Ledger, String> {
+    let unavailable = |_| "ledger_unavailable".to_owned();
     // A file this store wrote holds no more than the limit the core keeps
     // its ledger within; one that does was not, and is not read into memory.
     // Counted in bytes, as the limit is: `length` of text counts characters.
@@ -458,8 +508,6 @@ struct Rest {
     #[serde(default)]
     spawn_placement_revision: u64,
     #[serde(default)]
-    node_clocks: BTreeMap<String, NodeClock>,
-    #[serde(default)]
     human_turns: BTreeMap<String, HumanTurn>,
 }
 
@@ -478,7 +526,6 @@ impl Rest {
             watches,
             identity_waits,
             spawn_placement_revision,
-            node_clocks,
             human_turns,
         } = self;
         Ledger {
@@ -490,7 +537,6 @@ impl Rest {
             spawns,
             identity_waits,
             spawn_placement_revision,
-            node_clocks,
             human_turns,
         }
     }
@@ -504,7 +550,6 @@ struct RestRef<'a> {
     watches: &'a [Watch],
     identity_waits: &'a [IdentityWait],
     spawn_placement_revision: u64,
-    node_clocks: &'a BTreeMap<String, NodeClock>,
     human_turns: &'a BTreeMap<String, HumanTurn>,
 }
 
@@ -520,7 +565,6 @@ fn split(ledger: &Ledger) -> (RestRef<'_>, &[Letter], &[AgentRecord], &[SpawnRec
         spawns,
         identity_waits,
         spawn_placement_revision,
-        node_clocks,
         human_turns,
     } = ledger;
     (
@@ -530,7 +574,6 @@ fn split(ledger: &Ledger) -> (RestRef<'_>, &[Letter], &[AgentRecord], &[SpawnRec
             watches,
             identity_waits,
             spawn_placement_revision: *spawn_placement_revision,
-            node_clocks,
             human_turns,
         },
         letters,

@@ -633,6 +633,7 @@ impl Resumed {
             ended: false,
             terminal_id: Some(format!("t-{}", actor.pane_id)),
             forked: false,
+            successor: None,
         };
         self.submit(
             by,
@@ -4853,6 +4854,7 @@ fn with_worker_and_reviewer(runtime: &mut Runtime) {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
     }
     runtime.delivery_ledger = Ok(Arc::new(ledger));
@@ -8625,6 +8627,7 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -9420,6 +9423,7 @@ fn far_agent(id: &str, pane: &str) -> (Actor, crate::coordination::AgentRecord) 
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     (actor, record)
 }
@@ -12566,6 +12570,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let worker = Actor {
         pane_id: "worker".into(),
@@ -12748,6 +12753,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let worker = Actor {
         pane_id: "worker".into(),
@@ -16163,6 +16169,7 @@ fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped(
         ended: true,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     // Until the book is read, even a registration with no mission spawn

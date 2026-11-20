@@ -481,6 +481,7 @@ pub(crate) mod tests {
             actor,
             ended,
             forked: false,
+            successor: None,
         }
     }
 

@@ -80,6 +80,7 @@ impl Runtime {
                             context: authority.context.clone(),
                             also_reads: Vec::new(),
                             proven: crate::delivery::worker::Proven::Now,
+                            registers: Vec::new(),
                         },
                         actor.clone(),
                         Some(note.target.clone()),

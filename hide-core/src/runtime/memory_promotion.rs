@@ -2267,6 +2267,7 @@ pub(super) fn spawn_hide_agent(
             context: start.authority.context.clone(),
             also_reads: Vec::new(),
             proven: crate::delivery::worker::Proven::Now,
+            registers: Vec::new(),
         },
         start.actor.clone(),
         crate::coordination::Command::Spawn {

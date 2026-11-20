@@ -976,6 +976,7 @@ fn lay_start(
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let apply = |ledger: &mut crate::delivery::ledger::Ledger, mutation: &Mutation| {
         crate::coordination::apply(ledger, &hide, mutation, 1).unwrap()

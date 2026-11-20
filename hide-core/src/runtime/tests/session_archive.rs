@@ -252,6 +252,7 @@ fn register_root(runtime: &mut Runtime) {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     ledger.next_id = 2;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
@@ -601,6 +602,7 @@ fn with_registrations(runtime: &mut Runtime) -> String {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
     }
     ledger.next_id = 3;

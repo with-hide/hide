@@ -1,6 +1,9 @@
-//! The two approved human causes share the durable store reservation and
-//! existing external channels. No retry can follow a consumed reservation.
-use super::ledger::{Ledger, State};
+//! The approved human cause, an inactivity warning its observer did not
+//! confirm, takes the durable store reservation and the existing external
+//! channels. No retry can follow a consumed reservation. A letter that ends
+//! with no recipient tells only its sender (PRD letters-missions-simplify
+//! B7), never the operator.
+use super::ledger::Ledger;
 use super::worker::{HumanNotice, HumanNoticeKind};
 
 const NOTICE_LIMIT: usize = 8;
@@ -56,21 +59,6 @@ pub(super) fn claim(ledger: &mut Ledger, now: u64) -> Vec<HumanNotice> {
             if receipt.target.same_identity(&target) && receipt.activity_at_unix_ms == activity {
                 receipt.parent_notified = true;
             }
-        }
-    }
-    for letter in &mut ledger.letters {
-        if notices.len() == NOTICE_LIMIT {
-            break;
-        }
-        if letter.state == State::Undelivered && !letter.human_notified {
-            letter.human_notified = true;
-            notices.push(HumanNotice {
-                id: letter.id.clone(),
-                actor: letter.sender.clone(),
-                kind: HumanNoticeKind::LetterUndelivered,
-                recipient: letter.recipient.name.clone(),
-                about: String::new(),
-            });
         }
     }
     notices
