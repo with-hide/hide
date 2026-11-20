@@ -233,6 +233,7 @@ pub fn run(dir: &str) -> ! {
         }
     }
     hide_node::diagnostics::install(diagnostic);
+    crate::raise_open_files(hide_node::diagnostics::emit);
     let bind = |name: &str| -> LocalListener {
         let path = dir.join(name);
         LocalListener::bind(&path).unwrap_or_else(|error| {

@@ -152,6 +152,9 @@ pub struct AppState {
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
     pub pane_sizes: Arc<crate::pane_sizes::PaneSizes>,
+    /// What the pane bootstrap's and the node attach socket's accept threads
+    /// do, for `/health`.
+    pub listeners: Arc<crate::accepting::CoreListeners>,
     /// A `hide <path>` that brought a project in front asks this machine's
     /// windows to come forward too, showing it (`project_open`): each sends
     /// its screen a `window_call` frame with this payload.
@@ -529,6 +532,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "open_handlers_in_flight": state.opener.in_flight(),
         "idle_remaining_secs": idle_remaining_secs(&state),
         "instance": state.seat.instance(),
+        "listeners": state.listeners.report(),
     }))
 }
 
