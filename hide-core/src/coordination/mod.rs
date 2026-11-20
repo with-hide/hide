@@ -1311,23 +1311,32 @@ pub(crate) fn live_successor<'a>(
     ledger: &'a Ledger,
     id: &str,
 ) -> Option<Result<&'a AgentRecord, &'a AgentRecord>> {
-    let mut record = ledger.agents.iter().find(|record| record.id == id)?;
-    // Each step goes to a later registration; the count bounds a ledger
-    // edited by hand into a loop.
-    for _ in 0..ledger.agents.len() {
-        if !record.ended {
-            return Some(Ok(record));
+    let first = ledger.agents.iter().find(|record| record.id == id)?;
+    let last = line(first, ledger.agents.len(), |next| {
+        ledger.agents.iter().find(|record| record.id == next)
+    })
+    .last()
+    .unwrap_or(first);
+    Some(if last.ended { Err(last) } else { Ok(last) })
+}
+
+/// The registrations of `first`'s line, in order: `first`, then each one
+/// that took the place of the one before (`succeed`), up to the first live
+/// one, found by `find`. At most `limit` steps, which bounds a ledger edited
+/// by hand into a loop.
+pub(crate) fn line<'a>(
+    first: &'a AgentRecord,
+    limit: usize,
+    find: impl Fn(&str) -> Option<&'a AgentRecord>,
+) -> impl Iterator<Item = &'a AgentRecord> {
+    let mut steps = 0;
+    std::iter::successors(Some(first), move |record| {
+        steps += 1;
+        if !record.ended || steps > limit {
+            return None;
         }
-        match record
-            .successor
-            .as_deref()
-            .and_then(|next| ledger.agents.iter().find(|record| record.id == next))
-        {
-            Some(next) => record = next,
-            None => break,
-        }
-    }
-    Some(Err(record))
+        record.successor.as_deref().and_then(&find)
+    })
 }
 
 /// The live registration [`resolve_registered`] finds, whole.
