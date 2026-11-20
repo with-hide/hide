@@ -257,15 +257,16 @@ where
 impl WorkspaceViewStore {
     /// Whether `tab`'s desk of `key` floats with the tool now (D-50): a
     /// View came onto it while the lane drew a tool and not the desk, and
-    /// the lane still draws both. The one reading of the floating desk.
+    /// the open lane still shows both. The one reading of the floating
+    /// desk. Shown, not drawn: a file still loading leaves the desk with no
+    /// View yet while the shell already draws it, and it floats then too.
     pub(super) fn tray_floats(&self, key: &WorkspaceKey, tab: &str) -> bool {
         self.tray_floats
             .as_ref()
             .is_some_and(|(at, at_tab)| at == key && at_tab == tab)
-            && self
-                .views
-                .get(&key.0, &key.1)
-                .is_some_and(|view| view.tool.is_some() && view.draws_tray(tab))
+            && self.views.get(&key.0, &key.1).is_some_and(|view| {
+                view.open && view.tool.is_some() && view.tray(tab).is_some_and(|tray| tray.shown)
+            })
     }
 
     /// Numbers a call that opened `key`'s lane and records which column it

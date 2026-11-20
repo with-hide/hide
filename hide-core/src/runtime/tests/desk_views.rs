@@ -2623,3 +2623,23 @@ fn a_shown_desk_with_no_view_floats_when_a_file_comes_beside_a_floating_tool() {
     assert!(lane_documents(&runtime), "the desk is drawn");
     assert!(desk_floats(&runtime), "and floats with the Explorer");
 }
+
+/// D-50: the desk shown for a file that is still loading, no View on it
+/// yet, already floats with the Explorer, since the shell draws it then; a
+/// snapshot without the flag would stand it for a moment and resize every
+/// terminal twice.
+#[test]
+fn a_desk_shown_for_a_file_still_loading_floats_with_the_tool() {
+    let (mut runtime, _checkout, _directory) = setup("desk-floats-loading");
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    let key = runtime.front_workspace_key().unwrap();
+    let tab = runtime.front_tab(&key);
+    runtime.open_tray_for(&key, &Place::Tray(tab));
+    runtime.sync_workspace_view();
+    assert_eq!(
+        runtime.snapshot.workspace_view.as_ref().unwrap().tray.count,
+        0
+    );
+    assert!(lane_documents(&runtime), "the desk is shown");
+    assert!(desk_floats(&runtime), "and floats with the Explorer");
+}
