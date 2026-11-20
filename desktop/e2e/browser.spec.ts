@@ -368,7 +368,7 @@ test(`browser: a page an agent the operator is not watching opens loads on no de
   const again = await shellPage(app);
   await enterWorkspace(again, "fixture");
   // A page drawn on a desk means the shell has sent the core's inventory.
-  await expect.poll(async () => (await views()).some((view) => view.visible), { timeout: 20_000 }).toBe(true);
+  await expect.poll(async () => (await views()).some((view) => view.visible), { timeout: 20_000 }).toBe(true); // wait-ok: the relaunched host draws its first page on a desk
   expect((await views()).some((view) => view.url === `${origin}/b.html`)).toBe(false);
   expect(offScreenLoads()).toBe(before);
   // Its agent's next command loads it again where it is.
