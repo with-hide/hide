@@ -1775,7 +1775,7 @@ export type MissionWaitingOn =
 /** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
 export type MissionReviewRounds = { line: string; rounds: number; limit: number };
 
-/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, a long quiet with no push, or its worker stopped. */
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, or its worker stopped. */
 export type MissionWarningKind = "review_fails" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };

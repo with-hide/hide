@@ -75,6 +75,10 @@ pub(crate) struct NodeFacts {
     /// The node waits on the operator alone (`Runtime::operator_waits`):
     /// settling a stall reads the same answer raising it did.
     pub operator_waits: bool,
+    /// A heal is bringing the worker back after its work was cut
+    /// (`Runtime::healing`): its stop is not its own, so it does not warn
+    /// (PRD letters-missions-simplify B19).
+    pub healing: bool,
 }
 
 /// A worker whose row reads stopped with nothing of its own to wait on: no
@@ -658,6 +662,7 @@ pub(crate) fn stopped_worker<'a>(
         .is_some_and(|raise| raise.reason != AttentionReason::WarningStood);
     let stands = node_works(mission, node)
         && fact.worker == Some(WorkerLife::Running)
+        && !fact.healing
         && !stall_excused(mission, node, operator_waits)
         && !raised
         && owed_elsewhere(mission, node, pulls, operator_waits) == Some(false);
@@ -1727,6 +1732,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// PRD letters-missions-simplify B19: while a heal brings a node's
+    /// worker back, its stop does not warn; once it is back, the same stop
+    /// warns as before.
+    #[test]
+    fn a_worker_being_healed_raises_no_stopped_warning() {
+        let m = reviewed();
+        let pulls = listed(Vec::new());
+        let stopped = |healing| NodeFacts {
+            worker: Some(WorkerLife::Running),
+            stopped: Some(WorkerStopped {
+                since_unix_ms: 0,
+                cause: None,
+            }),
+            healing,
+            ..Default::default()
+        };
+        let late = 200 * MINUTE;
+        assert!(warn_acts(&m, Some(&pulls), &[stopped(true)], &[false], late).is_empty());
+        assert_eq!(
+            warn_acts(&m, Some(&pulls), &[stopped(false)], &[false], late),
+            [WarnAct::Raise {
+                node: 0,
+                kind: WarningKind::Stopped,
+                from: 0,
+                cause: None,
+            }]
+        );
     }
 
     /// PRD letters-missions-simplify D-32, B32: a change at work that went
