@@ -231,6 +231,18 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
     expect(missionTone(mission("m", { status: "done", decision: "stale ask" }))).toBe("done");
     expect([missionTone(mission("m", { status: "planning" })), missionTone(mission("m", { status: "merge_wait" })), missionTone(mission("m", { status: "cancelled" }))]).toEqual(["waiting", "review", "cancelled"]);
   });
+
+  it("turns a running mission's chip to the stopped colour once a node stopped and none works, and keeps it working while one still moves (operator decision 2026-11-20)", () => {
+    const stopped = { status: "working" as const, work: { state: "stopped" as const, cause: null, since_unix_ms: 1 } };
+    const tones = [
+      [node("a", stopped), node("b", { status: "working", work: { state: "working" } })],
+      [node("a", stopped), node("b", { status: "done" }), node("c")],
+      // A node resting on a review still moves; nothing stopped is not a stall.
+      [node("a", { status: "working", work: { state: "waiting", on: { kind: "review" } } }), node("b", stopped)],
+      [node("a", { status: "done" }), node("b")],
+    ].map((nodes) => missionTone(mission("m", { nodes })));
+    expect(tones).toEqual(["working", "stopped", "working", "working"]);
+  });
 });
 
 describe("what a running mission's pane says (PRD mission-plan-visibility B9, B10)", () => {
