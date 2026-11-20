@@ -3487,48 +3487,6 @@ impl Runtime {
         })
     }
 
-    /// Who answers for registration `record`, by registration id (PRD
-    /// letters-missions-simplify D-24): its parent, else the Conductor of an
-    /// open mission in which it is a node's worker or checker; none for an
-    /// agent no one answers for, such as the operator's own. An agent that
-    /// took a pane over takes its predecessor's roles but not its parent
-    /// (`coordination::succeed`), so this, never `record.parent` alone, is
-    /// who hears of its heal and its reports, and who may put it to sleep,
-    /// archive or end it.
-    pub(crate) fn answerer(&self, record: &crate::coordination::AgentRecord) -> Option<String> {
-        record
-            .parent
-            .clone()
-            .or_else(|| self.mission_conductor_for(&record.id))
-    }
-
-    /// The registration of the Conductor of the open mission in which
-    /// registration `agent` is a node's worker or checker
-    /// (`MissionBook::conductor_for`), never `agent` itself.
-    pub(crate) fn mission_conductor_for(&self, agent: &str) -> Option<String> {
-        self.registration_of(self.missions.book.conductor_for(agent)?)
-            .filter(|conductor| conductor != agent)
-    }
-
-    /// The registration of each open mission's Conductor by the
-    /// registrations that work or check in it (`MissionBook::participants`):
-    /// what the lineage writer reads, off the lock, to give a participant
-    /// with no parent its Conductor as the one its row answers to
-    /// (`coordination::lineage::answering`).
-    pub(crate) fn mission_conductors(&self) -> std::collections::BTreeMap<String, String> {
-        let mut conductors = std::collections::BTreeMap::new();
-        for (agent, conductor) in self.missions.book.participants() {
-            // The first mission that binds it, as `conductor_for` reads it.
-            if conductors.contains_key(agent) {
-                continue;
-            }
-            if let Some(conductor) = self.registration_of(conductor).filter(|id| id != agent) {
-                conductors.insert(agent.to_owned(), conductor);
-            }
-        }
-        conductors
-    }
-
     /// The live registration `actor` holds, as `conductor_of` names it.
     fn live_registration(&self, actor: &Actor) -> Option<String> {
         self.delivery_ledger

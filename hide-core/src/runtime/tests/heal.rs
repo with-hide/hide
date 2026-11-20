@@ -441,13 +441,13 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
     );
 }
 
-/// B2, B17, B18: an agent that took a mission worker's or checker's pane
-/// over has no parent (`coordination::succeed`), and its Conductor answers
-/// for it all the same (`Runtime::answerer`): the worker at work is told to
-/// go on and is counted back in the Conductor's one cell, and a checker its
-/// engine could not bring back is named there, as a child would be.
+/// B2, B17, B18, PRD letters-missions-simplify D-24: the agent that took a
+/// mission worker's or checker's pane over answers to the Conductor the one
+/// before it answered to (`coordination::succeed` gives it the parent): the
+/// worker at work is told to go on and is counted back in the Conductor's
+/// one cell, and a checker its engine could not bring back is named there.
 #[test]
-fn a_mission_participant_with_no_parent_is_healed_as_its_conductors() {
+fn a_mission_participants_successor_is_healed_as_its_conductors_child() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = runtime();
     let node = runtime.node().as_str().to_owned();
@@ -459,24 +459,50 @@ fn a_mission_participant_with_no_parent_is_healed_as_its_conductors() {
     let conductor = actor(&node, "w1:p3", "s-3");
     let worker = actor(&node, "w1:p1", "s-18");
     let checker = actor(&node, "w1:p7", "s-7");
-    let mut former = record("agent-1", &actor(&node, "w1:p1", "s-1"), Some("agent-3"));
-    former.ended = true;
-    former.successor = Some("agent-18".into());
-    registered(
-        &mut runtime,
-        vec![
+    // A worker and a checker the Conductor started, each followed in its
+    // pane by a new conversation the Conductor never started.
+    let mut ledger = crate::delivery::ledger::Ledger {
+        next_id: 18,
+        agents: vec![
             record("agent-3", &conductor, None),
-            former,
-            record("agent-18", &worker, None),
-            record("agent-7", &checker, None),
+            record("agent-1", &actor(&node, "w1:p1", "s-1"), Some("agent-3")),
+            record("agent-5", &actor(&node, "w1:p7", "s-5"), Some("agent-3")),
         ],
+        ..Default::default()
+    };
+    let successions = std::collections::BTreeMap::from([
+        (
+            "agent-1".to_owned(),
+            crate::coordination::Succession {
+                successor: record("", &worker, None),
+            },
+        ),
+        (
+            "agent-5".to_owned(),
+            crate::coordination::Succession {
+                successor: record("", &checker, None),
+            },
+        ),
+    ]);
+    assert_eq!(
+        crate::coordination::succeed(
+            &mut ledger,
+            &successions,
+            1,
+            &crate::coordination::Held::default()
+        ),
+        [
+            ("agent-1".to_owned(), "agent-18".to_owned()),
+            ("agent-5".to_owned(), "agent-19".to_owned())
+        ]
     );
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
     let mut mission = mission_with_worker("agent-18");
     mission.conductor.actor = conductor.clone();
     mission.conductor.agent_id = Some("agent-3".into());
     mission.nodes[0].criteria[0].checkers.push(
         serde_json::from_value(
-            serde_json::json!({"worker": {"agent": "codex"}, "agent_id": "agent-7"}),
+            serde_json::json!({"worker": {"agent": "codex"}, "agent_id": "agent-19"}),
         )
         .unwrap(),
     );
@@ -486,9 +512,9 @@ fn a_mission_participant_with_no_parent_is_healed_as_its_conductors() {
     heal(&mut runtime, &node, &healing, 1_000);
     assert_eq!(
         runtime.heal_letters_owed(),
-        ["go-on:agent-18:1000", "go-on:agent-7:1000"]
+        ["go-on:agent-18:1000", "go-on:agent-19:1000"]
     );
-    runtime.heal_not_woken(&["agent-7".to_owned()]);
+    runtime.heal_not_woken(&["agent-19".to_owned()]);
     for actor in [&conductor, &worker] {
         observe(&mut runtime, actor);
     }

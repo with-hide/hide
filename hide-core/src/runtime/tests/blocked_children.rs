@@ -627,13 +627,10 @@ fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
 }
 
 /// PRD letters-missions-simplify D-24, B9: the agent that took a mission
-/// worker's pane over has no parent (`coordination::succeed`), and the book
-/// names the mission's Conductor as the one that answers for it
-/// (`Runtime::mission_conductors`), which the lineage writer turns into its
-/// row's parent (`coordination::lineage`,
-/// `a_parentless_mission_worker_is_its_conductors_child_on_its_row`): its
-/// block is the Conductor's child cell, and nothing of it reaches the
-/// operator's turn within the grace.
+/// worker's pane over answers to the worker's Conductor
+/// (`coordination::succeed` gives it the parent), so the lineage writer
+/// makes its row the Conductor's child: its block is the Conductor's child
+/// cell, and nothing of it reaches the operator's turn.
 #[test]
 fn a_successor_workers_block_is_its_conductors_child_cell() {
     let mut runtime = runtime();
@@ -665,20 +662,31 @@ fn a_successor_workers_block_is_its_conductors_child_cell() {
         }
     };
     let conductor = actor("w1:p1", "s-1");
-    let mut former = record("agent-2", actor("w1:p2", "s-2"), Some("agent-1"));
-    former.ended = true;
-    former.successor = Some("agent-3".into());
-    runtime.delivery_ledger = Ok(std::sync::Arc::new(crate::delivery::ledger::Ledger {
+    let mut ledger = crate::delivery::ledger::Ledger {
         version: 1,
-        next_id: 4,
+        next_id: 3,
         agents: vec![
             record("agent-1", conductor.clone(), None),
-            former,
-            record("agent-3", actor("w1:p2", "s-3"), None),
+            record("agent-2", actor("w1:p2", "s-2"), Some("agent-1")),
         ],
         ..Default::default()
-    }));
-    let mut mission: crate::missions::Mission = serde_json::from_value(json!({
+    };
+    let successions = std::collections::BTreeMap::from([(
+        "agent-2".to_owned(),
+        crate::coordination::Succession {
+            successor: record("", actor("w1:p2", "s-3"), None),
+        },
+    )]);
+    crate::coordination::succeed(
+        &mut ledger,
+        &successions,
+        1,
+        &crate::coordination::Held::default(),
+    );
+    let successor = ledger.agents.iter().find(|r| r.id == "agent-3").unwrap();
+    assert_eq!(successor.parent.as_deref(), Some("agent-1"));
+    runtime.delivery_ledger = Ok(std::sync::Arc::new(ledger));
+    let mission: crate::missions::Mission = serde_json::from_value(json!({
         "id": "mission-1", "title": "Fix", "project": "/fixture",
         "device_id": crate::node::TEST_NODE,
         "conductor": {"actor": conductor, "agent_id": "agent-1"},
@@ -687,11 +695,7 @@ fn a_successor_workers_block_is_its_conductors_child_cell() {
         "nodes": [{"key": "a", "title": "A", "kind": "change", "status": "working", "agent_id": "agent-3"}]
     }))
     .unwrap();
-    runtime.missions.book.missions.push(mission.clone());
-    assert_eq!(
-        runtime.mission_conductors(),
-        std::collections::BTreeMap::from([("agent-3".to_owned(), "agent-1".to_owned())])
-    );
+    runtime.missions.book.missions.push(mission);
 
     // The row as the lineage writer leaves it: the Conductor's child.
     ingest_lineage(
@@ -716,9 +720,4 @@ fn a_successor_workers_block_is_its_conductors_child_cell() {
     let noted = of_kind(&records, "child_blocked.noted");
     assert_eq!(noted.len(), 1, "{records:?}");
     assert_eq!(noted[0]["parent_pane_id"], "w1:p1");
-
-    // Its mission done, no one answers for it.
-    mission.status = crate::missions::MissionStatus::Done;
-    runtime.missions.book.missions[0] = mission;
-    assert!(runtime.mission_conductors().is_empty());
 }

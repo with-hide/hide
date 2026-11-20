@@ -912,7 +912,7 @@ fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
         Some(&successor),
         "it takes the children"
     );
-    assert_eq!(next.parent, None, "and is the child of no one");
+    assert_eq!(next.parent, None, "and, as the Conductor was, a root");
     drop(runtime);
 
     // A stop after the ledger kept the takeover and before the mission book

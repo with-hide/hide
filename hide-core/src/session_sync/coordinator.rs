@@ -1194,9 +1194,7 @@ fn begin_read_connection(context: &SessionSyncContext, snapshot_started_at: Inst
 }
 
 /// What the lineage writer reads from the runtime in one lock: the delivery
-/// ledger, the panes that should carry this connection's mark, and the open
-/// missions' participants by their Conductors (`Runtime::mission_conductors`,
-/// a few entries per open mission).
+/// ledger and the panes that should carry this connection's mark.
 /// Hands a pulled engine's agents to the lineage writer, as the event path
 /// hands it each agent list the engine answers: the writer settles the
 /// registrations Hide owes an agent once its session shows (a fork, a spawn
@@ -1210,14 +1208,14 @@ fn observe_pulled(
     moved: bool,
     started_at: Instant,
 ) {
-    let Some((ledger, wanted)) = lineage_inputs(context) else {
+    let Some((ledger, marks)) = lineage_inputs(context) else {
         return;
     };
     writer.observe(
         &ledger,
         &state.agents,
         &|pane| state.panes.iter().any(|known| known.pane_id == pane),
-        &wanted,
+        &marks,
         moved,
         started_at,
     );
@@ -1227,16 +1225,12 @@ fn lineage_inputs(
     context: &SessionSyncContext,
 ) -> Option<(
     Arc<crate::delivery::ledger::Ledger>,
-    crate::coordination::lineage::Wanted,
+    BTreeMap<String, String>,
 )> {
     let runtime = context.runtime.upgrade()?;
     let guard = runtime.lock().ok()?;
     let ledger = guard.delivery_state().ok()?;
-    let wanted = crate::coordination::lineage::Wanted {
-        marks: guard.wanted_server_marks(context.read_target()),
-        conductors: guard.mission_conductors(),
-    };
-    Some((ledger, wanted))
+    Some((ledger, guard.wanted_server_marks(context.read_target())))
 }
 
 /// Forgets the host's published panes before a fresh snapshot is asked for,

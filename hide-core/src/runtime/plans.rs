@@ -1595,7 +1595,17 @@ impl Runtime {
                 .spawns
                 .iter()
                 .any(|spawn| spawn.plan.is_some() && spawn.child.as_deref() == Some(own))
-                || self.missions.book.conductor_for(own).is_some()
+                || self.missions.book.missions.iter().any(|mission| {
+                    mission.status.open()
+                        && mission.nodes.iter().any(|node| {
+                            node.agent_id.as_deref() == Some(own)
+                                || node.criteria.iter().any(|line| {
+                                    line.checkers
+                                        .iter()
+                                        .any(|checker| checker.agent_id.as_deref() == Some(own))
+                                })
+                        })
+                })
         });
         if delegated {
             return Err("plan_delegate_not_permitted".into());

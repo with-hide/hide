@@ -1457,66 +1457,54 @@ fn hide_agent_sleep_takes_only_the_agent_or_its_parent() {
     assert_eq!(phase(&runtime, WORKER), None);
 }
 
-/// D-20, PRD letters-missions-simplify D-24: a worker with no parent, as the
-/// agent that took a worker's pane over is (`coordination::succeed`), is
-/// put to sleep by the Conductor of the open mission it works in, who
-/// answers for it; outside such a mission no one but itself may.
+/// D-20, PRD letters-missions-simplify D-24: binding an agent to a node
+/// gives the Conductor no say over it: an operator's root it binds as a
+/// worker still refuses the Conductor's sleep.
 #[test]
-fn hide_agent_sleep_takes_a_parentless_worker_from_its_conductor() {
+fn hide_agent_sleep_refuses_a_conductor_that_only_binds_the_agent() {
     let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger.agents[1].parent = None;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
     assert_eq!(
         sleep_command(&mut runtime, "agent-2").unwrap_err(),
         "parent_authority_required"
     );
-    runtime.missions.book.missions.push(mission("working"));
-    runtime.save_missions();
-    assert_eq!(
-        sleep_command(&mut runtime, "agent-2").unwrap()["state"],
-        "ending"
-    );
+    assert_eq!(phase(&runtime, WORKER), None);
 }
 
-/// PRD letters-missions-simplify D-24: `hide request send parent` from a
-/// worker with no parent names the Conductor of the open mission it works
-/// in, so the agent that took a worker's pane over reports where the one
-/// before it did; with no such mission no one answers for it.
+/// D-20, PRD letters-missions-simplify D-24, B2: the agent that took the
+/// worker's pane over answers to the worker's Conductor
+/// (`coordination::succeed` gives it the parent), so the Conductor puts it
+/// to sleep as it would the worker.
 #[test]
-fn a_parentless_workers_parent_is_its_conductor() {
+fn hide_agent_sleep_takes_a_workers_successor_from_its_conductor() {
     let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    ledger.agents[1].parent = None;
+    // The worker's pane ran another conversation before this one.
+    let mut next = ledger.agents[1].clone();
+    next.id = String::new();
+    next.parent = None;
+    ledger.agents[1].actor.session = Some("earlier-session".into());
+    ledger.agents[1].session = "earlier-session".into();
+    let successions = std::collections::BTreeMap::from([(
+        "agent-2".to_owned(),
+        crate::coordination::Succession { successor: next },
+    )]);
+    let succeeded = crate::coordination::succeed(
+        &mut ledger,
+        &successions,
+        1,
+        &crate::coordination::Held::default(),
+    );
+    let successor = succeeded[0].1.clone();
     runtime.delivery_ledger = Ok(Arc::new(ledger));
-    let send = |runtime: &mut Runtime| {
-        let context = runtime
-            .workspace_control_query(crate::node::TEST_NODE, WORKER, Query::Info)
-            .unwrap()
-            .context;
-        runtime
-            .prepare_delivery(
-                crate::node::TEST_NODE,
-                WORKER,
-                &context,
-                None,
-                crate::delivery::Command::Send {
-                    target: "parent".into(),
-                    intent: "done".into(),
-                    body: "done".into(),
-                    kind: "report".into(),
-                    now: false,
-                    force: false,
-                },
-            )
-            .map(|_| ())
-    };
-    assert_eq!(send(&mut runtime).unwrap_err(), "no_parent");
-    runtime.missions.book.missions.push(mission("working"));
-    runtime.save_missions();
-    // Its Conductor is found: the send goes on to the store, which this
-    // fixture does not run.
-    assert_eq!(send(&mut runtime), Err("delivery_unavailable".into()));
+    assert_eq!(
+        sleep_command(&mut runtime, &successor).unwrap()["state"],
+        "ending"
+    );
 }
 
 /// PRD hide-plan-delegate B6: a `request` that would wake a sleeping plan

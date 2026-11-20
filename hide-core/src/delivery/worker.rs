@@ -1480,10 +1480,6 @@ impl crate::coordination::Holds for BookHolds<'_> {
             .as_ref()
             .map_err(Clone::clone)
     }
-
-    fn mission_conductor_for(&self, agent: &str) -> Option<String> {
-        self.runtime.lock().ok()?.mission_conductor_for(agent)
-    }
 }
 
 /// Whether the caller and target `request` names are still the ones it was

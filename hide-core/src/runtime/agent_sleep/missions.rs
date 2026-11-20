@@ -189,8 +189,8 @@ impl Runtime {
     }
 
     /// Reads the letters `next` holds that `previous` did not, in the order
-    /// they were sent: a delegated child's `report` to its parent (the one
-    /// that answers for it, `Runtime::answerer`) marks it to sleep, and its later letter to its parent of any other kind, or a
+    /// they were sent: a delegated child's `report` to its parent marks it
+    /// to sleep, and its later letter to its parent of any other kind, or a
     /// letter sent to it that would wake it asleep
     /// (`Letter::wakes_a_sleeper`), drops that mark. Run by every
     /// publish of the ledger. The ledger this runtime started on is the
@@ -212,22 +212,17 @@ impl Runtime {
             if letter.wakes_a_sleeper() {
                 self.drop_report_marks(next, letter, |actor| letter.recipient.same_identity(actor));
             }
-            // Its parent is the one that answers for it (`Runtime::answerer`),
-            // so a worker that took a pane over without a parent reports to
-            // its Conductor as the worker before it did.
-            let Some((child, parent)) = next
-                .agents
-                .iter()
-                .rev()
-                .filter(|record| !record.ended && record.actor.same_identity(&letter.sender))
-                .find_map(|record| Some((record, self.answerer(record)?)))
-            else {
+            let Some(child) = next.agents.iter().rev().find(|record| {
+                !record.ended
+                    && record.parent.is_some()
+                    && record.actor.same_identity(&letter.sender)
+            }) else {
                 continue;
             };
-            let to_parent = next
-                .agents
-                .iter()
-                .any(|record| record.id == parent && record.actor.same_identity(&letter.recipient));
+            let to_parent = next.agents.iter().any(|record| {
+                Some(&record.id) == child.parent.as_ref()
+                    && record.actor.same_identity(&letter.recipient)
+            });
             if !to_parent {
                 continue;
             }
