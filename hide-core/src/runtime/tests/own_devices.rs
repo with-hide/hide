@@ -190,8 +190,11 @@ fn an_engine_opened_for_a_replaced_attempt_is_not_installed() {
         DEVICE,
         Arc::new(HolderNode::default()),
         state.path(),
-        "/srv/account".to_owned(),
-        false,
+        crate::engine::own::DeviceLink {
+            home: "/srv/account".to_owned(),
+            windows: false,
+            switched: false,
+        },
         Arc::new(hide_agent_adapter::definition::Catalog::read(Vec::new())),
         Arc::default(),
     )

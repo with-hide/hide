@@ -959,3 +959,47 @@ fn codexs_prompt_and_guard_hooks_ask_the_daemon_themselves_inside_their_timeout(
         );
     }
 }
+
+/// A guest's entries on its host's account, started the way each agent
+/// starts a hook here, in a pane the host's app started and in a terminal
+/// outside Hide: each says nothing and writes nothing, and what each start
+/// took is printed beside what the shell alone takes.
+/// `.config/nextest.toml` shows the lines on a passing run: they are what
+/// the guest cap was set from (`hide_peer_protocol::launch::MAX_GUEST_NODES`).
+#[test]
+fn a_guests_entries_say_nothing_and_cost_one_start_each() {
+    use crate::other_install::{Account, Place};
+    const RUNS: usize = 10;
+    let account = Account::with_a_guests_entries();
+    for place in [Place::AppPane, Place::Outside] {
+        let cost = account.tool_calls(AgentRuntime::ClaudeCode, &[], place, RUNS);
+        println!("hook cost, a guest's ClaudeCode entry, no shell, {place:?}: {cost}");
+    }
+    for shell in codex_shells() {
+        for place in [Place::AppPane, Place::Outside] {
+            let how = [shell, "-NoProfile", "-Command"];
+            let cost = account.tool_calls(AgentRuntime::Codex, &how, place, RUNS);
+            println!("hook cost, a guest's Codex entry through {shell}, {place:?}: {cost}");
+        }
+        let mut alone: Vec<std::time::Duration> = (0..RUNS)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let status = Command::new(shell)
+                    .args(["-NoProfile", "-Command", "exit 0"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "{shell}: {status}");
+                start.elapsed()
+            })
+            .collect();
+        alone.sort();
+        println!(
+            "hook cost, {shell} alone: p50 {:.1} ms, max {:.1} ms over {RUNS} starts",
+            alone[alone.len() / 2].as_secs_f64() * 1000.0,
+            alone[alone.len() - 1].as_secs_f64() * 1000.0
+        );
+    }
+}

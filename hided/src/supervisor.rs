@@ -1435,7 +1435,7 @@ fn end_on_peer(env: &Env, kept: &Abandoned) -> Result<&'static str, MoveFailure>
     let remote = |program: &str| {
         Remote::new(&env.home, &peer.alias, program, &build).with_state_dir(&peer.state_dir)
     };
-    let packages = crate::core_move::starter::this_program()
+    let packages = crate::core_install::starter::this_program()
         .ok()
         .and_then(|program| program.parent().map(Path::to_path_buf))
         .ok_or_else(|| MoveFailure::Local {
@@ -1730,6 +1730,7 @@ mod tests {
                     environment: &[],
                     log: &home.path().join("core.log"),
                 },
+                &hide_kit::layout::keep_alive(&state),
                 home.path(),
                 &AtomicBool::new(false),
             )

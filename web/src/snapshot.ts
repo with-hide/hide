@@ -1653,6 +1653,7 @@ export type MissionNode = {
   /** A general node's preset, and the icon key the core's preset table names for a general node (PRD node-presets D-02, D-08); absent on other nodes and from an older core. */
   preset?: MissionNodePreset | null;
   icon?: string | null;
+  /** What it waits on, as the plan wrote it: `<node>`, or `<node>:<line>` for one finish line of that node (`missionDependency` reads it). */
   depends_on: string[];
   status: MissionNodeStatus;
   blocked: MissionBlocked | null;
@@ -1671,6 +1672,8 @@ export type MissionNode = {
   /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
   prs: MissionNodePr[];
   base_pr: number | null;
+  /** The node it stacks on while that one's work is not in main: it starts from that node's branch and its pull request is based there (`NodeStack`); absent when not stacked and from an older core. */
+  stack?: MissionNodeStack | null;
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
@@ -1751,10 +1754,15 @@ export type MissionLettersHeldFor = "unreachable" | "approval" | "draft" | "unan
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
+/** The node a node stacks on, its branch and its current pull request (`NodeStack`). */
+export type MissionNodeStack = { on: string; branch: string | null; pr: number | null };
+
 /** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
 export type MissionWaitingOn =
   | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
   | { kind: "nodes"; keys: string[] }
+  /** The merge of the pull request it stacks on comes first (`WaitingOn::Below`). */
+  | { kind: "below"; node: string }
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review or verification failing in a row, a long quiet with no push, or its worker stopped. */
@@ -2186,7 +2194,35 @@ export type Device = {
   machine_name?: string | null;
   /** A node that dials the core rather than a device the core dials (`DeviceSnapshot::dials_in`). */
   dials_in?: boolean;
+  /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
+  peer_key?: string | null;
+  /** Where the switch of this helper device to its machine's own Hide stands (`DeviceSnapshot::switch`); absent while none runs or failed. */
+  switch?: DeviceSwitch | null;
+  /** What the Hide this core started on the device's machine over SSH still needs to stay reachable (`DeviceSnapshot::needs`); absent when it needs nothing. */
+  needs?: DeviceNeeds | null;
+  /** Whether the switch to its machine's own Hide is offered on this device (`DeviceSnapshot::switchable`): a helper device dialed over SSH that has connected. */
+  switchable?: boolean;
+  /** How many of the device's terminals its switch could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
+  not_carried?: number | null;
+  /** Added over SSH to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
+  switch_first?: boolean;
 };
+
+/**
+ * What a machine's Hide, started over SSH, needs from the operator to stay
+ * reachable with no one at it (`contracts/snapshot-wire-enums.json`:
+ * `device_needs`): automatic login on a Mac, or on Linux the `command` an
+ * administrator runs there.
+ */
+export type DeviceNeeds = { kind: "auto_login" | "linger"; command?: string | null };
+
+/**
+ * A helper device's switch to the connection of the Hide on its machine
+ * (`contracts/snapshot-wire-enums.json`: `device_switch_state`). `reason` is
+ * the code of why a `failed` one stopped; the device is the helper's until
+ * the switch lands, so a failed one changed nothing.
+ */
+export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed"; reason?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does
@@ -3535,6 +3571,19 @@ export type OverviewGraphMetadata = {
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
 };
 
+/**
+ * One guest machine and its panes on this machine. A pane is drawn and typed
+ * into by its `id`, `guest:<device_id>:pane:<pane>`, which is not the
+ * `remote:` address of a pane on that machine.
+ */
+export type GuestPanes = {
+  /** The guest's device id, the id `navigator.peers` names it by. */
+  device_id: string;
+  /** Its connection id. */
+  key: string;
+  panes: { id: string; pane: string; since_unix_ms: number }[];
+};
+
 export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
@@ -3570,8 +3619,12 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
+    /** The device the last Add over SSH did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
+    device_not_added?: { label: string; reason: string } | null;
     /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
     peers?: import("./pairing").Peer[];
+    /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */
+    guest_panes?: GuestPanes[];
     focused_device_id?: string | null;
     /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
     tools?: ToolCell[];

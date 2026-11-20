@@ -6,8 +6,10 @@ import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { PairingDialogs } from "../PairingDialogs";
 import type { PairingView, Peer } from "../pairing";
+import type { Device, GuestPanes } from "../snapshot";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
+import { forgetFirewallAsk } from "./firewall";
 import { PairedRows } from "./PairingRows";
 
 // The shell's modules reach xterm, which asks jsdom for a canvas it lacks.
@@ -24,7 +26,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function mount(pairing: PairingView | null, peers: Peer[] = []) {
+async function mount(pairing: PairingView | null, peers: Peer[] = [], guest_panes: GuestPanes[] = [], devices: Partial<Device>[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -34,7 +36,7 @@ async function mount(pairing: PairingView | null, peers: Peer[] = []) {
   const root = createRoot(container);
   const saved = useShellStore.getState();
   await act(async () => {
-    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices: [], peers }, ui_state: {} } } as never);
+    useShellStore.setState({ connection: "live", pairing, pairingResult: null, rest: { navigator: { devices, peers, guest_panes }, ui_state: {} } } as never);
     root.render(
       <TooltipProvider>
         <PairedRows actions={actions} />
@@ -125,7 +127,25 @@ it("asks before removing a machine that opens this computer, with its work left 
   expect(events.filter((event) => event.kind === "pairing_remove")).toHaveLength(0);
   await press("[data-peer-remove-go]");
   expect(last(events)).toMatchObject({ kind: "pairing_remove", payload: { device: guest.key, direction: "incoming" } });
+  // With no terminal of that machine here there is nothing to end, and nothing says so.
+  expect(last(events)?.payload).not.toHaveProperty("end_work");
   expect(q("[data-peer-remove-confirm]")).toBeNull();
+  await unmount();
+});
+
+it("offers to end a removed machine's work only while it has terminals here, and sends that choice (B26, B60)", async () => {
+  const guest = peer({ key: "cd".repeat(32), device_id: "macbook", name: "MacBook", opens: null, opened_by: "active" });
+  const panes = [1, 2].map((n) => ({ id: `guest:macbook:pane:w1:p${n}`, pane: `w1:p${n}`, since_unix_ms: n }));
+  const { q, press, events, unmount } = await mount(idle, [guest], [{ device_id: "macbook", key: guest.key, panes }]);
+  await act(async () => { q('[data-peer-menu="macbook"]')?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await press('[data-peer-remove-incoming="macbook"]');
+  // Leaving the work is still what a plain Remove does.
+  expect(q("[data-peer-remove-work]")?.dataset.peerRemoveWork).toBe("keep");
+  expect(q('[data-peer-remove-choice="end"]')?.textContent).toBe("End itIts 2 terminals here close now, even while that computer is away");
+  await press('[data-peer-remove-choice="end"] [role="radio"]');
+  expect(q("[data-peer-remove-work]")?.dataset.peerRemoveWork).toBe("end");
+  await press("[data-peer-remove-go]");
+  expect(last(events)).toMatchObject({ kind: "pairing_remove", payload: { device: guest.key, direction: "incoming", end_work: true } });
   await unmount();
 });
 
@@ -177,4 +197,114 @@ it("shows the pasted link's words with They match and They differ, then how it e
   await full.press("[data-pair-join-close]");
   expect(last(full.events)).toMatchObject({ kind: "pairing_dismiss_join" });
   await full.unmount();
+});
+
+/** A desktop host on Windows whose firewall rules answer `state` until an ask returns `answer`. */
+function windowsHost(state: "allowed" | "missing" | "no_port", answer: "allowed" | "declined") {
+  let now: "allowed" | "missing" | "no_port" = state;
+  const host = {
+    kind: "electron",
+    platform: "win32",
+    firewallState: vi.fn(async () => now),
+    allowFirewall: vi.fn(async () => {
+      if (answer === "allowed") now = "allowed";
+      return answer;
+    }),
+  };
+  window.hideHost = host as never;
+  return host;
+}
+
+it("asks Windows once for the firewall rules when this PC is shared, and a no leaves the line with Allow (B32)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("missing", "declined");
+  const screen = await mount(idle);
+  expect(screen.q("[data-pair-firewall]"), "nothing is shared or paired yet").toBeNull();
+  await screen.press("[data-pair-share-make]");
+  expect(host.allowFirewall).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+
+  const shared = await mount({ ...idle, offer: { link: "hide://pair#v=1&id=ab&s=cd", expires_unix_ms: Date.now() + 60_000 } });
+  await act(async () => {});
+  expect(shared.q("[data-pair-firewall]")?.textContent).toContain("The firewall blocks direct connections");
+  await shared.press("[data-pair-share-end]");
+  await shared.unmount();
+
+  const again = await mount(idle);
+  await again.press("[data-pair-share-make]");
+  expect(host.allowFirewall, "a second share asks nothing on its own").toHaveBeenCalledTimes(1);
+  await again.unmount();
+  delete window.hideHost;
+});
+
+it("asks Windows on the first share before the folder has a port, since the ask chooses it (B32)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("no_port", "allowed");
+  const screen = await mount(idle);
+  await screen.press("[data-pair-share-make]");
+  expect(host.allowFirewall).toHaveBeenCalledTimes(1);
+  await screen.unmount();
+  delete window.hideHost;
+});
+
+it("asks Windows again from the line, and the line goes once the rules are in (B32)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("missing", "allowed");
+  const screen = await mount(idle, [peer()]);
+  await act(async () => {});
+  expect(screen.q("[data-pair-firewall]")).not.toBeNull();
+  await screen.press("[data-pair-firewall-allow]");
+  await act(async () => {});
+  expect(host.allowFirewall).toHaveBeenCalledTimes(1);
+  expect(screen.q("[data-pair-firewall]"), "the rules are in").toBeNull();
+  await screen.unmount();
+  delete window.hideHost;
+});
+
+it("shows no firewall line on another computer's screen of this one, and reads no rules there (B52)", async () => {
+  forgetFirewallAsk();
+  const host = windowsHost("missing", "declined");
+  const screen = await mount(null, [peer()]);
+  await act(async () => {});
+  expect(screen.q("[data-pair-firewall]")).toBeNull();
+  expect(host.firewallState).not.toHaveBeenCalled();
+  await screen.unmount();
+  delete window.hideHost;
+});
+
+it("shows no firewall line where the host keeps no rules", async () => {
+  forgetFirewallAsk();
+  const screen = await mount(idle, [peer()]);
+  await act(async () => {});
+  expect(screen.q("[data-pair-firewall]")).toBeNull();
+  await screen.unmount();
+});
+
+it("says under a machine's row what the Hide started there over SSH still needs, with its command (B30)", async () => {
+  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "cd".repeat(32), device_id: "mac-mini", name: "Mac mini" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" })];
+  const devices: Partial<Device>[] = [
+    { id: "build-box", kind: "remote", needs: { kind: "linger", command: "sudo loginctl enable-linger hy" } },
+    { id: "mac-mini", kind: "remote", needs: { kind: "auto_login" } },
+    { id: "laptop", kind: "remote" },
+  ];
+  const { q, unmount } = await mount(idle, peers, [], devices);
+  const linger = q('[data-peer-row="build-box"] [data-device-needs="build-box:linger"]');
+  expect(linger?.textContent).toContain("Needs sudo");
+  expect(linger?.querySelector("code")?.textContent).toBe("sudo loginctl enable-linger hy");
+  expect(q('[data-peer-row="mac-mini"] [data-device-needs="mac-mini:auto_login"]')?.textContent).toBe("Turn on automatic login there to stay connected after a restart");
+  // A machine whose Hide needs nothing has no line.
+  expect(q('[data-peer-row="laptop"] [data-device-needs]')).toBeNull();
+  await unmount();
+});
+
+it("keeps under a machine's row how many terminals its switch could not take over (B36)", async () => {
+  const peers = [peer({ device_id: "build-box", name: "build-box" }), peer({ key: "ef".repeat(32), device_id: "laptop", name: "Laptop" })];
+  const devices: Partial<Device>[] = [
+    { id: "build-box", kind: "remote", not_carried: 2 },
+    { id: "laptop", kind: "remote" },
+  ];
+  const { q, unmount } = await mount(idle, peers, [], devices);
+  expect(q('[data-peer-row="build-box"] [data-device-not-carried="build-box:2"]')?.textContent).toBe("2 terminals could not be taken over · AI conversations can be resumed");
+  expect(q('[data-peer-row="laptop"] [data-device-not-carried]')).toBeNull();
+  await unmount();
 });

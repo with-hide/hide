@@ -30,13 +30,11 @@ pub const NODE_SIDE: &str = "n";
 /// The guest's install root: the builds of that guest the host keeps, each
 /// in a folder named by the first 16 hex characters of its digest, and the
 /// `current` that leads to the one its hooks run. The host build writes the
-/// build folders and removes them; the guest build runs from one, points
-/// `current` at itself and keeps its holders' version folders in
-/// [`HOLDERS_DIR`] below it (D-77 (2)).
+/// build folders and removes them, and touches nothing else there; the
+/// guest build runs from one, points `current` at itself and keeps its
+/// holders' version folders below the root as it keeps the account's below
+/// a home, apart from the account's own (D-77 (2)).
 pub const INSTALL_SIDE: &str = "i";
-/// The folder under the install root that holds the version folders the
-/// guest's pane holders run from, apart from the account's own.
-pub const HOLDERS_DIR: &str = "holders";
 /// How many builds of one guest a host keeps: the one that runs and the one
 /// before it.
 pub const BUILDS_KEPT: usize = 2;
@@ -53,11 +51,38 @@ pub fn install_name(guest: &str) -> String {
 /// spelled the one way a folder name is.
 pub fn guest_of_install(name: &str) -> Option<&str> {
     let guest = name.strip_prefix(INSTALL_PREFIX)?;
-    let spelled = guest.len() == crate::key::SHORT_KEY_CHARS
-        && guest
+    short_key_spelled(guest).then_some(guest)
+}
+
+fn short_key_spelled(name: &str) -> bool {
+    name.len() == crate::key::SHORT_KEY_CHARS
+        && name
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-    spelled.then_some(guest)
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// How the name of a guest's installation starts in the account's agent
+/// settings (D-77 (4), (5)): the guest's build writes its hook entries under
+/// that name and the host's build takes them out by Hide's marker and the
+/// same name, so the two builds have to spell it alike. The rest of the
+/// name is the guest's install root.
+pub const HOOKS_INSTALL_PREFIX: &str = "guest-root:";
+
+/// Whether `root` is spelled as a guest's install root, `<…>/g/<16
+/// hex>/i`: the one shape whose installation is a guest's.
+pub fn is_install_root(root: &Path) -> bool {
+    let named = |folder: &Path, name: &str| folder.file_name().is_some_and(|found| found == name);
+    let Some(guest) = root.parent() else {
+        return false;
+    };
+    named(root, INSTALL_SIDE)
+        && guest
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(short_key_spelled)
+        && guest
+            .parent()
+            .is_some_and(|guests| named(guests, GUESTS_DIR))
 }
 
 /// Whether a node whose `--guest` folder is `node_dir` and whose program is
@@ -139,6 +164,18 @@ pub const END_NOW_WAITS_SECS: u64 = 5;
 /// still holds, and how many times, before it counts a failed start.
 pub const FOLDER_HELD_RETRY_SECS: u64 = 1;
 pub const FOLDER_HELD_RETRIES: u32 = 10;
+/// How many guests one host has at work at once (D-77 (7)). A guest is at
+/// work while its node runs or a pane of it is left on the host, and that
+/// long its hook entries are on the host's account, where every agent
+/// event, the host's own among them, starts each guest's helper once. The
+/// number keeps what the guests add to one event inside a second on the
+/// slowest system Hide supports, for an agent that runs its hooks one after
+/// another: a Windows runner printed what one start takes there, about a
+/// quarter of a second with the PowerShell an entry runs in
+/// (`hide-agent-hooks/tests/it/windows_hook_command.rs`), and
+/// `docs/ARCHITECTURE.md`, What a guest may take, has the figures. A guest
+/// past it is told [`crate::manage::NodeStop::HostFull`].
+pub const MAX_GUEST_NODES: usize = 4;
 /// A node that crashed more than [`CRASHES`] times within
 /// [`CRASH_WINDOW_SECS`] is not started again by itself (B70).
 pub const CRASHES: usize = 5;
@@ -222,6 +259,12 @@ pub const EXIT_ENDED: i32 = 0;
 /// A write to the host failed or a thread of the node panicked: the node
 /// ends rather than run on unheard. The host counts it as a crash.
 pub const EXIT_HOST_UNREACHABLE: i32 = 70;
+/// The node ended itself to be started again: a holder of one of its panes
+/// died without saying why, and a node's start is what settles such a pane.
+/// It asks at most once in [`HOLDER_LOST_RESTART_SECS`]; the host starts it
+/// again at once and counts the end with the crashes, so a node that asks
+/// without end is left stopped like one that crashes (D-77 (6)).
+pub const EXIT_RESTART: i32 = 71;
 /// A word after `serve` the node does not know: the build is too old or too
 /// new for this host (`update_needed`), not a crash.
 pub const EXIT_UNKNOWN_WORD: i32 = 64;

@@ -127,43 +127,19 @@
     "example": "hide ps --here"
   },
   "device list": {
-    "line": "Lists the machines connected to this Hide: the Hides it is paired with, each with who opens whom and whether the two are connected, and its SSH devices, each with its state and whatever it is waiting on from you; run it on the machine that runs Hide, since a device is refused.",
+    "line": "Lists the devices connected to this Hide, with each one's state and whatever it is waiting on from you; run it on the machine that runs Hide, since a device is refused.",
     "example": "hide device list"
   },
-  "device share": {
-    "line": "Prints a link that lets one other Hide open this machine: it works once, for nine minutes, and ends when the command does. When that machine pastes it, the command shows four words to compare with its screen and takes your yes or no, then waits until it is let in. Only the operator may run it, in a terminal outside Hide's panes.",
-    "example": "hide device share"
-  },
   "device add": {
-    "line": "With a link another Hide shared, pairs with that machine: the command shows four words, takes your yes or no once you have compared them with the other screen, and waits for that machine's operator to allow it; only the operator may run it, outside Hide's panes. With a Host name from ~/.ssh/config, adds a computer you reach over SSH: one that already runs its own Hide is connected to as a Hide, with no words and nothing installed there, when ssh signs in without asking and the command runs outside Hide's panes; any other is registered as a device, and nothing is installed until the operator chooses Allow and install on its row in Settings > Devices.",
+    "line": "Registers a computer you reach over SSH, by its Host name in ~/.ssh/config, as a device; its folders, Git and terminals wait until the operator chooses Allow and install on its row in Settings > Devices. Only the machine that runs Hide may add one.",
     "example": "hide device add mini --name 'Mac mini'"
   },
-  "device allow": {
-    "line": "Answers, at this terminal, the machines that wait for this machine's operator: each is shown with what it would be allowed, and takes a yes or no. For a machine with no window to answer in; only the operator may run it, outside Hide's panes.",
-    "example": "hide device allow"
-  },
-  "device pause": {
-    "line": "Stops one direction of a paired machine without removing it: its streams end at once and its work keeps running. A machine paired both ways needs --outgoing (this machine opening it), --incoming (it opening this machine) or --both.",
-    "example": "hide device pause mini --incoming"
-  },
-  "device resume": {
-    "line": "Turns a paused direction of a paired machine back on, after which the two connect again by themselves. Only the operator may run it, in a terminal outside Hide's panes.",
-    "example": "hide device resume mini --incoming"
-  },
   "device remove": {
-    "line": "Removes one direction of a paired machine, which then cannot come back in with the same key until it is paired again; what already ran there and what was read cannot be undone, and its work keeps running. For an SSH device, forgets it and takes Hide's helper off it only if the helper is connected at that moment and no other registered device reaches the same account there.",
+    "line": "Forgets a device, and takes Hide's helper off it only if the helper is connected at that moment and no other registered device reaches the same account there; otherwise the helper stays and the reason goes to Hide's diagnostics. Its panes and agents keep running there.",
     "example": "hide device remove mini"
   },
-  "device request": {
-    "line": "Asks a machine that already opens this one to let this machine open it too, over the connection the two share; its operator answers there, and hide device list shows what came of it. Only the operator may run it, outside Hide's panes.",
-    "example": "hide device request mini"
-  },
-  "device address": {
-    "line": "Names an address a paired machine is tried at first, before the addresses it was last reached at and the relay. Only the operator may run it, outside Hide's panes.",
-    "example": "hide device address mini 192.168.0.12:7842"
-  },
   "device retry": {
-    "line": "Dials a paired machine that is not connected again now. For an SSH device, starts a new attempt to connect it, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt. With --wait it waits until the SSH device connects, needs the operator, the attempt fails or five minutes pass.",
+    "line": "Starts a new attempt to connect a device, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt, and only the machine that runs Hide may ask. With --wait it waits until the device connects, needs the operator, the attempt fails or five minutes pass.",
     "example": "hide device retry mini --wait"
   },
   "access request": {

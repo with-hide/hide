@@ -477,6 +477,15 @@ impl Drop for LocalListener {
     }
 }
 
+/// Whether this system can address a local endpoint at `path`: refused, with
+/// the path, its length and the limit in the reason, where a Unix socket
+/// address cannot hold it; a Windows pipe has no such limit. For a caller
+/// that decides where an endpoint goes before the program that binds it
+/// starts.
+pub fn check_path(path: &Path) -> io::Result<()> {
+    sys::check_path(path)
+}
+
 /// Whether the entry at `path` has the kind a local listener leaves: a socket
 /// on Unix, a marker file on Windows. A link is judged as itself, not followed.
 /// This only reads metadata; it neither connects nor removes the entry.

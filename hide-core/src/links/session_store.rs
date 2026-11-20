@@ -115,31 +115,8 @@ impl LinkStore {
                 }
             }
         }
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT device,agent,id,parent_device,parent_agent,parent_id FROM session_parents",
-            )
-            .map_err(failed)?;
         let mut children: HashMap<SessionIdentity, Vec<SessionIdentity>> = HashMap::new();
-        for row in statement
-            .query_map([], |r| {
-                Ok((
-                    SessionIdentity {
-                        device_id: r.get(0)?,
-                        agent: r.get(1)?,
-                        session_id: r.get(2)?,
-                    },
-                    SessionIdentity {
-                        device_id: r.get(3)?,
-                        agent: r.get(4)?,
-                        session_id: r.get(5)?,
-                    },
-                ))
-            })
-            .map_err(failed)?
-        {
-            let (child, parent) = row.map_err(failed)?;
+        for (child, parent) in self.parent_edges()? {
             children.entry(parent).or_default().push(child);
         }
         let mut level: Vec<SessionIdentity> = members.iter().cloned().collect();
@@ -161,6 +138,85 @@ impl LinkStore {
             level = next;
         }
         Ok(members)
+    }
+
+    /// Each session of `members` another session of `members` started, with
+    /// the one that started it: a delegated session is its parent's, never
+    /// a root of its own.
+    pub fn parents_within(
+        &self,
+        members: &BTreeSet<SessionIdentity>,
+    ) -> Result<HashMap<SessionIdentity, SessionIdentity>, String> {
+        Ok(self
+            .parent_edges()?
+            .into_iter()
+            .filter(|(child, parent)| members.contains(child) && members.contains(parent))
+            .collect())
+    }
+
+    /// Every recorded (child, parent) pair.
+    fn parent_edges(&self) -> Result<Vec<(SessionIdentity, SessionIdentity)>, String> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT device,agent,id,parent_device,parent_agent,parent_id FROM session_parents",
+            )
+            .map_err(failed)?;
+        statement
+            .query_map([], |r| {
+                Ok((
+                    SessionIdentity {
+                        device_id: r.get(0)?,
+                        agent: r.get(1)?,
+                        session_id: r.get(2)?,
+                    },
+                    SessionIdentity {
+                        device_id: r.get(3)?,
+                        agent: r.get(4)?,
+                        session_id: r.get(5)?,
+                    },
+                ))
+            })
+            .map_err(failed)?
+            .collect::<Result<_, _>>()
+            .map_err(failed)
+    }
+
+    /// The pull requests `sessions` made, newest first and each once, at
+    /// most `limit`.
+    pub fn prs_made(&self, sessions: &[SessionIdentity], limit: usize) -> Result<Vec<u64>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT created_at,number FROM ledger_outputs WHERE device=?1 AND agent=?2 AND id=?3 \
+                 AND kind='pr' ORDER BY created_at DESC LIMIT ?4",
+            )
+            .map_err(failed)?;
+        let mut made = Vec::new();
+        for session in sessions {
+            let rows = statement
+                .query_map(
+                    params![
+                        session.device_id,
+                        session.agent,
+                        session.session_id,
+                        limit as i64
+                    ],
+                    |r| Ok((r.get::<_, u64>(0)?, r.get::<_, u64>(1)?)),
+                )
+                .map_err(failed)?;
+            for row in rows {
+                made.push(row.map_err(failed)?);
+            }
+        }
+        made.sort_by(|a, b| b.cmp(a));
+        let mut seen = HashSet::new();
+        Ok(made
+            .into_iter()
+            .map(|(_, number)| number)
+            .filter(|number| seen.insert(*number))
+            .take(limit)
+            .collect())
     }
 
     /// The sessions of `members` active at or after `since`, newest first,

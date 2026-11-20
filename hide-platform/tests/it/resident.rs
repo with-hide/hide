@@ -260,6 +260,13 @@ fn starter() {
     };
     #[cfg(windows)]
     let _job = windows_job::enter(&setup);
+    // An ordinary child beside the resident, started as any child is: it
+    // stays in the starter's group (Unix) or job (Windows).
+    let ordinary = setup.contains("ordinary").then(|| {
+        let mut command = role_command("sleep");
+        command.stdout(Stdio::null());
+        command.spawn().unwrap().id()
+    });
     let (reader, writer) = std::io::pipe().unwrap();
     let command = resident_command();
     #[cfg(unix)]
@@ -271,10 +278,11 @@ fn starter() {
             drop(writer);
             let report = line_after(reader, "RESIDENT ");
             println!(
-                "STARTED pid={} outer_job={} starter={} {report}",
+                "STARTED pid={} outer_job={} starter={} ordinary={} {report}",
                 resident.pid,
                 resident.outer_job,
-                std::process::id()
+                std::process::id(),
+                ordinary.map_or_else(|| "none".to_owned(), |pid| pid.to_string())
             );
         }
         Err(error) => println!("REFUSED kind={:?} {error}", error.kind()),
@@ -530,6 +538,75 @@ fn a_resident_child_outlives_what_ends_its_starter() {
     assert_eq!(field(&line, "in_job"), field(&line, "outer_job"), "{line}");
     // Nothing more ends it: it still runs once its starter is gone.
     assert!(resident.is_running(), "the resident ended with its starter");
+}
+
+/// Runs a starter with `setup` as an owned child started by `spawn`, and
+/// answers it with the line it printed.
+fn run_owned_starter(
+    setup: &str,
+    spawn: fn(&mut Command) -> std::io::Result<hide_platform::process::OwnedChild>,
+) -> (hide_platform::process::OwnedChild, String) {
+    let mut command = role_command("starter");
+    command.env(SETUP, setup);
+    let mut starter = spawn(&mut command).unwrap();
+    let stdout = starter.take_stdout().unwrap();
+    let (sender, heard) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            for marker in ["STARTED ", "REFUSED "] {
+                if let Some((_, rest)) = line.split_once(marker) {
+                    let _ = sender.send(format!("{marker}{rest}"));
+                    return;
+                }
+            }
+        }
+    });
+    let line = heard
+        .recv_timeout(HANG_LIMIT)
+        .expect("the starter answered nothing");
+    (starter, line)
+}
+
+/// A program run as an owned child that lets residents leave (as
+/// `hide connect` runs `hided core-update`) places a resident beside an
+/// ordinary child; ending the owned child's tree, its group on Unix and
+/// its kill-on-close job on Windows, ends the ordinary child and leaves the
+/// resident running.
+#[test]
+fn a_resident_child_outlives_the_owned_child_that_started_it() {
+    let (mut starter, line) = run_owned_starter(
+        "ordinary",
+        hide_platform::process::OwnedChild::spawn_letting_residents_leave,
+    );
+    assert!(line.starts_with("STARTED "), "{line}");
+    let resident = Started::new(field(&line, "pid").parse().unwrap());
+    let ordinary = Started::new(field(&line, "ordinary").parse().unwrap());
+    assert!(ordinary.is_running(), "{line}");
+    starter.kill_tree().unwrap();
+    wait_until(
+        "the ordinary child ends with the owned child's tree",
+        || !ordinary.is_running(),
+    );
+    assert!(
+        resident.is_running(),
+        "the resident ended with the owned child's tree"
+    );
+}
+
+/// Any other owned child keeps what it starts: on Windows its job lets no
+/// process leave, so a resident start inside it is refused rather than
+/// started to end with it (on Unix a resident leaves the group whoever
+/// starts it).
+#[cfg(windows)]
+#[test]
+fn a_resident_start_inside_an_ordinary_owned_child_is_refused() {
+    let (_starter, line) = run_owned_starter("", hide_platform::process::OwnedChild::spawn);
+    assert!(line.starts_with("REFUSED "), "{line}");
+    assert_eq!(field(&line, "kind"), "PermissionDenied", "{line}");
+    assert!(
+        line.contains("kill_on_close=true,breakaway_ok=false"),
+        "{line}"
+    );
 }
 
 /// The job the desktop app's daemon runs in: Electron starts it with

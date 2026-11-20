@@ -25,6 +25,7 @@ import {
   criteriaTally,
   criterionName,
   criterionNote,
+  dependencyNodes,
   eventWords,
   gateWaitedLong,
   hideWords,
@@ -597,8 +598,8 @@ function CheckerChip({ mission, kind, checker, actions }: { mission: Mission; ki
  */
 function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNode; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const before = node.depends_on.flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
-  const after = mission.nodes.filter((other) => other.depends_on.includes(node.key));
+  const before = dependencyNodes(node).flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
+  const after = mission.nodes.filter((other) => dependencyNodes(other).includes(node.key));
   if (before.length === 0 && after.length === 0) return null;
   const arrow = <ArrowRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
   const pills = (nodes: MissionNode[], which: "before" | "after") => (

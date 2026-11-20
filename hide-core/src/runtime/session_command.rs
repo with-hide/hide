@@ -88,6 +88,56 @@ impl Runtime {
         })
     }
 
+    /// What a session start in `pane` on the device `context` names reads
+    /// the Project's other sessions from (`links::session_brief`); none for
+    /// a session another agent delegated, whose brief is its parent's, and
+    /// when the record has no home.
+    pub(crate) fn brief_scope(
+        &self,
+        context: &crate::workspace_control::Context,
+        pane: &str,
+        own_session_id: &str,
+    ) -> Option<crate::links::session_brief::BriefScope> {
+        let delegated = self.delivery_ledger.as_ref().ok().is_some_and(|ledger| {
+            ledger
+                .agents
+                .iter()
+                .rev()
+                .find(|record| {
+                    !record.ended && record.machine == context.device_id && record.pane == pane
+                })
+                .is_some_and(|record| record.parent.is_some())
+        });
+        if delegated {
+            return None;
+        }
+        let missions = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter_map(|mission| {
+                Some((
+                    mission.conductor.session.clone()?,
+                    crate::links::session_brief::MissionMark {
+                        id: mission.id.clone(),
+                        title: mission.title.clone(),
+                    },
+                ))
+            })
+            .collect();
+        Some(crate::links::session_brief::BriefScope {
+            sessions: self.session_scope(context)?,
+            open: self
+                .session_row_identities()
+                .into_iter()
+                .flatten()
+                .collect(),
+            missions,
+            own_session_id: own_session_id.to_owned(),
+        })
+    }
+
     /// The native session the registered agent `id` runs.
     pub(crate) fn registered_agent_session(&self, id: &str) -> Option<SessionIdentity> {
         let ledger = self.delivery_ledger.as_ref().ok()?;

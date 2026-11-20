@@ -280,6 +280,8 @@ fn prompt_memory(
     // The Hide global instruction comes with the session-start ask, in its
     // own slot outside Memory's quota (PRD memory-self-improve D-31).
     let mut global = None;
+    // The Project's other sessions come with it too, once.
+    let mut sessions = None;
     if input.memory_first.unwrap_or(input.first) {
         let index = memory_context_until(request(HookEvent::SessionStart), home, deadline);
         start = matches!(
@@ -291,12 +293,13 @@ fn prompt_memory(
         // capsule when the guidance came first; Memory off answers no
         // capsule, so a later prompt does not carry it again.
         global = index.global.filter(|_| input.first || start);
+        sessions = index.sessions.filter(|_| input.first || start);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();
     let (context, index_kept) = bounded_memory_capsule(&context, body);
     // The session's open questions ride outside Memory's quota, last.
-    let parts = [global, context, prompt.asks];
+    let parts = [global, context, sessions, prompt.asks];
     let context = parts
         .iter()
         .any(Option::is_some)

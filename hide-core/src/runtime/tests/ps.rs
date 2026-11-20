@@ -300,6 +300,7 @@ fn mission(
             pr: None,
             prs: Vec::new(),
             base_pr: None,
+            stack: None,
             branch: None,
             pr_state: None,
             pr_url: None,

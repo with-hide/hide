@@ -418,6 +418,7 @@ impl Runtime {
                     ssh_alias: profile.target.clone(),
                     wsl_distro: None,
                     host_consent: true,
+                    switch_first: false,
                 }) {
                     Ok(id) => {
                         let registrations = &self.snapshot.ui_state.device_registrations;

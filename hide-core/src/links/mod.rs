@@ -15,6 +15,7 @@ pub mod agent_asks;
 pub mod ledger;
 mod pr_cache;
 pub mod query;
+pub mod session_brief;
 pub mod session_command;
 pub mod store;
 mod summary_scope;

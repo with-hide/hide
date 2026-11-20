@@ -339,6 +339,19 @@ impl Letter {
                 .is_none_or(|finished| now.saturating_sub(finished) < RETENTION_MS)
     }
 
+    /// Whether the letter is a first inactivity warning to a pane observer
+    /// whose escalation to the operator (`human::claim`) may still be owed:
+    /// not yet notified, and neither acknowledged nor cancelled. A letter
+    /// that finished so stays when a full ledger drops finished letters, as
+    /// the escalation reads it; the one-day cleanup still takes it.
+    pub(crate) fn escalation_owed(&self) -> bool {
+        self.watch_warning
+            .as_ref()
+            .is_some_and(|warning| warning.ordinal == 1 && !warning.parent_notified)
+            && !self.recipient.code_owned()
+            && !matches!(self.state, State::Acknowledged | State::Cancelled)
+    }
+
     pub(crate) fn intake_confirmed(&self) -> bool {
         // Only legacy Delivered proves a hook confirmation. A legacy Ack
         // may have preceded intake, so its missing receipt remains unknown,
@@ -917,24 +930,48 @@ impl Ledger {
     }
 
     /// The check [`Self::bytes`] makes, counting the encoding instead of
-    /// keeping it, so it can follow every request of a batch.
+    /// keeping it.
     pub fn check(&self) -> Result<(), String> {
         self.validate()?;
-        match serde_json::to_writer(&mut Length(0), self) {
+        match serde_json::to_writer(&mut Length::up_to(FILE_LIMIT), self) {
             Ok(()) => Ok(()),
             Err(error) if error.is_io() => Err("capacity".into()),
             Err(_) => Err("ledger_unavailable".into()),
         }
     }
+
+    /// The length of the file [`Self::bytes`] would write, past the limit
+    /// too, counted without keeping it, so it can follow every request of a
+    /// batch and say how much room a full ledger has to make.
+    pub(crate) fn size(&self) -> Result<usize, String> {
+        self.validate()?;
+        encoded_len(self)
+    }
 }
 
-/// Counts the bytes written to it and refuses those past the file's limit.
-struct Length(usize);
+/// The length of `value`'s encoding in the file, counted without keeping it.
+pub(crate) fn encoded_len(value: &impl Serialize) -> Result<usize, String> {
+    let mut length = Length::up_to(usize::MAX);
+    serde_json::to_writer(&mut length, value).map_err(|_| "ledger_unavailable")?;
+    Ok(length.written)
+}
+
+/// Counts the bytes written to it and refuses those past `limit`.
+struct Length {
+    written: usize,
+    limit: usize,
+}
+
+impl Length {
+    fn up_to(limit: usize) -> Self {
+        Self { written: 0, limit }
+    }
+}
 
 impl std::io::Write for Length {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 += bytes.len();
-        if self.0 > FILE_LIMIT {
+        self.written += bytes.len();
+        if self.written > self.limit {
             return Err(std::io::ErrorKind::FileTooLarge.into());
         }
         Ok(bytes.len())

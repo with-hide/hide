@@ -55,6 +55,8 @@ pub enum CommandKind {
         reason: String,
     },
     Device(crate::device_cli::DeviceCli),
+    /// `hide always-on …`: a paired machine's login item and firewall rules.
+    AlwaysOn(crate::always_on::cli::Command),
     /// `hide access request|status|leave|list`: an external tool's own
     /// connection.
     Access(crate::access_cli::AccessCli),
@@ -204,7 +206,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
-        "device" => usage(crate::device_cli::USAGE),
+        "device" => usage(crate::device_cli::usage_here()),
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
@@ -222,6 +224,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "status" => "usage: hide status [--json]".to_owned(),
         "import" => IMPORT_USAGE.to_owned(),
         "stop" => "usage: hide stop".to_owned(),
+        "always-on" => crate::always_on::cli::USAGE.to_owned(),
         "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
         "guide" => "usage: hide guide".to_owned(),
@@ -245,7 +248,7 @@ fn help_text() -> String {
         crate::delivery_cli::USAGE,
         crate::agent_cli::USAGE,
         crate::ps_cli::USAGE,
-        crate::device_cli::USAGE,
+        crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
         crate::pane_cli::USAGE,
@@ -365,6 +368,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
+        Some("always-on") => crate::always_on::cli::parse(&args[2..]).map(CommandKind::AlwaysOn),
         Some("restart") => match (
             iter.next().map(String::as_str),
             iter.next().and_then(|pid| pid.parse().ok()),
@@ -483,10 +487,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("device") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::usage_here())))?;
             crate::device_cli::parse(iter)
                 .map(CommandKind::Device)
-                .map_err(|reason| wrong(reason, crate::device_cli::USAGE))
+                .map_err(|reason| wrong(reason, crate::device_cli::usage_here()))
         }
         Some("access") => {
             crate::cli_contract::admit(&args[1..])
@@ -1015,6 +1019,9 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
+        CommandKind::AlwaysOn(command) => {
+            crate::always_on::cli::run(&command, &env.home, &env.state_dir, env.device_connect)
+        }
         CommandKind::Restart { daemon, started } => restart(&env, daemon, started),
         CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
@@ -1583,6 +1590,10 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
     if let Some(next_action) = crate::access::next_action(reason) {
         return next_action;
     }
+    // A pane of another Hide's work here, while that Hide is away.
+    if let Some(next_action) = crate::guest_node::away::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" => crate::pane_auth::CHECKOUT_NEXT_ACTION,
         "caller_unavailable" => "Retry from a live shell inside a registered project checkout",
@@ -1595,6 +1606,7 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// nothing was sent, and the bootstrap's next step still applies.
 pub(crate) fn bootstrap_refused(reason: &str) -> bool {
     crate::access::next_action(reason).is_some()
+        || crate::guest_node::away::next_action(reason).is_some()
         || matches!(
             reason,
             "checkout_not_registered"
@@ -2209,12 +2221,77 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
             ConnectError::StartFailed(detail)
         })?;
     }
+    // A paired machine's core runs under its login item (PRD
+    // device-connect-iroh D-41): the item starts it, with its marker put
+    // back, and a core of an older build it started is updated. An item
+    // that cannot start it (no GUI session, turned off in the login items,
+    // its task deleted) leaves the core to this start, so the app opens.
+    let agents = crate::always_on::agents_for(&env.home);
+    let item_started = crate::login_item::installed(&agents, &env.home, &env.state_dir)
+        .map_err(ConnectError::StartFailed)?
+        && match crate::login_item::start_installed(&agents, &env.home, &env.state_dir) {
+            Ok(()) => true,
+            Err(message) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "component": "hide", "kind": "core.item_unavailable",
+                        "message": message,
+                    })
+                );
+                false
+            }
+        };
+    if item_started {
+        let (state, health) = wait_for_item_core(env)?;
+        if health["build"] == build.as_str() {
+            return Ok((state, health));
+        }
+        if package.is_none() {
+            return Err(ConnectError::OtherBuild(format!(
+                "the core its login item runs (pid {}) is build {}; this hide is not from a desktop package (build {build}) and does not update it",
+                state.pid,
+                health["build"].as_str().unwrap_or("unknown"),
+            )));
+        }
+        let program = health["starter"]["program"]
+            .as_str()
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                ConnectError::StartFailed(
+                    "the core its login item started names no program".to_owned(),
+                )
+            })?;
+        return update_started_core(env, (state, health), &build, &program);
+    }
     let spawned_at = unix_ms();
     let mut daemon = spawn_daemon(env, false).map_err(ConnectError::StartFailed)?;
     let started = wait_healthy(env, &mut daemon, spawned_at);
     // The daemon outlives this command; nothing waits for it.
     std::mem::forget(daemon);
     started
+}
+
+/// How long the core a login item started has to answer `/health`.
+const ITEM_CORE_ANSWERS_WITHIN: Duration = Duration::from_secs(30);
+
+/// The daemon of this state folder once the core its login item started
+/// answers, of whatever build.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn wait_for_item_core(env: &Env) -> Result<Healthy, ConnectError> {
+    let deadline = std::time::Instant::now() + ITEM_CORE_ANSWERS_WITHIN;
+    loop {
+        if let Some(healthy) = healthy_daemon(env) {
+            return Ok(healthy);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(ConnectError::NoResponse(format!(
+                "the core its login item starts did not answer within {}s",
+                ITEM_CORE_ANSWERS_WITHIN.as_secs()
+            )));
+        }
+        std::thread::sleep(HEALTH_PAUSE);
+    }
 }
 
 /// How long an updated core has to answer `/health` once its update said
@@ -2313,8 +2390,10 @@ fn update_started_core(
         .arg(program)
         .args(["--intent", &intent]);
     // Its own process group, so a host that gives up on this connect and
-    // kills it never cuts the update short.
-    let finished = hide_platform::process::run_to_end(
+    // kills it never cuts the update short. A test fixture's update starts
+    // the core as its resident child, which leaves its job on Windows; the
+    // login item's core is Task Scheduler's and in no job of this process.
+    let finished = hide_platform::process::run_to_end_letting_residents_leave(
         &mut command,
         crate::core_update::WITHIN,
         &std::sync::atomic::AtomicBool::new(false),
@@ -2619,7 +2698,9 @@ fn connect_json(env: &Env) -> Result<(), String> {
 /// about or stopped.
 fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
     match kind {
-        CommandKind::Stop | CommandKind::Status { json: true } => Some(env::STATE_FOLDER_KEYS),
+        CommandKind::Stop | CommandKind::Status { json: true } | CommandKind::AlwaysOn(_) => {
+            Some(env::STATE_FOLDER_KEYS)
+        }
         CommandKind::RuntimePrepare => Some(&[env::HOME]),
         CommandKind::Status { json: false } => Some(env::STATUS_KEYS),
         _ => None,
@@ -2910,6 +2991,9 @@ fn daemon_to_restart(
 }
 
 fn stop(state_dir: &Path) -> Result<(), String> {
+    // First, so a login item does not start the core again (PRD
+    // device-connect-iroh D-41); `hide connect` puts it back.
+    crate::login_item::release(state_dir)?;
     match state_file::read_state(state_dir).map_err(|e| e.to_string())? {
         Some(state) if still_the_daemon(&state) => {
             stop_daemon(state_dir, &state)?;
@@ -3785,11 +3869,11 @@ mod tests {
             (&["hide", "ps", "--help"][..], usage(crate::ps_cli::USAGE)),
             (
                 &["hide", "device", "-h"][..],
-                usage(crate::device_cli::USAGE),
+                usage(crate::device_cli::usage_here()),
             ),
             (
                 &["hide", "device", "add", "--help"][..],
-                usage(crate::device_cli::USAGE),
+                usage(crate::device_cli::usage_here()),
             ),
             (
                 &["hide", "request", "send", "--help"][..],
@@ -3815,7 +3899,7 @@ mod tests {
             parse(&["hide", "device"]).unwrap_err(),
             format!(
                 "hide device needs a subcommand\n{}",
-                usage(crate::device_cli::USAGE)
+                usage(crate::device_cli::usage_here())
             )
         );
         assert!(

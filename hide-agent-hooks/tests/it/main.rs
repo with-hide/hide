@@ -25,6 +25,7 @@ mod mcp_files;
 mod opencode_helper;
 mod opencode_plugin;
 mod opener_guard;
+mod other_install;
 mod pi_extension;
 mod plan_record;
 mod pre_tool;

@@ -86,6 +86,7 @@ pub fn local_target(kit_dir: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTa
         legacy: crate::legacy::local(home),
         stop,
         profiles: None,
+        hooks_only: false,
     }
 }
 

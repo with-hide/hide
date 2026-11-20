@@ -11,10 +11,11 @@ const KEY_LIMIT: usize = 40;
 /// Nodes in one graph: a mission's plan or a session's plan.
 pub const NODE_LIMIT: usize = 64;
 
-/// A node as the graph sees it: its key and the keys it waits on.
+/// A node as the graph sees it: its key and the keys of the nodes it waits
+/// on, one per dependency it names.
 pub(crate) trait Node {
     fn key(&self) -> &str;
-    fn depends_on(&self) -> &[String];
+    fn depends_on(&self) -> impl Iterator<Item = &str>;
 }
 
 /// Why a node list is not a graph, with the node it was found at so the
@@ -56,12 +57,11 @@ pub(crate) fn check_edges<N: Node>(nodes: &[N]) -> Result<(), Refusal> {
     for node in nodes {
         if let Some(dependency) = node
             .depends_on()
-            .iter()
-            .find(|key| key.as_str() == node.key() || !keys.contains(key.as_str()))
+            .find(|key| *key == node.key() || !keys.contains(key))
         {
             return Err(Refusal::Unknown {
                 node: node.key().to_owned(),
-                dependency: dependency.clone(),
+                dependency: dependency.to_owned(),
             });
         }
     }
@@ -121,7 +121,7 @@ pub(crate) fn walk_upstream<'a, N: Node>(
 ) {
     let by_key: BTreeMap<&str, &N> = nodes.iter().map(|node| (node.key(), node)).collect();
     let mut seen = BTreeSet::new();
-    let mut stack: Vec<&str> = start.depends_on().iter().map(String::as_str).collect();
+    let mut stack: Vec<&str> = start.depends_on().collect();
     while let Some(key) = stack.pop() {
         if !seen.insert(key) {
             continue;
@@ -130,7 +130,7 @@ pub(crate) fn walk_upstream<'a, N: Node>(
             continue;
         };
         match visit(upstream) {
-            Step::Continue => stack.extend(upstream.depends_on().iter().map(String::as_str)),
+            Step::Continue => stack.extend(upstream.depends_on()),
             Step::Stop => return,
         }
     }
@@ -160,8 +160,7 @@ pub(crate) fn depths<N: Node>(nodes: &[N]) -> BTreeMap<&str, usize> {
             0
         } else {
             node.depends_on()
-                .iter()
-                .filter(|dependency| by_key.contains_key(dependency.as_str()))
+                .filter(|dependency| by_key.contains_key(dependency))
                 .map(|dependency| depth(dependency, by_key, out, guard + 1) + 1)
                 .max()
                 .unwrap_or(0)
@@ -197,8 +196,8 @@ mod tests {
         fn key(&self) -> &str {
             self.0
         }
-        fn depends_on(&self) -> &[String] {
-            &self.1
+        fn depends_on(&self) -> impl Iterator<Item = &str> {
+            self.1.iter().map(String::as_str)
         }
     }
 

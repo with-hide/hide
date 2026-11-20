@@ -1,6 +1,6 @@
 #[cfg(unix)]
 use hide_platform::user_agents::Login;
-use hide_platform::user_agents::{LoginAgent, UserAgents, account_home};
+use hide_platform::user_agents::{LoginAgent, NOT_THE_ACCOUNT_HOME, UserAgents, account_home};
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -14,8 +14,9 @@ fn the_account_home_is_an_absolute_path() {
 
 /// A system with no login agents answers each question that needs one
 /// `Unsupported` with its reason, holds no agent to read, unload, remove or
-/// forget, and runs nothing: a fixture HOME's kit gets this on every system.
-fn has_no_login_agents(agents: &UserAgents) {
+/// forget, and runs nothing: a HOME that is not the account's own gets this
+/// on every system. `reason` is why it has none.
+fn has_no_login_agents(agents: &UserAgents, reason: &str) {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path();
     let stop = AtomicBool::new(false);
@@ -31,27 +32,19 @@ fn has_no_login_agents(agents: &UserAgents) {
         environment: &[],
         log: &home.join("agent.log"),
     };
-    unsupported(agents.supported(), "this system has no login agents");
-    unsupported(
-        agents.login(home, &stop).map(drop),
-        "this system has no login agents",
-    );
+    unsupported(agents.supported(), reason);
+    unsupported(agents.login(home, &stop).map(drop), reason);
     unsupported(
         agents.sleeps_on_power(home, &stop).map(drop),
         "this system has no power settings to read",
     );
     unsupported(
-        agents.install(&agent, home, &stop),
-        "this system has no login agents",
+        agents.install(&agent, &home.join("marker"), home, &stop),
+        reason,
     );
-    unsupported(
-        agents.start_once(&agent, home, home, &stop),
-        "this system has no login agents",
-    );
-    unsupported(
-        agents.start("example.agent", home, &stop),
-        "this system has no login agents",
-    );
+    unsupported(agents.linger(home, &stop).map(drop), reason);
+    unsupported(agents.start_once(&agent, home, home, &stop), reason);
+    unsupported(agents.start("example.agent", home, &stop), reason);
     assert_eq!(
         agents.last_exit("example.agent", home, &stop).unwrap(),
         None
@@ -60,26 +53,41 @@ fn has_no_login_agents(agents: &UserAgents) {
     assert!(!agents.is_installed("example.agent", home).unwrap());
     agents.unload("example.agent", home, &stop).unwrap();
     agents.remove("example.agent", home, &stop).unwrap();
-    agents.forget("example.agent", home).unwrap();
+    agents.forget("example.agent", home, &stop).unwrap();
     assert_eq!(std::fs::read_dir(home).unwrap().count(), 0);
 }
 
 #[test]
 fn none_has_no_login_agents() {
-    has_no_login_agents(&UserAgents::none());
+    has_no_login_agents(&UserAgents::none(), "this system has no login agents");
 }
 
-/// launchd is the one system with login agents; every other one answers
-/// that it has none, so a core move refuses it rather than guess.
-#[cfg(not(target_os = "macos"))]
+/// The system's login agents are the account's whatever HOME says, so only
+/// a program whose HOME is the account's own home gets them: any other
+/// HOME, a test's or an isolated run's, has none and says why.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[test]
-fn systems_other_than_macos_have_no_login_agents() {
-    has_no_login_agents(&UserAgents::current());
+fn only_the_accounts_own_home_has_the_systems_login_agents() {
+    let own = account_home().unwrap();
+    UserAgents::of_home(&own).supported().unwrap();
+    // The same folder spelled another way is still the account's.
+    UserAgents::of_home(&own.join(".")).supported().unwrap();
+
+    let other = tempfile::tempdir().unwrap();
+    has_no_login_agents(&UserAgents::of_home(other.path()), NOT_THE_ACCOUNT_HOME);
+    // A folder inside the account's home is not its home, nor is one that
+    // is not there.
+    has_no_login_agents(
+        &UserAgents::of_home(&own.join("no-such-folder-of-hide")),
+        NOT_THE_ACCOUNT_HOME,
+    );
 }
 
-#[cfg(target_os = "macos")]
+/// Each desktop system keeps login agents: launchd, systemd's user manager,
+/// Task Scheduler.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[test]
-fn macos_has_login_agents() {
+fn every_desktop_system_has_login_agents() {
     UserAgents::current().supported().unwrap();
 }
 
@@ -270,8 +278,9 @@ fn lint(list: &Path) {
 }
 
 /// An install replaces what is loaded, then loads its definition for the
-/// home it was given; a removal unloads before it uninstalls, and a
-/// forgotten agent stays loaded but is no longer installed.
+/// home it was given, kept alive while its marker exists; a removal unloads
+/// before it uninstalls, and a forgotten agent stays loaded but is no longer
+/// installed.
 #[cfg(unix)]
 #[test]
 fn an_install_loads_its_definition_and_a_removal_unloads_it_first() {
@@ -287,12 +296,20 @@ fn an_install_loads_its_definition_and_a_removal_unloads_it_first() {
         environment: &[("HOME", "/private/tmp/a&b")],
         log: &home.join("agent.log"),
     };
-    boundary.install(&agent, home, &stop).unwrap();
+    let marker = Path::new("/private/tmp/a&b/keep-alive");
+    boundary.install(&agent, marker, home, &stop).unwrap();
     let written = std::fs::read_to_string(home.join("list")).unwrap();
     assert!(
         written.contains("<string>/private/tmp/a&amp;b</string>"),
         "{written}"
     );
+    assert!(
+        written.contains(
+            "<key>KeepAlive</key><dict><key>PathState</key><dict><key>/private/tmp/a&amp;b/keep-alive</key><true/></dict></dict>"
+        ),
+        "{written}"
+    );
+    assert!(written.contains("<key>RunAtLoad</key><true/>"), "{written}");
     #[cfg(target_os = "macos")]
     lint(&home.join("list"));
     assert!(boundary.is_loaded("example.agent", home, &stop).unwrap());
@@ -303,7 +320,7 @@ fn an_install_loads_its_definition_and_a_removal_unloads_it_first() {
             .is_installed("example.agent", other.path())
             .unwrap()
     );
-    boundary.install(&agent, home, &stop).unwrap();
+    boundary.install(&agent, marker, home, &stop).unwrap();
     boundary.remove("example.agent", home, &stop).unwrap();
     assert!(!boundary.is_installed("example.agent", home).unwrap());
     assert!(!boundary.is_loaded("example.agent", home, &stop).unwrap());
@@ -317,25 +334,261 @@ fn an_install_loads_its_definition_and_a_removal_unloads_it_first() {
         ]
     );
 
-    boundary.install(&agent, home, &stop).unwrap();
-    boundary.forget("example.agent", home).unwrap();
+    boundary.install(&agent, marker, home, &stop).unwrap();
+    boundary.forget("example.agent", home, &stop).unwrap();
     assert!(!boundary.is_installed("example.agent", home).unwrap());
     assert!(boundary.is_loaded("example.agent", home, &stop).unwrap());
-    boundary.forget("example.agent", home).unwrap();
+    boundary.forget("example.agent", home, &stop).unwrap();
     boundary.unload("example.agent", home, &stop).unwrap();
 }
 
+/// A recording `systemctl`: `show` answers active once a unit was started
+/// and until it is stopped, and a `daemon-reload` keeps a copy of each unit
+/// the folder holds.
+#[cfg(unix)]
+const RECORDING_SYSTEMCTL: &str = "#!/bin/sh\nshift\nprintf '%s\\n' \"$*\" >> \"$HOME/calls\"\ncase \"$1\" in\n  show) [ -f \"$HOME/active\" ] && echo ActiveState=active && exit 0; echo ActiveState=inactive; exit 0 ;;\n  start) touch \"$HOME/active\" ;;\n  stop) rm -f \"$HOME/active\" ;;\n  enable) mkdir -p \"$HOME/.config/systemd/user/default.target.wants\"; ln -sf \"../$2\" \"$HOME/.config/systemd/user/default.target.wants/$2\" ;;\nesac\nexit 0\n";
+
+/// An agent adopted over its own run is written and left running, never
+/// unloaded: the process asking may be that run. One the system dropped is
+/// loaded again from its definition, and one never installed is
+/// `NotFound`.
+#[cfg(unix)]
+#[test]
+fn an_adopted_agent_keeps_its_run_and_a_dropped_one_is_loaded_again() {
+    let directory = tempfile::tempdir().unwrap();
+    crate::stand_ins::program(&directory.path().join("launchctl"), RECORDING_LAUNCHCTL);
+    let agents = UserAgents::fixture(directory.path());
+    let home = directory.path();
+    let stop = AtomicBool::new(false);
+    let agent = LoginAgent {
+        label: "example.agent",
+        program: Path::new("/bin/sleep"),
+        arguments: &["600"],
+        environment: &[],
+        log: &home.join("agent.log"),
+    };
+    let marker = home.join("keep-alive");
+    let missing = agents.load("example.agent", home, &stop).unwrap_err();
+    assert_eq!(missing.kind(), ErrorKind::NotFound, "{missing}");
+
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    agents.forget("example.agent", home, &stop).unwrap();
+    agents.adopt(&agent, &marker, home, &stop).unwrap();
+    assert!(agents.is_installed("example.agent", home).unwrap());
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    assert_eq!(changes(home), ["bootstrap fixture"], "the run was unloaded");
+
+    std::fs::remove_file(home.join("loaded")).unwrap();
+    agents.load("example.agent", home, &stop).unwrap();
+    agents.load("example.agent", home, &stop).unwrap();
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    assert_eq!(changes(home), ["bootstrap fixture", "bootstrap fixture"]);
+}
+
+/// systemd's agent is a unit the account's manager wants with
+/// `default.target`, kept alive while its marker exists: an install stops
+/// what runs, writes the unit, reloads, enables and starts it; a removal
+/// stops it and takes the unit and its link away; a forgotten unit goes on
+/// running.
+#[cfg(unix)]
+#[test]
+fn a_systemd_agent_is_a_wanted_unit_kept_alive_by_its_marker() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    crate::stand_ins::program(&home.join("systemctl"), RECORDING_SYSTEMCTL);
+    let agents = UserAgents::fixture_of(Kind::Systemd, home);
+    let stop = AtomicBool::new(false);
+    let agent = LoginAgent {
+        label: "example.agent",
+        program: Path::new("/opt/a b/hided"),
+        arguments: &["core-login", "--state-dir", "/home/example/state"],
+        environment: &[],
+        log: &home.join("agent.log"),
+    };
+    let marker = home.join("keep-alive");
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    let unit =
+        std::fs::read_to_string(home.join(".config/systemd/user/example.agent.service")).unwrap();
+    assert!(
+        unit.contains(&format!("ConditionPathExists={}\n", marker.display())),
+        "{unit}"
+    );
+    assert!(
+        unit.contains(
+            "ExecStart=\"/opt/a b/hided\" \"core-login\" \"--state-dir\" \"/home/example/state\"\n"
+        ),
+        "{unit}"
+    );
+    assert!(agents.is_installed("example.agent", home).unwrap());
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    agents.forget("example.agent", home, &stop).unwrap();
+    assert!(!agents.is_installed("example.agent", home).unwrap());
+    assert!(
+        !home
+            .join(".config/systemd/user/default.target.wants/example.agent.service")
+            .exists()
+    );
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    agents.remove("example.agent", home, &stop).unwrap();
+    assert!(!agents.is_loaded("example.agent", home, &stop).unwrap());
+    let calls: Vec<String> = std::fs::read_to_string(home.join("calls"))
+        .unwrap()
+        .lines()
+        .filter(|call| !call.starts_with("show "))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        calls,
+        [
+            "daemon-reload",
+            "enable example.agent.service",
+            "start --no-block example.agent.service",
+            "daemon-reload",
+            "stop example.agent.service",
+            "daemon-reload",
+            "enable example.agent.service",
+            "start --no-block example.agent.service",
+            "stop example.agent.service",
+            "daemon-reload",
+        ]
+    );
+}
+
+/// A systemd unit adopted over its own run is rewritten and enabled, never
+/// stopped and not started again: the process asking may be that run. One
+/// not running is started.
+#[cfg(unix)]
+#[test]
+fn a_systemd_adopt_never_stops_a_running_unit() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    crate::stand_ins::program(&home.join("systemctl"), RECORDING_SYSTEMCTL);
+    let agents = UserAgents::fixture_of(Kind::Systemd, home);
+    let stop = AtomicBool::new(false);
+    let agent = LoginAgent {
+        label: "example.agent",
+        program: Path::new("/opt/hide/hided"),
+        arguments: &["core-login"],
+        environment: &[],
+        log: &home.join("agent.log"),
+    };
+    let marker = home.join("keep-alive");
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    agents.forget("example.agent", home, &stop).unwrap();
+    std::fs::remove_file(home.join("calls")).unwrap();
+
+    agents.adopt(&agent, &marker, home, &stop).unwrap();
+    assert!(agents.is_installed("example.agent", home).unwrap());
+    assert!(agents.is_loaded("example.agent", home, &stop).unwrap());
+    let calls = |home: &Path| -> Vec<String> {
+        std::fs::read_to_string(home.join("calls"))
+            .unwrap()
+            .lines()
+            .filter(|call| !call.starts_with("show "))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        calls(home),
+        ["daemon-reload", "enable example.agent.service"],
+        "the running unit was stopped or started again"
+    );
+
+    std::fs::remove_file(home.join("active")).unwrap();
+    std::fs::remove_file(home.join("calls")).unwrap();
+    agents.adopt(&agent, &marker, home, &stop).unwrap();
+    assert_eq!(
+        calls(home),
+        [
+            "daemon-reload",
+            "enable example.agent.service",
+            "start --no-block example.agent.service"
+        ]
+    );
+}
+
+/// The account lingers once `loginctl` says it does; a refusal names the
+/// command an administrator runs.
+#[cfg(unix)]
+#[test]
+fn a_linger_the_account_may_not_ask_for_names_the_command_that_turns_it_on() {
+    use hide_platform::user_agents::{Kind, Linger};
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    crate::stand_ins::program(
+        &home.join("loginctl"),
+        "#!/bin/sh\ncase \"$1\" in\n  show-user) [ -f \"$HOME/lingers\" ] && echo yes && exit 0; echo no; exit 0 ;;\n  enable-linger) [ -f \"$HOME/allowed\" ] && touch \"$HOME/lingers\" && exit 0; echo 'Access denied' >&2; exit 1 ;;\nesac\nexit 2\n",
+    );
+    crate::stand_ins::program(&home.join("systemctl"), "#!/bin/sh\nexit 0\n");
+    let agents = UserAgents::fixture_of(Kind::Systemd, home);
+    let stop = AtomicBool::new(false);
+    assert_eq!(agents.login(home, &stop).unwrap(), Login::LoggedIn);
+    let Linger::NeedsAdministrator { command } = agents.linger(home, &stop).unwrap() else {
+        panic!("a refused linger is on");
+    };
+    assert!(
+        command.starts_with("sudo loginctl enable-linger "),
+        "{command}"
+    );
+    std::fs::write(home.join("allowed"), "").unwrap();
+    assert_eq!(agents.linger(home, &stop).unwrap(), Linger::On);
+    assert_eq!(agents.login(home, &stop).unwrap(), Login::NotNeeded);
+}
+
+/// Task Scheduler's agent is a task under `\\Hide\\` created from its
+/// definition and run at once; it carries no environment, and a forgotten
+/// one is deleted.
+#[cfg(unix)]
+#[test]
+fn a_task_scheduler_agent_is_a_task_created_from_its_definition() {
+    use hide_platform::user_agents::Kind;
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path();
+    crate::stand_ins::program(
+        &home.join("schtasks"),
+        "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$3\" >> \"$HOME/calls\"\n[ \"$1\" = /Create ] && cp \"$5\" \"$HOME/task.xml\"\nexit 0\n",
+    );
+    let agents = UserAgents::fixture_of(Kind::TaskScheduler, home);
+    let stop = AtomicBool::new(false);
+    let marker = home.join("keep-alive");
+    let mut agent = LoginAgent {
+        label: "example.agent",
+        program: Path::new("C:\\hide\\hided.exe"),
+        arguments: &["core-login"],
+        environment: &[("HOME", "C:\\x")],
+        log: &home.join("agent.log"),
+    };
+    let refused = agents.install(&agent, &marker, home, &stop).unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::Unsupported, "{refused}");
+    agent.environment = &[];
+    agents.install(&agent, &marker, home, &stop).unwrap();
+    assert!(agents.is_installed("example.agent", home).unwrap());
+    let task = std::fs::read(home.join("task.xml")).unwrap();
+    assert_eq!(&task[..2], &[0xFF, 0xFE], "UTF-16 with its byte order mark");
+    agents.remove("example.agent", home, &stop).unwrap();
+    assert!(!agents.is_installed("example.agent", home).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(home.join("calls")).unwrap(),
+        "/Create \\Hide\\example.agent\n/Run \\Hide\\example.agent\n/End \\Hide\\example.agent\n/Delete \\Hide\\example.agent\n"
+    );
+}
+
 /// The real launchd of a disposable macOS runner (PRD core-host-node-move
-/// D-16): a login agent installed this way starts, comes back after it is
-/// killed, stays stopped after it exits successfully, is replaced by the
-/// next install when it was only forgotten (a core that gives its copy back
-/// leaves itself loaded, B9), and is gone with its process when removed. It
+/// D-16, device-connect-iroh D-41): a login agent installed this way starts,
+/// comes back after it is killed while its marker exists, stays stopped
+/// after an exit once the marker is gone, starts again when the marker comes
+/// back, is replaced by the next install when it was only forgotten (a core
+/// that gives its copy back leaves itself loaded, B9), and is gone with its
+/// process when removed. It
 /// refuses to run anywhere but a hosted CI runner, since `gui/<uid>` is the
 /// account's real session whatever HOME is.
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "real launchd: only on a disposable macOS CI runner"]
-fn a_login_agent_restarts_after_a_kill_never_after_success_and_ends_when_removed() {
+fn a_login_agent_restarts_while_its_marker_exists_and_ends_when_removed() {
     use std::time::Instant;
     assert!(
         std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
@@ -384,7 +637,9 @@ fn a_login_agent_restarts_after_a_kill_never_after_success_and_ends_when_removed
         Login::LoggedIn,
         "no GUI session"
     );
-    agents.install(&agent, home, &stop).unwrap();
+    let marker = home.join("keep-alive");
+    std::fs::write(&marker, "").unwrap();
+    agents.install(&agent, &marker, home, &stop).unwrap();
     let removed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         wait("the first start", Duration::from_secs(20), &|| {
             starts().len() == 1
@@ -397,22 +652,23 @@ fn a_login_agent_restarts_after_a_kill_never_after_success_and_ends_when_removed
         });
         let second = starts()[1];
         assert!(alive(second));
+        std::fs::remove_file(&marker).unwrap();
         hide_platform::process::terminate(second).unwrap();
-        wait("the successful exit", Duration::from_secs(10), &|| {
-            !alive(second)
-        });
+        wait("the exit", Duration::from_secs(10), &|| !alive(second));
         #[allow(clippy::disallowed_methods)] // past launchd's ten-second throttle
         std::thread::sleep(Duration::from_secs(15));
-        assert_eq!(starts().len(), 2, "launchd restarted a successful exit");
-        agents.start(&label, home, &stop).unwrap();
-        wait("the start asked for", Duration::from_secs(20), &|| {
-            starts().len() == 3
-        });
+        assert_eq!(starts().len(), 2, "launchd restarted with the marker gone");
+        std::fs::write(&marker, "").unwrap();
+        wait(
+            "the start the marker asked for",
+            Duration::from_secs(30),
+            &|| starts().len() == 3,
+        );
         let third = starts()[2];
         // Only the installation goes; the job stays loaded and running.
-        agents.forget(&label, home).unwrap();
+        agents.forget(&label, home, &stop).unwrap();
         assert!(agents.is_loaded(&label, home, &stop).unwrap());
-        agents.install(&agent, home, &stop).unwrap();
+        agents.install(&agent, &marker, home, &stop).unwrap();
         wait(
             "the start of the new install",
             Duration::from_secs(20),
@@ -423,7 +679,21 @@ fn a_login_agent_restarts_after_a_kill_never_after_success_and_ends_when_removed
             Duration::from_secs(10),
             &|| !alive(third),
         );
-        starts()[3]
+        // A start asked for right after an exit, while launchd holds the
+        // job's restart back for its throttle: `hide stop` then `hide
+        // connect` does this, and the start waits the throttle out.
+        let fourth = starts()[3];
+        std::fs::remove_file(&marker).unwrap();
+        hide_platform::process::terminate(fourth).unwrap();
+        wait("the fourth's exit", Duration::from_secs(10), &|| {
+            !alive(fourth)
+        });
+        std::fs::write(&marker, "").unwrap();
+        agents.start(&label, home, &stop).unwrap();
+        wait("the asked-for start", Duration::from_secs(5), &|| {
+            starts().len() == 5
+        });
+        starts()[4]
     }));
     let removal = agents.remove(&label, home, &stop);
     let running = removed.unwrap_or_else(|panic| std::panic::resume_unwind(panic));

@@ -83,6 +83,14 @@ impl PaneSlot {
         drop(previous);
     }
 
+    /// Takes the ownership of the slot's panes for a node that outlives its
+    /// links, waiting up to `within` for another owner to let go, or
+    /// answers the ownership already taken: the holders every link then
+    /// asks ([`crate::serve::Services::panes`]).
+    pub fn own(&self, within: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
+        self.owned(Some(within))
+    }
+
     fn owned(&self, acquire: Option<Duration>) -> Result<Arc<dyn PaneHolders>, HolderError> {
         {
             let mut owner = self.owner.lock().unwrap_or_else(PoisonError::into_inner);

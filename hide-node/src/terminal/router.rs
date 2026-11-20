@@ -60,13 +60,23 @@ enum Route {
         node: Arc<dyn TerminalNode>,
         pane: String,
     },
-    /// A device pane whose device has no link now.
+    /// A guest's pane on this machine, by its node's own id, behind that
+    /// guest's tap.
+    Guest {
+        node: Arc<dyn TerminalNode>,
+        pane: String,
+    },
+    /// A device pane whose device has no link now, or a guest's pane whose
+    /// node is not running.
     Unrouted,
 }
 
 #[derive(Default)]
 struct Routes {
     devices: HashMap<String, Arc<dyn TerminalNode>>,
+    /// The guests whose node runs on this machine, each behind the tap its
+    /// node serves, by the guest's device id.
+    guests: HashMap<String, Arc<dyn TerminalNode>>,
     /// Devices whose link is up without terminals, and why.
     unstarted: HashMap<String, String>,
     /// The panes on screen, as the core last said, by the core's ids.
@@ -259,6 +269,15 @@ impl Router {
     }
 
     fn route_in(routes: &Routes, pane: &str) -> Route {
+        if let Some((guest, source)) = hide_node_link::address::guest_pane(pane) {
+            return match routes.guests.get(guest) {
+                Some(node) => Route::Guest {
+                    node: Arc::clone(node),
+                    pane: source.to_owned(),
+                },
+                None => Route::Unrouted,
+            };
+        }
         match Self::device_of(pane) {
             None => Route::Local,
             Some((device, source)) => match routes.devices.get(device) {
@@ -270,6 +289,20 @@ impl Router {
                 None => Route::Unrouted,
             },
         }
+    }
+
+    /// The panes of the guest `device` on this machine are reached through
+    /// `node`, the tap its node serves (PRD device-connect-iroh D-77 (5)).
+    /// Their output reaches the screen's hub from the tap itself.
+    pub fn install_guest(&self, device: &str, node: Arc<dyn TerminalNode>) {
+        let replaced = lock(&self.routes).guests.insert(device.to_owned(), node);
+        drop(replaced);
+    }
+
+    /// The guest's node ended: its panes take no key until it runs again.
+    pub fn remove_guest(&self, device: &str) {
+        let removed = lock(&self.routes).guests.remove(device);
+        drop(removed);
     }
 
     fn unrouted_attach(&self, pane: String) {
@@ -383,7 +416,9 @@ impl TerminalNode for Router {
     ) {
         match self.route(pane) {
             Route::Local => self.local.input_permit(pane, bytes, reply),
-            Route::Device { node, pane, .. } => node.input_permit(&pane, bytes, reply),
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
+                node.input_permit(&pane, bytes, reply)
+            }
             Route::Unrouted => reply(Err(hide_node_link::terminal::InputPermitError::Unavailable)),
         }
     }
@@ -507,6 +542,12 @@ impl TerminalNode for Router {
                 }
                 node.control(control);
             }
+            Route::Guest { node, pane } => {
+                if let Some(target) = control.pane_mut() {
+                    *target = pane;
+                }
+                node.control(control);
+            }
             Route::Unrouted => match control {
                 TerminalControl::Attach { .. } => self.unrouted_attach(scoped),
                 TerminalControl::Release { .. } | TerminalControl::Forget { .. } => {
@@ -550,7 +591,7 @@ impl TerminalNode for Router {
             Route::Local => self
                 .local
                 .key(KeyTarget::Pane(scoped), bytes, typed_at_unix_ms),
-            Route::Device { node, pane, .. } => {
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
                 node.key(KeyTarget::Pane(pane), bytes, typed_at_unix_ms)
             }
             Route::Unrouted => self.reports.report(TerminalReport::Error {
@@ -565,7 +606,9 @@ impl TerminalNode for Router {
     fn view(&self, pane: &str, size: GridSize, new_view: bool) {
         match self.route(pane) {
             Route::Local => self.local.view(pane, size, new_view),
-            Route::Device { node, pane, .. } => node.view(&pane, size, new_view),
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => {
+                node.view(&pane, size, new_view)
+            }
             Route::Unrouted => {}
         }
     }
@@ -573,7 +616,7 @@ impl TerminalNode for Router {
     fn redraw(&self, pane: &str) {
         match self.route(pane) {
             Route::Local => self.local.redraw(pane),
-            Route::Device { node, pane, .. } => node.redraw(&pane),
+            Route::Device { node, pane, .. } | Route::Guest { node, pane } => node.redraw(&pane),
             Route::Unrouted => {}
         }
     }
@@ -863,6 +906,53 @@ mod tests {
                 generation: 2
             }]
         );
+    }
+
+    /// PRD device-connect-iroh D-77 (5): a guest's pane on this machine is
+    /// reached through the guest's tap by its node's own id, and is no pane
+    /// of the device that guest also is.
+    #[test]
+    fn a_guests_pane_reaches_its_tap_by_the_nodes_own_id() {
+        let (router, local, _hub, reports) = router();
+        let device = Arc::new(Recorder::default());
+        let tap = Arc::new(Recorder::default());
+        router.install_device("macbook", Arc::clone(&device) as Arc<dyn TerminalNode>);
+        router.install_guest("macbook", Arc::clone(&tap) as Arc<dyn TerminalNode>);
+        router.key(
+            KeyTarget::Pane("guest:macbook:pane:w1:p1".into()),
+            b"a".to_vec(),
+            1,
+        );
+        router.control(attach("guest:macbook:pane:w1:p1"));
+        assert_eq!(
+            tap.keys.lock().unwrap().as_slice(),
+            [(KeyTarget::Pane("w1:p1".into()), b"a".to_vec())]
+        );
+        assert_eq!(tap.controls.lock().unwrap().as_slice(), [attach("w1:p1")]);
+        assert_eq!(
+            hide_node_link::terminal::wait_for_input_permit(&router, "guest:macbook:pane:w1:p1", 3),
+            Ok(())
+        );
+        assert_eq!(
+            tap.permits.lock().unwrap().as_slice(),
+            [("w1:p1".to_owned(), 3)]
+        );
+        assert!(device.keys.lock().unwrap().is_empty());
+        assert!(local.keys.lock().unwrap().is_empty());
+
+        // Without its guest the pane takes no key, and says so.
+        router.remove_guest("macbook");
+        router.key(
+            KeyTarget::Pane("guest:macbook:pane:w1:p1".into()),
+            b"b".to_vec(),
+            2,
+        );
+        assert_eq!(tap.keys.lock().unwrap().len(), 1);
+        assert!(device.keys.lock().unwrap().is_empty());
+        assert!(matches!(
+            reports.0.lock().unwrap().as_slice(),
+            [TerminalReport::Error { .. }]
+        ));
     }
 
     #[test]

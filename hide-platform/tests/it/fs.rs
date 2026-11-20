@@ -1448,6 +1448,55 @@ fn a_durable_program_replaces_a_shared_file_with_a_private_one() {
     assert_eq!(names(outer.path()), ["program"]);
 }
 
+/// A file whose bytes arrive in pieces takes its name only once its writer
+/// said they are all there: a refusal leaves the old file and nothing beside
+/// it, and what a writer that was killed left under the part's one name is
+/// replaced by the next.
+#[test]
+fn a_durable_write_from_pieces_installs_only_what_its_writer_accepted() {
+    use std::io::Write;
+    let outer = folder();
+    let program = outer.path().join("program");
+    fs::write(&program, b"old").unwrap();
+    // A writer that was killed part way.
+    fs::write(outer.path().join("program.part"), b"half of an earlier one").unwrap();
+
+    let refused =
+        atomic::write_file_durable_from(&program, DurableAccess::PrivateExecutable, |file| {
+            file.write_all(b"not the bytes")?;
+            Err(ErrorKind::InvalidData.into())
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            atomic::DurableWriteError::BeforeReplace { source, cleanup }
+                if source.kind() == ErrorKind::InvalidData && cleanup.is_none()
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(read(&program), "old");
+    assert_eq!(names(outer.path()), ["program"]);
+
+    let installed =
+        atomic::write_file_durable_from(&program, DurableAccess::PrivateExecutable, |file| {
+            file.write_all(b"private ")?;
+            file.write_all(b"program")
+        })
+        .unwrap();
+    assert_eq!(read(&program), "private program");
+    assert_eq!(identity::file_id(&program).unwrap(), installed);
+    assert!(private::is_private(&program).unwrap());
+    #[cfg(unix)]
+    assert_eq!(
+        Permissions::of(&File::open(&program).unwrap())
+            .unwrap()
+            .unix_mode(),
+        Some(0o700)
+    );
+    assert_eq!(names(outer.path()), ["program"]);
+}
+
 #[test]
 fn a_written_file_replaces_the_old_one_whole_and_leaves_nothing_beside_it() {
     let outer = folder();

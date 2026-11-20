@@ -1686,6 +1686,7 @@ dependencies = [
  "hide-host",
  "hide-kit",
  "hide-node-link",
+ "hide-peer-protocol",
  "hide-platform",
  "hide-shell",
  "libc",

@@ -1238,7 +1238,15 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     // The stack is the purple dashed edge, and nothing else marks it.
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.getAttribute("class")).toContain("text-mission-review");
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.hasAttribute("data-edge-dashed")).toBe(true);
+    expect(waiting.q("[data-edge-label]")).toBeNull();
   } finally { await waiting.unmount(); }
+  // mission-82: an edge on a finish line names the line, and the node free to start on it says it stacks there.
+  const early = [node("core", { title: "Core", status: "working", pr: 1703, branch: "m82/core" }), node("host", { title: "Host", depends_on: ["core:c1"], steps: ["Read the wire", "Open the PR"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } })];
+  const lined = await mount({ items: [mission({ nodes: early })] });
+  try {
+    expect(lined.q('[data-edge-label="core>host"]')?.textContent).toBe("c1");
+    expect(lined.q('[data-mission-node="host"] [data-node-steps-waiting]')?.textContent).toBe("2 planned steps · can start · stacked on Core");
+  } finally { await lined.unmount(); }
   // Waiting on its merges, a git mission tags the branch the core reads and has not found in main; a branch it cannot read says nothing.
   const branches = [node("notes", { title: "Notes", status: "done", delivery: "direct", branch: "release/notes", landing: { state: "left", action: "join" } }), node("bump", { title: "Bump", status: "done", delivery: "direct", branch: "release/bump", unread: true, landing: { state: "unread", action: "join" } })];
   const git = await mount({ items: [mission({ status: "merge_wait", nodes: branches, landing_order: ["notes"] })] });
