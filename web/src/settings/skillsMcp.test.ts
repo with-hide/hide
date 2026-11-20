@@ -70,25 +70,25 @@ describe("the shared skill folder's column", () => {
 // starts the same is not under it.
 describe("a path under home", () => {
   it.each([
-    ["/Users/me/.grok/config.toml", "~/.grok/config.toml"],
-    ["/Users/me", "~"],
-    ["/Users/mel/.grok/config.toml", "/Users/mel/.grok/config.toml"],
+    ["/Users/al/.grok/config.toml", "~/.grok/config.toml"],
+    ["/Users/al", "~"],
+    ["/Users/alice/.grok/config.toml", "/Users/alice/.grok/config.toml"],
     ["/srv/skills/notes", "/srv/skills/notes"],
   ])("%s reads as %s", (path, shown) => {
-    expect(homePath(path, "/Users/me/")).toBe(shown);
+    expect(homePath(path, "/Users/al/")).toBe(shown);
   });
 });
 
 // A Windows machine reports its own paths, with `\` and a drive letter, and names them without case.
 describe("a Windows path under home", () => {
   it.each([
-    ["C:\\Users\\me\\.grok\\config.toml", "~\\.grok\\config.toml"],
-    ["c:\\users\\ME\\.codex\\config.toml", "~\\.codex\\config.toml"],
-    ["C:\\Users\\me", "~"],
-    ["C:\\Users\\mel\\.grok\\config.toml", "C:\\Users\\mel\\.grok\\config.toml"],
+    ["C:\\Users\\al\\.grok\\config.toml", "~\\.grok\\config.toml"],
+    ["c:\\users\\al\\.codex\\config.toml", "~\\.codex\\config.toml"],
+    ["C:\\Users\\al", "~"],
+    ["C:\\Users\\alice\\.grok\\config.toml", "C:\\Users\\alice\\.grok\\config.toml"],
     ["D:\\skills\\notes", "D:\\skills\\notes"],
   ])("%s reads as %s", (path, shown) => {
-    expect(homePath(path, "C:\\Users\\me")).toBe(shown);
+    expect(homePath(path, "C:\\Users\\al")).toBe(shown);
   });
 
   it("keeps the last name whole whichever separator it has", () => {
