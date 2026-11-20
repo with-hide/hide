@@ -3439,7 +3439,11 @@ impl Runtime {
         origin: PaneFocusOrigin,
         request_id: Option<String>,
     ) {
+        let followed = (origin == PaneFocusOrigin::Operator).then(|| pane_id.clone());
         self.change_look(|runtime| runtime.focus_pane_steps(pane_id, origin, request_id));
+        if let Some(pane) = followed {
+            self.follow_pair_focus(&pane);
+        }
     }
 
     /// The steps of `focus_pane`, which runs them as one selection (`look.rs`).

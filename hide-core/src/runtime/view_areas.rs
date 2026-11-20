@@ -3505,6 +3505,11 @@ impl Runtime {
                     )
                 })
         });
+        let opener = display
+            .opener
+            .as_ref()
+            .map(|opener| self.view_opener_snapshot(opener));
+        let owner_pane = self.owner_pane_of(display, opener.as_ref());
         ViewDisplaySnapshot {
             id: display.id.clone(),
             tab_id: tab.map(|tab| tab.id.clone()),
@@ -3530,15 +3535,13 @@ impl Runtime {
             url: display.url.clone(),
             title: display.title.clone(),
             load: display.load,
-            opener: display
-                .opener
-                .as_ref()
-                .map(|opener| self.view_opener_snapshot(opener)),
+            opener,
             comments,
             not_delivered,
             unseen: display.unseen.is_some(),
             external: display.external.clone(),
             card: display.card.clone(),
+            owner_pane,
         }
     }
 

@@ -89,32 +89,3 @@ export function cardPath(s: ShellState, t: Translate, item: DetailItem): string 
       return cardTitle(s, t, item);
   }
 }
-
-/**
- * The pane of the agent a card belongs to, whose logo ends the card's path
- * line: the core's owner (`detail_owner_pane`), the agent a card pressed
- * where no agent is opens beside, read from the same rows: a record's or a
- * plan's session's pane, a mission's Conductor while present, the first
- * agent of a pull request's row (`pull_request_lead`). Only an agent of this
- * machine, as the core looks up none on a device. Moving the rule into the
- * card's display is node pair's (B24).
- */
-export function cardOwnerPane(s: ShellState, item: DetailItem): string | null {
-  const local = (pane: string | undefined, device: string) => s.agents.find((row) => row.pane_id === pane && row.device_id === device)?.pane_id ?? null;
-  switch (item.kind) {
-    case "record":
-    case "plan":
-      return s.agents.find((row) => row.device_id === item.session.device_id && row.session_id === item.session.session_id)?.pane_id ?? null;
-    case "mission": {
-      const mission = missionOf(s.rest, item.mission);
-      return mission?.conductor.present ? local(mission.conductor.pane_id, mission.device_id) : null;
-    }
-    case "pull_request": {
-      const project = catalogWorkspaces(s.rest).find((row) => row.id === item.workspace_id);
-      const lead = project?.agent_scope.prs.rows.find((row) => row.number === item.number)?.agents[0]?.pane_id;
-      return project ? local(lead, project.device_id) : null;
-    }
-    default:
-      return null;
-  }
-}

@@ -355,6 +355,11 @@ pub struct WorkspaceViewSnapshot {
     /// the tab strip and the sidebar mark them (D-17); absent while none is.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pairs: Vec<PairViewSnapshot>,
+    /// The panes of this Workspace's Agent tabs that have something to show
+    /// beside the desk, a View their agent opened or a live session's record
+    /// (B19): ◧ is on for these and off, with why, for every other.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pairable: Vec<String>,
     /// The Agent areas, for a Workspace whose tabs the core arranges (this
     /// machine's and a node's that dialed in); `None` on a device this core
     /// dials, whose engine shows one tab.
@@ -570,6 +575,13 @@ pub struct ViewDisplaySnapshot {
     /// as it does wherever the card shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub card: Option<DetailItem>,
+    /// The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view
+    /// B24, D-41): an agent's View its opener's pane now, a card its owner's
+    /// (the record's or plan's session, a mission's Conductor, the agent that
+    /// made a pull request); absent for what the operator opened. Pair view
+    /// takes this pane to the left and folds another agent's tabs by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_pane: Option<String>,
 }
 
 impl ViewDisplaySnapshot {

@@ -390,7 +390,7 @@ impl Runtime {
     /// holds the mission, the agent that made a pull request for its card.
     /// An owner on a connected device is not looked up, so its card opens
     /// on the tray in front (`docs/INSTALL.md`, What each system supports).
-    fn detail_owner_pane(&self, item: &DetailItem) -> Option<String> {
+    pub(super) fn detail_owner_pane(&self, item: &DetailItem) -> Option<String> {
         match item {
             DetailItem::Record { session } | DetailItem::Plan { session } => {
                 if session.device_id != self.node.as_str() {

@@ -20,6 +20,8 @@ import type { TerminalContextLink } from "./terminalLinkProvider";
 import type { RevealHost } from "./revealExternal";
 import { archiveOffer, type ArchiveOffer } from "./archive";
 import { agentsByPane, allAgents } from "./paneAgents";
+import { pairLabelKey, type PairOffer } from "./pairView";
+import { commandLabel } from "./shortcutLabels";
 
 // The delegation tree where the operator works (PRD S6 D-07, B14-B16): a
 // child pane's header returns to its parent, a parent's badge lists every
@@ -159,13 +161,14 @@ export type RevisitOffer = "hidden" | "star" | "done";
  * pair view, `on` on the pane in it to leave it, `none` disabled with why on
  * a pane with nothing to show beside it (B19).
  */
-export type PaneHeadOffer = { mention: boolean; pair: "off" | "on" | "none" };
+export type PaneHeadOffer = { mention: boolean; pair: PairOffer };
 
-function pairEntry(pair: PaneHeadOffer["pair"]): MenuEntry<PaneMenuId> {
+function pairEntry(pair: PairOffer): MenuEntry<PaneMenuId> {
   return {
     id: "pair_view", icon: "pair",
-    label: translate(pair === "on" ? "panes.menu.pairOff" : "panes.menu.pair"),
-    unavailable: pair === "none" ? translate("panes.menu.pairNone") : null,
+    label: translate(pair === "on" ? pairLabelKey("on") : pairLabelKey("off")),
+    unavailable: pair === "none" ? translate(pairLabelKey("none")) : null,
+    shortcut: commandLabel("pair_view") || undefined,
   };
 }
 

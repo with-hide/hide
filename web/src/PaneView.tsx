@@ -28,6 +28,7 @@ import { PaneConnectionChip } from "./PaneConnection";
 import { PaneMention } from "./PaneMention";
 import { AncestorPath, usePaneMenu, type PaneHeadOffer, type TerminalMenuContext } from "./PaneRelations";
 import { workspaceViewOf } from "./workspace";
+import { pairLabelKey, pairOffer } from "./pairView";
 import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -212,11 +213,13 @@ export const PaneView = memo(function PaneView({
   const moving = move?.mutationBlocked(pane.id) ?? false;
   const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
   // ◧ (PRD lane-desk-pair-view B19, B20, B22): pressed while this pane is
-  // its tab's pair view's; a pane with no agent has no view or session to
-  // show beside it, so its ◧ is off with why.
-  const paired = useShellStore((s) => workspaceViewOf(s.rest)?.tray.pair?.pane_id === paneId);
-  const head: PaneHeadOffer = { mention: Boolean(agentKind), pair: paired ? "on" : agentKind ? "off" : "none" };
-  const pairLabel = t(head.pair === "on" ? "panes.menu.pairOff" : head.pair === "off" ? "panes.menu.pair" : "panes.menu.pairNone");
+  // its tab's pair view's, off with why on a pane the core lists with
+  // nothing to show beside the desk (`pairOffer`, the menus' rule too).
+  const pair = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
+  const paired = pair === "on";
+  const head: PaneHeadOffer = { mention: Boolean(agentKind), pair };
+  const pairLabel = t(pairLabelKey(pair));
+  const pairChord = commandLabel("pair_view");
   // `@` is an item of the pane menu (D-32, B21); its list opens under the `…`.
   const [mention, setMention] = useState(false);
   const paneMenu = usePaneMenu(pane, title, actions, head, () => setMention(true));
@@ -457,9 +460,9 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
         {/* ◧ stands left of the zoom and follows its rule (B20): shown on the pane that holds the keyboard or is pointed at, kept
-            drawn while pressed, and in the pane menu below the narrow breakpoint (`pane-head-narrow`), where the head draws neither. Its chord joins the hint once pair
-            view has one. `aria-disabled` keeps the hint of an off ◧, which says why. */}
-        <Hint label={pairLabel}>
+            drawn while pressed, and in the pane menu below the narrow breakpoint (`pane-head-narrow`), where the head draws neither.
+            Its hint carries ⌘. while it can act; `aria-disabled` keeps the hint of an off ◧, which says why. */}
+        <Hint label={pairLabel} shortcut={head.pair === "none" ? undefined : pairChord}>
           <Button
             variant="ghost"
             size="icon-sm"

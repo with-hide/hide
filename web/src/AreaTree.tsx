@@ -72,6 +72,8 @@ export type AreaAdapter<I extends AreaItem> = {
   barAttributes?: Record<string, string>;
   barStart?: (area: Area<I>) => React.ReactNode;
   barEnd?: (area: Area<I>) => React.ReactNode;
+  /** Which tabs the strip draws; the shown one always is. An item left out stays in the area, reached through `barEnd` (PRD lane-desk-pair-view D-41). */
+  inStrip?: (item: I) => boolean;
   /** The column's own ✕, drawn once at its top-right corner as a tool's head draws it: it closes the whole column. */
   close?: { label: string; onClose: () => void; attributes?: Record<string, string>; beside?: React.ReactNode };
   shown?: (area: Area<I>) => I | null;
@@ -486,6 +488,8 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   const { t } = useInterfaceTranslation();
   const shown = area.displays.find((row) => row.id === area.active) ?? null;
   const selectedId = tree.adapter.shown ? tree.adapter.shown(area)?.id : area.active;
+  const inStrip = tree.adapter.inStrip;
+  const stripped = inStrip ? area.displays.filter((display) => display.id === selectedId || inStrip(display)) : area.displays;
   // Both columns share the room left of the bar's own controls in stages,
   // the selected tab keeping its title longest (`tabStripFit`). The room is
   // the zone's, which the bar sizes, so the tabs' own widths never feed back.
@@ -494,9 +498,9 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
   const newTabMenu = useRef<HTMLSpanElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const [fits, setFits] = useState<{ selected: TabFit; others: TabFit }>({ selected: "titled", others: "titled" });
-  const tabCount = area.displays.length;
-  const hasSelected = area.displays.some((display) => display.id === selectedId);
-  const selected = area.displays.find((display) => display.id === selectedId);
+  const tabCount = stripped.length;
+  const hasSelected = stripped.some((display) => display.id === selectedId);
+  const selected = stripped.find((display) => display.id === selectedId);
   const selectedLabel = selected ? tree.adapter.label(selected) : "";
   useLayoutEffect(() => {
     const node = zone.current;
@@ -534,13 +538,13 @@ function AreaTabBar({ area, active, index, count, switcher }: { area: Area<I>; a
     const observer = new ResizeObserver(reveal);
     observer.observe(list);
     return () => observer.disconnect();
-  }, [area.active, area.displays.length, fits]);
+  }, [area.active, stripped.length, fits]);
   return (
     <div className={`flex h-[var(--size-tab-strip)] shrink-0 items-stretch border-b border-border ${active ? "bg-background" : "bg-card"}`} data-area-tab-bar={area.id} {...data("tab-bar", area.id)} {...tree.adapter.barAttributes}>
       {tree.adapter.barStart?.(area)}
       <div ref={zone} className="flex min-w-0 flex-1 items-stretch">
         <div ref={strip} role="tablist" aria-label={t("panes.area.tabListOf", { label: tree.adapter.tabListLabel, index: index + 1, total: count })} className="flex min-w-0 items-stretch overflow-x-auto">
-          {area.displays.map((display) => (
+          {stripped.map((display) => (
             <EntryContextMenu
               key={display.id}
               returnToInput={column === "view"}
