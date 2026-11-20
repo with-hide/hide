@@ -78,6 +78,21 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     await partial.click();
     await expect(light.locator('[data-store-cell="skill:aside-browser:antigravity"]')).toHaveAttribute("data-store-cell-state", "on", { timeout: 60_000 }); // wait-ok: the kit's pass that writes the skill into Antigravity's folder
     await expect(light.locator('[data-store-detail="skill:aside-browser"]')).toBeVisible();
+
+    // Apply to all shows what comes in first: the copy, its files and the agents it goes to; Cancel takes nothing (B20).
+    await light.locator('[data-store-adopt="skill:ast-grep"]').click();
+    const take = page.locator('[data-store-dialog="adopt"]');
+    await expect(take).toContainText("SKILL.md", { timeout: 60_000 }); // wait-ok: the kit's read of the copy's folder
+    await expect(take).toContainText("ast-grep");
+    await expect(take).toContainText("Claude");
+    await take.locator("[data-store-cancel]").click();
+    await expect(take).toHaveCount(0);
+    await expect(light.locator('[data-store-unmanaged="skill:ast-grep"]')).toBeVisible();
+    await expect(light.locator('[data-store-row="skill:ast-grep"]')).toHaveCount(0);
+    await light.locator('[data-store-adopt="skill:ast-grep"]').click();
+    await expect(take.locator("[data-store-install]")).toBeEnabled({ timeout: 60_000 }); // wait-ok: the kit's read of the copy's folder
+    await take.locator("[data-store-install]").click();
+    await expect(light.locator('[data-store-row="skill:ast-grep"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's adopt pass
   } finally {
     stopStore(fixture);
   }
@@ -235,6 +250,9 @@ test("a store whose keys' secret is lost says so with the start-over, and the st
     await expect(note).toHaveCount(0, { timeout: 60_000 }); // wait-ok: the kit's pass after the start-over
     await expect(machine.locator('[data-store-unmanaged="mcp:linear"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's pass after the start-over
     await machine.locator('[data-store-adopt="mcp:linear"]').click();
+    const take = page.locator('[data-store-dialog="adopt"]');
+    await expect(take).toContainText("Take linear into Hide");
+    await take.locator("[data-store-install]").click();
     await expect(machine.locator('[data-store-row="mcp:linear"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's adopt pass
   } finally {
     stopStore(fixture);

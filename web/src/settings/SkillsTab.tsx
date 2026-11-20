@@ -20,11 +20,11 @@ import { kitUnavailableText } from "../kitWhy";
 import { cn } from "../lib/utils";
 import { lastSeen } from "../mobileSettings";
 import { machineName, windowDeviceId, windowFirst } from "../screenMachine";
-import type { Device, StoreAsk, StoreCell, StoreItem, StoreItemKind, StoreReport, StoreUnmanaged } from "../snapshot";
+import type { Device, StoreAsk, StoreCell, StoreFoundCopy, StoreItem, StoreItemKind, StoreReport, StoreUnmanaged } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { agentMachines, type AgentMachine } from "./agentRows";
-import { AddDialog, AskDialog, FilesDialog, KeysDialog, UpdateDialog, refusalText } from "./StoreDialogs";
+import { AddDialog, AdoptDialog, AskDialog, FilesDialog, KeysDialog, UpdateDialog, refusalText, type AdoptTarget } from "./StoreDialogs";
 import {
   agentShortName,
   allSwitch,
@@ -64,6 +64,8 @@ type Page = {
   newSession: ReadonlySet<string>;
   openFiles: (item: StoreItem) => void;
   openKeys: (item: StoreItem) => void;
+  /** Shows what a take-over would bring in, which only its Apply sends (B20). */
+  openAdopt: (target: AdoptTarget) => void;
   openUpdate: (items: StoreItem[]) => void;
   /** Deletes the item; the page keeps the request, since the row goes before its answer lands. */
   remove: (item: StoreItem) => void;
@@ -123,6 +125,7 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
   const [adding, setAdding] = useState(false);
   const [files, setFiles] = useState<StoreItem | null>(null);
   const [keys, setKeys] = useState<StoreItem | null>(null);
+  const [adopting, setAdopting] = useState<AdoptTarget | null>(null);
   const [updates, setUpdates] = useState<string[] | null>(null);
   const [removed, setRemoved] = useState<StoreItem | null>(null);
   const [undone, setUndone] = useState(false);
@@ -138,6 +141,7 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
     newSession,
     openFiles: setFiles,
     openKeys: setKeys,
+    openAdopt: setAdopting,
     openUpdate: (items) => setUpdates(items.map((item) => item.id)),
     remove: (item) => {
       setRemoved(item);
@@ -235,6 +239,7 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
       {removed && removal.done && !undone && report ? <UndoToast key={removal.sent} item={removed} report={report} page={page} onDone={() => setUndone(true)} /> : null}
       {adding && report ? <AddDialog device={device} name={name} report={report} shown={shown} local={device.id === own} actions={actions} onClose={() => setAdding(false)} /> : null}
       {files ? <FilesDialog item={files} onClose={() => setFiles(null)} /> : null}
+      {adopting && report ? <AdoptDialog device={device} target={adopting} report={report} shown={shown} actions={actions} onClose={() => setAdopting(null)} /> : null}
       {keys && report ? <KeysDialog device={device} item={keys} report={report} actions={actions} onClose={() => setKeys(null)} /> : null}
       {updates && report ? <UpdateDialog device={device} queue={updates} report={report} actions={actions} onClose={() => setUpdates(null)} /> : null}
       {ask && report ? <AskDialog ask={ask} report={report} shown={shown} actions={actions} onClose={() => useUiStore.getState().clearStoreAsk()} /> : null}
@@ -754,7 +759,7 @@ function CellFix({ first, item, column, cell, page }: { first: boolean; item: St
             {t("store.retry")}
           </Button>
         ) : (
-          <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={page.readOnly} onClick={() => page.openAdopt({ kind: item.kind, name: item.name, from: cell.place ?? undefined, path: cell.path ? (item.kind === "skill" ? joinPath(cell.path, item.name) : cell.path) : null })} data-store-take-over={`${item.id}:${column.id}`}>
             {t("store.cell.takeOver")}
           </Button>
         )}
@@ -822,7 +827,6 @@ function Unmanaged({ rows, report, shown, page }: { rows: StoreUnmanaged[]; repo
 
 function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; report: StoreReport; shown: ReadonlySet<string>; page: Page }) {
   const { t } = useInterfaceTranslation();
-  const request = useStoreRequest(page.device.id, page.actions);
   const columns = shownColumns(report, row.kind, shown);
   const where = (agents: string[]) => {
     const names = columns.filter((column) => column.readers.some((agent) => agents.includes(agent)) || agents.some((agent) => column.agent === agent)).map((column) => columnName(column, t("store.column.shared")));
@@ -843,21 +847,20 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
           {row.same ? null : <span className="text-warning"> · {t("store.unmanaged.differs")}</span>}
         </span>
       </span>
-      {request.refusal ? <Note tone="error">{refusalText(request.refusal, t)}</Note> : null}
       {row.same || row.copies.length < 2 ? (
-        <Button variant="secondary" size="sm" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: row.kind, name: row.name }])} data-store-adopt={`${row.kind}:${row.name}`}>
+        <Button variant="secondary" size="sm" disabled={page.readOnly} onClick={() => page.openAdopt({ kind: row.kind, name: row.name, path: copyPath(row.copies[0]) })} data-store-adopt={`${row.kind}:${row.name}`}>
           {t("store.unmanaged.applyAll")}
         </Button>
       ) : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="sm" disabled={request.pending} data-store-adopt={`${row.kind}:${row.name}`}>
+            <Button variant="secondary" size="sm" disabled={page.readOnly} data-store-adopt={`${row.kind}:${row.name}`}>
               {t("store.unmanaged.applyAll")}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {row.copies.map((copy) => (
-              <DropdownMenuItem key={copy.place} onSelect={() => request.send([{ op: "adopt", kind: row.kind, name: row.name, from: copy.place }])} data-store-adopt-from={copy.place}>
+              <DropdownMenuItem key={copy.place} onSelect={() => page.openAdopt({ kind: row.kind, name: row.name, from: copy.place, path: copyPath(copy) })} data-store-adopt-from={copy.place}>
                 {t("store.unmanaged.fromWhich", { agent: where(copy.agents) })}
               </DropdownMenuItem>
             ))}
@@ -866,6 +869,17 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
       )}
     </div>
   );
+}
+
+/** Where a copy is on its machine: the folder a link there leads to, else the copy itself. */
+function copyPath(copy: StoreFoundCopy | undefined): string | null {
+  return copy ? (copy.link ?? copy.path) : null;
+}
+
+/** A name under a folder of the machine, with the separator the folder's path has. */
+function joinPath(folder: string, name: string): string {
+  const separator = folder.includes("\\") && !folder.includes("/") ? "\\" : "/";
+  return `${folder.replace(/[\\/]+$/, "")}${separator}${name}`;
 }
 
 function Trash({ report, page }: { report: StoreReport; page: Page }) {

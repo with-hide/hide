@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import { PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { Note } from "../components/settings-rows";
 import { Badge } from "../components/ui/badge";
@@ -11,7 +11,7 @@ import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import type { Device, McpPastedServer, McpReach, McpServer, StoreAsk, StoreFoundSkill, StoreItem, StorePreview, StoreRefusalCause, StoreReport, StoreUpdateDiff } from "../snapshot";
+import type { Device, McpPastedServer, McpReach, McpServer, StoreAsk, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreUpdateDiff } from "../snapshot";
 import { agentShortName, addInput, filesOf, keyNames, newest, previewIds, previewSource, serverLine, versionValue } from "./skillsMcp";
 import { useStoreRequest } from "./useStoreRequest";
 
@@ -251,15 +251,15 @@ function PickSkills({ preview, onClose, onNext }: { preview: StorePreview; onClo
 }
 
 /** 스킬 n개 설치: where they come from, every file coming in, and the agents that get them, every profile included. */
-function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onInstall, confirmLabel, header }: { preview: StorePreview; skills: StoreFoundSkill[]; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; onClose: () => void; onInstall: () => void; confirmLabel?: string; header?: ReactNode }) {
+function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onInstall, confirmLabel, header, title, data = "install" }: { preview: StorePreview; skills: StoreFoundSkill[]; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; onClose: () => void; onInstall: () => void; confirmLabel?: string; header?: ReactNode; title?: string; data?: string }) {
   const { t } = useInterfaceTranslation();
   const { files } = filesOf(skills);
   const agents = preview.agents.filter((agent) => shown.has(agent));
   return (
     <StoreDialog
-      title={t("store.add.install", { count: skills.length })}
+      title={title ?? t("store.add.install", { count: skills.length })}
       onClose={onClose}
-      data="install"
+      data={data}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-store-cancel="true">{t("common.cancel")}</Button>
@@ -279,6 +279,68 @@ function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onI
         </Fact>
       </Facts>
       {refusal ? <Note tone="error" data-store-install-refused={refusal}>{refusalText(refusal, t)}</Note> : null}
+    </StoreDialog>
+  );
+}
+
+/** A copy an agent holds that Hide is asked to take in: its kind and name, the place it is taken from, and where it is on the machine. */
+export type AdoptTarget = { kind: StoreItemKind; name: string; from?: string; path: string | null };
+
+/**
+ * [모두에 적용] or [가져오기]: what is taken in, shown before anything moves
+ * (B20). A skill's copy is read like a folder added: where it is, every file
+ * (▲ an executable one) and the agents it goes to; a server's, the agent file
+ * it is in and the agents it goes to. Only Apply takes it in.
+ */
+export function AdoptDialog({ device, target, report, shown, actions, onClose }: { device: Device; target: AdoptTarget; report: StoreReport; shown: ReadonlySet<string>; actions: Actions; onClose: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const read = useStoreRequest(device.id, actions);
+  const apply = useStoreRequest(device.id, actions);
+  const [before] = useState(() => previewIds(report));
+  const asked = useRef(false);
+  const reads = target.kind === "skill" && target.path !== null;
+  useEffect(() => {
+    if (!reads || asked.current || target.path === null) return;
+    asked.current = true;
+    read.send([{ op: "inspect", source: { kind: "folder", path: target.path } }]);
+  }, [reads, read, target.path]);
+  useEffect(() => {
+    if (apply.done) onClose();
+  }, [apply.done, onClose]);
+  const adopt = () => apply.send([{ op: "adopt", kind: target.kind, name: target.name, ...(target.from ? { from: target.from } : {}) }]);
+  const title = t("store.adopt.title", { name: target.name });
+  const header = <p className="text-body text-muted-foreground">{t("store.adopt.line")}</p>;
+  const preview = reads && read.done ? newest(report.previews, before) : null;
+  if (preview) {
+    return <InstallConfirm title={title} data="adopt" preview={preview} skills={preview.skills} shown={shown} pending={apply.pending} refusal={apply.refusal} onClose={onClose} onInstall={adopt} confirmLabel={t("store.adopt.apply")} header={header} />;
+  }
+  const agents = (report.columns[target.kind] ?? []).flatMap((column) => column.agents).filter((agent, index, all) => shown.has(agent) && all.indexOf(agent) === index);
+  const reading = reads && !read.refusal;
+  return (
+    <StoreDialog
+      title={title}
+      onClose={onClose}
+      data="adopt"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} data-store-cancel="true">{t("common.cancel")}</Button>
+          {reads ? null : (
+            <Button disabled={apply.pending} aria-busy={apply.pending} onClick={adopt} data-store-install="true">{t("store.adopt.apply")}</Button>
+          )}
+        </>
+      }
+    >
+      {header}
+      {reading ? (
+        <span className="text-body text-muted-foreground">{t("store.reading")}</span>
+      ) : (
+        <Facts>
+          {target.path !== null ? <Fact label={t("store.detail.source")} mono>{target.path}</Fact> : null}
+          <Fact label={t("store.detail.agents")}><AgentChips agents={agents} /></Fact>
+        </Facts>
+      )}
+      {read.refusal ? <Note tone="error" data-store-adopt-refused={read.refusal}>{refusalText(read.refusal, t)}</Note> : null}
+      {apply.refusal ? <Note tone="error" data-store-install-refused={apply.refusal}>{refusalText(apply.refusal, t)}</Note> : null}
     </StoreDialog>
   );
 }
