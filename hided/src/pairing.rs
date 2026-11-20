@@ -415,7 +415,7 @@ pub struct Pairing {
     /// Which machines cannot connect until one side updates, and whether
     /// that side was asked to (B22), until the two connect.
     updates: Mutex<HashMap<PeerKey, PeerUpdate>>,
-    /// Where bringing the Hides this machine started to its build stands.
+    /// Where bringing the Hides this machine switched to its build stands.
     raises: Mutex<Raises>,
     /// Held by the one raise that runs: each copies a build to a machine
     /// and restarts its core (B23).
@@ -473,9 +473,6 @@ struct SshRequest {
     alias: String,
     id: String,
     made: Instant,
-    /// A switch under this request began starting a Hide on the target:
-    /// the machine it pairs with is one this machine started (B23).
-    started: bool,
 }
 
 /// What a machine's row says after another refused first exchange, given
@@ -492,7 +489,7 @@ fn still_needed(said: Option<PeerUpdate>, behind: Behind) -> PeerUpdate {
     }
 }
 
-/// The Hides this machine started on other machines, each brought to this
+/// The Hides this machine switched on other machines, each brought to this
 /// machine's build once per build it is seen to run (B23,
 /// `crate::started_cores`).
 #[derive(Default)]
@@ -699,7 +696,7 @@ impl Pairing {
                         if asked && peers.ask_update(&key).is_err() {
                             lock(&self.updates).insert(key, PeerUpdate::There);
                         }
-                        // A Hide this machine started is brought to its
+                        // A Hide this machine switched is brought to its
                         // build instead of waiting for someone there.
                         if behind != Behind::Ours {
                             self.raise_started(&peers, key, &build, false);
@@ -729,11 +726,13 @@ impl Pairing {
         }
     }
 
-    /// Brings the Hide this machine started on `key`'s machine to this
-    /// build, when that Hide names an older one (`theirs`): once per build
-    /// it names, and again when the operator asks (`asked`). A machine
-    /// this one did not start a Hide on, and one that runs this build or a
-    /// newer release, are left alone. One raise runs at a time.
+    /// Brings the Hide this machine reaches through a login on `key`'s
+    /// machine to this build, when that Hide names an older one (`theirs`):
+    /// once per build it names, and again when the operator asks (`asked`).
+    /// A machine this one never switched through a login, and one that runs
+    /// this build or a newer release, are left alone, and so is one that
+    /// answers that its app updates it or that nothing would start its core
+    /// again: its row shows nothing of the raise. One raise runs at a time.
     fn raise_started(self: &Arc<Self>, peers: &HostPeers, key: PeerKey, theirs: &str, asked: bool) {
         let Some(login) = peers.host(&key).and_then(|host| host.started) else {
             return;
@@ -817,6 +816,16 @@ impl Pairing {
     /// (D-41).
     async fn paired_changed(&self, machines: &[PeerMachine]) {
         self.always_on.peers_changed();
+        // What a raise left of a machine goes with the machine.
+        {
+            let paired: std::collections::HashSet<PeerKey> = machines
+                .iter()
+                .filter_map(|machine| PeerKey::from_hex(&machine.key).ok())
+                .collect();
+            let mut raises = lock(&self.raises);
+            raises.shown.retain(|key, _| paired.contains(key));
+            raises.tried.retain(|key, _| paired.contains(key));
+        }
         // A guest's work here follows its grant: one that holds none any
         // more was taken off this machine (`Guests::granted`).
         if let Some(guests) = self.guests.get() {
@@ -1370,22 +1379,14 @@ impl Pairing {
         let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
         let installing = {
             let (runtime, far) = (runtime.clone(), Arc::clone(far));
-            let (installed, under) = (device.to_owned(), requested.clone());
+            let installed = device.to_owned();
             move || {
                 far.started();
-                // Kept with the request, which a switch that stops after
-                // the start is asked again under.
-                if let Some(kept) = lock(&steps.ssh_requests)
-                    .iter_mut()
-                    .find(|kept| kept.alias == under)
-                {
-                    kept.started = true;
-                }
                 runtime.block_on(steps.switch_step(&installed, "installing", json!({})));
             }
         };
-        // The login the machine is reached through, which is also what its
-        // record keeps when this switch started its Hide (B23).
+        // The login the machine is reached through, which its record keeps
+        // for bringing its Hide to this machine's build (B23).
         let through = match &source.via {
             hide_core::SwitchVia::Ssh { alias, .. } => Login::Ssh(alias.clone()),
             hide_core::SwitchVia::Wsl { distro } => Login::Wsl(distro.clone()),
@@ -1510,9 +1511,6 @@ impl Pairing {
             connecting["needs"] = needs.payload();
         }
         self.switch_step(device, "connecting", connecting).await;
-        let started = lock(&self.ssh_requests)
-            .iter()
-            .any(|kept| kept.alias == requested && kept.started);
         if let Some(paired) = paired.clone() {
             match service.adopt(paired.accepted, paired.first) {
                 // Adopted before, by a switch that stopped after it.
@@ -1523,22 +1521,26 @@ impl Pairing {
             }
             lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
         }
-        if started {
-            // The Hide there is this machine's to keep at its build, through
-            // the login it was started through (B23). The pairing stands
-            // without the record, so a store that refuses it is only logged.
-            let saved = peers.known(|known| {
-                let mut record = known.of(&host).cloned().ok_or(StoreError::Unknown)?;
-                record.started = Some(through.clone());
-                known.put(record)
-            });
-            if let Err(error) = saved {
-                hide_core::diagnostic!(json!({
-                    "component": "pairing",
-                    "kind": "pairing.started_not_saved",
-                    "reason": format!("{error:?}"),
-                }));
+        // A Hide reached through a login is this machine's to keep at its
+        // build through that login (B23), whichever switch started it: the
+        // record is the machine's, not this run's, and an account that has
+        // the app answers a raise that its app updates it. The pairing
+        // stands without the record, so a store that refuses it is only
+        // logged.
+        let saved = peers.known(|known| {
+            let mut record = known.of(&host).cloned().ok_or(StoreError::Unknown)?;
+            if record.started.as_ref() == Some(through) {
+                return Ok(());
             }
+            record.started = Some(through.clone());
+            known.put(record)
+        });
+        if let Err(error) = saved {
+            hide_core::diagnostic!(json!({
+                "component": "pairing",
+                "kind": "pairing.started_not_saved",
+                "reason": format!("{error:?}"),
+            }));
         }
         let over = Instant::now() + SWITCH_CONNECTS_WITHIN;
         loop {
@@ -1690,7 +1692,6 @@ impl Pairing {
             alias: alias.to_owned(),
             id: id.clone(),
             made: Instant::now(),
-            started: false,
         });
         Ok(id)
     }

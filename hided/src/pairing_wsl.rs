@@ -100,7 +100,7 @@ impl Login for Wsl<'_> {
     }
 }
 
-/// Brings the Hide this PC started in `distro` to this build
+/// Brings the Hide of `distro`, which this PC switched, to this build
 /// (`crate::started_cores`), through `wsl.exe`.
 pub fn raise(
     access: &WslAccess,

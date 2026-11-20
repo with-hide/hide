@@ -192,9 +192,9 @@ impl Login for Ssh<'_> {
     }
 }
 
-/// Brings the Hide this machine started on the target `alias` names to
-/// this build (`crate::started_cores`), over one SSH login that asks
-/// nobody: it runs with no operator at the row.
+/// Brings the Hide of the target `alias` names, which this machine
+/// switched, to this build (`crate::started_cores`), over one SSH login
+/// that asks nobody: it runs with no operator at the row.
 pub fn raise(
     reach: &Reach,
     alias: &str,
@@ -540,7 +540,7 @@ fn needs_of(login: &dyn Login, reach: &Reach, started: bool) -> Option<Needs> {
 /// names as the sign of it (`sd_booted`). A target that does not answer is
 /// read as one that was: the line a missing systemd shows is said only of
 /// a distribution known to have none.
-fn runs_systemd(login: &dyn Login) -> bool {
+pub(crate) fn runs_systemd(login: &dyn Login) -> bool {
     let argv = ["test", "-d", "/run/systemd/system"].map(str::to_owned);
     // `test` prints nothing; the cap is the least a run may be given.
     match login.run(&argv, 1, ANSWER_WITHIN) {

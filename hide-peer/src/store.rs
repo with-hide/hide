@@ -477,9 +477,10 @@ pub struct Host {
     /// Where the host was last reached, in the order to try.
     #[serde(default)]
     pub candidates: Vec<Candidate>,
-    /// The login this machine started the host's Hide through, when it
-    /// did: that Hide has no app of its own to update it, so this machine
-    /// brings it to its own build (PRD device-connect-iroh B23).
+    /// The login this machine switched the host through, when it did: a
+    /// Hide started from the programs put there over a login has no app of
+    /// its own to update it, so this machine brings it to its own build
+    /// until the account has one (PRD device-connect-iroh B23).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<Login>,
 }

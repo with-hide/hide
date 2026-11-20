@@ -27,7 +27,9 @@
 //! raises of two machines happen one after the other and the second finds
 //! what the first left. A core of this build or a newer one is left as it
 //! is; an older one is replaced as above, with this build put beside the
-//! one its starter runs.
+//! one its starter runs. An account that has the desktop app is left to
+//! it: the app updates its core, and a core raised past the app's build
+//! would refuse the app's own connection.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -76,6 +78,9 @@ pub enum Outcome {
     /// A raise found the core running a newer build, which is never
     /// lowered.
     Kept,
+    /// A raise found the desktop app on the account, which updates its
+    /// core from the day it is there (B23).
+    LeftToApp,
 }
 
 /// A raise's refusals a caller tells apart from every other reason.
@@ -105,6 +110,7 @@ pub fn outcome(stdout: &str, exit: &str, stderr: &str) -> Result<(), String> {
         Outcome::RolledBack { reason, .. } => Err(format!("rolled_back: {reason}")),
         Outcome::Refused { reason } => Err(reason),
         Outcome::Kept => Err("core_newer".to_owned()),
+        Outcome::LeftToApp => Err("left_to_app".to_owned()),
     }
 }
 
@@ -212,6 +218,19 @@ fn replace_held<S: Starter>(
     program: &Path,
     starter: &S,
 ) -> Result<Outcome, String> {
+    let builds = replaceable(args, held, previous_program, program)?;
+    replace(args, &builds, previous_program, program, starter)
+}
+
+/// What stands in the way of replacing the core, read before anything is
+/// stopped or started: the two programs are builds of one install, and no
+/// move holds the folder. The two builds when nothing does.
+fn replaceable(
+    args: &Args,
+    held: &handover::Held,
+    previous_program: &Path,
+    program: &Path,
+) -> Result<(Build, Build), String> {
     let new = build_of(program)?;
     let previous = build_of(previous_program)?;
     if new.root != previous.root {
@@ -229,6 +248,19 @@ fn replace_held<S: Starter>(
         );
         return Err(MOVE_RUNNING.to_owned());
     }
+    Ok((new, previous))
+}
+
+/// Replaces the core by `program`'s build, with the way back to
+/// `previous_program`'s; `builds` is what [`replaceable`] answered for the
+/// two.
+fn replace<S: Starter>(
+    args: &Args,
+    (new, previous): &(Build, Build),
+    previous_program: &Path,
+    program: &Path,
+    starter: &S,
+) -> Result<Outcome, String> {
     log(
         &args.intent,
         "update.started",
@@ -236,7 +268,7 @@ fn replace_held<S: Starter>(
     );
     match starter.replace(&args.state_dir, program) {
         Ok(pid) => {
-            adopt(&new, &previous.version);
+            adopt(new, &previous.version);
             log(&args.intent, "update.done", json!({"pid": pid}));
             Ok(Outcome::Updated {
                 pid,
@@ -251,7 +283,7 @@ fn replace_held<S: Starter>(
                     log(&args.intent, "rollback.failed", json!({"reason": again}));
                     format!("the update failed ({reason}) and the previous build did not start again: {again}")
                 })?;
-            adopt(&previous, &new.version);
+            adopt(previous, &new.version);
             log(&args.intent, "rollback.done", json!({"pid": pid}));
             Ok(Outcome::RolledBack { pid, reason })
         }
@@ -276,6 +308,8 @@ struct Running {
 trait Account {
     /// The folder's core, when one answers.
     fn running(&self) -> Result<Option<Running>, String>;
+    /// Whether the account has the desktop app, which updates its core.
+    fn app(&self) -> Result<bool, String>;
     /// Whether a starter of the account's starts the folder's core again.
     fn kept(&self) -> Result<bool, String>;
     /// The install root the account's starter runs its builds from.
@@ -311,6 +345,10 @@ impl Account for ThisAccount<'_> {
             started: path(&health["starter"]["program"]),
             program: path(&health["program"]),
         }))
+    }
+
+    fn app(&self) -> Result<bool, String> {
+        hide_kit::app_installed(&self.home).map_err(|refusal| refusal.detail)
     }
 
     fn kept(&self) -> Result<bool, String> {
@@ -379,6 +417,17 @@ fn raise_with<S: Starter>(
         }
         Standing::Unordered => return Err(OTHER_BUILD.to_owned()),
     }
+    // The app on this account updates its core (B23): a core a paired
+    // machine raised past the app's build would refuse the app's own
+    // connection, with no release for the app to catch up to.
+    if account.app()? {
+        log(
+            &args.intent,
+            "raise.left_to_app",
+            json!({"core": core.release.shown()}),
+        );
+        return Ok(Outcome::LeftToApp);
+    }
     // Both builds stand in the root the account's starter runs from: the
     // one the core runs is there when its starter started it, and is put
     // there from the core's own folder when nothing did.
@@ -393,12 +442,15 @@ fn raise_with<S: Starter>(
         }
     };
     let new = account.place(program, &build_of(&previous)?.root)?;
+    // Every refusal comes before the stop: a raise that ends refused
+    // leaves the core that ran.
+    let builds = replaceable(args, &held, &previous, &new)?;
     if core.started.is_none() {
         // Its starter never started it, so replacing the starter's run
         // would not end it, and the new core would wait on its lock.
         account.stop()?;
     }
-    replace_held(args, &held, &previous, &new, starter)
+    replace(args, &builds, &previous, &new, starter)
 }
 
 /// `current` leads to `running`, and the other build of the update stays.
@@ -521,6 +573,7 @@ mod tests {
     struct Machine {
         root: PathBuf,
         core: Option<Running>,
+        app: bool,
         kept: bool,
         placed: std::cell::RefCell<Vec<(PathBuf, PathBuf)>>,
         stopped: std::cell::Cell<u32>,
@@ -529,6 +582,10 @@ mod tests {
     impl Account for Machine {
         fn running(&self) -> Result<Option<Running>, String> {
             Ok(self.core.clone())
+        }
+
+        fn app(&self) -> Result<bool, String> {
+            Ok(self.app)
         }
 
         fn kept(&self) -> Result<bool, String> {
@@ -580,6 +637,7 @@ mod tests {
                 started: Some(previous.clone()),
                 program: Some(previous.clone()),
             }),
+            app: false,
             kept: true,
             placed: Default::default(),
             stopped: Default::default(),
@@ -696,6 +754,54 @@ mod tests {
         assert_eq!(machine.stopped.get(), 0);
         assert!(starts.started.borrow().is_empty());
         let _ = previous;
+    }
+
+    // B23: an account that has the desktop app is its app's to update: a
+    // raise of its older core touches nothing.
+    #[test]
+    fn a_raise_leaves_an_account_that_has_the_app_to_its_app() {
+        let root = tempfile::tempdir().unwrap();
+        let (args, mut machine, _, uploaded) = raise_fixture(root.path());
+        machine.app = true;
+        let starts = Starts::default();
+        assert_eq!(
+            raise_with(&args, &uploaded, ("new", &release(6)), &machine, &&starts),
+            Ok(Outcome::LeftToApp)
+        );
+        assert!(machine.placed.borrow().is_empty());
+        assert_eq!(machine.stopped.get(), 0);
+        assert!(starts.started.borrow().is_empty());
+    }
+
+    // A raise that is refused leaves the core that ran: a core no starter
+    // started is stopped by hand before the new one starts, and a move that
+    // holds the folder is found before that stop, not after it.
+    #[test]
+    fn a_raise_a_move_refuses_stops_no_core() {
+        use crate::core_move::handover::{Handover, HandoverState};
+        let root = tempfile::tempdir().unwrap();
+        let (args, mut machine, _, uploaded) = raise_fixture(root.path());
+        let own = root
+            .path()
+            .join("helper")
+            .join("aaaaaaaaaaaaaaaa")
+            .join("hided");
+        machine.core = Some(Running {
+            started: None,
+            program: Some(own),
+            ..machine.core.clone().unwrap()
+        });
+        handover::hold(&args.state_dir)
+            .unwrap_or_else(|_| panic!("the folder's lock"))
+            .write(&Handover::new("move-1", "a", "b", HandoverState::Active))
+            .unwrap();
+        let starts = Starts::default();
+        assert_eq!(
+            raise_with(&args, &uploaded, ("new", &release(6)), &machine, &&starts),
+            Err(MOVE_RUNNING.to_owned())
+        );
+        assert_eq!(machine.stopped.get(), 0);
+        assert!(starts.started.borrow().is_empty());
     }
 
     /// The node reads only an outcome: a line of any other shape is named

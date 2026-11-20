@@ -1,16 +1,19 @@
-//! A Hide this machine started on another machine keeps up with this
+//! A Hide this machine switched on another machine keeps up with this
 //! machine's build (PRD device-connect-iroh B23).
 //!
 //! A machine that was a helper device, or a WSL distribution, runs a Hide
-//! of its own once it is switched, started from the programs this machine
-//! had installed there. No app there updates it, so the machine that
-//! started it does: it puts its own build beside the one that runs, through
-//! the login it started it through (`hide_peer::store::Login`, kept with
-//! the host's record), and runs that build's `hided core-update` there,
-//! which decides under the account's own lock what the core is and whether
-//! it rises (`crate::core_update`). A newer core is never lowered, two
-//! machines that raise one core do so one after the other, and a new build
-//! that does not start gives way to the one that ran.
+//! of its own once it is switched, started from the programs a machine
+//! that reaches it over a login had installed there. While no app there
+//! updates it, a machine that reaches it does: it puts its own build beside
+//! the one that runs, through the login its switch went through
+//! (`hide_peer::store::Login`, kept with the host's record), and runs that
+//! build's `hided core-update` there, which decides under the account's own
+//! lock what the core is and whether it rises (`crate::core_update`). A
+//! newer core is never lowered, two machines that raise one core do so one
+//! after the other, and a new build that does not start gives way to the
+//! one that ran. An account that has the desktop app answers that its app
+//! updates it, and a core nothing would start again stays on the build it
+//! runs: neither is a failure, and neither shows on the machine's row.
 //!
 //! [`raise_on`] is one such raise on a login. When it runs and what a row
 //! shows of it are the pairing's (`crate::pairing`).
@@ -19,7 +22,7 @@ use hide_node::ssh::host::HelperPackages;
 use serde_json::json;
 
 use crate::core_update::{self, Outcome};
-use crate::pairing_ssh::{Login, NotInstalled};
+use crate::pairing_ssh::{Channel, Login, NotInstalled};
 
 /// How a raise ended when nothing stood in its way.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +34,12 @@ pub enum Raised {
     Current,
     /// It runs a newer build, which another machine brought.
     Kept,
+    /// Its account has the desktop app, which updates it from then on.
+    LeftToApp,
+    /// Nothing on its account starts its core again (a WSL distribution
+    /// with no systemd), so it stays on the build it runs: a new build that
+    /// did not start would leave the account with no core.
+    NotKept,
 }
 
 /// Why a core was not raised, as a row names it; what was said is in the
@@ -43,8 +52,8 @@ pub enum Failure {
     RolledBack,
     /// Another machine's update, or a move, runs there now.
     Busy,
-    /// Anything else: the build did not go in, the core is not one its
-    /// account keeps, or it answered nothing this build reads.
+    /// Anything else: the build did not go in, or it answered nothing this
+    /// build reads.
     Failed,
 }
 
@@ -72,6 +81,11 @@ pub(crate) fn raise_on(login: &dyn Login, packages: &HelperPackages) -> Result<R
         );
         failure
     };
+    // Said before a build is copied there, which this one would refuse.
+    if login.channel() == Channel::Wsl && !crate::pairing_ssh::runs_systemd(login) {
+        log("raise.not_kept", json!({"read": "no_systemd"}));
+        return Ok(Raised::NotKept);
+    }
     let program = login
         .install(packages, hide_kit::layout::HELPER_ROOT)
         .map_err(|error| match error {
@@ -91,6 +105,11 @@ pub(crate) fn raise_on(login: &dyn Login, packages: &HelperPackages) -> Result<R
         Some(Outcome::Updated { .. }) => Raised::Updated,
         Some(Outcome::Current) => Raised::Current,
         Some(Outcome::Kept) => Raised::Kept,
+        Some(Outcome::LeftToApp) => Raised::LeftToApp,
+        Some(Outcome::Refused { reason }) if reason == core_update::NOT_KEPT => {
+            log("raise.not_kept", json!({"read": "core_update"}));
+            return Ok(Raised::NotKept);
+        }
         Some(Outcome::RolledBack { reason, .. }) => {
             return Err(failed(Failure::RolledBack, reason));
         }
@@ -128,16 +147,20 @@ mod tests {
     use crate::pairing_ssh::Channel;
 
     /// A login that takes the build or says why not, and answers the
-    /// command it is given with `said`.
+    /// command it is given with `said`; asked whether systemd started the
+    /// target, it answers `systemd`.
     struct Account {
+        channel: Channel,
+        systemd: bool,
         install: Result<String, fn(String) -> NotInstalled>,
+        installs: std::cell::Cell<u32>,
         said: Result<&'static str, &'static str>,
         ran: RefCell<Vec<Vec<String>>>,
     }
 
     impl Login for Account {
         fn channel(&self) -> Channel {
-            Channel::Ssh
+            self.channel
         }
 
         fn name(&self) -> &str {
@@ -149,6 +172,13 @@ mod tests {
         }
 
         fn run(&self, argv: &[String], _: usize, _: Duration) -> Result<Ran, String> {
+            if argv[0] == "test" {
+                return Ok(Ran {
+                    status: i32::from(!self.systemd),
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                });
+            }
             self.ran.borrow_mut().push(argv.to_vec());
             self.said
                 .map(|line| Ran {
@@ -165,13 +195,17 @@ mod tests {
 
         fn install(&self, _: &HelperPackages, root: &str) -> Result<String, NotInstalled> {
             assert_eq!(root, hide_kit::layout::HELPER_ROOT);
+            self.installs.set(self.installs.get() + 1);
             self.install.clone().map_err(|kind| kind("no".to_owned()))
         }
     }
 
     fn account(said: Result<&'static str, &'static str>) -> Account {
         Account {
+            channel: Channel::Ssh,
+            systemd: true,
             install: Ok("/home/me/.hide/host-helper/aaaaaaaaaaaaaaaa/hided".to_owned()),
+            installs: Default::default(),
             said,
             ran: RefCell::default(),
         }
@@ -212,14 +246,40 @@ mod tests {
                 r#"{"kind":"refused","reason":"move_running"}"#,
                 Err(Failure::Busy),
             ),
+            // Neither is a failure: an app there updates its own core, and
+            // a core nothing starts again stays on the build it runs.
+            (r#"{"kind":"left_to_app"}"#, Ok(Raised::LeftToApp)),
             (
                 r#"{"kind":"refused","reason":"core_not_kept"}"#,
+                Ok(Raised::NotKept),
+            ),
+            (
+                r#"{"kind":"refused","reason":"other_build"}"#,
                 Err(Failure::Failed),
             ),
             ("hided: unknown word", Err(Failure::Failed)),
         ] {
             assert_eq!(raise(&account(Ok(said))), raised, "{said}");
         }
+    }
+
+    // B23: a distribution systemd did not start has nothing that would
+    // start its core again, so its raise ends before a build is copied
+    // there; one systemd started is raised like any other machine.
+    #[test]
+    fn a_distribution_with_no_systemd_is_not_raised_and_takes_no_build() {
+        let distribution = |systemd| Account {
+            channel: Channel::Wsl,
+            systemd,
+            ..account(Ok(r#"{"kind":"current"}"#))
+        };
+        let without = distribution(false);
+        assert_eq!(raise(&without), Ok(Raised::NotKept));
+        assert_eq!(without.installs.get(), 0);
+        assert!(without.ran.borrow().is_empty());
+        let with = distribution(true);
+        assert_eq!(raise(&with), Ok(Raised::Current));
+        assert_eq!(with.installs.get(), 1);
     }
 
     // B23: a login that does not reach the account, at the copy or at the
