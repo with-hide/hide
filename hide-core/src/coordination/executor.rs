@@ -1464,6 +1464,28 @@ fn spawn(
         // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
         answer_by += hook_started.elapsed();
     }
+    // An automation's run works unattended, so its folder is read as its
+    // machine has it now, not as the catalog read it up to a minute ago: a
+    // pane asked for a folder that is gone opens in the home folder
+    // instead, and the run would work there. It is asked before anything is
+    // reserved, so one that is gone leaves nothing behind; a retry whose pane
+    // exists is judged before its start is typed.
+    let unattended = task
+        .as_ref()
+        .is_some_and(|task| task.kind == super::TaskKind::Automation);
+    if unattended && earlier.as_ref().is_none_or(|record| record.pane.is_none()) {
+        let device = machine.as_deref().unwrap_or(&actor.device_id);
+        let node = context(client, device)
+            .map_err(|reason| {
+                if machine.is_some() {
+                    "machine_unavailable".to_owned()
+                } else {
+                    reason
+                }
+            })?
+            .node;
+        folder_there(node.as_deref(), repo)?;
+    }
     // The device checks above only read, so a slow device never holds the
     // process-wide lock that local and Factory spawns need; everything that
     // creates something runs under it.
@@ -1544,17 +1566,6 @@ fn spawn(
         return Err(crate::runtime::start_hook::HookRefusal::Unchecked
             .code()
             .to_owned());
-    }
-    // An automation's run works unattended, so its folder is read as its
-    // machine has it now, not as the catalog read it up to a minute ago: a
-    // pane asked for a folder that is gone opens in the home folder
-    // instead, and the run would work there. One that is gone leaves no pane
-    // behind; a retry whose pane exists is judged before its start is typed.
-    let unattended = task
-        .as_ref()
-        .is_some_and(|task| task.kind == super::TaskKind::Automation);
-    if unattended && reserved.pane.is_none() {
-        folder_there(node.as_deref(), repo)?;
     }
     // A device that stops answering partway leaves the spawn reserved and
     // resumable: the caller is told the device is unavailable, and the same

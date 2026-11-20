@@ -1125,6 +1125,10 @@ fn an_automation_spawn_into_a_folder_gone_since_it_was_read_makes_no_pane() {
     ] {
         assert_eq!(spawner.count(method), 0, "{method}");
     }
+    assert!(
+        spawner.ledger().spawns.is_empty(),
+        "a refused start reserves nothing"
+    );
     *spawner.folders.lock().unwrap() = [true].into();
     let child = spawner.spawn_for_automation("run").unwrap();
     assert_eq!(child["pane"], "w2:p1");

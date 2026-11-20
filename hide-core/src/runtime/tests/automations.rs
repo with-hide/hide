@@ -1465,6 +1465,38 @@ fn a_start_refused_for_an_agent_not_set_up_stops_the_automation() {
     assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
 }
 
+/// B23: a start refused because its folder is gone on its machine, as the
+/// spawn finds it right before the pane and again before the start is typed,
+/// stops the automation as folder missing with its Needs You line, and is not
+/// tried again: a run started anywhere else would work where nobody set it.
+#[test]
+fn a_start_refused_for_a_folder_gone_stops_the_automation() {
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let id = harness.run_now();
+    harness.answer(
+        &intent(&id, 1, 1),
+        &[Answer::Refused(crate::coordination::FOLDER_GONE)],
+    );
+    harness.tick(1);
+    harness.tick(1);
+    assert_eq!(
+        harness.run(&id),
+        (
+            json!("failed"),
+            json!(1),
+            json!("automation_folder_missing")
+        )
+    );
+    assert_eq!(harness.asked().len(), 1);
+    let mut runtime = harness.runtime.lock().unwrap();
+    assert_eq!(
+        show(&mut runtime, &id)["paused"]["reason"],
+        "folder_missing"
+    );
+    assert_eq!(needs_you(&mut runtime).0, vec![id.clone()]);
+}
+
 /// B23: an agent whose program this machine does not find stops the
 /// automation for a person before anything is typed, rather than leaving a
 /// shell that never starts an agent and reads as a start that stopped

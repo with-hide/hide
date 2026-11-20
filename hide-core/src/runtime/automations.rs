@@ -2740,7 +2740,7 @@ fn start_failure(code: String) -> Failure {
         | "agent_not_set_up"
         | "agent_hook_missing"
         | "agent_hook_untrusted" => Failure::Person(PauseReason::AgentMissing),
-        "spawn_folder_unreadable" => Failure::Person(PauseReason::FolderMissing),
+        crate::coordination::FOLDER_GONE => Failure::Person(PauseReason::FolderMissing),
         _ => Failure::Transient(code),
     }
 }
