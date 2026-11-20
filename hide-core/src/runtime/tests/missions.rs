@@ -19620,3 +19620,105 @@ fn a_node_workers_brief_ends_with_what_starts_its_checkers() {
     assert_eq!(brief(&mut runtime, "mission-1:docs"), "Fix it.");
     assert_eq!(brief(&mut runtime, "mission-1:review-fix"), "Fix it.");
 }
+
+/// PRD mission-speed-2 D-03: an agent that takes letters at its tools takes
+/// a mission cell waiting for it at its next tool use, and a tool use with
+/// nothing waiting for it takes nothing; an agent Hide rings mid-turn
+/// instead (Codex) takes nothing at a tool use.
+#[test]
+fn a_tool_use_hands_a_waiting_mission_cell_to_an_agent_that_takes_letters_there() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let observed: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+        {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
+        {"id":"reviewer","pane_id":"reviewer","agent":"opencode","agent_status":"working","state_change_seq":2,"lineage_session":"reviewer-session"},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+    let actor = runtime.delivery_observations["reviewer"].actor.clone();
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for record in ledger
+        .agents
+        .iter_mut()
+        .filter(|record| record.id == "agent-3")
+    {
+        record.actor = actor.clone();
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let node = crate::node::TEST_NODE;
+    let tool =
+        |runtime: &mut Runtime, pane: &str| runtime.take_status(node, pane, Some(4_096), true);
+    assert!(tool(&mut runtime, "reviewer").is_none_or(|cells| cells.is_empty()));
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert!(
+        tool(&mut runtime, "recipient").is_none(),
+        "Codex is rung instead"
+    );
+    let given = tool(&mut runtime, "reviewer").unwrap();
+    assert!(
+        given.len() == 1 && given[0].line.contains("ready for your review"),
+        "{given:?}"
+    );
+    assert!(
+        tool(&mut runtime, "reviewer").is_none_or(|cells| cells.is_empty()),
+        "taken once"
+    );
+}
+
+/// PRD mission-speed-2 B11, B12: a conflict told to a worker at work says
+/// its CI waits and what to do, and a round failure that comes before the
+/// worker read it joins the same cell instead of replacing it.
+#[test]
+fn a_workers_unread_conflict_cell_keeps_its_round_failure_too() {
+    use crate::missions::{FixReason, Woken};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    let mut wake = crate::runtime::missions::wake_about(
+        "fix".into(),
+        Some(7),
+        WakeEvent::Fix,
+        Some(HEAD.into()),
+        Some("wake:7:conflict".into()),
+    );
+    wake.to = Some("agent-2".into());
+    wake.why = Some(FixReason::Conflict);
+    crate::runtime::missions::record(mission, wake).unwrap();
+    let node = mission
+        .nodes
+        .iter_mut()
+        .find(|node| node.key == "fix")
+        .unwrap();
+    node.woken.push(Woken {
+        pr: 7,
+        why: FixReason::Conflict,
+        head: Some(HEAD.into()),
+    });
+    let fail = json!({"commit": HEAD, "pass": false, "evidence": "parser drops v1"});
+    command(&mut runtime, "reviewer", record_of("fix", "review", fail)).unwrap();
+    let cells = runtime.cells_of("agent-2");
+    assert_eq!(cells.len(), 1, "{cells:?}");
+    assert!(cells[0].mid_turn);
+    assert!(
+        cells[0]
+            .line
+            .contains("Its CI does not run until the conflict is gone")
+            && cells[0].line.contains("Its review round: review FAIL"),
+        "{}",
+        cells[0].line
+    );
+}

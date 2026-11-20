@@ -1310,7 +1310,13 @@ impl Runtime {
             return;
         };
         let (line, failed, _) = super::missions::round_facts(mission, row);
-        if !failed {
+        // An unread fact cell for the worker on the node (a fix it was
+        // woken for) already carries the round's line when read; replacing
+        // it would lose a fact Hide does not repeat.
+        let standing = mission.wakes.iter().any(|kept| {
+            kept.node == node && kept.to.as_deref() == Some(worker.as_str()) && kept.round.is_none()
+        });
+        if !failed || standing {
             return;
         }
         let signal = row.check_signal();

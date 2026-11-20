@@ -1120,7 +1120,7 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
     if let Some(round) = wake.round {
         return round_body(mission, wake, node, round, &news);
     }
-    match wake.event {
+    let body = match wake.event {
         WakeEvent::Merged => news(format!("{pr} was merged"), PR_ACT),
         WakeEvent::ChangesRequested => {
             news(format!("{pr} received a review asking for changes"), PR_ACT)
@@ -1330,17 +1330,8 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 }
                 _ => "Fix it on your branch and push, then report to your Conductor as before",
             };
-            // The worker's one cell about the node keeps a round failure
-            // this fact replaced unread.
-            let round = match (
-                wake.to.as_ref(),
-                node.map(|node| round_facts(mission, node)),
-            ) {
-                (Some(_), Some((line, true, _))) => format!("\nIts review round: {line}."),
-                _ => String::new(),
-            };
             format!(
-                "{pr} {what} (mission {} \"{}\", node {}).\n{act}.{round}",
+                "{pr} {what} (mission {} \"{}\", node {}).\n{act}.",
                 mission.id, mission.title, wake.node
             )
         }
@@ -1421,6 +1412,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
                 wake.node, mission.id, mission.title
             )
         }
+    };
+    // A worker's one cell about its node keeps a round failure this fact
+    // replaced unread, and `tell_worker` leaves this cell standing.
+    match (&wake.to, node.map(|node| round_facts(mission, node))) {
+        (Some(_), Some((line, true, _))) => format!("{body}\nIts review round: {line}."),
+        _ => body,
     }
 }
 
@@ -1737,11 +1734,6 @@ pub(super) fn round_facts(mission: &Mission, node: &MissionNode) -> (String, boo
     (parts.join(" · "), failed, running)
 }
 
-/// The receivers one node's cells other than its Conductor's reach at
-/// most: its worker, and a checker in each slot of its review and its
-/// verification (`mission_criteria::CHECKER_LIMIT` each).
-const NODE_RECEIVER_LIMIT: usize = 1 + 2 * crate::mission_criteria::CHECKER_LIMIT;
-
 /// What a Conductor woken about a pull request of its own does.
 const PR_ACT: &str = "move a stacked PR above it onto the change, or answer the review";
 
@@ -1818,8 +1810,9 @@ pub(super) fn record(mission: &mut Mission, mut wake: PendingWake) -> Option<Str
 /// resolves the node's standing CI and review facts. With
 /// `PENDING_WAKE_LIMIT` cells already standing for the Conductor a new
 /// subject is refused and logged, and every cell keeps its place
-/// (engineering #15). A worker's or checker's cells are capped apart, by
-/// the receivers a node has (`NODE_RECEIVER_LIMIT`). A wake with no key of its own gets one from what
+/// (engineering #15). A worker's or checker's cells are one per node and
+/// receiver, and a cell for an agent the node no longer holds goes first,
+/// so a node keeps at most one per agent it holds and the newest. A wake with no key of its own gets one from what
 /// it is about.
 pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<String> {
     if wake.key.is_none() {
@@ -1881,24 +1874,6 @@ pub(super) fn push_wake(mission: &mut Mission, mut wake: PendingWake) -> Option<
                     Some(to) == wake.to.as_ref() || held.iter().any(|agent| agent == to)
                 })
         });
-    }
-    if fresh && wake.to.is_some() {
-        let receivers = mission
-            .wakes
-            .iter()
-            .filter(|kept| kept.node == wake.node && kept.to.is_some())
-            .map(|kept| kept.to.as_deref())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len();
-        if receivers >= NODE_RECEIVER_LIMIT {
-            crate::diagnostic!(json!({
-                "component": "missions", "kind": "mission.worker_wake_refused",
-                "mission": mission.id, "node": wake.node, "event": wake.event.as_str(),
-                "round": wake.round.map(RoundWake::as_str),
-                "cap": NODE_RECEIVER_LIMIT,
-            }));
-            return None;
-        }
     }
     // A standing fact that updates the node's standing cell keeps when the
     // cell began and whether the operator was told of it (D-23).

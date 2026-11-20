@@ -410,6 +410,18 @@ impl Runtime {
         }
         let ledger = self.delivery_ledger.clone().ok();
         let recipient = recipient_key(ledger.as_deref(), &actor);
+        // A tool event builds cells only for a caller a mission cell waits
+        // for.
+        if tool
+            && !self.missions.book.missions.iter().any(|mission| {
+                mission
+                    .wakes
+                    .iter()
+                    .any(|wake| wake.to.as_deref() == Some(recipient.as_str()))
+            })
+        {
+            return Some(Vec::new());
+        }
         Some(self.take_cells(&recipient, ledger.as_deref(), room, tool))
     }
 
