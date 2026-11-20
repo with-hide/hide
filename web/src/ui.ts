@@ -359,6 +359,8 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
+  /** The `hide skill` / `hide mcp` confirm 확인하기 opened, which Settings › 스킬·MCP shows until it is answered or gone. */
+  storeAskRequested: string | null;
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
@@ -438,6 +440,8 @@ type UiStore = {
   /** The overlay ⌘K replaced when it opened, so Settings in front reads as a screen with nothing to relate to (PRD cmdk-navigation B7). */
   searchOver: Overlay;
   closeOverlay: (overlay?: Overlay) => void;
+  openStoreAsk: (id: string) => void;
+  clearStoreAsk: () => void;
   openSettings: (tab: SettingsTab) => void;
   openProjectSettings: (target: ProjectSettingsTarget, returnFocus?: HTMLElement | null, focus?: "name") => void;
   /** Opens Settings on Devices with the Add device dialog in front. */
@@ -535,6 +539,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  storeAskRequested: null,
   switchedDevices: [],
   moveGiveUpRequested: false,
   pendingClose: null,
@@ -622,6 +627,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  openStoreAsk: (id) => set({ overlay: "settings", settingsTab: "skills", storeAskRequested: id }),
+  clearStoreAsk: () => set({ storeAskRequested: null }),
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
   clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
