@@ -103,8 +103,9 @@ export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: A
   const pane = tab?.panes.find((row) => row.id === paneId);
   return (
     <div className="relative h-full w-full min-h-0 min-w-0" data-layout-pane={paneId} data-pair-pane={paneId}>
+      {/* Keyed by pane, so another pane taking the left mounts its own view and the keys follow it (B25), as on the tab's canvas. */}
       {pane ? (
-        <PaneView pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} />
+        <PaneView key={paneId} pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} />
       ) : (
         <div className="h-full bg-background" data-pane-missing={paneId} />
       )}

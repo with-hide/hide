@@ -140,7 +140,7 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
 
     // B25: choosing the first agent in the sidebar takes it to the left with its own View on the right.
     await page.locator(`nav[data-sidebar] [data-agent-open="${left}"]`).first().click();
-    await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
+    await expect(page.locator(`[data-pair-pane="${left}"] .xterm-helper-textarea`), "the keys follow the pane chosen").toBeFocused();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
     // B26: ⌘. brings the tab's own layout back, every pane at the place and grid it had, one resize for the left terminal.
