@@ -10032,7 +10032,7 @@ fn the_review_round_at_the_limit_failing_tells_the_conductor_once_how_to_settle_
     let body = super::super::missions::wake_body(mission, wake);
     for words in [
         "reached its review round limit",
-        "round 3 of 3",
+        "failed in round 3, with 3 rounds",
         "`normal` strength",
         "fix the serious findings in the node",
         "follow-up issues",

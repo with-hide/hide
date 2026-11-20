@@ -729,8 +729,13 @@ describe("where a node's time went (mission-82)", () => {
     expect(nodeSpans(node("n", { status: "working", started_at_unix_ms: at(40), ready_at_unix_ms: at(40) }), end)).toEqual({ work: 40 * minute, review: null, wait: null });
     expect(nodeSpans(node("n", { status: "planned", ready_at_unix_ms: at(25) }), end)).toEqual({ work: null, review: null, wait: 25 * minute });
   });
+  it("counts a node back at work from a finish from when it went back, not the time it stood done", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(1000), started_at_unix_ms: at(1000), worked_at_unix_ms: at(60), own_met_at_unix_ms: at(20) }), end)).toEqual({ work: 40 * minute, review: 20 * minute, wait: null });
+  });
   it("leaves out what the record cannot say: a finished node from before the stamp, and a node that could not start yet", () => {
     expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    // Its wait alone never stands in for the total of a node that started.
+    expect(nodeSpans(node("n", { status: "done", ready_at_unix_ms: at(480), started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
     expect(nodeSpans(node("n", { status: "planned" }), end)).toBeNull();
   });
 });
@@ -751,9 +756,14 @@ describe("a node's warnings", () => {
   it("names the first on the card and each in full", () => {
     expect(warningWords(mission("m"), warned, t)).toEqual({
       short: "Review limit 3/3 +1",
-      full: ["Warned the Conductor: review or verify round 3 of 3 failed: the round limit is reached", "Warned the Conductor: no push for 95 minutes"],
+      full: ["Warned the Conductor: review or verify failed in round 3: the 3-round limit is reached", "Warned the Conductor: no push for 95 minutes"],
     });
     expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
+  });
+
+  it("leaves out an older core's review warning, which carries no rounds", () => {
+    expect(warningWords(mission("m"), { ...warned, review_rounds: undefined }, t)).toEqual({ short: "No push", full: ["Warned the Conductor: no push for 95 minutes"] });
+    expect(warningWords(mission("m"), { ...warned, review_rounds: null, warnings: [warned.warnings![0]!] }, t)).toBeNull();
   });
 
   it("says a stopped worker's warning with how long and why (mission-56)", () => {

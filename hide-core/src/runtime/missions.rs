@@ -306,16 +306,20 @@ pub struct NodeView {
     /// What Hide itself did to the node last (D-07, D-15).
     pub hide: Option<crate::missions::HideMark>,
     /// Its review's or verification's rounds against the mission's limit
-    /// (`MissionNode::most_rounds`, `Strength::review_rounds`); none before
+    /// (`MissionNode::review_line`, `Strength::review_rounds`); none before
     /// a checker answered.
     pub review_rounds: Option<ReviewRounds>,
     /// When it could have started: the mission's start or its last
     /// dependency done, whichever came later (`ready_at`); none while it
     /// cannot. Its 기다림 runs from here to `started_at_unix_ms`.
     pub ready_at_unix_ms: Option<u64>,
-    /// When the lines its worker answers first all stood met
-    /// (`MissionNode::own_met_at_unix_ms`): its 작업 runs from
-    /// `started_at_unix_ms` to here, its 리뷰·CI from here to
+    /// When it last went to work (`MissionNode::worked_at_unix_ms`): its
+    /// start, or when it went back to work from a finish; its 작업 runs from
+    /// here. None for a node of a book from before it.
+    pub worked_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers first all stood met in this run of
+    /// its work (`MissionNode::own_met_at_unix_ms`): its 작업 runs from
+    /// `worked_at_unix_ms` to here, its 리뷰·CI from here to
     /// `finished_at_unix_ms` or now. None before then, and for a node of a
     /// book from before it.
     pub own_met_at_unix_ms: Option<u64>,
@@ -1310,12 +1314,12 @@ pub(super) fn wake_body(mission: &Mission, wake: &PendingWake) -> String {
             let (what, ask) = match (wake.warning, node, warning) {
                 (Some(WarningKind::ReviewFails), Some(node), _) => {
                     let limit = crate::mission_health::review_limit(mission);
-                    let line = node
-                        .review_past_limit(limit)
-                        .map_or("review", |line| line.key.as_str());
+                    let past = node.review_line(limit);
+                    let line = past.map_or("review", |line| line.key.as_str());
+                    let rounds = past.map_or(limit, |line| line.rounds);
                     (
                         format!(
-                            "reached its review round limit: the {line} round {limit} of {limit} the mission's `{}` strength allows failed",
+                            "reached its review round limit: the {line} failed in round {rounds}, with {limit} rounds the mission's `{}` strength allows",
                             mission.strength.unwrap_or_default().as_str()
                         ),
                         format!(
@@ -4923,12 +4927,15 @@ impl Runtime {
                         }
                     }),
                     hide: node.hide.clone(),
-                    review_rounds: node.most_rounds().map(|line| ReviewRounds {
-                        line: line.key.clone(),
-                        rounds: line.rounds,
-                        limit: crate::mission_health::review_limit(mission),
-                    }),
+                    review_rounds: node
+                        .review_line(crate::mission_health::review_limit(mission))
+                        .map(|line| ReviewRounds {
+                            line: line.key.clone(),
+                            rounds: line.rounds,
+                            limit: crate::mission_health::review_limit(mission),
+                        }),
                     ready_at_unix_ms: ready_at(mission, node),
+                    worked_at_unix_ms: node.worked_at_unix_ms,
                     own_met_at_unix_ms: node.own_met_at_unix_ms,
                     pushed_at_unix_ms: node.pushed_at_unix_ms,
                     asks_push: node.asks_push(),

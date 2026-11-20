@@ -739,9 +739,11 @@ pub(crate) fn warn_acts(
             }
             _ => {}
         }
+        let limit = review_limit(mission);
         let past = works
-            .then(|| node.review_past_limit(review_limit(mission)))
-            .flatten();
+            .then(|| node.review_line(limit))
+            .flatten()
+            .filter(|line| line.past_limit(limit));
         match standing(WarningKind::ReviewFails) {
             Some(_) if past.is_none() => acts.push(WarnAct::Clear {
                 node: at,
@@ -1641,6 +1643,7 @@ mod tests {
             summary: None,
             at_unix_ms: Some(5),
             commit: None,
+            rounds: 1,
             pane_id: None,
             machine: None,
         });
@@ -1656,6 +1659,32 @@ mod tests {
             told_unix_ms: Some(from),
             cause: None,
         }
+    }
+
+    /// mission-82 review O4: a node with a review and a verification names
+    /// one rounds line everywhere: the one past the limit and not passed,
+    /// else the one with the most rounds.
+    #[test]
+    fn a_node_names_the_line_past_the_limit_before_the_one_with_most_rounds() {
+        use crate::mission_criteria::CriterionState::{Fail, Pass};
+        let mut m = reviewed();
+        let mut verify = m.nodes[0].criteria[1].clone();
+        verify.key = "verify".into();
+        verify.kind = crate::mission_criteria::CriterionKind::Verify;
+        m.nodes[0].criteria.push(verify);
+        let set = |m: &mut Mission, at: usize, rounds: u32, state| {
+            m.nodes[0].criteria[at].rounds = rounds;
+            m.nodes[0].criteria[at].state = state;
+        };
+        set(&mut m, 1, 5, Pass);
+        set(&mut m, 2, 4, Fail);
+        let named = |m: &Mission| m.nodes[0].review_line(4).map(|line| line.key.clone());
+        assert_eq!(named(&m).as_deref(), Some("verify"));
+        set(&mut m, 2, 3, Fail);
+        assert_eq!(named(&m).as_deref(), Some("review"));
+        set(&mut m, 1, 0, Pass);
+        set(&mut m, 2, 0, Fail);
+        assert_eq!(named(&m), None);
     }
 
     /// mission-82: the round at the strength's limit failing warns, once:

@@ -890,9 +890,9 @@ it("says in the panel's head where a node's time went, work, review and CI, and 
   const at = (minutes: number) => now - minutes * 60_000;
   const nodes = [
     // Waited 3h for its dependency, worked 1.5h to its own lines, then 8.5h in review and CI so far.
-    node("a", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }),
-    // A done node of a book from before the stamp keeps its total.
-    node("b", { status: "done", pr: 3, pr_state: "merged", started_at_unix_ms: at(90), finished_at_unix_ms: at(30) }),
+    node("a", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), worked_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }),
+    // A done node of a book from before the stamp keeps its total; the core sends every started mission's node its ready time.
+    node("b", { status: "done", pr: 3, pr_state: "merged", ready_at_unix_ms: at(780), started_at_unix_ms: at(90), finished_at_unix_ms: at(30) }),
   ];
   const move = (minutes: number, key: string, status: MissionNode["status"]): MissionEvent => ({ at_unix_ms: at(minutes), kind: "node", node: key, status });
   const events = [move(600, "a", "working"), move(90, "b", "working"), move(30, "b", "done")];

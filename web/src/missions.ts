@@ -614,23 +614,27 @@ export function nodeTimes(node: MissionNode, events: readonly MissionEvent[], en
 
 /**
  * Where a node's time went (mission-82), as `hide mission show` splits it:
- * `work` from its start until its worker's lines first all stood met,
- * `review` from then until it finished, and `wait` from when it could have
- * started until it did; a span still running counts to `end`. A part the
- * record cannot say (no start yet, a book from before the stamp) is null,
- * and so is a wait under a minute. Null when no part can be said.
+ * `work` from when it last went to work (its start, or back from a finish)
+ * until its worker's lines stood met, `review` from then until it finished,
+ * and `wait` from when it could have started until it did; a span still
+ * running counts to `end`. A part the record cannot say (no start yet, a
+ * book from before the stamps) is null, and so is a wait under a minute.
+ * Null when neither work nor review can be said of a node that started, so
+ * a wait alone never stands in for its total.
  */
 export function nodeSpans(node: MissionNode, end: number): { work: number | null; review: number | null; wait: number | null } | null {
   const started = node.started_at_unix_ms;
+  const from = node.worked_at_unix_ms ?? started;
   const finished = node.finished_at_unix_ms;
   const met = node.own_met_at_unix_ms ?? null;
-  const span = (from: number, to: number) => Math.max(0, to - from);
-  const work = started == null ? null : met != null ? span(started, met) : finished == null ? span(started, end) : null;
+  const span = (since: number, to: number) => Math.max(0, to - since);
+  const work = from == null ? null : met != null ? span(from, met) : finished == null ? span(from, end) : null;
   const review = met == null ? null : span(met, finished ?? end);
   const ready = node.ready_at_unix_ms ?? null;
   const waited = ready == null ? null : started != null ? span(ready, started) : node.status === "planned" ? span(ready, end) : null;
   const wait = waited != null && waited >= 60_000 ? waited : null;
-  return work == null && review == null && wait == null ? null : { work, review, wait };
+  if (work == null && review == null && (started != null || wait == null)) return null;
+  return { work, review, wait };
 }
 
 /**
@@ -1124,14 +1128,16 @@ export function heldNodes(mission: Mission): number {
  * nothing.
  */
 export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): { short: string; full: string[] } | null {
-  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []);
+  // An older core's review warning carries no rounds (a connected device of an earlier build): it says nothing rather than `0/0`.
+  const rounds = node.review_rounds;
+  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []).filter((warning) => warning.kind !== "review_fails" || rounds != null);
   const first = warnings[0];
   if (!first) return null;
   const minutes = (warning: MissionNodeWarning) => String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000));
   const words = (warning: MissionNodeWarning, form: "short" | "full") => {
     switch (warning.kind) {
       case "review_fails":
-        return t(`mission.warning.review_fails.${form}`, { rounds: node.review_rounds?.rounds ?? 0, limit: node.review_rounds?.limit ?? 0 });
+        return t(`mission.warning.review_fails.${form}`, { rounds: rounds!.rounds, limit: rounds!.limit });
       case "no_push":
         return t(`mission.warning.no_push.${form}`, { minutes: minutes(warning) });
       case "stopped":

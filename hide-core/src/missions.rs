@@ -1304,9 +1304,11 @@ pub struct MissionNode {
     /// When the lines its worker answers (`CriterionKind::worker_answers`)
     /// first all stood passed or skipped: where its own work ended and the
     /// review, CI and fix rounds began, the split of the node's time
-    /// (`hide mission show`, the map's panel). Set once, on the record or
-    /// skip that met the last of them. A book from before it has none, and
-    /// a node whose lines were already met then never gets one.
+    /// (`hide mission show`, the map's panel), counted from
+    /// `worked_at_unix_ms`. Set once a run of its work, on the record or
+    /// skip that met the last of them; going back to work from a finish
+    /// starts the next run (`back_to_work`). A book from before it has none,
+    /// and a node whose lines were already met then never gets one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_met_at_unix_ms: Option<u64>,
     /// The warnings the node carries now, at most one of each kind.
@@ -1562,6 +1564,9 @@ impl MissionNode {
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
+        // Its time splits again from here: work until its lines stand met
+        // again, now when nothing of its own is left open.
+        self.own_met_at_unix_ms = self.own_lines_met().then_some(now);
         self.done_head = None;
         for line in &mut self.criteria {
             line.shown.clear();
@@ -1615,32 +1620,21 @@ impl MissionNode {
         }
     }
 
-    /// The review or verification line whose rounds reached `limit` and
-    /// that has not passed or been skipped since (`Criterion::rounds`), the
-    /// one with more rounds first; none while every checker line is within
-    /// its rounds. The one rule the limit's warning stands on.
-    pub fn review_past_limit(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
-        self.criteria
-            .iter()
-            .filter(|line| {
-                line.kind.checker_judges()
-                    && line.rounds >= limit
-                    && !matches!(
-                        line.state,
-                        crate::mission_criteria::CriterionState::Pass
-                            | crate::mission_criteria::CriterionState::Skipped
-                    )
-            })
+    /// The node's review rounds line (`Criterion::rounds`): the review or
+    /// verification line past `limit` (`Criterion::past_limit`), the one
+    /// with more rounds first, else the one with the most rounds; none
+    /// before any checker answered. The one rule the limit's warning, its
+    /// letter and the screens that count rounds read.
+    pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        let lines = || {
+            self.criteria
+                .iter()
+                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
+        };
+        lines()
+            .filter(|line| line.past_limit(limit))
             .max_by_key(|line| line.rounds)
-    }
-
-    /// The checker line with the most review rounds, for the screens that
-    /// count them against the limit; none before any checker answered.
-    pub fn most_rounds(&self) -> Option<&crate::mission_criteria::Criterion> {
-        self.criteria
-            .iter()
-            .filter(|line| line.kind.checker_judges() && line.rounds > 0)
-            .max_by_key(|line| line.rounds)
+            .or_else(|| lines().max_by_key(|line| line.rounds))
     }
 }
 
@@ -5826,6 +5820,42 @@ pub(crate) mod tests {
         let mut node = one("b");
         node.back_to_work(5);
         assert_eq!(node.round, 1);
+    }
+
+    /// mission-82 review O5: a node back at work from a finish splits its
+    /// time again from then, so the time it stood done is neither work nor
+    /// review: its own lines all met, its work is already done; a defect
+    /// left open, its work runs until that line is met.
+    #[test]
+    fn a_node_back_at_work_from_a_finish_splits_its_time_again_from_then() {
+        use crate::mission_criteria::{Criterion, CriterionKind, CriterionState};
+        let mut node = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2)
+            .unwrap()
+            .nodes[0]
+            .clone();
+        for line in node
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.worker_answers())
+        {
+            line.state = CriterionState::Pass;
+        }
+        node.own_met_at_unix_ms = Some(3);
+        node.back_to_work(50);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(50), Some(50))
+        );
+        node.criteria
+            .push(Criterion::new("d1", CriterionKind::Defect));
+        node.back_to_work(90);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(90), None)
+        );
+        node.criteria.last_mut().unwrap().state = CriterionState::Pass;
+        node.note_own_met(false, 120);
+        assert_eq!(node.own_met_at_unix_ms, Some(120));
     }
 
     /// A mission created before verification strength keeps the checkers

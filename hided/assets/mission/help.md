@@ -40,8 +40,9 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 
 `hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, where its time went, its review rounds of the limit, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
 Where a node's time went reads `작업 1.5h · 리뷰·CI 9h · 기다림 3h`: 작업 from its start until its worker's own lines first all stood passed or skipped, 리뷰·CI from then until it finished (or now), and 기다림 from when it could have started (the mission's start, or its last dependency done) until it did; the map's node panel says the same.
+A node taken back to work from a finish (a defect, a follow-up pull request, your `--status working`) splits again from then: 작업 until its own lines stand met again, at once when none is left open, and 리뷰·CI after it; the time it stood done counts in neither.
 A long 리뷰·CI beside a short 작업 is rounds of review, CI and fixes, the time the round limit below bounds; a long 기다림 is a node that could have started earlier.
-A part the record cannot say is left out: a node finished before Hide recorded these times shows none of 작업 and 리뷰·CI.
+A part the record cannot say is left out: a node finished before Hide recorded these times shows none of them, and the map's panel keeps its total.
 `hide mission show <node>` reads that node in full: its finish lines with their evidence and verdicts, its pull requests and CI, its branch and last push, its warnings, its worker and the worker's newest letters.
 With `--json` it prints the record itself instead, `{"mission":…}`, or for one node `{"mission_id","node","letters"}` (`letters` is null when the ledger could not be read): the fields this guide names in backticks, such as a node's `criteria`, the mission's `strength` and an open question's `key`, are read there.
 
@@ -195,7 +196,7 @@ The mission's `strength` in `hide mission show --json` says how much checking yo
 Propose it in the plan's `strength`: `fast`, `normal` or `thorough` (빠르게, 보통, 꼼꼼하게 in Korean); when it differs from the setting, give why in one line in `strength_why` and say it with the plan.
 When the operator asks for another strength, before or during the mission ("check this one thoroughly"), send the plan again with the new `strength` and its `strength_why`; Hide records the change as a mission event and the map's head shows it.
 The gate holds only each node's own lines, the check command and CI; the strength is how you choose each node's `checks`.
-Hide counts the review rounds against it: a node's round is each distinct head its review or verification checkers answered (the `--commit` they record), and the strength allows 1 round at `fast`, 3 at `normal` (a review and at most two re-reviews) and 4 at `thorough`; a mission from before strength counts as `normal`.
+Hide counts the review rounds against it: a node's rounds are the most heads any one of its review or verification checkers answered (the `--commit` it records), so a slow checker's answer on a head another already moved past opens none; on a node with no pull request, whose answers name no head, each new answer of a checker is its next round. The strength allows 1 round at `fast`, 3 at `normal` (a review and at most two re-reviews) and 4 at `thorough`; a mission from before strength counts as `normal`.
 `hide mission show` prints each node's rounds of the limit (`리뷰 2/3라운드`).
 
 - `fast`: the node's own lines and CI only; a reviewer only on a node whose failure would be costly; one review round, with no re-review.

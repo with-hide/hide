@@ -330,6 +330,7 @@ fn mission(
             hide: None,
             review_rounds: None,
             ready_at_unix_ms: None,
+            worked_at_unix_ms: None,
             own_met_at_unix_ms: None,
             pushed_at_unix_ms: None,
             asks_push: false,

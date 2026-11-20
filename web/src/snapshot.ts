@@ -1718,7 +1718,9 @@ export type MissionNode = {
   review_rounds?: MissionReviewRounds | null;
   /** When it could have started, the mission's start or its last dependency done (`ready_at`); null while it cannot, absent from an older core. */
   ready_at_unix_ms?: number | null;
-  /** When the lines its worker answers first all stood met (`MissionNode::own_met_at_unix_ms`): its work ends and its review and CI begin here (`nodeSpans`); null before then and for a node of a book from before it. */
+  /** When it last went to work, its start or back from a finish (`MissionNode::worked_at_unix_ms`): its work counts from here (`nodeSpans`); null for a node of a book from before it, absent from an older core. */
+  worked_at_unix_ms?: number | null;
+  /** When the lines its worker answers first all stood met in this run of its work (`MissionNode::own_met_at_unix_ms`): its work ends and its review and CI begin here (`nodeSpans`); null before then and for a node of a book from before it. */
   own_met_at_unix_ms?: number | null;
   /** When Hide last read a new head on one of its pull requests. */
   pushed_at_unix_ms?: number | null;

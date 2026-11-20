@@ -161,21 +161,24 @@ fn rounds_words(node: &Value) -> Option<String> {
 }
 
 /// Where the node's time went (`ready_at_unix_ms`, `started_at_unix_ms`,
-/// `own_met_at_unix_ms`, `finished_at_unix_ms`): 작업 from its start until
-/// its worker's lines first all stood met, 리뷰·CI from then until it
-/// finished, and 기다림 from when it could have started until it did; a
-/// span still running counts to `now`. A part the record cannot say (no
-/// start yet, a book from before the stamp) is left out, never shown
-/// empty, and a wait under a minute says nothing.
+/// `worked_at_unix_ms`, `own_met_at_unix_ms`, `finished_at_unix_ms`): 작업
+/// from when it last went to work (its start, or back from a finish) until
+/// its worker's lines stood met, 리뷰·CI from then until it finished, and
+/// 기다림 from when it could have started until it did; a span still
+/// running counts to `now`. A part the record cannot say (no start yet, a
+/// book from before the stamps) is left out, never shown empty, a wait
+/// under a minute says nothing, and a node that started says nothing when
+/// neither 작업 nor 리뷰·CI can be said.
 fn time_words(node: &Value, now: u64) -> Option<String> {
     let at = |field: &str| node[field].as_u64();
     let started = at("started_at_unix_ms");
+    let from = at("worked_at_unix_ms").or(started);
     let finished = at("finished_at_unix_ms");
     let met = at("own_met_at_unix_ms");
     let end = finished.unwrap_or(now);
-    let work = match (started, met) {
-        (Some(start), Some(met)) => Some(met.saturating_sub(start)),
-        (Some(start), None) if finished.is_none() => Some(now.saturating_sub(start)),
+    let work = match (from, met) {
+        (Some(from), Some(met)) => Some(met.saturating_sub(from)),
+        (Some(from), None) if finished.is_none() => Some(now.saturating_sub(from)),
         _ => None,
     };
     let review = met.map(|met| end.saturating_sub(met));
@@ -186,6 +189,10 @@ fn time_words(node: &Value, now: u64) -> Option<String> {
             None => None,
         })
         .filter(|wait| *wait >= MINUTE_MS);
+    // A wait alone never stands for the time of a node that started.
+    if work.is_none() && review.is_none() && started.is_some() {
+        return None;
+    }
     let parts: Vec<String> = [("작업", work), ("리뷰·CI", review), ("기다림", wait)]
         .into_iter()
         .filter_map(|(word, span)| Some(format!("{word} {}", span_words(span?))))
@@ -777,6 +784,18 @@ mod tests {
             (
                 json!({"status": "done", "started_at_unix_ms": at(300), "finished_at_unix_ms": at(10)}),
                 None,
+            ),
+            // A node finished before the stamp keeps its total, not its wait.
+            (
+                json!({"status": "done", "started_at_unix_ms": at(300), "finished_at_unix_ms": at(10),
+                       "ready_at_unix_ms": at(480)}),
+                None,
+            ),
+            // Back at work from a finish hours later: the split counts that run.
+            (
+                json!({"status": "working", "started_at_unix_ms": at(400), "worked_at_unix_ms": at(60),
+                       "own_met_at_unix_ms": at(20), "ready_at_unix_ms": at(400)}),
+                Some("작업 40m · 리뷰·CI 20m"),
             ),
             (json!({"status": "planned"}), None),
         ] {
