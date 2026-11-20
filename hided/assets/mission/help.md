@@ -38,7 +38,11 @@ Working or checking nodes of two open missions, such a command is refused as `mi
 `hide mission show <mission id>`, the command Hide's letters name, reads that whole mission; a key that is also a node of the mission you mean reads that node.
 Running a command again changes nothing more, so after a timeout read `hide mission show` and decide.
 
-`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, its review or verification failures in a row, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
+`hide mission show` reads the mission as text: a head line (title, status, nodes done of those left in the plan, the open decision, how many warnings stand) and one line per node (its status, where its time went, its review rounds of the limit, minutes since its last push, its pull request and CI, what it waits on, which is `waiting_on` in `--json`, and ⚠ on a warned node).
+Where a node's time went reads `작업 1.5h · 리뷰·CI 9h · 기다림 3h`: 작업 from its start until its worker's own lines first all stood passed or skipped, 리뷰·CI from then until it finished (or now), and 기다림 from when it could have started (the mission's start, or when its last dependency was met: a node done, or a line it waits on recorded) until it did; the map's node panel says the same.
+A node taken back to work from a finish (a defect, a follow-up pull request, your `--status working`) splits again from then: 작업 until its own lines stand met again, at once when none is left open, and 리뷰·CI after it; the time it stood done counts in neither.
+A long 리뷰·CI beside a short 작업 is rounds of review, CI and fixes, the time the round limit below bounds; a long 기다림 is a node that could have started earlier.
+A part the record cannot say is left out: a node finished before Hide recorded these times shows none of them, and the map's panel keeps its total.
 `hide mission show <node>` reads that node in full: its finish lines with their evidence and verdicts, its pull requests and CI, its branch and last push, its warnings, its worker and the worker's newest letters.
 With `--json` it prints the record itself instead, `{"mission":…}`, or for one node `{"mission_id","node","letters"}` (`letters` is null when the ledger could not be read): the fields this guide names in backticks, such as a node's `criteria`, the mission's `strength` and an open question's `key`, are read there.
 
@@ -199,7 +203,9 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 The mission's `strength` in `hide mission show --json` says how much checking you plan: Settings › Mission's `default_strength` when the mission was created, until a plan changes it.
 Propose it in the plan's `strength`: `fast`, `normal` or `thorough` (빠르게, 보통, 꼼꼼하게 in Korean); when it differs from the setting, give why in one line in `strength_why` and say it with the plan.
 When the operator asks for another strength, before or during the mission ("check this one thoroughly"), send the plan again with the new `strength` and its `strength_why`; Hide records the change as a mission event and the map's head shows it.
-Hide enforces none of it: the gate holds only each node's own lines, the check command and CI; the strength is how you choose each node's `checks` and how many review rounds you run.
+The gate holds only each node's own lines, the check command and CI; the strength is how you choose each node's `checks`.
+Hide counts the review rounds against it: a node's rounds are the most heads any one of its review or verification checkers answered (the `--commit` it records), so a slow checker's answer on a head another already moved past opens none; on a node with no pull request, whose answers name no head, each new answer of a checker is its next round. The strength allows 1 round at `fast`, 3 at `normal` (a review and at most two re-reviews) and 4 at `thorough`; a mission from before strength counts as `normal`.
+`hide mission show` prints each node's rounds of the limit (`리뷰 2/3라운드`).
 
 - `fast`: the node's own lines and CI only; a reviewer only on a node whose failure would be costly; one review round, with no re-review.
 - `normal`: judge each node's risk.
@@ -208,7 +214,9 @@ Hide enforces none of it: the gate holds only each node's own lines, the check c
   A low-risk node (docs, copy, a small fix) gets no checker.
   Review again at most twice, and a re-review reads only what changed since the review before.
 - `thorough`: a `review` and a `verify` on every change node; several checkers deciding by `majority` on the risky ones; review again at most three times.
-- After the last round the strength allows, a serious finding still open is fixed in the node; a minor or rare-case one goes to the report as a follow-up.
+- When the round at the limit fails, Hide sends you one letter, and nothing to the operator: the limit is reached.
+  Settle it yourself, without asking the operator: have the worker fix the serious findings in the node; file each ordinary and minor one as a follow-up issue, name them on the pull request, and skip the line with `hide mission skip <node> review --reason "<issue numbers>"` (`verify` for a verification).
+  A serious finding still open after the fix gets the checker's look again; the ordinary and minor ones never hold the node past the limit (`docs/CODE_REVIEW.md`, Writing a finding).
 - A minor finding that blocks nothing gets no push of its own: the worker gathers them and sends them with the next push the node needs.
 - Choose every checker from the worker candidates in Settings › Mission, as you choose workers; with no candidates, among the agents installed here.
   Prefer a different kind of agent than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); when the candidates have none, any candidate.
@@ -299,7 +307,8 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A later push needs the next review round only when the strength allows one, and that round reads only what changed.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
 - A node whose approach fails: change the method yourself (retry, another worker, another order, split or join nodes), count it with `--attempts`, and leave the reason in `--change`.
-  A second review or verification FAIL in the same area is such a failure: change the design or hand the node to a fresh worker, never plug the holes one at a time.
+  A serious finding that comes back in the same area in the next review or verification round is such a failure: change the design or hand the node to a fresh worker, never plug the holes one at a time.
+  Ordinary and minor findings are no reason for a fresh worker: they wait for the round limit, where they become follow-up issues (Verification strength, above).
   So is a `check` or `ci` line that fails again for the same reason after its rerun, and a worker that keeps going round the same problem with no progress.
   The same problem unsolved after two attempts goes to the operator with what you tried and what you need decided.
 - Handing a node to a fresh worker is yours to decide and needs no question to the operator; say it in one line in conversation and in `--change`. It goes the same for every kind of node, in a Git project or a plain folder:
@@ -381,7 +390,7 @@ The same cause is raised once.
 CI, review and merge waits call no one, and a worker waiting on them, or on the operator's answer to a raise on its node or to your `hide mission decide --node` question about it, is not warned for being quiet, neither by the no-push warning nor by its watch's no-activity letter.
 A failed CI is its worker's to run again or fix, so it is no wait: put a wait on the operator that is not a merge on the map with `decide --node`, or the quiet worker is warned.
 
-Three signs that a worker is stuck are told to you first: a node whose review or verification failed twice in a row, a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet), and a node whose worker stopped for 5 minutes.
+Three signs that a worker is stuck are told to you first: a node whose review or verification round at the strength's limit failed (Verification strength, above, says what to do), a `pr` change node at work with no push for 90 minutes while the next move is its worker's (a pull request waiting only on CI, a review or a merge, or a node waiting on the operator, is not quiet), and a node whose worker stopped for 5 minutes.
 A worker is stopped when its program runs, its turn ended and it waits on nothing: no question or approval for the operator, no person's turn, child, background task, checks or reply it waits on, no letter of its own waiting for an answer, and no report to you as its last word; and its node waits on no one either (no pull request waiting on CI, a review or the merge, no raise, no question of yours about it, no delay or hold, and no gate that is all it owes).
 Its letter says why the turn ended when the agent said: a usage limit, with the agent's own line and its reset time when it gave one, or an API error; otherwise that it ended with no report.
 Send it on with a letter saying what is left, or give the node a fresh worker (Handing a node to a fresh worker, above); on a usage limit, send it on once the limit resets (hold the mission until then with `hide mission delay`) or give the node a fresh worker on another model.
@@ -389,8 +398,8 @@ The map draws the node `멈춤` with its cause and how long ago from the moment 
 Each sends you one letter and puts ⚠ on the node, on the map and in `hide mission show`; a passing or skipped review, a new push, or the stopped worker at work or waiting again, or its node waiting on someone, takes it off with its letter if not sent yet, and a warning that stands is never sent again (one raised while your letters are full is sent once there is room).
 While a worker stands stopped, its node's no-push warning goes and none rises, so you get one letter per stop, and while its warning stands its watch sends you no no-activity letter; the raise the stopped warning becomes after 30 minutes does not take that warning off.
 Read the node with `hide mission show <node>` and judge whether its worker needs another approach or the node a fresh worker.
-A failed review's or verification's warning stays yours alone: it goes only when that line passes, which a worker fixing the findings does not reach for a whole round, so it is never raised as stalled and never reaches the operator; when each round finds something new, judge the approach or give the node a fresh worker, and ask with `hide mission decide --node` when what is left is the operator's to decide.
-The three thresholds are fixed: two failed reviews or verifications in a row, 90 minutes with no push, and 5 minutes stopped.
+The round limit's warning stays yours alone: it stands through any round after the limit and goes only when that line passes or you skip it, so it is never raised as stalled and never reaches the operator.
+The thresholds are fixed: the strength's round limit, 90 minutes with no push, and 5 minutes stopped.
 
 ### A move that did not come
 

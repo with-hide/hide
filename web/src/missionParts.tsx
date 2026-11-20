@@ -3,13 +3,13 @@ import type { TFunction } from "i18next";
 import { useMemo, type ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
 import { DeviceChip } from "./components/device-chip";
-import { formatElapsed } from "./components/elapsed";
+import { formatElapsed, formatSpan } from "./components/elapsed";
 import { MissionPrMark } from "./components/mission-pr";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, itemNames, launchSession, missionNumber, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type ItemNames, type NodeLook, type NodeResult, type RunProfile } from "./missions";
+import { checkerState, itemNames, launchSession, missionNumber, nodeSpans, nodeTimes, nodeWorkWords, runWords, shortCommit, workerAsleep, type ItemNames, type NodeLook, type NodeResult, type RunProfile } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { machineName, windowDeviceId } from "./screenMachine";
 import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
@@ -97,6 +97,18 @@ export function useNodeTimes(mission: Mission, node: MissionNode, events: Missio
   const times = events ? nodeTimes(node, events, end) : null;
   if (!times || (times.running && mission.stale)) return null;
   return { took: times.took != null && times.took > 0 ? formatElapsed(language, times.took) : null, running: times.running };
+}
+
+/** Where a node's time went (`nodeSpans`) as one line, `작업 1.5h · 리뷰·CI 8.5h · 기다림 3h`, the words `hide mission show` prints; null when the record cannot split it, and while its device does not answer a running span says nothing (B35). */
+export function useNodeSpans(mission: Mission, node: MissionNode, end: number): string | null {
+  const { t } = useInterfaceTranslation();
+  const spans = nodeSpans(node, end);
+  if (!spans || (mission.stale && node.finished_at_unix_ms == null)) return null;
+  const parts = (["work", "review", "wait"] as const).flatMap((part) => {
+    const span = spans[part];
+    return span == null ? [] : [t(`mission.time.${part}`, { span: formatSpan(span) })];
+  });
+  return parts.join(" · ");
 }
 
 const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed", running: "text-mission-working", waiting: "text-muted-foreground" } as const;

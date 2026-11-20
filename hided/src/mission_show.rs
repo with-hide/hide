@@ -136,13 +136,84 @@ fn line_of<'a>(node: &'a Value, kind: &str) -> Option<&'a Value> {
         .find(|line| line["kind"] == kind)
 }
 
-/// The node's failed reviews or verifications in a row, marked when they warn.
+/// The node's review or verification rounds against the mission's limit
+/// (`review_rounds`), marked when the round at the limit failed and warns.
 fn review_words(node: &Value) -> Option<String> {
-    let fails = node["review_fails"].as_u64().filter(|fails| *fails > 0)?;
     Some(marked(
         warning(node, "review_fails").is_some(),
-        format!("리뷰·검증 FAIL {fails}연속"),
+        rounds_words(node)?,
     ))
+}
+
+/// `리뷰 2/3라운드`: the rounds its checkers answered of those allowed.
+fn rounds_words(node: &Value) -> Option<String> {
+    let rounds = &node["review_rounds"];
+    let line = if rounds["line"] == "verify" {
+        "검증"
+    } else {
+        "리뷰"
+    };
+    Some(format!(
+        "{line} {}/{}라운드",
+        rounds["rounds"].as_u64()?,
+        rounds["limit"].as_u64()?
+    ))
+}
+
+/// Where the node's time went (`ready_at_unix_ms`, `started_at_unix_ms`,
+/// `worked_at_unix_ms`, `own_met_at_unix_ms`, `finished_at_unix_ms`): 작업
+/// from when it last went to work (its start, or back from a finish) until
+/// its worker's lines stood met, 리뷰·CI from then until it finished, and
+/// 기다림 from when it could have started until it did; a span still
+/// running counts to `now`. A part the record cannot say (no start yet, a
+/// book from before the stamps) is left out, never shown empty, a wait
+/// under a minute says nothing, and a node that started says nothing when
+/// neither 작업 nor 리뷰·CI can be said.
+fn time_words(node: &Value, now: u64) -> Option<String> {
+    let at = |field: &str| node[field].as_u64();
+    let started = at("started_at_unix_ms");
+    let from = at("worked_at_unix_ms").or(started);
+    let finished = at("finished_at_unix_ms");
+    let met = at("own_met_at_unix_ms");
+    let end = finished.unwrap_or(now);
+    let work = match (from, met) {
+        (Some(from), Some(met)) => Some(met.saturating_sub(from)),
+        (Some(from), None) if finished.is_none() => Some(now.saturating_sub(from)),
+        _ => None,
+    };
+    let review = met.map(|met| end.saturating_sub(met));
+    let wait = at("ready_at_unix_ms")
+        .and_then(|ready| match started {
+            Some(start) => Some(start.saturating_sub(ready)),
+            None if node["status"] == "planned" => Some(now.saturating_sub(ready)),
+            None => None,
+        })
+        .filter(|wait| *wait >= MINUTE_MS);
+    // A wait alone never stands for the time of a node that started.
+    if work.is_none() && review.is_none() && started.is_some() {
+        return None;
+    }
+    let parts: Vec<String> = [("작업", work), ("리뷰·CI", review), ("기다림", wait)]
+        .into_iter()
+        .filter_map(|(word, span)| Some(format!("{word} {}", span_words(span?))))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+const MINUTE_MS: u64 = 60_000;
+
+/// A span as the node's time reads it: whole minutes under an hour, else
+/// hours to one decimal (`40m`, `1.5h`, `9h`).
+fn span_words(ms: u64) -> String {
+    let minutes = ms / MINUTE_MS;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let tenths = (ms + 3 * MINUTE_MS) / (6 * MINUTE_MS);
+    match tenths % 10 {
+        0 => format!("{}h", tenths / 10),
+        tenth => format!("{}.{tenth}h", tenths / 10),
+    }
 }
 
 /// Its last push, or that a change at work has none yet, marked when the
@@ -352,6 +423,7 @@ fn draw_mission(mission: &Value, now: u64) -> Result<String, String> {
     }
     for node in &nodes {
         let mut fields = vec![text(node, "key").to_owned(), node_status(node)];
+        fields.extend(time_words(node, now));
         fields.extend(review_words(node));
         fields.extend(push_words(node, now));
         fields.extend(stop_words(node, now));
@@ -434,8 +506,8 @@ fn draw_line(out: &mut String, line: &Value, now: u64) {
     if let Some(said) = line["text"].as_str() {
         let _ = write!(words, " · {said}");
     }
-    if let Some(fails) = line["fails_in_a_row"].as_u64().filter(|fails| *fails > 0) {
-        let _ = write!(words, " · FAIL {fails}연속");
+    if let Some(rounds) = line["rounds"].as_u64().filter(|rounds| *rounds > 0) {
+        let _ = write!(words, " · {rounds}라운드");
     }
     if let Some(commit) = line["commit"].as_str() {
         let _ = write!(words, " · {}", commit.get(..7).unwrap_or(commit));
@@ -550,6 +622,9 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let Some(reason) = result["unread_reason"].as_str() {
         let _ = writeln!(out, "읽지 못함 · {reason}");
     }
+    if let Some(time) = time_words(node, now) {
+        let _ = writeln!(out, "시간 {time}");
+    }
     if let Some(push) = push_words(node, now) {
         let _ = writeln!(out, "{push}");
     }
@@ -559,8 +634,8 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     for warning in node["warnings"].as_array().into_iter().flatten() {
         let what = match warning["kind"].as_str() {
             Some("review_fails") => format!(
-                "리뷰·검증 FAIL {}연속",
-                node["review_fails"].as_u64().unwrap_or(0)
+                "{} · 한도 도달, 보통 이하는 후속 이슈로",
+                rounds_words(node).unwrap_or_else(|| "리뷰".to_owned())
             ),
             Some("no_push") => format!(
                 "push 없이 {}분",
@@ -665,11 +740,13 @@ mod tests {
         "nodes": [
             {"key": "show", "kind": "change", "delivery": "pr", "status": "working",
              "agent_runtime": "running", "pr": 7, "prs": [{"number": 7, "state": "failed"}],
-             "pr_state": "failed", "review_fails": 2, "pushed_at_unix_ms": NOW - 95 * MINUTE,
+             "pr_state": "failed", "review_rounds": {"line": "review", "rounds": 3, "limit": 3},
+             "ready_at_unix_ms": NOW - 780 * MINUTE, "started_at_unix_ms": NOW - 600 * MINUTE,
+             "own_met_at_unix_ms": NOW - 510 * MINUTE, "pushed_at_unix_ms": NOW - 95 * MINUTE,
              "asks_push": true, "waiting_on": {"kind": "worker"},
              "criteria": [
                 {"key": "c1", "kind": "own", "state": "pass"},
-                {"key": "review", "kind": "review", "state": "fail", "fails_in_a_row": 2},
+                {"key": "review", "kind": "review", "state": "fail", "rounds": 3},
                 {"key": "ci", "kind": "ci", "state": "fail"}],
              "warnings": [
                 {"kind": "review_fails", "from_unix_ms": NOW - 20 * MINUTE, "since_unix_ms": NOW - 20 * MINUTE,
@@ -677,39 +754,90 @@ mod tests {
                 {"kind": "no_push", "from_unix_ms": NOW - 95 * MINUTE, "since_unix_ms": NOW - 5 * MINUTE}]},
             {"key": "ci", "kind": "change", "delivery": "pr", "status": "working",
              "pr": 8, "prs": [{"number": 8, "state": "pending"}], "pr_state": "pending",
-             "review_fails": 0, "pushed_at_unix_ms": NOW - 12 * MINUTE, "warnings": [],
+             "pushed_at_unix_ms": NOW - 12 * MINUTE, "warnings": [],
              "asks_push": true, "waiting_on": {"kind": "decision"},
              "criteria": [{"key": "c1", "kind": "own", "state": "pass"},
                           {"key": "review", "kind": "review", "state": "open"},
                           {"key": "ci", "kind": "ci", "state": "pass"}]},
             {"key": "docs", "kind": "change", "delivery": "pr", "status": "done",
              "pr": 6, "prs": [{"number": 5, "state": "closed"}, {"number": 6, "state": "merged"}],
-             "pr_state": "merged", "review_fails": 0, "warnings": [],
+             "pr_state": "merged", "warnings": [],
              "criteria": [{"key": "ci", "kind": "ci", "state": "pass"}]},
             {"key": "later", "kind": "general", "preset": "research", "status": "planned", "depends_on": ["show", "docs"],
              "waiting_on": {"kind": "nodes", "keys": ["show"]},
-             "review_fails": 0, "warnings": [], "criteria": []},
+             "warnings": [], "criteria": []},
             {"key": "old", "kind": "change", "delivery": "pr", "status": "dropped",
-             "review_fails": 0, "warnings": [], "criteria": []},
+             "warnings": [], "criteria": []},
         ]}})
     }
 
     /// with-hide/hide-private#552 c1: the head says the title, the state,
     /// how many nodes finished of those left in the plan, the open decision
-    /// and the warnings; each node is one line with its state, failed
-    /// reviews in a row, last push, pull request and CI, what it waits on,
-    /// and `⚠` on the line and on each fact that warns.
+    /// and the warnings; each node is one line with its state, where its
+    /// time went (mission-82), its review rounds of the limit, last push,
+    /// pull request and CI, what it waits on, and `⚠` on the line and on
+    /// each fact that warns. A done node of a book from before the time's
+    /// stamp says no time rather than an empty one.
     #[test]
     fn a_mission_reads_as_its_head_and_one_line_per_node() {
         assert_eq!(
             draw(&mission(), NOW).unwrap(),
             "mission-33 · Show summary · 진행 중 · 끝 1/4 · 빠짐 1 · 열린 결정 1 · 경고 2\n\
              결정 · Merge order?\n\
-             ⚠ show · 작업 중 · ⚠리뷰·검증 FAIL 2연속 · ⚠push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
+             ⚠ show · 작업 중 · 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h · ⚠리뷰 3/3라운드 · ⚠push 95분 전 · #7 실패 · CI 실패 · 기다림 작업자\n\
              \x20 ci · 작업 중 · push 12분 전 · #8 대기 · CI 통과 · 기다림 운영자 결정\n\
              \x20 docs · 끝 · #6 머지됨 외 1\n\
              \x20 later · 계획 · 기다림 show\n\
              \x20 old · 빠짐\n"
+        );
+    }
+
+    /// mission-82 c2: a node's time splits at its start and where its
+    /// worker's lines first all stood met, each part counting to `now`
+    /// while it runs: work alone before the stamp, the wait of a planned
+    /// node that could start, nothing for a wait under a minute, and no
+    /// work or review for a finished node of a book from before the stamp,
+    /// whose `started` and `finished` alone cannot say where review began.
+    #[test]
+    fn a_nodes_time_splits_into_work_review_and_wait_and_leaves_out_what_it_cannot_say() {
+        let at = |minutes: u64| json!(NOW - minutes * MINUTE);
+        for (node, words) in [
+            (
+                json!({"status": "working", "started_at_unix_ms": at(40), "ready_at_unix_ms": at(40)}),
+                Some("작업 40m"),
+            ),
+            (
+                json!({"status": "done", "started_at_unix_ms": at(200), "own_met_at_unix_ms": at(110),
+                       "finished_at_unix_ms": at(20), "ready_at_unix_ms": at(203)}),
+                Some("작업 1.5h · 리뷰·CI 1.5h · 기다림 3m"),
+            ),
+            (
+                json!({"status": "planned", "ready_at_unix_ms": at(25)}),
+                Some("기다림 25m"),
+            ),
+            (
+                json!({"status": "done", "started_at_unix_ms": at(300), "finished_at_unix_ms": at(10)}),
+                None,
+            ),
+            // A node finished before the stamp keeps its total, not its wait.
+            (
+                json!({"status": "done", "started_at_unix_ms": at(300), "finished_at_unix_ms": at(10),
+                       "ready_at_unix_ms": at(480)}),
+                None,
+            ),
+            // Back at work from a finish hours later: the split counts that run.
+            (
+                json!({"status": "working", "started_at_unix_ms": at(400), "worked_at_unix_ms": at(60),
+                       "own_met_at_unix_ms": at(20), "ready_at_unix_ms": at(400)}),
+                Some("작업 40m · 리뷰·CI 20m"),
+            ),
+            (json!({"status": "planned"}), None),
+        ] {
+            assert_eq!(time_words(&node, NOW).as_deref(), words, "{node}");
+        }
+        assert_eq!(
+            [0, 59, 60, 87, 90, 540, 544, 545].map(|minutes| span_words(minutes * MINUTE)),
+            ["0m", "59m", "1h", "1.5h", "1.5h", "9h", "9.1h", "9.1h"]
         );
     }
 
@@ -891,12 +1019,13 @@ mod tests {
              작업자 claude opus · agent-2 · pane w1:p2 · 깨어 있음\n\
              PR #7 실패 · https://github.com/acme/hide/pull/7\n\
              브랜치 feat/show\n\
+             시간 작업 1.5h · 리뷰·CI 8.5h · 기다림 3h\n\
              ⚠push 95분 전\n\
-             경고 ⚠ 리뷰·검증 FAIL 2연속 · 지휘자에게 알림 20분 전\n\
+             경고 ⚠ 리뷰 3/3라운드 · 한도 도달, 보통 이하는 후속 이슈로 · 지휘자에게 알림 20분 전\n\
              경고 ⚠ push 없이 95분 · 지휘자에게 알릴 차례\n\
              완료 줄 1/3\n\
              \x20 c1 통과 · show reads as text · 근거 unit test · w 30분 전\n\
-             \x20 review 실패 · FAIL 2연속\n\
+             \x20 review 실패 · 3라운드\n\
              \x20   codex 실패 · agent-3 · 20분 전 · input lost · 근거 repro in test\n\
              \x20   claude 열림 · 아직 안 붙음\n\
              \x20 ci 실패\n\
