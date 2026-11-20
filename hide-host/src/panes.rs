@@ -108,6 +108,23 @@ fn inspect_holder(
     })
 }
 
+/// The pane `pane_id` of this node, when the process `peer` runs in it: the
+/// pid is the one this machine's kernel reports for the other end of a
+/// local stream, and it is the pane's shell or descends from it. Every
+/// service of a node that takes a pane's word proves its caller here.
+pub fn prove_caller(
+    slot: &crate::pane_holders::PaneSlot,
+    pane_id: &str,
+    peer: i32,
+) -> Result<PaneIdentity, &'static str> {
+    let identity = inspect_holder(slot, pane_id)?;
+    if pane_peer::descends_from(peer, identity.shell_pid) {
+        Ok(identity)
+    } else {
+        Err("caller_not_in_pane")
+    }
+}
+
 struct Started {
     holders: crate::pane_holders::PaneSlot,
     socket_wire: String,
@@ -483,6 +500,11 @@ impl Panes {
             if request.access.is_some() {
                 return Err("access_core_only".to_owned());
             }
+            // Pairing is asked of the core of the machine it is typed on
+            // (PRD device-connect-iroh B1); a device's node takes none.
+            if request.device.is_some() {
+                return Err("device_core_only".to_owned());
+            }
             if request
                 .hook
                 .as_ref()
@@ -490,13 +512,7 @@ impl Panes {
             {
                 return Err("invalid_request".to_owned());
             }
-            let pane = inspect_holder(&started.holders, &request.pane_id).and_then(|identity| {
-                if pane_peer::descends_from(peer, identity.shell_pid) {
-                    Ok(identity)
-                } else {
-                    Err("caller_not_in_pane")
-                }
-            });
+            let pane = prove_caller(&started.holders, &request.pane_id, peer);
             let proved = match pane {
                 Ok(identity) => Proved::Pane(identity),
                 Err(_) if self.checkout_callers => {

@@ -175,6 +175,9 @@ extraResource.push(path.join(resources, "app-update.yml"));
 
 const APP_BUNDLE_ID = APP_ID;
 
+/** What macOS shows when Hide first reaches another machine on the same network. */
+const LOCAL_NETWORK_REASON = "Hide connects directly to your other computers on this network.";
+
 /**
  * macOS's notification permission helper (PRD first-run-onboarding D-12):
  * one Swift file compiled for this machine's architecture, with the app's
@@ -223,6 +226,11 @@ const [outputDir] = await packager({
   platform,
   arch,
   overwrite: true,
+  // macOS shows this once, when the operator first shares this Mac or adds
+  // a device, and without the key blocks every path to an address on the
+  // same network, so two Macs on one Wi-Fi would connect only through the
+  // relay (PRD device-connect-iroh D-83).
+  extendInfo: { NSLocalNetworkUsageDescription: LOCAL_NETWORK_REASON },
   // The packager's own default (native modules unpacked), plus the status page: with the shipped
   // fuses `loadFile` cannot read a file inside the archive (`src/main/statusPage.ts`).
   asar: { unpack: "**/{.**,**}/**/*.node", unpackDir: "dist/static" },
@@ -289,6 +297,9 @@ if (platform === "win32") {
   }
 }
 if (platform === "darwin") {
+  // Read back from the built app, like the fuses: a bundle without it ships a Mac that never connects directly.
+  const reason = spawnSync("/usr/bin/plutil", ["-extract", "NSLocalNetworkUsageDescription", "raw", path.join(bundle, "Contents", "Info.plist")], { encoding: "utf8" });
+  if (reason.status !== 0 || reason.stdout.trim() !== LOCAL_NETWORK_REASON) throw new Error("hide.app's Info.plist does not carry NSLocalNetworkUsageDescription");
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
   // A Developer ID bundle was signed inside the packager; a release's is notarized below.

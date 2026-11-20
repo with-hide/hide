@@ -190,6 +190,22 @@ impl Upstream {
         session.attach(program, state_dir)
     }
 
+    /// The machine's system (`macos`, `linux` or `windows`), read at the
+    /// sign-in of the session the last step left or of a new one.
+    pub fn system(&self) -> Result<String, SessionError> {
+        self.with_session(|session| Ok(session.system().to_owned()))
+    }
+
+    /// Where the alias resolved at the last dial: the host name `ssh`
+    /// signs in at, and none when the alias goes through a proxy command
+    /// or a jump host, whose server this machine does not reach itself.
+    pub fn direct_host(&self) -> Option<String> {
+        lock_recover(&self.resolved)
+            .as_ref()
+            .filter(|resolved| !resolved.proxied())
+            .map(|resolved| resolved.hostname.clone())
+    }
+
     /// Runs `argv` on the machine with no input; see [`Session::run`].
     pub fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, SessionError> {
         self.with_session(|session| session.run(argv, cap, within))

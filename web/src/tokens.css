@@ -228,7 +228,6 @@
   --size-rail-badge: 13px;
   --size-rail-badge-text: 9px;
   --size-rail-mark: 8px;
-  --size-rail-crown: 9px;
   --size-pane-header: 28px;
   --size-sidebar-min: 220px;
   --size-sidebar-ideal: 292px;
@@ -355,6 +354,7 @@
   --size-mission-popover: 320px;
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
+  --size-chip-edge-bar: 2px;
   --size-flow-title: 196px;
   --size-flow-bar: 8px;
   --size-pr-number: 38px;

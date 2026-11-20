@@ -66,10 +66,47 @@
     ],
     "version": 1
   },
+  "file": {
+    "build": {
+      "id_chars": 16,
+      "max_bytes": 268435456,
+      "max_files": 64,
+      "max_path_bytes": 255
+    },
+    "build_file_fields": [
+      "executable",
+      "path",
+      "sha256",
+      "size"
+    ],
+    "messages": {
+      "build": {
+        "fields": [
+          "files",
+          "id"
+        ],
+        "since": 1
+      },
+      "build_placed": {
+        "fields": [
+          "id"
+        ],
+        "since": 1
+      },
+      "refused": {
+        "fields": [
+          "reason"
+        ],
+        "since": 1
+      }
+    }
+  },
   "guest": {
     "folder": {
+      "builds_kept": 2,
       "guests": "g",
       "host_side": "h",
+      "install_side": "i",
       "key_file": "key",
       "node_side": "n",
       "panes": "panes.json"
@@ -82,14 +119,22 @@
         "install"
       ]
     },
+    "install": {
+      "build_chars": 16,
+      "hooks_name_prefix": "guest-root:",
+      "name_prefix": "guest:"
+    },
     "launch": {
       "arguments": [
         "node",
         "serve",
         "--guest"
       ],
-      "end_fields": [
-        "end"
+      "box_full_fields": [
+        "pane"
+      ],
+      "capabilities": [
+        "events"
       ],
       "end_modes": [
         "now",
@@ -99,10 +144,29 @@
         "ended": 0,
         "folder_held": 75,
         "folder_refused": 73,
+        "host_unreachable": 70,
+        "restart": 71,
         "unknown_word": 64
       },
-      "idle_fields": [
+      "from_node": [
+        "box_full",
+        "event",
         "idle"
+      ],
+      "limits": {
+        "crash_window_secs": 600,
+        "crashes": 5,
+        "end_now_waits_secs": 5,
+        "folder_held_retries": 10,
+        "folder_held_retry_secs": 1,
+        "guest_nodes": 4,
+        "holder_lost_restart_secs": 600,
+        "idle_end_secs": 60
+      },
+      "max_line_bytes": 1049600,
+      "position_fields": [
+        "outbox",
+        "seq"
       ],
       "ready": {
         "fields": [
@@ -117,7 +181,13 @@
         ],
         "version": 1,
         "within_secs": 10
-      }
+      },
+      "to_node": [
+        "ack",
+        "away",
+        "end",
+        "resume"
+      ]
     },
     "sockets": {
       "link": "link.sock",
@@ -201,9 +271,34 @@
         ],
         "since": 1
       },
+      "node_end": {
+        "fields": [
+          "mode"
+        ],
+        "since": 1
+      },
+      "node_preparing": {
+        "fields": [
+          "arch",
+          "os"
+        ],
+        "since": 1
+      },
       "node_ready": {
         "fields": [
           "build"
+        ],
+        "since": 1
+      },
+      "node_retry": {
+        "fields": [],
+        "since": 1
+      },
+      "node_start": {
+        "fields": [
+          "build",
+          "build_id",
+          "release"
         ],
         "since": 1
       },
@@ -229,7 +324,12 @@
       "update_needed",
       "folder_refused",
       "crashed",
+      "host_full",
       "other"
+    ],
+    "release_fields": [
+      "commit",
+      "order"
     ]
   },
   "pairing": {
@@ -239,6 +339,15 @@
       "unknown"
     ],
     "messages": {
+      "asking": {
+        "fields": [
+          "device",
+          "name",
+          "nonce",
+          "words"
+        ],
+        "since": 1
+      },
       "confirm": {
         "fields": [
           "grant"
@@ -262,6 +371,7 @@
       },
       "pair": {
         "fields": [
+          "commit",
           "device",
           "name",
           "secret"
@@ -273,12 +383,26 @@
           "reason"
         ],
         "since": 1
+      },
+      "request": {
+        "fields": [
+          "device",
+          "name"
+        ],
+        "since": 1
+      },
+      "reveal": {
+        "fields": [
+          "nonce"
+        ],
+        "since": 1
       }
     },
     "refusals": [
       "no_offer",
       "declined",
       "full",
+      "unanswered",
       "other"
     ]
   },

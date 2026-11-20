@@ -864,6 +864,7 @@ impl Runtime {
             &self.snapshot.navigator.agents,
         );
         crate::project_context::sort_projects(&mut workspaces, &projected_agents);
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();
@@ -1387,23 +1388,65 @@ impl Runtime {
                 Some(checkout.id.as_str()) == self.snapshot.navigator.focused_checkout_id.as_deref()
             })
         });
-        if !focused_checkout_exists && self.snapshot.ui_state.focused_checkout_id.is_none() {
+        // A project no list shows (an automation's folder) holds the focus
+        // only while the engine has a pane there, the run's terminal the
+        // operator came to look at: once that closes, the Workspace and
+        // Changes would go on naming a folder no list holds. The focus goes
+        // back to the checkout last in front that a list shows, else as with
+        // none.
+        let left_unlisted = self.snapshot.navigator.workspaces.iter().any(|workspace| {
+            workspace.unlisted
+                && workspace.checkouts.iter().any(|checkout| {
+                    !checkout.has_panes
+                        && Some(checkout.id.as_str())
+                            == self.snapshot.navigator.focused_checkout_id.as_deref()
+                })
+        });
+        if left_unlisted
+            || (!focused_checkout_exists && self.snapshot.ui_state.focused_checkout_id.is_none())
+        {
+            let listed = |checkout_id: &str| {
+                self.snapshot.navigator.workspaces.iter().any(|workspace| {
+                    workspace.device_id == self.node.as_str()
+                        && !workspace.unlisted
+                        && workspace
+                            .checkouts
+                            .iter()
+                            .any(|checkout| checkout.id == checkout_id && checkout.exists)
+                })
+            };
+            let last_in_front = left_unlisted
+                .then(|| {
+                    self.snapshot
+                        .ui_state
+                        .recent_checkouts
+                        .iter()
+                        .filter(|recent| recent.device_id == self.node.as_str())
+                        .find(|recent| listed(&recent.checkout_id))
+                        .map(|recent| recent.checkout_id.clone())
+                })
+                .flatten();
             // The catalog's first checkout, passing over one whose folder
             // the node found gone: a restored pane's row stays while its
             // folder is missing, and with no activity its place in the order
-            // is its id's, so the window would open on it by chance.
+            // is its id's, so the window would open on it by chance. A
+            // project no list shows (an automation's folder) is never opened
+            // on: its run's terminal would become the selected pane.
             let starts = || {
                 self.snapshot
                     .navigator
                     .workspaces
                     .iter()
+                    .filter(|workspace| !workspace.unlisted)
                     .flat_map(|workspace| workspace.checkouts.iter())
                     .filter(|checkout| checkout.exists)
             };
-            self.snapshot.navigator.focused_checkout_id = starts()
-                .find(|checkout| !self.catalog_paths.gone(&checkout.path))
-                .or_else(|| starts().next())
-                .map(|checkout| checkout.id.clone());
+            self.snapshot.navigator.focused_checkout_id = last_in_front.or_else(|| {
+                starts()
+                    .find(|checkout| !self.catalog_paths.gone(&checkout.path))
+                    .or_else(|| starts().next())
+                    .map(|checkout| checkout.id.clone())
+            });
         }
         let focused = self
             .snapshot
@@ -2248,6 +2291,11 @@ impl Runtime {
         }
         if session_ok {
             changed |= self.request_device_facts(target_id);
+            // A project registered before this session arrived, whose folder
+            // the helper had confirmed already, has no facts answer left to
+            // open its terminal on. At most `REGISTRATION_TERMINAL_LIMIT`
+            // entries are looked at, and none in the usual case.
+            self.open_registration_terminals(target_id);
             changed |= self.node_agent_sleep_visit(target_id);
         }
         changed |= self.refresh_agent_lineage();
@@ -6097,6 +6145,7 @@ impl Runtime {
             &mut workspaces,
             &self.snapshot.navigator.agents,
         );
+        self.mark_unlisted(&mut workspaces);
         self.snapshot.navigator.workspaces = workspaces;
         self.end_pairs_of_gone_panes();
         self.refresh_start_profile_catalog();

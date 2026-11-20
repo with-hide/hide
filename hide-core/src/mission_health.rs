@@ -14,8 +14,8 @@
 //! answer (B29).
 
 use crate::missions::{
-    AttentionReason, CiResult, Delivery, FixReason, Mission, MissionNode, MissionStatus, NodeKind,
-    NodeStatus, StopCause, WarningKind, cause_key,
+    AttentionReason, CiResult, Delivery, FixReason, LinesNow, Mission, MissionNode, MissionStatus,
+    NodeKind, NodeStatus, StopCause, WarningKind, cause_key,
 };
 use crate::model::{
     CiEnd, GithubProjectSnapshot, MergeState, PullRequestBadge, PullRequestSnapshot, ReviewDecision,
@@ -96,6 +96,8 @@ pub(crate) struct Facts<'a> {
     pub nodes: Vec<NodeFacts>,
     /// The mission's device does not answer.
     pub device_stale: bool,
+    /// Each node's lines as they show now (`Runtime::lines_now`).
+    pub lines: Vec<LinesNow>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -500,7 +502,7 @@ fn still_holds(
         {
             false
         }
-        AttentionReason::NotStarted => could_start(mission, node),
+        AttentionReason::NotStarted => could_start(mission, node, &facts.lines),
         AttentionReason::WarningStood => {
             node.status == NodeStatus::Working
                 && node.warnings.iter().any(|warning| warning.kind.stalls())
@@ -621,9 +623,12 @@ fn waits_on_others(pull: &PullRequestSnapshot) -> bool {
     !pull.badge.is_settled() && !pull.is_draft && needs(pull).is_empty()
 }
 
-/// The review's failures in a row that warn a node's Conductor
-/// (with-hide/hide-private#552). Fixed: no Settings row sets it.
-pub(crate) const REVIEW_FAILS_THAT_WARN: u32 = 2;
+/// The review rounds a node of `mission` gets (`Strength::review_rounds`),
+/// a mission from before verification strength counting as `normal`.
+pub(crate) fn review_limit(mission: &Mission) -> u32 {
+    mission.strength.unwrap_or_default().review_rounds()
+}
+
 /// How long a node at work goes with no push before its Conductor is warned.
 pub(crate) const QUIET_THAT_WARNS_MS: u64 = 90 * 60_000;
 /// How long a node's worker stands stopped (`stopped_worker`) before its
@@ -685,11 +690,13 @@ pub(crate) enum WarnAct {
 }
 
 /// How the warnings of `mission`'s nodes change at `now` (with-hide/hide-private#552):
-/// a node at work in a running mission warns once its review failed
-/// `REVIEW_FAILS_THAT_WARN` times in a row, and once it went
+/// a node at work in a running mission warns once the round of its review
+/// or verification at the strength's limit (`review_limit`) failed, and
+/// the warning stands, through any round after it, until that line passes
+/// or is skipped, so the Conductor is told once; and once it went
 /// `QUIET_THAT_WARNS_MS` with no push
 /// while it had work of its own, a change by pull request whose pull request
-/// does not just wait on others. The first goes when the review passes or
+/// does not just wait on others. The first goes when that line passes or
 /// is skipped, the second when a new push arrives, and both when the node
 /// is no longer at work. A pull request GitHub's answer does not hold now
 /// decides nothing, so a stale answer raises no quiet warning on a node
@@ -734,18 +741,27 @@ pub(crate) fn warn_acts(
             }
             _ => {}
         }
-        let fails = works && node.review_fails() >= REVIEW_FAILS_THAT_WARN;
+        let limit = review_limit(mission);
+        let past = works
+            .then(|| node.review_line(limit))
+            .flatten()
+            .filter(|line| line.past_limit(limit));
         match standing(WarningKind::ReviewFails) {
-            Some(_) if !fails => acts.push(WarnAct::Clear {
+            Some(_) if past.is_none() => acts.push(WarnAct::Clear {
                 node: at,
                 kind: WarningKind::ReviewFails,
             }),
-            None if fails => acts.push(WarnAct::Raise {
-                node: at,
-                kind: WarningKind::ReviewFails,
-                from: last_review_at(node).unwrap_or(now),
-                cause: None,
-            }),
+            None if past.is_some_and(|line| {
+                line.state == crate::mission_criteria::CriterionState::Fail
+            }) =>
+            {
+                acts.push(WarnAct::Raise {
+                    node: at,
+                    kind: WarningKind::ReviewFails,
+                    from: last_review_at(node).unwrap_or(now),
+                    cause: None,
+                })
+            }
             _ => {}
         }
         let quiet = node.quiet_since();
@@ -831,6 +847,7 @@ pub(crate) fn stalls(
     pulls: Option<&GithubProjectSnapshot>,
     cap_full: bool,
     operator_waits: &[bool],
+    lines: &[LinesNow],
 ) -> Vec<Stall> {
     if mission.status != MissionStatus::Running || operator_waits.len() != mission.nodes.len() {
         return Vec::new();
@@ -846,7 +863,7 @@ pub(crate) fn stalls(
             pr,
             head: None,
         };
-        if could_start(mission, node) {
+        if could_start(mission, node, lines) {
             if !cap_full {
                 out.push(stall(AttentionReason::NotStarted, None));
             }
@@ -1002,16 +1019,16 @@ pub(crate) fn safety_net_due(
 }
 
 /// Whether `node` could start and was not: not started (`started`), the
-/// mission's own work, and every node it depends on done.
-pub(crate) fn could_start(mission: &Mission, node: &MissionNode) -> bool {
+/// mission's own work, and every dependency met
+/// (`Mission::dependency_met`, against `lines` as they show now): a node it
+/// depends on done, or the finish line of it it names met.
+pub(crate) fn could_start(mission: &Mission, node: &MissionNode, lines: &[LinesNow]) -> bool {
     !node.started()
         && node.kind != NodeKind::External
-        && node.depends_on.iter().all(|key| {
-            mission
-                .nodes
-                .iter()
-                .any(|other| &other.key == key && other.status == NodeStatus::Done)
-        })
+        && node
+            .depends_on
+            .iter()
+            .all(|key| mission.dependency_met(key, lines).is_some())
 }
 
 /// The node's current pull request while it waits on CI, a review or the
@@ -1028,11 +1045,11 @@ fn waiting_pull<'a>(
         .then_some(pull)
 }
 
-/// When a checker last answered the node's review.
+/// When a checker last answered the node's review or verification.
 fn last_review_at(node: &MissionNode) -> Option<u64> {
     node.criteria
         .iter()
-        .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
+        .filter(|line| line.kind.checker_judges())
         .flat_map(|line| &line.checkers)
         .filter_map(|checker| checker.at_unix_ms)
         .max()
@@ -1160,6 +1177,7 @@ mod tests {
             pulls,
             nodes,
             device_stale: false,
+            lines: Vec::new(),
         }
     }
 
@@ -1629,6 +1647,7 @@ mod tests {
             summary: None,
             at_unix_ms: Some(5),
             commit: None,
+            rounds: 1,
             pane_id: None,
             machine: None,
         });
@@ -1646,35 +1665,89 @@ mod tests {
         }
     }
 
-    /// with-hide/hide-private#552: the review failing twice in a row warns,
-    /// once, and the review passing takes it away.
+    /// mission-82 review O4: a node with a review and a verification names
+    /// one rounds line everywhere: the one past the limit and not passed,
+    /// else the one with the most rounds.
     #[test]
-    fn a_review_failed_twice_in_a_row_warns_until_it_passes() {
+    fn a_node_names_the_line_past_the_limit_before_the_one_with_most_rounds() {
+        use crate::mission_criteria::CriterionState::{Fail, Pass};
         let mut m = reviewed();
-        m.nodes[0].criteria[1].fails_in_a_row = 1;
-        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
-        m.nodes[0].criteria[1].fails_in_a_row = 2;
-        assert_eq!(
-            warn_acts(&m, None, &[], &[], 10),
-            [WarnAct::Raise {
-                node: 0,
-                kind: WarningKind::ReviewFails,
-                from: 5,
-                cause: None,
-            }]
-        );
-        // Standing, a third failure raises nothing more.
-        m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
-        m.nodes[0].criteria[1].fails_in_a_row = 3;
-        assert!(warn_acts(&m, None, &[], &[], 10).is_empty());
-        m.nodes[0].criteria[1].fails_in_a_row = 0;
-        assert_eq!(
-            warn_acts(&m, None, &[], &[], 10),
-            [WarnAct::Clear {
-                node: 0,
-                kind: WarningKind::ReviewFails,
-            }]
-        );
+        let mut verify = m.nodes[0].criteria[1].clone();
+        verify.key = "verify".into();
+        verify.kind = crate::mission_criteria::CriterionKind::Verify;
+        m.nodes[0].criteria.push(verify);
+        let set = |m: &mut Mission, at: usize, rounds: u32, state| {
+            m.nodes[0].criteria[at].rounds = rounds;
+            m.nodes[0].criteria[at].state = state;
+        };
+        set(&mut m, 1, 5, Pass);
+        set(&mut m, 2, 4, Fail);
+        let named = |m: &Mission| m.nodes[0].review_line(4).map(|line| line.key.clone());
+        assert_eq!(named(&m).as_deref(), Some("verify"));
+        // Both past it: the failed one, even with fewer rounds (n1).
+        set(&mut m, 1, 5, crate::mission_criteria::CriterionState::Open);
+        assert_eq!(named(&m).as_deref(), Some("verify"));
+        set(&mut m, 1, 5, Pass);
+        set(&mut m, 2, 3, Fail);
+        assert_eq!(named(&m).as_deref(), Some("review"));
+        set(&mut m, 1, 0, Pass);
+        set(&mut m, 2, 0, Fail);
+        assert_eq!(named(&m), None);
+    }
+
+    /// mission-82: the round at the strength's limit failing warns, once:
+    /// a round before it failing does not, nor the limit's round still
+    /// open; standing, the rounds after it raise nothing more, and the line
+    /// passing or skipped takes it away. A mission from before strength
+    /// counts as normal.
+    #[test]
+    fn the_review_round_at_the_strengths_limit_failing_warns_once_until_the_line_passes() {
+        use crate::mission_criteria::CriterionState::{Fail, Open, Pass, Skipped};
+        use crate::missions::Strength;
+        for (strength, limit) in [
+            (Some(Strength::Fast), 1),
+            (Some(Strength::Normal), 3),
+            (Some(Strength::Thorough), 4),
+            (None, 3),
+        ] {
+            let mut m = reviewed();
+            m.strength = strength;
+            let review = |m: &mut Mission, rounds: u32, state| {
+                m.nodes[0].criteria[1].rounds = rounds;
+                m.nodes[0].criteria[1].state = state;
+            };
+            review(&mut m, limit - 1, Fail);
+            assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            review(&mut m, limit, Open);
+            assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            review(&mut m, limit, Fail);
+            assert_eq!(
+                warn_acts(&m, None, &[], &[], 10),
+                [WarnAct::Raise {
+                    node: 0,
+                    kind: WarningKind::ReviewFails,
+                    from: 5,
+                    cause: None,
+                }],
+                "{strength:?}"
+            );
+            m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
+            for state in [Open, Fail] {
+                review(&mut m, limit + 1, state);
+                assert!(warn_acts(&m, None, &[], &[], 10).is_empty(), "{strength:?}");
+            }
+            for state in [Pass, Skipped] {
+                review(&mut m, limit + 1, state);
+                assert_eq!(
+                    warn_acts(&m, None, &[], &[], 10),
+                    [WarnAct::Clear {
+                        node: 0,
+                        kind: WarningKind::ReviewFails,
+                    }],
+                    "{strength:?} {state:?}"
+                );
+            }
+        }
     }
 
     /// with-hide/hide-private#552: a change at work warns at ninety minutes
@@ -1779,7 +1852,8 @@ mod tests {
     #[test]
     fn only_a_change_at_work_warns() {
         let mut m = reviewed();
-        m.nodes[0].criteria[1].fails_in_a_row = 2;
+        m.nodes[0].criteria[1].rounds = 3;
+        m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
         m.nodes[0].warnings = vec![
             warn(WarningKind::ReviewFails, 5),
             warn(WarningKind::NoPush, 0),
@@ -1799,7 +1873,7 @@ mod tests {
             ]
         );
         m.nodes[0].warnings.clear();
-        m.nodes[0].criteria[1].fails_in_a_row = 0;
+        m.nodes[0].criteria[1].rounds = 0;
         m.nodes[0].status = NodeStatus::Working;
         m.nodes[0].back_to_work(100 * MINUTE);
         assert!(warn_acts(&m, None, &[], &[], 189 * MINUTE).is_empty());
@@ -1846,24 +1920,24 @@ mod tests {
     fn a_node_that_could_start_stands_unless_its_move_is_excused() {
         let m = startable();
         assert_eq!(
-            stalls(&m, None, false, &NONE_WAITS),
+            stalls(&m, None, false, &NONE_WAITS, &[]),
             [stall(1, AttentionReason::NotStarted, None)]
         );
-        assert!(stalls(&m, None, true, &NONE_WAITS).is_empty());
-        assert!(stalls(&m, None, false, &[false, true]).is_empty());
+        assert!(stalls(&m, None, true, &NONE_WAITS, &[]).is_empty());
+        assert!(stalls(&m, None, false, &[false, true], &[]).is_empty());
         let mut delayed = startable();
         delayed.delay = Some("disk".into());
-        assert!(stalls(&delayed, None, false, &NONE_WAITS).is_empty());
+        assert!(stalls(&delayed, None, false, &NONE_WAITS, &[]).is_empty());
         let mut asked = startable();
         asked.decision = Some("which way?".into());
-        assert!(stalls(&asked, None, false, &NONE_WAITS).is_empty());
+        assert!(stalls(&asked, None, false, &NONE_WAITS, &[]).is_empty());
         let mut upstream = startable();
         upstream.nodes[0].status = NodeStatus::Working;
-        let found = stalls(&upstream, None, false, &NONE_WAITS);
+        let found = stalls(&upstream, None, false, &NONE_WAITS, &[]);
         assert!(!found.iter().any(|found| found.node == 1), "{found:?}");
         let mut named = startable();
         named.nodes[1].agent_id = Some("agent-b".into());
-        assert!(stalls(&named, None, false, &NONE_WAITS).is_empty());
+        assert!(stalls(&named, None, false, &NONE_WAITS, &[]).is_empty());
     }
 
     /// A gate's question holds the mission only once its node owes nothing
@@ -1895,11 +1969,11 @@ mod tests {
             material_asked: false,
         });
         assert_eq!(
-            stalls(&m, None, false, &NONE_WAITS),
+            stalls(&m, None, false, &NONE_WAITS, &[]),
             [stall(1, AttentionReason::NotStarted, None)],
             "the gate asks while its node still owes its checks"
         );
-        assert!(stalls(&m, None, false, &[true, false]).is_empty());
+        assert!(stalls(&m, None, false, &[true, false], &[]).is_empty());
     }
 
     /// A warning stands as a stall only once its Conductor was told it: one
@@ -1910,13 +1984,13 @@ mod tests {
         let mut untold = warn(WarningKind::NoPush, 90 * MINUTE);
         untold.told_unix_ms = None;
         m.nodes[0].warnings.push(untold);
-        assert!(stalls(&m, None, false, &[false]).is_empty());
+        assert!(stalls(&m, None, false, &[false], &[]).is_empty());
         m.nodes[0].warnings[0].told_unix_ms = Some(95 * MINUTE);
         assert_eq!(
-            stalls(&m, None, false, &[false]),
+            stalls(&m, None, false, &[false], &[]),
             [stall(0, AttentionReason::WarningStood, None)]
         );
-        assert!(stalls(&m, None, false, &[true]).is_empty());
+        assert!(stalls(&m, None, false, &[true], &[]).is_empty());
     }
 
     /// A failed review warns the Conductor and stops there: while the worker
@@ -1928,7 +2002,8 @@ mod tests {
     fn a_failed_review_is_never_raised_as_a_stall() {
         let failed = || {
             let mut m = reviewed();
-            m.nodes[0].criteria[1].fails_in_a_row = 3;
+            m.nodes[0].criteria[1].rounds = 3;
+            m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Fail;
             m.nodes[0].warnings.push(warn(WarningKind::ReviewFails, 5));
             m
         };
@@ -1937,7 +2012,7 @@ mod tests {
             evaluate(m, &facts(Some(&pulls), vec![NodeFacts::default()]))
                 .contains(&Act::Clear { node: 0 })
         };
-        assert!(stalls(&failed(), None, false, &[false]).is_empty());
+        assert!(stalls(&failed(), None, false, &[false], &[]).is_empty());
         let mut raised = failed();
         raised.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
         assert!(cleared(&raised));
@@ -1947,7 +2022,7 @@ mod tests {
             .warnings
             .push(warn(WarningKind::Stopped, 5));
         assert_eq!(
-            stalls(&stopped, None, false, &[false]),
+            stalls(&stopped, None, false, &[false], &[]),
             [stall(0, AttentionReason::WarningStood, None)]
         );
         stopped.nodes[0].attention = Some(attention(AttentionReason::WarningStood, None));
@@ -1963,12 +2038,12 @@ mod tests {
         m.nodes[0].criteria[1].state = crate::mission_criteria::CriterionState::Open;
         let waiting = listed(vec![pull(7, "feat/a", PullRequestBadge::Open)]);
         assert_eq!(
-            stalls(&m, Some(&waiting), false, &[false]),
+            stalls(&m, Some(&waiting), false, &[false], &[]),
             [stall(0, AttentionReason::WaitStood, Some(7))]
         );
-        assert!(stalls(&m, None, false, &[false]).is_empty());
+        assert!(stalls(&m, None, false, &[false], &[]).is_empty());
         let merged = listed(vec![pull(7, "feat/a", PullRequestBadge::Merged)]);
-        assert!(stalls(&m, Some(&merged), false, &[false]).is_empty());
+        assert!(stalls(&m, Some(&merged), false, &[false], &[]).is_empty());
     }
 
     /// A stall goes once its move came, or once none is owed: the node

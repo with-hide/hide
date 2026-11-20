@@ -109,8 +109,11 @@ impl HelperPackages {
             ))
         })?;
         payload.files.push(
-            read_package(&device_program(HOLDER_NAME, os), &holder, os, arch)
-                .map_err(EstablishError::Install)?,
+            read_package(&device_program(HOLDER_NAME, os), &holder, os, arch).map_err(
+                |reason| {
+                    EstablishError::install(hide_node_link::device::InstallStop::Local, reason)
+                },
+            )?,
         );
         // A kit's runtime is the holder's pinned ConPTY runtime (Windows),
         // which it loads from the folder beside the node's program
@@ -135,7 +138,9 @@ impl HelperPackages {
                     .ok_or_else(|| lacks(&format!(" file {path}")))?;
                 payload
                     .files
-                    .push(read_package(path, &file, os, arch).map_err(EstablishError::Install)?);
+                    .push(read_package(path, &file, os, arch).map_err(|reason| {
+                        EstablishError::install(hide_node_link::device::InstallStop::Local, reason)
+                    })?);
             }
         }
         Ok(payload)
@@ -163,8 +168,9 @@ impl HelperPackages {
     /// by the same rule as the helper.
     fn local(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
-        let helper = read_package(&device_program(HELPER_NAME, os), &helper, os, arch)
-            .map_err(EstablishError::Install)?;
+        let helper = read_package(&device_program(HELPER_NAME, os), &helper, os, arch).map_err(
+            |reason| EstablishError::install(hide_node_link::device::InstallStop::Local, reason),
+        )?;
         let mut payload = Payload {
             files: vec![helper],
             missing: Vec::new(),

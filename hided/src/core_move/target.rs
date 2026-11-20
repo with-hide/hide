@@ -19,7 +19,7 @@ use serde_json::json;
 
 use super::answer::{Inspection, StepAnswer, StepLine};
 use super::handover::{self, Handover, HandoverState};
-use super::starter::CoreStarter;
+use crate::core_install::starter::CoreStarter;
 
 struct Args {
     step: String,
@@ -42,7 +42,7 @@ const RELEASED_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
 fn parse(args: &[OsString]) -> Result<Args, String> {
     let (step, rest) = args.split_first().ok_or(USAGE)?;
     let step = step.to_str().ok_or(USAGE)?.to_owned();
-    let flags = super::flags::parse(
+    let flags = crate::core_install::flags::parse(
         rest,
         &[
             "--state-dir",
@@ -423,7 +423,7 @@ fn start(state_dir: &Path, intent: &str) -> Answered {
     };
     let home = hide_platform::host::home_dir().map_err(|error| plain(error.to_string()))?;
     let starter = CoreStarter::for_account(&home).map_err(plain)?;
-    let program = super::starter::this_program().map_err(plain)?;
+    let program = crate::core_install::starter::this_program().map_err(plain)?;
     let pid = starter
         .start_within(state_dir, &program, within)
         .map_err(plain)?;
@@ -712,7 +712,9 @@ fn resume(state_dir: &Path, intent: &str) -> Answered {
     }
     let home = hide_platform::host::home_dir().map_err(|error| plain(error.to_string()))?;
     let pid = CoreStarter::for_account(&home)
-        .and_then(|starter| starter.start(state_dir, &super::starter::this_program()?))
+        .and_then(|starter| {
+            starter.start(state_dir, &crate::core_install::starter::this_program()?)
+        })
         .map_err(plain)?;
     Ok(StepAnswer::Running { pid, leftover })
 }
@@ -904,6 +906,7 @@ mod tests {
                     environment: &[],
                     log: &home.path().join("core.log"),
                 },
+                &hide_kit::layout::keep_alive(&state),
                 home.path(),
                 &std::sync::atomic::AtomicBool::new(false),
             )

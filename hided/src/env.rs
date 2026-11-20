@@ -45,6 +45,12 @@ pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
 pub const HIDE_RELAY_URL: &str = "HIDE_RELAY_URL";
 pub const RELAY_URL: &str = "wss://relay.withhide.dev/ws";
 pub const HIDE_MACHINE_ID: &str = host::MACHINE_ID_VARIABLE;
+/// Development and tests: the one address this machine's endpoint for other
+/// Hides binds, with no relay and no local network search (`peer_host`).
+pub const HIDE_PEER_DIRECT: &str = "HIDE_PEER_DIRECT";
+/// Whether this build offers connections between two Hides
+/// ([`Env::device_connect`]); off in every build until that feature ships.
+pub const HIDE_DEVICE_CONNECT: &str = "HIDE_DEVICE_CONNECT";
 /// Test-only: how a core move starts the core on the machine taking it.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// Test-only: `hang` makes the core role's stop never return, so a journey
@@ -202,6 +208,18 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "Mobile connects to wss://relay.withhide.dev/ws",
     },
     EnvKey {
+        key: HIDE_PEER_DIRECT,
+        required: false,
+        format: "an IP address and UDP port such as 127.0.0.1:0, for development or tests: the endpoint other Hides connect to binds that one address and uses no relay and no local network search",
+        absent_behavior: "The endpoint binds every interface, attaches to the device relay and finds machines on the local network; it is opened only on a machine that is paired, or is sharing itself or adding a machine",
+    },
+    EnvKey {
+        key: HIDE_DEVICE_CONNECT,
+        required: false,
+        format: "1 or 0, for development and tests until connections between two Hides ship",
+        absent_behavior: "This build offers no connection to another Hide: no pairing in Settings > Devices or `hide device`, no endpoint and no login item for it, even where a development build left pairing records; SSH and WSL devices work as before",
+    },
+    EnvKey {
         key: HIDE_MACHINE_ID,
         required: false,
         format: "a node id: lowercase letters, digits and '-'; only a test fixture sets it, so one host runs a node and the core it dials as two machines",
@@ -210,31 +228,31 @@ pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
         key: HIDE_BUILD_VERSION_OVERRIDE,
         required: false,
-        format: "a version such as 0.4.2; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "a version such as 0.4.2; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A link's hello carries the version this build was packaged with (HIDE_VERSION at build time)",
     },
     EnvKey {
         key: HIDE_BUILD_ORDER_OVERRIDE,
         required: false,
-        format: "a commit count; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "a commit count; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A link's hello carries the build order this build was packaged with (HIDE_BUILD_ORDER at build time, 0 when no package numbered it)",
     },
     EnvKey {
         key: HIDE_CORE_STARTER,
         required: false,
-        format: "`fixture`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "`fixture`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move starts the core on the machine taking it through the account's login item (launchd); a fixture HOME with `fixture` starts it as a detached process instead, and a fixture HOME without it is refused, so no test reaches launchd",
     },
     EnvKey {
         key: HIDE_FIXTURE_CORE_STOP,
         required: false,
-        format: "`hang`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "`hang`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "The core role stops when asked; a fixture HOME with `hang` makes that stop never return, so the process ends itself past its bound",
     },
     EnvKey {
         key: HIDE_PREFLIGHT_PROGRAMS,
         required: false,
-        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move's checks on the machine taking the core run the account's `gh`, /bin/launchctl and /usr/bin/pmset; a fixture HOME names stand-ins, so a test passes or fails each check without the machine's own GitHub login, session and power settings, and a fixture HOME without it is refused rather than reaching the account's launchd",
     },
     EnvKey {
@@ -302,6 +320,17 @@ pub struct Env {
     /// The only tailscale CLI Mobile runs, when set (`HIDE_TAILSCALE_BIN`).
     pub tailscale_bin: Option<PathBuf>,
     pub relay_url: String,
+    /// The one address the endpoint for other Hides binds, with no relay
+    /// (`HIDE_PEER_DIRECT`); `None` is the product's endpoint.
+    pub peer_direct: Option<SocketAddr>,
+    /// Whether this build offers connections between two Hides
+    /// (`HIDE_DEVICE_CONNECT=1`): pairing, its `hide device` verbs and
+    /// Settings rows, the endpoint and the login item that keeps a paired
+    /// core on. Off by default in every build, release or not, until that
+    /// feature ships (mission-75 release A), which removes the switch. The
+    /// one place it is read; every caller is handed this value, and the
+    /// window reads it from the daemon's hello (`device_connect`).
+    pub device_connect: bool,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
 }
@@ -357,6 +386,14 @@ pub fn load_for_from(
     } else {
         Err(errors)
     }
+}
+
+/// [`Env::device_connect`] of this process's environment, for what a
+/// command prints before it loads its environment (`hide --help`). An
+/// invalid value counts as off here; a command that loads its environment
+/// refuses it.
+pub fn device_connect_here() -> bool {
+    load_for(&[HIDE_DEVICE_CONNECT]).is_ok_and(|env| env.device_connect)
 }
 
 pub fn load_from(read: impl FnMut(&str) -> Option<String>) -> Result<Env, Vec<EnvError>> {
@@ -546,6 +583,30 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         None => RELAY_URL.to_owned(),
     };
+    let peer_direct = match read(HIDE_PEER_DIRECT) {
+        None => None,
+        Some(value) => match value.parse::<SocketAddr>() {
+            Ok(address) => Some(address),
+            Err(_) => {
+                errors.push(EnvError {
+                    key: HIDE_PEER_DIRECT,
+                    kind: "invalid",
+                });
+                None
+            }
+        },
+    };
+    let device_connect = match read(HIDE_DEVICE_CONNECT).as_deref() {
+        None | Some("0") => false,
+        Some("1") => true,
+        Some(_) => {
+            errors.push(EnvError {
+                key: HIDE_DEVICE_CONNECT,
+                kind: "invalid",
+            });
+            false
+        }
+    };
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
@@ -566,6 +627,8 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         access,
         tailscale_bin,
         relay_url,
+        peer_direct,
+        device_connect,
         search_path,
     };
     (env, errors)
@@ -929,6 +992,47 @@ mod tests {
                 .host_helper_root,
             None
         );
+    }
+
+    #[test]
+    fn the_peer_endpoint_override_is_one_address_and_port() {
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example")]).unwrap().peer_direct,
+            None
+        );
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example"), (HIDE_PEER_DIRECT, "127.0.0.1:0")])
+                .unwrap()
+                .peer_direct,
+            Some(SocketAddr::from(([127, 0, 0, 1], 0)))
+        );
+        for value in ["", "127.0.0.1", "localhost:7842", "1"] {
+            assert_eq!(
+                from_map(&[(HOME, "/Users/example"), (HIDE_PEER_DIRECT, value)]).unwrap_err()[0]
+                    .key,
+                HIDE_PEER_DIRECT,
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn connections_between_hides_are_off_unless_the_switch_says_1() {
+        let device_connect = |pairs: &[(&str, &str)]| {
+            let mut all = vec![(HOME, "/Users/example")];
+            all.extend_from_slice(pairs);
+            from_map(&all).map(|env| env.device_connect)
+        };
+        assert!(!device_connect(&[]).unwrap());
+        assert!(!device_connect(&[(HIDE_DEVICE_CONNECT, "0")]).unwrap());
+        assert!(device_connect(&[(HIDE_DEVICE_CONNECT, "1")]).unwrap());
+        for value in ["", "true", "yes", "2"] {
+            assert_eq!(
+                device_connect(&[(HIDE_DEVICE_CONNECT, value)]).unwrap_err()[0].key,
+                HIDE_DEVICE_CONNECT,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

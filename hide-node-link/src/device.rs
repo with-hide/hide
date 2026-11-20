@@ -785,6 +785,31 @@ pub struct SshFailure {
     pub detail: String,
 }
 
+/// Where an install of the build on a device stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallStop {
+    /// The device answered that it could not take a step: its install
+    /// folder, a file, or an answer the install does not know.
+    Refused,
+    /// The connection ended, or stopped taking bytes, part way.
+    Ended,
+    /// The device answered nothing within the install's time.
+    Quiet,
+    /// This machine could not make what it sends: a file of its build, or
+    /// the install folder or device home it names.
+    Local,
+}
+
+impl EstablishError {
+    /// An install that stopped at `stop`, for `reason`.
+    pub fn install(stop: InstallStop, reason: impl Into<String>) -> Self {
+        Self::Install {
+            stop,
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EstablishError {
     Connect(RemoteError),
@@ -807,7 +832,12 @@ pub enum EstablishError {
         arch: String,
         reason: String,
     },
-    Install(String),
+    /// The build could not be put on the device; `stop` is where it
+    /// stopped, the closed class analytics counts.
+    Install {
+        stop: InstallStop,
+        reason: String,
+    },
     Helper(String),
     /// The machine the device's node reports is not the one its
     /// registration names, or cannot name it (`DeviceNaming`): nothing was
@@ -828,7 +858,7 @@ impl fmt::Display for EstablishError {
             ),
             Self::Stopped(reason)
             | Self::Unsupported(reason)
-            | Self::Install(reason)
+            | Self::Install { reason, .. }
             | Self::Helper(reason)
             | Self::MachineName(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),
@@ -1194,6 +1224,17 @@ pub trait DeviceConnector: Send + Sync {
         _distro: &str,
     ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
         Err("WSL distributions can be connected only from the Windows app".to_owned())
+    }
+
+    /// The transport for the device `node`, another machine that runs Hide
+    /// and is paired with this one under the connection key `key` (PRD
+    /// device-connect-iroh D-61); nothing connects until it is used.
+    fn peer_transport(
+        &self,
+        _node: &str,
+        _key: &str,
+    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
+        Err("This Hide connects no paired machine".to_owned())
     }
 
     /// This PC's WSL distributions, for Add device. Blocking and bounded;

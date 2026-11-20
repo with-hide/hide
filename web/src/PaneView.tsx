@@ -165,6 +165,7 @@ export const PaneView = memo(function PaneView({
   local = true,
   keysStayOnDesk = false,
   offline = false,
+  owned = false,
 }: {
   pane: PaneRow;
   transport: TerminalPane | undefined;
@@ -189,6 +190,8 @@ export const PaneView = memo(function PaneView({
   keysStayOnDesk?: boolean;
   /** True while that device's connection is down. */
   offline?: boolean;
+  /** True where a screen owns the pane's life, as an automation's run terminal (PRD automations B16): its head carries no ⋯ menu and no ✕. */
+  owned?: boolean;
 }) {
   const { t } = useInterfaceTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -395,7 +398,7 @@ export const PaneView = memo(function PaneView({
         }}
         onContextMenu={(event) => {
           event.preventDefault();
-          paneMenu.openAt(event.clientX, event.clientY);
+          if (!owned) paneMenu.openAt(event.clientX, event.clientY);
         }}
       >
         {/* The header's first row is this pane: its state on the left, what can be done to it on the right, each in a place that does not move.
@@ -489,6 +492,8 @@ export const PaneView = memo(function PaneView({
             </Button>
           </Hint>
         ) : null}
+        {owned ? null : (
+        <>
         <PaneMention paneId={paneId} actions={actions} open={mention} setOpen={setMention} anchor={
         <Hint label={t("panes.actions", { name: title })}>
           <Button
@@ -518,6 +523,8 @@ export const PaneView = memo(function PaneView({
           </Button>
         </Hint>
         {paneMenu.menu}
+        </>
+        )}
       </header>
       <div className="h-[var(--size-hairline)] shrink-0 bg-border" />
       <div className="relative min-h-0 flex-1">

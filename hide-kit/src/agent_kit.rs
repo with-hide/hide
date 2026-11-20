@@ -929,8 +929,15 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         }
     }
 
-    // Skill folders, shared by every agent that reads one.
-    for dir in SkillDir::ALL {
+    // Skill folders, shared by every agent that reads one, and by every
+    // Hide of the account: an installation that keeps only its hooks here
+    // leaves them to the account's own Hide.
+    let skill_dirs: &[SkillDir] = if target.hooks_only {
+        &[]
+    } else {
+        &SkillDir::ALL
+    };
+    for &dir in skill_dirs {
         let readers = || {
             ADAPTERS
                 .iter()
@@ -1028,6 +1035,12 @@ pub(crate) fn remove(target: &KitTarget) -> Vec<(String, RemoveOutcome)> {
             }
             HookSupport::Part(_) | HookSupport::None => {}
         }
+    }
+    // The skill stubs and what an earlier build left for a retired agent
+    // are the account's, not one installation's: an installation that keeps
+    // only its hooks here takes neither with it.
+    if target.hooks_only {
+        return outcomes;
     }
     for dir in SkillDir::ALL {
         let outcome = match remove_skill(dir, &target.home) {

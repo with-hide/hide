@@ -175,7 +175,7 @@ unpack() { case $1 in zput) gzip -dc 2>/dev/null || { cat >/dev/null; return 1; 
 safe() { set -- $(ls -ldn -- "$1" 2>/dev/null); case ${1:-} in d*) ;; *) return 3;; esac; [ "${3:-}" = "$uid" ] || [ "${3:-}" = 0 ] || return 1; case $1 in ?????w*|????????w*) ;; *) return 0;; esac; [ "$3" = 0 ] || return 2; case $1 in ?????????[tT]*) return 0;; esac; return 2; };
 mine() { set -- $(ls -ldn -- "$1" 2>/dev/null); [ "${3:-}" = "$uid" ] || return 1; case ${1:-} in ?????w*|????????w*) return 1;; esac; return 0; };
 store() { { (umask 077; mkdir -p -- "${1%/*}") && cat > "$1"; } || { cat > /dev/null; return 1; }; };
-below() { u=$root; ur=$1; while :; do up=${ur%%/*}; case $up in ''|.|..) ub="$1 is not a path below the install folder"; return 1;; esac; u=$u/$up; [ ! -L "$u" ] || { ub="$u is a link, so the helper was not installed there; remove it on the device"; return 1; }; case $ur in */*) ur=${ur#*/};; *) return 0;; esac; if [ ! -d "$u" ]; then [ -n "${2:-}" ] || return 0; (umask 077; mkdir -- "$u") 2>/dev/null || { ub="$u could not be made"; return 1; }; fi; mine "$u" || { ub="$u belongs to another account or can be changed by one, so the helper was not installed there; remove it on the device"; return 1; }; done; };
+below() { u=$root; ur=$1; while :; do up=${ur%%/*}; case $up in ''|.|..) ub="$1 is not a path below the install folder"; return 1;; esac; u=$u/$up; [ ! -L "$u" ] || { ub="$u is a link, so the helper was not installed there; remove it on the device"; return 1; }; case $ur in */*) ur=${ur#*/};; *) return 0;; esac; if [ ! -d "$u" ]; then [ -n "${2:-}" ] || return 0; (umask 077; mkdir -- "$u") 2>/dev/null || { [ -d "$u" ] && [ ! -L "$u" ]; } || { ub="$u could not be made"; return 1; }; fi; mine "$u" || { ub="$u belongs to another account or can be changed by one, so the helper was not installed there; remove it on the device"; return 1; }; done; };
 o= e= x= t=;
 trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
@@ -446,18 +446,23 @@ pub(crate) fn install(
     unpacks: bool,
 ) -> Result<Installed, EstablishError> {
     let deadline = Instant::now() + INSTALL_TIMEOUT;
-    let failed = |reason: String| EstablishError::Install(reason);
+    use hide_node_link::device::InstallStop::{Local, Refused};
+    let failed = |stop, reason: String| EstablishError::install(stop, reason);
     let root = match helper_root.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", home.trim_end_matches('/')),
         None if hide_platform::path::is_wire_absolute(helper_root) => helper_root.to_owned(),
         None => {
-            return Err(failed(format!(
-                "The helper install root {helper_root:?} must be absolute or start with ~/"
-            )));
+            return Err(failed(
+                Local,
+                format!(
+                    "The helper install root {helper_root:?} must be absolute or start with ~/"
+                ),
+            ));
         }
     };
     if root.split('/').any(|part| part == ".." || part == ".") || !plain(&root) {
         return Err(failed(
+            Local,
             "The helper install root is not a plain path".to_owned(),
         ));
     }
@@ -465,7 +470,7 @@ pub(crate) fn install(
         [kind, resolved] if kind == "root" && hide_platform::path::is_wire_absolute(resolved) => {
             resolved.clone()
         }
-        other => return Err(failed(refusal(other))),
+        other => return Err(failed(Refused, refusal(other))),
     };
     let version = &payload.version()[..16];
     let files: Vec<(String, &Package)> = payload
@@ -474,7 +479,10 @@ pub(crate) fn install(
         .map(|file| (format!("{version}/{}", file.relative), file))
         .collect();
     if files.iter().any(|(relative, _)| !plain(relative)) {
-        return Err(failed("The build names a file Hide cannot send".to_owned()));
+        return Err(failed(
+            Local,
+            "The build names a file Hide cannot send".to_owned(),
+        ));
     }
     let mut asked = format!("held\t{}\n", files.len());
     for (relative, file) in &files {
@@ -488,7 +496,7 @@ pub(crate) fn install(
                 held.insert(relative.clone());
             }
             [kind] if kind == "end" => break,
-            other => return Err(failed(refusal(other))),
+            other => return Err(failed(Refused, refusal(other))),
         }
     }
     let mut upload = Upload {
@@ -504,8 +512,9 @@ pub(crate) fn install(
         let mode = if file.executable { "700" } else { "600" };
         let packed = if unpacks {
             let started = Instant::now();
-            let packed = pack(&file.bytes)
-                .map_err(|error| failed(format!("{relative} could not be packed: {error}")))?;
+            let packed = pack(&file.bytes).map_err(|error| {
+                failed(Local, format!("{relative} could not be packed: {error}"))
+            })?;
             upload.pack_ms += started.elapsed().as_millis() as u64;
             Some(packed)
         } else {
@@ -537,17 +546,20 @@ pub(crate) fn install(
                 // The helper must arrive before it starts; an optional kit
                 // part the kit reports.
                 if index == 0 {
-                    return Err(failed(format!("The device could not take {reason}")));
+                    return Err(failed(
+                        Refused,
+                        format!("The device could not take {reason}"),
+                    ));
                 }
                 upload.missing.push(reason.clone());
             }
-            other => return Err(failed(refusal(other))),
+            other => return Err(failed(Refused, refusal(other))),
         }
     }
     let helper = payload
         .files
         .first()
-        .ok_or_else(|| failed("The build carries no helper".to_owned()))?;
+        .ok_or_else(|| failed(Local, "The build carries no helper".to_owned()))?;
     let helper_relative = format!("{version}/{}", helper.relative);
     Ok(Installed {
         helper_path: format!("{resolved}/{helper_relative}"),
@@ -624,10 +636,13 @@ pub(crate) fn install_build(
     unpacks: bool,
 ) -> Result<String, EstablishError> {
     if !payload.missing.is_empty() {
-        return Err(EstablishError::Install(format!(
-            "This build cannot update a core without all of its parts: {}",
-            payload.missing.join("; ")
-        )));
+        return Err(EstablishError::install(
+            hide_node_link::device::InstallStop::Local,
+            format!(
+                "This build cannot update a core without all of its parts: {}",
+                payload.missing.join("; ")
+            ),
+        ));
     }
     install(pipe, root, home, &payload, unpacks).map(|installed| installed.helper_path)
 }
@@ -905,7 +920,10 @@ fn plain(field: &str) -> bool {
 
 fn send(pipe: &mut dyn Pipe, bytes: &[u8], until: Instant) -> Result<(), EstablishError> {
     pipe.send(bytes, until).map_err(|reason| {
-        EstablishError::Install(format!("The device stopped taking the install: {reason}"))
+        EstablishError::install(
+            hide_node_link::device::InstallStop::Ended,
+            format!("The device stopped taking the install: {reason}"),
+        )
     })
 }
 
@@ -915,19 +933,24 @@ fn step(pipe: &mut dyn Pipe, line: &str, until: Instant) -> Result<Vec<String>, 
 }
 
 fn read_step(pipe: &mut dyn Pipe, until: Instant) -> Result<Vec<String>, EstablishError> {
-    let line = pipe.line(until).map_err(|stop| {
-        EstablishError::Install(match stop {
-            Stop::Quiet => {
-                "The device did not answer the install in time; nothing was started".to_owned()
-            }
-            Stop::Ended(reason) => format!("The connection ended during the install: {reason}"),
-        })
+    let line = pipe.line(until).map_err(|stop| match stop {
+        Stop::Quiet => EstablishError::install(
+            hide_node_link::device::InstallStop::Quiet,
+            "The device did not answer the install in time; nothing was started",
+        ),
+        Stop::Ended(reason) => EstablishError::install(
+            hide_node_link::device::InstallStop::Ended,
+            format!("The connection ended during the install: {reason}"),
+        ),
     })?;
     answer(&line).ok_or_else(|| {
-        EstablishError::Install(format!(
-            "The device answered the install with {:?}",
-            String::from_utf8_lossy(&line)
-        ))
+        EstablishError::install(
+            hide_node_link::device::InstallStop::Refused,
+            format!(
+                "The device answered the install with {:?}",
+                String::from_utf8_lossy(&line)
+            ),
+        )
     })
 }
 

@@ -280,16 +280,36 @@ fn testing_an_unconnected_device_reports_the_way_out() {
 }
 
 pub(super) fn runtime_with_home() -> Runtime {
+    runtime_showing_drives(None)
+}
+
+/// A runtime on a machine that shows its Windows PC's drives at
+/// `windows_drives`: a WSL distribution, or none for any other machine.
+fn runtime_showing_drives(windows_drives: Option<&str>) -> Runtime {
     let folder = scratch_dir("hide-core-devices-");
+    let mut runtime = runtime_reading(
+        &folder.path().join("state.json"),
+        crate::node::test_node(),
+        &folder.path().join("home"),
+        windows_drives,
+    );
+    runtime.test_dirs.push(folder);
+    runtime
+}
+
+/// A runtime of `node` started from the store at `state`, as a core's
+/// start reads it, with `home` as the account's home.
+fn runtime_reading(
+    state: &std::path::Path,
+    node: crate::node::NodeId,
+    home: &std::path::Path,
+    windows_drives: Option<&str>,
+) -> Runtime {
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         home: None,
-        node_id: crate::node::test_node(),
-        app_state_path: folder
-            .path()
-            .join("state.json")
-            .to_string_lossy()
-            .into_owned(),
+        node_id: node,
+        app_state_path: state.to_string_lossy().into_owned(),
         host_helper_root: None,
         host_cli_dir: None,
         workspace_views_path: None,
@@ -297,20 +317,44 @@ pub(super) fn runtime_with_home() -> Runtime {
         local_issues_path: None,
         effects_held: false,
         machine_name: None,
+        windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
     };
-    let mut runtime = Runtime::new(
+    Runtime::new(
         options,
         environment::EnvironmentReport {
             statuses: Vec::new(),
-            home_path: Some(folder.path().join("home")),
+            home_path: Some(home.to_path_buf()),
             codex_home: None,
         },
-        std::sync::Arc::new(hide_node::Local::new(Some(folder.path().join("home")))),
+        std::sync::Arc::new(hide_node::Local::new(Some(home.to_path_buf()))),
         crate::node::test_devices(),
-    );
-    runtime.test_dirs.push(folder);
-    runtime
+    )
+}
+
+/// PRD wsl-device B16 for a core that itself runs in a distribution: its own
+/// device row says where the Windows PC's drives show, as a device's helper
+/// reports its own, and a row built again keeps it. Any other machine names
+/// none, so a pasted Windows path stays as typed there.
+#[test]
+fn a_cores_own_device_row_names_where_its_windows_drives_show() {
+    let drives = |runtime: &Runtime| {
+        runtime
+            .snapshot()
+            .navigator
+            .devices
+            .iter()
+            .find(|device| device.kind != "remote")
+            .expect("this machine's row")
+            .host
+            .windows_drives
+            .clone()
+    };
+    let mut distribution = runtime_showing_drives(Some("/mnt"));
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    distribution.rebuild_device_rows();
+    assert_eq!(drives(&distribution).as_deref(), Some("/mnt"));
+    assert_eq!(drives(&runtime_with_home()), None);
 }
 
 /// A real worker resolves the alias with the system `ssh`, which refuses a
@@ -955,5 +999,1011 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
     assert_eq!(
         runtime.device_command(core, remove()).err().as_deref(),
         Some("device_unknown")
+    );
+}
+
+/// hided tells the core the machines this one is paired with as one list;
+/// the snapshot and `hide device list` then say both directions of each
+/// pair, and a list that is not such a list changes nothing (PRD
+/// device-connect-iroh D-72, B24).
+#[test]
+fn the_paired_machines_hided_tells_of_are_listed_with_both_directions() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, machines: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": machines }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    let pc = serde_json::json!({
+        "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+        "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
+        "reason": null, "update": null,
+    });
+    assert!(told(&mut runtime, serde_json::json!([pc])));
+    assert!(
+        !told(&mut runtime, serde_json::json!([pc])),
+        "the same list again publishes nothing"
+    );
+    let (answer, _) = runtime
+        .device_command(crate::node::TEST_NODE, DeviceCommand::List)
+        .expect("listed");
+    assert_eq!(
+        answer["peers"],
+        serde_json::json!([{
+            "id": "windows-pc", "name": "Windows PC", "connection_id": "ab".repeat(32),
+            "opens": "active", "opened_by": "paused", "connected": true, "path": "relay",
+            "reason": null, "update": null,
+        }])
+    );
+    // The machine this one opens is a device too, under the same id: one
+    // machine, one row.
+    assert_eq!(answer["devices"][0]["id"], "windows-pc");
+    assert_eq!(answer["devices"].as_array().map(Vec::len), Some(1));
+    // A window draws its rows from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["peers"].clone(),
+        )
+    };
+    let (seen, peers) = sent(&mut runtime, 0);
+    assert_eq!(peers[0]["device_id"], "windows-pc");
+    assert_eq!(peers[0]["opened_by"], "paused");
+
+    // A machine paired in neither direction is not a paired machine: the
+    // list is refused whole and the one before it stands.
+    let mut nobody = pc.clone();
+    nobody["opens"] = serde_json::Value::Null;
+    nobody["opened_by"] = serde_json::Value::Null;
+    told(&mut runtime, serde_json::json!([nobody]));
+    assert_eq!(runtime.snapshot.navigator.peers.len(), 1);
+
+    // The store is the owner: an empty list clears it.
+    assert!(told(&mut runtime, serde_json::json!([])));
+    assert!(runtime.snapshot.navigator.peers.is_empty());
+    // A window that drew the machine is told it is gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
+}
+
+/// The panes another machine's work runs in here are the list hided last
+/// told, replaced whole (PRD device-connect-iroh D-77 (5), B10): the
+/// snapshot and `hide device list` read it, the same list again publishes
+/// nothing, and a list whose pane is not its guest's is refused whole.
+#[test]
+fn a_guests_panes_on_this_machine_are_the_list_hided_last_told() {
+    use crate::device_command::DeviceCommand;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, guests: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "guest_panes",
+            "payload": { "guests": guests }
+        }))
+        .expect("guest panes event");
+        runtime.dispatch_json(&event)
+    };
+    let macbook = serde_json::json!({
+        "device_id": "macbook", "key": "cd".repeat(32),
+        "panes": [{"id": "guest:macbook:pane:w1:p1", "pane": "w1:p1", "since_unix_ms": 7}],
+    });
+    assert!(told(&mut runtime, serde_json::json!([macbook])));
+    assert!(
+        !told(&mut runtime, serde_json::json!([macbook])),
+        "the list it already holds is no change"
+    );
+    let (answer, _) = runtime
+        .device_command(crate::node::TEST_NODE, DeviceCommand::List)
+        .expect("listed");
+    assert_eq!(
+        answer["guest_panes"],
+        serde_json::json!([{
+            "id": "macbook", "connection_id": "cd".repeat(32),
+            "panes": [{"id": "guest:macbook:pane:w1:p1", "pane": "w1:p1", "since_unix_ms": 7}],
+        }])
+    );
+
+    // A window draws the list from the navigator it is sent.
+    let sent = |runtime: &mut Runtime, have: u64| -> (u64, serde_json::Value) {
+        let payload = runtime.snapshot_delta_payload(have);
+        let frame: serde_json::Value =
+            serde_json::from_slice(&crate::serialize_snapshot_delta(&payload).unwrap()).unwrap();
+        (
+            payload.revision,
+            frame["rest"]["navigator"]["guest_panes"].clone(),
+        )
+    };
+    let (seen, guests) = sent(&mut runtime, 0);
+    assert_eq!(guests[0]["device_id"], "macbook");
+    assert_eq!(guests[0]["panes"][0]["id"], "guest:macbook:pane:w1:p1");
+
+    // A pane under another machine's address.
+    let mut other = macbook.clone();
+    other["panes"][0]["id"] = serde_json::json!("guest:mini:pane:w1:p1");
+    told(&mut runtime, serde_json::json!([other]));
+    assert_eq!(
+        runtime.snapshot.navigator.guest_panes[0].panes[0].id,
+        "guest:macbook:pane:w1:p1"
+    );
+
+    assert!(told(&mut runtime, serde_json::json!([])));
+    assert!(runtime.snapshot.navigator.guest_panes.is_empty());
+    // A window that drew the panes is told they are gone.
+    assert_eq!(sent(&mut runtime, seen).1, serde_json::json!([]));
+}
+
+/// PRD device-connect-iroh D-61 over the state folders released builds
+/// wrote: a machine this build pairs with is saved as a device beside the
+/// ones the release stored, and the next start is the same machine to it.
+/// The start's conversions, which rename the devices an earlier build
+/// dialed, find nothing to do and hold nothing, and the core reads every
+/// device the release had as it read it before, with the paired machine
+/// after them under the id and the connection key it was registered by.
+#[test]
+fn a_machine_paired_over_a_released_state_folder_is_the_same_device_at_the_next_start() {
+    use crate::model::LinkOrigin;
+    use crate::node_migration::upgrade_tests::{fixtures, started};
+    use crate::node_migration::{CORE_STATE, MARKER_FILE, convert, name_devices};
+
+    let key = "ab".repeat(32);
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        let state = started(&folder);
+        let stored = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(state.path().join(name)).unwrap()).unwrap()
+        };
+        let node = crate::node::NodeId::parse(stored(MARKER_FILE)["node"].as_str().unwrap())
+            .unwrap_or_else(|error| panic!("{tag}: {error}"));
+        let home = tempfile::tempdir().unwrap();
+        // A core's start over the folder, as `runtime_showing_drives` makes
+        // one over an empty folder.
+        let reading = || {
+            Runtime::new(
+                CoreOptions {
+                    schema_version: SCHEMA_VERSION,
+                    home: None,
+                    node_id: node.clone(),
+                    app_state_path: state.path().join(CORE_STATE).to_string_lossy().into_owned(),
+                    host_helper_root: None,
+                    host_cli_dir: None,
+                    workspace_views_path: None,
+                    shortcut_import_path: None,
+                    local_issues_path: None,
+                    effects_held: false,
+                    machine_name: None,
+                    windows_drives: None,
+                    account_state_folder: false,
+                },
+                environment::EnvironmentReport {
+                    statuses: Vec::new(),
+                    home_path: Some(home.path().to_path_buf()),
+                    codex_home: None,
+                },
+                std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),
+                crate::node::test_devices(),
+            )
+        };
+        let devices = |runtime: &Runtime| -> Vec<(String, LinkOrigin)> {
+            runtime
+                .snapshot
+                .ui_state
+                .device_registrations
+                .iter()
+                .map(|registration| (registration.id.clone(), registration.origin.clone()))
+                .collect()
+        };
+
+        let mut runtime = reading();
+        let mut expected = devices(&runtime);
+        assert!(
+            !expected.is_empty(),
+            "{tag}: the release's own device is read"
+        );
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": [{
+                "key": key, "device_id": "windows-pc", "name": "Windows PC",
+                "opens": "active", "opened_by": null, "connected": false, "path": null,
+                "reason": null, "update": null,
+            }] }
+        }))
+        .expect("peer machines event");
+        assert!(runtime.dispatch_json(&event), "{tag}");
+        expected.push((
+            "windows-pc".to_owned(),
+            LinkOrigin::Peer {
+                key: key.clone(),
+                switched: false,
+            },
+        ));
+        assert_eq!(devices(&runtime), expected, "{tag}");
+        drop(runtime);
+
+        // The row as this build stored it: the connection key on it, and no
+        // SSH alias, which is what the conversion reads a dialed device by.
+        let rows = stored(CORE_STATE)["device_registrations"].clone();
+        let row = rows
+            .as_array()
+            .and_then(|rows| rows.iter().find(|row| row["id"] == "windows-pc"))
+            .unwrap_or_else(|| panic!("{tag}: the paired machine is not in the store: {rows}"));
+        assert_eq!(row["peer_key"], serde_json::json!(key), "{tag}");
+        assert_eq!(row["ssh_alias"], serde_json::Value::Null, "{tag}");
+
+        // The next start: what `hided` runs before the core reads the folder.
+        convert(state.path(), &node).unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+        let named = name_devices(state.path(), &node)
+            .unwrap_or_else(|refusal| panic!("{tag}: {refusal:?}"));
+        assert_eq!(named, Default::default(), "{tag}");
+        assert_eq!(
+            stored(CORE_STATE)["device_registrations"],
+            rows,
+            "{tag}: the start rewrote a device"
+        );
+        assert_eq!(devices(&reading()), expected, "{tag}");
+    }
+}
+
+/// A machine this one opens is a device for as long as the pairing holds
+/// (PRD device-connect-iroh D-61, B3): registered when its grant is active,
+/// kept through a pause, and removed with what Hide recorded for it when
+/// the pairing ends. A registration that already holds its id is not
+/// replaced.
+#[test]
+fn a_machine_this_one_opens_is_a_device_while_its_pairing_holds() {
+    use crate::model::LinkOrigin;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, machines: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": machines }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    let machine = |opens: &str| {
+        serde_json::json!({
+            "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+            "opens": opens, "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        })
+    };
+    let origin_of = |runtime: &Runtime, id: &str| {
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.id == id)
+            .map(|registration| registration.origin.clone())
+    };
+    let peer = LinkOrigin::Peer {
+        key: "ab".repeat(32),
+        switched: false,
+    };
+
+    // Not confirmed by its host yet: nothing to open.
+    told(&mut runtime, serde_json::json!([machine("confirming")]));
+    assert_eq!(origin_of(&runtime, "windows-pc"), None);
+
+    told(&mut runtime, serde_json::json!([machine("active")]));
+    assert_eq!(origin_of(&runtime, "windows-pc"), Some(peer.clone()));
+    let registration = runtime.device_registration("windows-pc").unwrap();
+    assert_eq!(registration.label, "Windows PC");
+    // Its row names the pairing it is, so Settings lists the machine once.
+    assert_eq!(
+        device(&runtime, "windows-pc").peer_key,
+        Some("ab".repeat(32))
+    );
+    assert!(
+        registration.host_consent.is_some(),
+        "pairing is the consent its node runs under"
+    );
+    // This test's connector reaches no paired machine, and the row says so
+    // instead of reading as never tried.
+    let status = runtime
+        .snapshot
+        .status
+        .remote
+        .iter()
+        .find(|status| status.target_id == "windows-pc")
+        .expect("the device has a status entry");
+    assert_eq!(
+        status.message.as_deref(),
+        Some("This Hide connects no paired machine")
+    );
+
+    for paused in ["paused", "paused_there"] {
+        told(&mut runtime, serde_json::json!([machine(paused)]));
+        assert_eq!(
+            origin_of(&runtime, "windows-pc"),
+            Some(peer.clone()),
+            "{paused}"
+        );
+    }
+
+    told(&mut runtime, serde_json::json!([machine("unpaired")]));
+    assert_eq!(origin_of(&runtime, "windows-pc"), None);
+    assert!(
+        !runtime
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .any(|status| status.target_id == "windows-pc")
+    );
+
+    // An SSH device already under that machine's id stays what it is.
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(crate::model::DeviceRegistration {
+            id: "windows-pc".to_owned(),
+            label: "pc over ssh".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "pc".to_owned(),
+                naming: crate::model::DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    told(&mut runtime, serde_json::json!([machine("active")]));
+    assert_eq!(
+        origin_of(&runtime, "windows-pc").and_then(|origin| origin.ssh_alias().map(str::to_owned)),
+        Some("pc".to_owned())
+    );
+    assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+}
+
+/// PRD device-connect-iroh D-34 (1), D-49: the helper device each released
+/// build registered, with the project and the terminals its agents ran in,
+/// is switched by this build under the id the upgrade named it by. The same
+/// registration becomes its machine's, with its name and what the operator
+/// allowed there, and every other record of the store is saved as it was:
+/// the projects, tabs, agents and sessions that name the device name it
+/// still, so its terminals are taken up again under the ids they had.
+#[test]
+fn a_released_builds_helper_device_is_switched_and_keeps_what_ran_on_it() {
+    use crate::model::LinkOrigin;
+    use crate::node_migration::upgrade_tests::{fixtures, node_of, started};
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    // Everything the store keeps but the devices themselves.
+    let rest = |runtime: &Runtime| {
+        let mut stored = serde_json::to_value(&runtime.snapshot.ui_state).expect("the store");
+        stored
+            .as_object_mut()
+            .expect("the store is an object")
+            .remove("device_registrations");
+        stored
+    };
+    let folders = fixtures();
+    assert!(!folders.is_empty(), "no released state folder was found");
+    for folder in folders {
+        let tag = folder.file_name().unwrap().to_string_lossy().into_owned();
+        // The store is read by the start itself, so what is in front and
+        // every other record is the release's own.
+        let state = started(&folder);
+        let mut runtime = runtime_reading(
+            &state.path().join(crate::node_migration::CORE_STATE),
+            node_of(state.path()),
+            &state.path().join("home"),
+            None,
+        );
+        let helper = runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.origin.dials_helper())
+            .cloned()
+            .unwrap_or_else(|| panic!("{tag}: the release registered no helper device"));
+        let devices = runtime.snapshot.ui_state.device_registrations.len();
+        // The release left a project on the device, which its machine's own
+        // Hide is handed (D-48).
+        let source = runtime
+            .device_switch_source(&helper.id)
+            .unwrap_or_else(|code| panic!("{tag}: the upgraded device cannot be switched: {code}"));
+        assert!(
+            !source.projects.is_empty(),
+            "{tag}: no project on the device"
+        );
+        let before = rest(&runtime);
+        // The terminals its agents ran in are known by the launches the
+        // store keeps under each pane, which the wire leaves out.
+        let launches = runtime.snapshot.ui_state.pane_launches.clone();
+        let there = format!("remote:{}:pane:", helper.id);
+        assert!(
+            launches.keys().any(|pane| pane.starts_with(&there)),
+            "{tag}: no agent ran in a terminal of the device"
+        );
+
+        dispatch(
+            &mut runtime,
+            "device_switch",
+            serde_json::json!({"device_id": helper.id, "step": "connecting", "key": key}),
+        );
+        assert_eq!(
+            runtime.device_registration(&helper.id),
+            Some(&helper),
+            "{tag}: the device changed before its machine was paired"
+        );
+        dispatch(
+            &mut runtime,
+            "peer_machines",
+            serde_json::json!({ "machines": [{
+                "key": key, "device_id": helper.id, "name": "device",
+                "opens": "active", "opened_by": null, "connected": false, "path": null,
+                "reason": null, "update": null,
+            }]}),
+        );
+
+        let switched = runtime
+            .device_registration(&helper.id)
+            .unwrap_or_else(|| panic!("{tag}: the device is gone"))
+            .clone();
+        assert_eq!(
+            switched.origin,
+            LinkOrigin::Peer {
+                key: key.clone(),
+                switched: true
+            },
+            "{tag}"
+        );
+        assert_eq!(
+            (&switched.label, &switched.host_consent),
+            (&helper.label, &helper.host_consent),
+            "{tag}"
+        );
+        assert_eq!(
+            runtime.snapshot.ui_state.device_registrations.len(),
+            devices,
+            "{tag}"
+        );
+        assert_eq!(
+            runtime.snapshot.ui_state.pane_launches, launches,
+            "{tag}: a terminal's launch changed"
+        );
+        // Its first open on the new connection is owed, and saved as owed.
+        assert!(
+            runtime.switch_open_pending(&helper.id),
+            "{tag}: the switched device owes no first open"
+        );
+        let after = rest(&runtime);
+        let changed: Vec<_> = before
+            .as_object()
+            .expect("the store is an object")
+            .iter()
+            .filter(|(name, value)| after.get(name.as_str()) != Some(value))
+            .map(|(name, value)| format!("{name}: {value} -> {:?}", after.get(name.as_str())))
+            .collect();
+        assert!(
+            changed.is_empty()
+                && after.as_object().map(serde_json::Map::len)
+                    == before.as_object().map(serde_json::Map::len),
+            "{tag}: the switch changed another record: {changed:#?}"
+        );
+    }
+}
+
+/// A helper device is switched to its machine's own connection under the
+/// registration it has (PRD device-connect-iroh D-49, B36, B41): the steps
+/// hided says are drawn on its row, a switch that stops leaves the helper
+/// as it was with the reason, and once the paired machine's grant is active
+/// the same id and name go on over that machine's connection.
+#[test]
+fn a_helper_device_is_switched_in_place_once_its_machine_is_paired() {
+    use crate::model::{DeviceNaming, DeviceRegistration, DeviceSwitchState, LinkOrigin};
+    let mut runtime = runtime();
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let machines = |opens: &str| {
+        serde_json::json!({ "machines": [{
+            "key": "ab".repeat(32), "device_id": "build-box-id", "name": "ubuntu-build",
+            "opens": opens, "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]})
+    };
+    let step = |step: &str| serde_json::json!({"device_id": "build-box-id", "step": step});
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    runtime.rebuild_device_rows();
+    let helper = runtime.device_registration("build-box-id").unwrap().clone();
+
+    // What hided switches it from names the projects registered on it and
+    // no other machine's (D-48), by its id or the alias it is dialed by.
+    for (id, device, path) in [
+        ("workspace:app", "build-box-id", "/home/me/app"),
+        ("workspace:here", crate::node::TEST_NODE, "/Users/me/here"),
+    ] {
+        runtime.snapshot.ui_state.workspace_registrations.push(
+            crate::model::WorkspaceRegistration {
+                primary_checkout_id: None,
+                id: id.to_owned(),
+                label: id.to_owned(),
+                path: path.to_owned(),
+                device_id: device.to_owned(),
+                pinned: false,
+            },
+        );
+    }
+    for named in ["build-box-id", "build-box"] {
+        let source = runtime
+            .device_switch_source(named)
+            .expect("a device to switch");
+        assert_eq!(source.device_id, "build-box-id", "{named}");
+        assert_eq!(source.projects, ["/home/me/app"], "{named}");
+    }
+    assert_eq!(
+        runtime.device_switch_source("nowhere").err(),
+        Some("device_unknown")
+    );
+
+    // Each step is drawn on the device's row.
+    for (said, drawn) in [
+        ("checking", DeviceSwitchState::Checking),
+        ("installing", DeviceSwitchState::Installing),
+    ] {
+        assert!(dispatch(&mut runtime, "device_switch", step(said)));
+        let switch = device(&runtime, "build-box-id").switch.clone().unwrap();
+        assert_eq!((switch.state, switch.reason), (drawn, None), "{said}");
+    }
+
+    // A switch that stops before the pairing leaves the helper device, with
+    // the reason (B41).
+    let mut failed = step("failed");
+    failed["reason"] = serde_json::json!("ssh_not_reached");
+    dispatch(&mut runtime, "device_switch", failed);
+    let switch = device(&runtime, "build-box-id").switch.clone().unwrap();
+    assert_eq!(switch.state, DeviceSwitchState::Failed);
+    assert_eq!(switch.reason.as_deref(), Some("ssh_not_reached"));
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+
+    // Paired, and not confirmed yet: still the helper's. The switch started
+    // a Hide there, which said what it still needs (B30); one spelled as no
+    // row can draw it is not taken.
+    let mut connecting = step("connecting");
+    connecting["key"] = serde_json::json!(key);
+    let mut unspelled = connecting.clone();
+    unspelled["needs"] = serde_json::json!({"kind": "linger"});
+    dispatch(&mut runtime, "device_switch", unspelled);
+    assert_eq!(
+        device(&runtime, "build-box-id")
+            .switch
+            .as_ref()
+            .map(|switch| switch.state),
+        Some(DeviceSwitchState::Failed),
+        "a step that names a linger without its command was taken"
+    );
+    connecting["needs"] = serde_json::json!({
+        "kind": "linger", "command": "sudo loginctl enable-linger hy",
+    });
+    dispatch(&mut runtime, "device_switch", connecting.clone());
+    assert_eq!(device(&runtime, "build-box-id").needs, None);
+    dispatch(&mut runtime, "peer_machines", machines("confirming"));
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    assert_eq!(
+        device(&runtime, "build-box-id")
+            .switch
+            .as_ref()
+            .map(|switch| switch.state),
+        Some(DeviceSwitchState::Connecting)
+    );
+
+    // The grant is active: the same registration is that machine's device.
+    dispatch(&mut runtime, "peer_machines", machines("active"));
+    let switched = runtime.device_registration("build-box-id").unwrap().clone();
+    assert_eq!(
+        switched.origin,
+        LinkOrigin::Peer {
+            key: key.clone(),
+            switched: true
+        }
+    );
+    assert_eq!(
+        switched.label, "build-box",
+        "the name its operator gave stays"
+    );
+    assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
+    let row = device(&runtime, "build-box-id");
+    assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
+    assert_eq!((row.ssh_alias.as_deref(), &row.switch), (None, &None));
+    // What that machine's Hide still needs is on the row from then on.
+    let needs = row.needs.clone().expect("what the machine's Hide needs");
+    assert_eq!(
+        (needs.kind, needs.command.as_deref()),
+        (
+            crate::model::DeviceNeeds::Linger,
+            Some("sudo loginctl enable-linger hy")
+        )
+    );
+    // Saved as it is, and read back the same.
+    let stored = serde_json::to_value(&switched).unwrap();
+    assert_eq!(stored["peer_switched"], true);
+    assert_eq!(
+        serde_json::from_value::<DeviceRegistration>(stored).unwrap(),
+        switched
+    );
+
+    // Its machine's name changing later does not rename it, and the pairing
+    // ending removes it like any paired machine's device.
+    let mut renamed = machines("active");
+    renamed["machines"][0]["name"] = serde_json::json!("renamed");
+    dispatch(&mut runtime, "peer_machines", renamed);
+    assert_eq!(
+        runtime.device_registration("build-box-id").unwrap().label,
+        "build-box"
+    );
+    dispatch(&mut runtime, "peer_machines", machines("unpaired"));
+    assert_eq!(runtime.device_registration("build-box-id"), None);
+
+    // A machine paired before the switch was asked for is taken at once.
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(helper.clone());
+    runtime.rebuild_device_rows();
+    dispatch(&mut runtime, "peer_machines", machines("active"));
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    dispatch(&mut runtime, "device_switch", connecting);
+    assert!(
+        runtime
+            .device_registration("build-box-id")
+            .unwrap()
+            .origin
+            .switched()
+    );
+
+    // A step that names no key, or a reason that is not a code, is refused.
+    for bad in [
+        serde_json::json!({"device_id": "build-box-id", "step": "connecting"}),
+        serde_json::json!({"device_id": "build-box-id", "step": "failed", "reason": "No such host"}),
+        serde_json::json!({"device_id": "build-box-id", "step": "connecting", "key": "zz"}),
+    ] {
+        let before = runtime.snapshot.ui_state.device_registrations.clone();
+        dispatch(&mut runtime, "device_switch", bad);
+        assert_eq!(runtime.snapshot.ui_state.device_registrations, before);
+    }
+}
+
+/// A switched device's first open on its new connection closes the panes
+/// that connection does not hold (PRD device-connect-iroh D-49, B36), and
+/// all of them for a later computer, whose own folder there holds none
+/// (D-75, B69). The core owes that open from the save that holds the
+/// switch, across a restart, and keeps each closed agent's conversation
+/// for 이어가기 once the engine names it (review of #2682).
+#[test]
+fn a_switched_device_owes_its_first_open_and_keeps_what_that_open_closed() {
+    use crate::model::{DeviceNaming, DeviceRegistration, LinkOrigin};
+    use crate::session_sync::NotCarried;
+    let mut runtime = runtime();
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    runtime
+        .snapshot
+        .ui_state
+        .workspace_registrations
+        .push(crate::model::WorkspaceRegistration {
+            primary_checkout_id: None,
+            id: "workspace:app".to_owned(),
+            label: "app".to_owned(),
+            path: "/home/me/app".to_owned(),
+            device_id: "build-box-id".to_owned(),
+            pinned: false,
+        });
+    runtime.rebuild_device_rows();
+    assert!(!runtime.switch_open_pending("build-box-id"));
+    dispatch(
+        &mut runtime,
+        "peer_machines",
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": "build-box-id", "name": "ubuntu-build",
+            "opens": "active", "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]}),
+    );
+    dispatch(
+        &mut runtime,
+        "device_switch",
+        serde_json::json!({"device_id": "build-box-id", "step": "connecting", "key": key}),
+    );
+    assert!(runtime.switch_open_pending("build-box-id"));
+
+    // The save that holds the switch holds what it owes: a core started
+    // from that store owes the same open.
+    let stored = |runtime: &Runtime| persistence::load(&runtime.state_path).0;
+    assert!(
+        stored(&runtime)
+            .device_switch_opens
+            .contains("build-box-id")
+    );
+    let home = tempfile::tempdir().unwrap();
+    let copy = home.path().join("state.json");
+    std::fs::copy(&runtime.state_path, &copy).unwrap();
+    let restarted = runtime_reading(&copy, crate::node::test_node(), home.path(), None);
+    assert!(restarted.switch_open_pending("build-box-id"));
+    drop(restarted);
+
+    // The engine's restore on the new connection held none of the device's
+    // three panes: an agent in the project, a shell, and an agent whose
+    // folder no project of the device holds.
+    let left = |pane: &str, cwd: &str, agent: Option<(&str, &str)>| NotCarried {
+        pane_id: pane.to_owned(),
+        cwd: cwd.to_owned(),
+        agent: agent.map(|(kind, _)| kind.to_owned()),
+        name: None,
+        session: agent.map(|(_, session)| session.to_owned()),
+    };
+    let closed = [
+        left("w1:p1", "/home/me/app/src", Some(("claude-code", "s-1"))),
+        left("w1:p2", "/home/me/app", None),
+        left("w1:p3", "/tmp/elsewhere", Some(("codex", "s-2"))),
+    ];
+    assert!(runtime.settle_switch_open("build-box-id", &closed));
+    let archive = &runtime.snapshot.ui_state.session_archive;
+    let (id, _) = archive
+        .find("build-box-id", "claude-code", "s-1")
+        .expect("the closed agent's conversation under 보관됨");
+    let record = &archive.records[id];
+    assert_eq!(record.project_root, "/home/me/app");
+    assert_eq!(
+        record.members[0].pane_id,
+        crate::address::scoped_pane_id("build-box-id", "w1:p1")
+    );
+    assert_eq!(record.members[0].cwd.as_deref(), Some("/home/me/app/src"));
+    assert!(
+        archive.find("build-box-id", "codex", "s-2").is_none(),
+        "a conversation no project holds has no record to stand in"
+    );
+    // The row says how many terminals were not taken up (B36).
+    assert_eq!(device(&runtime, "build-box-id").not_carried, Some(3));
+
+    // Settled once, and the store owes nothing more.
+    assert!(!runtime.switch_open_pending("build-box-id"));
+    assert!(stored(&runtime).device_switch_opens.is_empty());
+    assert!(!runtime.settle_switch_open("build-box-id", &closed));
+    assert_eq!(runtime.snapshot.ui_state.session_archive.records.len(), 1);
+}
+
+/// A switch names at most `SWITCHED_PROJECTS` of the device's projects
+/// (D-48): as many as its machine's `hide device projects-ssh` takes, so a
+/// device with more hands the first of them on and the command is never
+/// refused for one too many.
+#[test]
+fn a_switch_names_no_more_projects_than_its_machine_takes() {
+    use crate::model::{DeviceNaming, DeviceRegistration, LinkOrigin};
+    let mut runtime = runtime();
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    let registered = crate::SWITCHED_PROJECTS + 3;
+    for index in 0..registered {
+        runtime.snapshot.ui_state.workspace_registrations.push(
+            crate::model::WorkspaceRegistration {
+                primary_checkout_id: None,
+                id: format!("workspace:{index}"),
+                label: format!("p{index}"),
+                path: format!("/home/me/p{index}"),
+                device_id: "build-box-id".to_owned(),
+                pinned: false,
+            },
+        );
+    }
+    let source = runtime
+        .device_switch_source("build-box-id")
+        .expect("a device to switch");
+    assert_eq!(source.projects.len(), crate::SWITCHED_PROJECTS);
+    let first: Vec<String> = (0..crate::SWITCHED_PROJECTS)
+        .map(|index| format!("/home/me/p{index}"))
+        .collect();
+    assert_eq!(source.projects, first);
+}
+
+/// A device added over SSH is added to be switched (B41, review of #2682):
+/// when that switch stops with nothing started on its machine, the device
+/// is taken off again and one line says why; once a Hide was started there
+/// or a grant saved, it stays a helper device with its reason and a retry.
+/// A helper device that was there before stays either way.
+#[test]
+fn a_device_added_for_its_switch_is_taken_off_when_the_switch_started_nothing() {
+    use crate::model::DeviceSwitchState;
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    let add = |runtime: &mut Runtime, alias: &str, switch_first: bool| {
+        runtime
+            .register_device(events::RegisterDevicePayload {
+                label: alias.to_owned(),
+                ssh_alias: alias.to_owned(),
+                wsl_distro: None,
+                host_consent: true,
+                switch_first,
+            })
+            .unwrap_or_else(|refusal| panic!("not registered: {}", refusal.code))
+    };
+    let failed = |device: &str, clean: bool| {
+        serde_json::json!({
+            "device_id": device, "step": "failed", "reason": "ssh_mac_signed_out", "clean": clean,
+        })
+    };
+
+    // Stopped before anything was started there: not added, with why.
+    let mut runtime = runtime();
+    let lab = add(&mut runtime, "lab", true);
+    assert!(device(&runtime, &lab).switch_first);
+    dispatch(&mut runtime, "device_switch", failed(&lab, true));
+    assert_eq!(runtime.device_registration(&lab), None);
+    let line = runtime.snapshot.navigator.device_not_added.clone();
+    assert_eq!(
+        line.map(|line| (line.label, line.reason)),
+        Some(("lab".to_owned(), "ssh_mac_signed_out".to_owned()))
+    );
+    // The next Add takes the line away.
+    let again = add(&mut runtime, "lab", true);
+    assert_eq!(runtime.snapshot.navigator.device_not_added, None);
+
+    // A Hide was started there, or a grant saved: it stays, as a helper
+    // device like any other from then on (B41).
+    dispatch(&mut runtime, "device_switch", failed(&again, false));
+    let row = device(&runtime, &again);
+    assert_eq!(
+        row.switch.as_ref().map(|switch| switch.state),
+        Some(DeviceSwitchState::Failed)
+    );
+    assert!(!row.switch_first);
+    dispatch(&mut runtime, "device_switch", failed(&again, true));
+    assert!(runtime.device_registration(&again).is_some());
+    assert_eq!(runtime.snapshot.navigator.device_not_added, None);
+
+    // A device that was not added for a switch is never taken off.
+    let older = add(&mut runtime, "older", false);
+    dispatch(&mut runtime, "device_switch", failed(&older, true));
+    assert!(runtime.device_registration(&older).is_some());
+}
+
+/// The link changes only after the switched registration is saved (review
+/// of #2682): a core that ended between the two would read the helper
+/// registration again and dial a folder its machine's own Hide already
+/// holds.
+#[test]
+fn a_switch_that_cannot_be_saved_leaves_the_helper_device_and_its_link() {
+    use crate::model::{DeviceNaming, DeviceRegistration, DeviceSwitchState, LinkOrigin};
+    let mut runtime = runtime();
+    let terminals = record_terminals(&mut runtime);
+    let key = "ab".repeat(32);
+    let dispatch = |runtime: &mut Runtime, kind: &str, payload: serde_json::Value| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": kind, "payload": payload,
+        }))
+        .expect("event");
+        runtime.dispatch_json(&event)
+    };
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(DeviceRegistration {
+            id: "build-box-id".to_owned(),
+            label: "build-box".to_owned(),
+            origin: LinkOrigin::Dialed {
+                ssh_alias: "build-box".to_owned(),
+                naming: DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    runtime.rebuild_device_rows();
+    let helper = runtime.device_registration("build-box-id").unwrap().clone();
+    dispatch(
+        &mut runtime,
+        "peer_machines",
+        serde_json::json!({ "machines": [{
+            "key": key, "device_id": "build-box-id", "name": "ubuntu-build",
+            "opens": "active", "opened_by": null, "connected": false, "path": null,
+            "reason": null, "update": null,
+        }]}),
+    );
+    let before = terminals.devices();
+
+    // The store cannot be written: its folder is a file.
+    let blocked = runtime.state_path.parent().unwrap().join("not-a-folder");
+    std::fs::write(&blocked, b"").unwrap();
+    let store = std::mem::replace(&mut runtime.state_path, blocked.join("state.json"));
+    let connecting = serde_json::json!({
+        "device_id": "build-box-id", "step": "connecting", "key": key,
+        "needs": {"kind": "auto_login"},
+    });
+    dispatch(&mut runtime, "device_switch", connecting.clone());
+    assert_eq!(runtime.device_registration("build-box-id"), Some(&helper));
+    let row = device(&runtime, "build-box-id");
+    let switch = row.switch.clone().expect("why the switch stopped");
+    assert_eq!(
+        (switch.state, switch.reason.as_deref()),
+        (DeviceSwitchState::Failed, Some("switch_not_saved"))
+    );
+    assert_eq!((row.peer_key.as_deref(), &row.needs), (None, &None));
+    assert_eq!(terminals.devices(), before, "the helper's link was touched");
+
+    // Pressed again once the store can be written, it lands (B41).
+    runtime.state_path = store;
+    dispatch(&mut runtime, "device_switch", connecting);
+    let row = device(&runtime, "build-box-id");
+    assert_eq!(row.peer_key.as_deref(), Some(key.as_str()));
+    assert_eq!(row.switch, None);
+    assert!(row.needs.is_some());
+    // Only now is the helper's link let go.
+    assert!(
+        terminals.devices().len() > before.len()
+            && terminals.devices()[before.len()..]
+                .iter()
+                .all(|said| said == "remove:build-box-id"),
+        "{:?}",
+        terminals.devices()
     );
 }

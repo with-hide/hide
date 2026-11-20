@@ -174,8 +174,9 @@ pub enum DeviceFailure {
     Unsupported,
     /// The release kit for the device's system could not be downloaded.
     Download,
-    /// The helper could not be installed on the device.
-    Install,
+    /// The helper could not be installed on the device, by where the
+    /// install stopped.
+    Install(hide_node_link::device::InstallStop),
     /// The installed helper did not start or answer.
     Helper,
     /// No connection could be set up from the registration (its SSH
@@ -359,7 +360,15 @@ fn device_failure_name(failure: DeviceFailure) -> &'static str {
         DeviceFailure::IdentityChanged => "identity_changed",
         DeviceFailure::Unsupported => "unsupported",
         DeviceFailure::Download => "download",
-        DeviceFailure::Install => "install",
+        DeviceFailure::Install(stop) => {
+            use hide_node_link::device::InstallStop;
+            match stop {
+                InstallStop::Refused => "install_refused",
+                InstallStop::Ended => "install_ended",
+                InstallStop::Quiet => "install_quiet",
+                InstallStop::Local => "install_local",
+            }
+        }
         DeviceFailure::Helper => "helper",
         DeviceFailure::NoTransport => "no_transport",
         DeviceFailure::WorkerUnavailable => "worker_unavailable",
@@ -426,6 +435,33 @@ mod tests {
                 ("platform", "unknown"),
             ]
         );
+    }
+
+    /// An install failure names where it stopped, so a device that refused
+    /// a step is told from a link that ended or went quiet part way.
+    #[test]
+    fn an_install_failure_names_where_it_stopped() {
+        use hide_node_link::device::InstallStop;
+        for (stop, name) in [
+            (InstallStop::Refused, "install_refused"),
+            (InstallStop::Ended, "install_ended"),
+            (InstallStop::Quiet, "install_quiet"),
+            (InstallStop::Local, "install_local"),
+        ] {
+            let event = Event::DeviceConnected {
+                outcome: DeviceOutcome::Failed(DeviceFailure::Install(stop)),
+                platform: DevicePlatform::Unknown,
+            };
+            assert_eq!(
+                event.properties(),
+                [
+                    ("outcome", "failed"),
+                    ("failed_step", "install"),
+                    ("failure", name),
+                    ("platform", "unknown"),
+                ]
+            );
+        }
     }
 
     /// The endings ssh explained with no line Hide knows are counted apart,

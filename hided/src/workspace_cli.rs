@@ -178,6 +178,25 @@ fn reported(reason: String) -> String {
 }
 
 pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
+    bootstrap_pane(env, one_shot).map_err(|reason| {
+        // In a pane of a guest's node whose core is away nothing answers
+        // for the pane, and the node says why (PRD device-connect-iroh
+        // B12): the caller hears that, not that Hide is gone.
+        let unanswered = matches!(
+            reason.as_str(),
+            "hide_unavailable" | "bridge_unavailable" | NOT_LINKED
+        );
+        if unanswered
+            && crate::guest_node::away::ask(&env.state_dir, env.pane_id.as_deref(), None).is_some()
+        {
+            crate::guest_node::away::OWNER_OFFLINE.to_owned()
+        } else {
+            reason
+        }
+    })
+}
+
+fn bootstrap_pane(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     // A caller with no pane id (a daemon first started from a plain terminal)
     // still bootstraps: hided binds it to the registered checkout holding
     // its cwd, or refuses with the reason the caller can act on.
@@ -193,6 +212,7 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
         hook: None,
         install: env.install.clone(),
         access: None,
+        device: None,
     };
     let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
     let install = env.install.as_deref();
@@ -275,6 +295,52 @@ pub fn access_bootstrap(
     ))
 }
 
+/// How long `hide device` waits for one answer about pairing: past opening
+/// the endpoint and a share's wait for the relay to name this machine.
+const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most a pairing answer holds: every paired machine and the pairings
+/// under way.
+const PAIRING_ANSWER_LIMIT: u64 = 256 * 1024;
+
+/// One ask about pairing this machine with another Hide (`crate::pairing`),
+/// answered by this machine's own daemon in one exchange on the bootstrap
+/// socket. The answer is the daemon's line, a refusal included; an `Err` is
+/// the reason none arrived.
+pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    pairing_ask_within(env, ask, PAIRING_TIMEOUT)
+}
+
+/// [`pairing_ask`] for an ask whose answer is the end of work the daemon
+/// does first, which `within` bounds.
+pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Value, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
+    let request = serde_json::to_value(PaneRequest {
+        // The pane this command says it runs in, which lets the daemon
+        // refuse what is the operator's without walking the process tree.
+        pane_id: env.pane_id.clone().unwrap_or_default(),
+        nonce: hex::encode(nonce),
+        one_shot: false,
+        hook: None,
+        install: None,
+        access: None,
+        device: Some(ask),
+    })
+    .map_err(|_| "reference_unavailable".to_owned())?;
+    let mut stream = connect_bootstrap(&env.state_dir)?;
+    stream
+        .set_read_timeout(Some(within))
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
+    let mut line = String::new();
+    BufReader::new(&mut stream)
+        .take(PAIRING_ANSWER_LIMIT)
+        .read_line(&mut line)
+        .map_err(|_| "request_timeout".to_owned())?;
+    serde_json::from_str(&line).map_err(|_| "hide_unavailable".to_owned())
+}
+
 fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
@@ -285,6 +351,7 @@ fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
         hook: None,
         install: None,
         access: Some(ask),
+        device: None,
     })
     .map_err(|_| "reference_unavailable".to_owned())
 }
@@ -541,6 +608,28 @@ pub fn request_plan(
     })
 }
 
+/// `hide automation`: a call on the operator's automations, answered by the
+/// core. A change is never sent again on its own: a lost answer is read
+/// back with `list`.
+pub fn request_automation(
+    credential: &mut Credential,
+    call: &Value,
+    action: bool,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"automation","request_id":request_id,"call":call}),
+            &request_id,
+            action,
+            after,
+        )
+    })
+}
+
 /// `hide session fold-ask`: folds one of the caller's session's open questions
 /// with its reason. Running it again converges: a folded question answers
 /// that it is already closed.
@@ -715,6 +804,26 @@ pub fn request_project_open_with_token(
         json!({"type":"project_open","request_id":request_id,"path":path}),
         &request_id,
         PROJECT_OPEN_TIMEOUT,
+    )
+}
+
+/// Registers this machine's folder `path` as a project of its own Hide and
+/// brings nothing forward, with the daemon's token from the state file this
+/// account owns (`project_open::run_add`), waiting `within` for its answer
+/// and never longer than an open waits.
+pub fn request_project_add_with_token(
+    port: u16,
+    token: &str,
+    path: &str,
+    within: Duration,
+) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"project_add","request_id":request_id,"path":path}),
+        &request_id,
+        within.min(PROJECT_OPEN_TIMEOUT),
     )
 }
 
@@ -2326,6 +2435,8 @@ mod tests {
             access: None,
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+            peer_direct: None,
+            device_connect: false,
             search_path: None,
         }
     }

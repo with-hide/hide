@@ -61,6 +61,14 @@ pub struct CoreOptions {
     /// B2); absent where the system names none.
     #[serde(default)]
     pub machine_name: Option<String>,
+    /// Where this machine shows the drives of the Windows PC it runs on,
+    /// when it is a WSL distribution (`hide_platform::host::windows_drives`);
+    /// absent on any other machine. It goes on this machine's own device
+    /// row, as a device's helper reports its own, so a Windows path pasted
+    /// into a core that runs in a distribution becomes that distribution's
+    /// path (PRD wsl-device B16).
+    #[serde(default)]
+    pub windows_drives: Option<String>,
     /// The embedder runs on the state folder this account's hide picks by
     /// default; only such a core writes this machine's guardrails policy,
     /// which every hook of the account reads (PRD agent-guardrails D-11). A
@@ -185,6 +193,12 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(serialize_with = "serialize_optional_shared")]
     pub access: Option<Arc<AccessSnapshot>>,
+    /// Automations and their runs (PRD automations D-02, D-20). Its own
+    /// section, absent until the core restored its book, so a run's change
+    /// never resends anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -926,6 +940,16 @@ pub enum PaneFindRoute {
     Bar,
 }
 
+/// A device an Add over SSH did not add (`NavigatorSnapshot::device_not_added`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceNotAddedSnapshot {
+    /// The name the operator gave it.
+    pub label: String,
+    /// Why its switch stopped, as the code a device row's failed switch
+    /// carries (`DeviceSwitchSnapshot::reason`).
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct NavigatorSnapshot {
     pub agent_scope: crate::agent_state::Scope,
@@ -941,6 +965,23 @@ pub struct NavigatorSnapshot {
     pub focused_workspace_id: Option<String>,
     pub focused_checkout_id: Option<String>,
     pub devices: Vec<DeviceSnapshot>,
+    /// The device the last Add over SSH did not add, with why (PRD
+    /// device-connect-iroh B41): its first switch stopped before anything
+    /// was started on that machine, and no device is left on the helper.
+    /// One at most, until the next device is added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_not_added: Option<DeviceNotAddedSnapshot>,
+    /// The machines this one is paired with over the peer connection, both
+    /// directions of each pair, as hided last told the core (PRD
+    /// device-connect-iroh D-72). Beside `devices`, not among them: a paired
+    /// machine runs its own core.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<crate::peer_machines::PeerMachine>,
+    /// The panes other machines' work runs in on this machine, by guest, as
+    /// hided last told the core (PRD device-connect-iroh D-77 (5), B10).
+    /// They are not this core's panes: its engine runs none of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guest_panes: Vec<crate::guest_panes::GuestPanes>,
     pub workspaces: Vec<WorkspaceSnapshot>,
     /// Project rows the core grouped at the bottom of each device's Projects
     /// list. `workspaces` remains the one authoritative row collection so
@@ -1090,6 +1131,96 @@ pub struct DeviceSnapshot {
     /// SSH alias, connection test or helper consent here (PRD
     /// core-host-node-remote-core D-04).
     pub dials_in: bool,
+    /// The connection key of the paired machine this device is (PRD
+    /// device-connect-iroh D-72): the machine has one row in Settings, its
+    /// pairing's, and this device serves its rail tile and its panes.
+    pub peer_key: Option<String>,
+    /// Where the device's switch to its machine's own connection stands
+    /// (PRD device-connect-iroh B36, B41); `None` when none was asked for
+    /// or it finished.
+    pub switch: Option<DeviceSwitchSnapshot>,
+    /// What the Hide this core started on the device's machine over SSH
+    /// still needs from the operator to stay reachable (PRD
+    /// device-connect-iroh B30), as that machine said when it was started;
+    /// kept while this core runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<DeviceNeedsSnapshot>,
+    /// Whether the device can be switched to its machine's own connection
+    /// (PRD device-connect-iroh B35, [`LinkOrigin::switches`]): the one
+    /// rule the row's `바꾸기` and `hide device switch` both follow.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switchable: bool,
+    /// How many of the device's terminals its switch could not take up
+    /// again and closed (B36), kept while this core runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_carried: Option<u32>,
+    /// Added over SSH to be switched at once (B41): its switch is asked
+    /// when it first connects, and it is not left on the helper when that
+    /// switch stops before anything was started on its machine.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switch_first: bool,
+}
+
+/// What a machine's Hide, started over SSH, needs to stay reachable with no
+/// one at it (PRD device-connect-iroh B30).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeviceNeedsSnapshot {
+    pub kind: DeviceNeeds,
+    /// With `linger`: the command an administrator runs on that machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl DeviceNeedsSnapshot {
+    /// Whether it is spelled as a row can draw it: a linger with its one
+    /// command line, an automatic login with none.
+    pub(crate) fn valid(&self) -> bool {
+        match (self.kind, self.command.as_deref()) {
+            (DeviceNeeds::AutoLogin, None) => true,
+            (DeviceNeeds::Linger, Some(command)) => {
+                !command.is_empty()
+                    && command.len() <= 256
+                    && !command.chars().any(char::is_control)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `contracts/snapshot-wire-enums.json`: `device_needs`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceNeeds {
+    /// A Mac's core starts at a login: after a restart it is back only
+    /// once someone logs in, or with automatic login on.
+    AutoLogin,
+    /// Linux: the core ends with the account's last session until an
+    /// administrator turns linger on.
+    Linger,
+}
+
+/// A helper device's switch to the connection of the Hide on its machine,
+/// as its row draws it: the step under way, or why the last one stopped.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceSwitchSnapshot {
+    pub state: DeviceSwitchState,
+    /// Why a `failed` switch stopped: a code the shell words, the pairing's
+    /// refusal codes among them.
+    pub reason: Option<String>,
+}
+
+/// `contracts/snapshot-wire-enums.json`: `device_switch_state`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceSwitchState {
+    /// The machine is asked what it has.
+    Checking,
+    /// A Hide is being put on the machine.
+    Installing,
+    /// The two machines are paired and the connection is being opened.
+    Connecting,
+    /// The switch stopped; the device is used as before.
+    Failed,
 }
 
 /// Why the kit does not run on a machine at all, as a code the web words
@@ -2536,6 +2667,12 @@ pub struct WorkspaceSnapshot {
     /// (D-07), so an unregistered workspace is never pinned.
     #[serde(default)]
     pub pinned: bool,
+    /// The core keeps this project off every list (the sidebar, the phone,
+    /// the project picker): an automation's own folder, registered only so
+    /// its runs can start there (PRD automations D-08, B30). Absent while
+    /// false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
     pub checkouts: Vec<CheckoutSnapshot>,
     /// Checkout rows grouped after the active rows in this project. The full
     /// rows stay in `checkouts`, which remains the authority for focus,
@@ -5117,6 +5254,12 @@ pub struct UiStateSnapshot {
     /// it makes (`runtime::agent_choice`). The store owns it.
     #[serde(default, skip_serializing)]
     pub pane_launches: BTreeMap<String, PaneLaunch>,
+    /// The devices switched to their machine's own connection whose first
+    /// engine open on it has not ended (`runtime::device_switch`): that open
+    /// closes the panes the new link does not hold, and a core that stopped
+    /// before it still owes it. The store owns it.
+    #[serde(default, skip_serializing)]
+    pub device_switch_opens: BTreeSet<String>,
     /// Each agent pane's request-view verb and when it took it, so the time
     /// a row has waited survives a restart (PRD overview-request-view D-40).
     /// The store owns it; the shell reads it on the row.
@@ -5986,6 +6129,7 @@ impl Default for UiStateSnapshot {
             pane_read_records: BTreeMap::new(),
             pane_completions: BTreeMap::new(),
             pane_launches: BTreeMap::new(),
+            device_switch_opens: BTreeSet::new(),
             request_verbs: BTreeMap::new(),
             agent_sleep_after_hours: default_sleep_after_hours(),
             project_issue_sources: BTreeMap::new(),
@@ -6065,6 +6209,14 @@ pub enum LinkOrigin {
     /// A WSL distribution of the PC the core runs on, whose node the core
     /// starts through `wsl.exe` (PRD wsl-device D-01, D-07).
     Wsl { distro: String },
+    /// Another machine that runs Hide and gave this one a grant (PRD
+    /// device-connect-iroh D-61): this core's node runs there as a process
+    /// of this core's build, under that machine's Hide, on the connection
+    /// the two keep. `key` is that machine's connection key, 64 lower hex
+    /// characters; its id is that machine's own node id. `switched` is a
+    /// device the core dialed as a helper before the two machines were
+    /// paired (D-49): it keeps the id and the name it had.
+    Peer { key: String, switched: bool },
 }
 
 /// Whether a device the core dials over SSH is named by its machine's own id
@@ -6110,7 +6262,7 @@ impl LinkOrigin {
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
             Self::Dialed { ssh_alias, .. } => Some(ssh_alias),
-            Self::Inbound | Self::Wsl { .. } => None,
+            Self::Inbound | Self::Wsl { .. } | Self::Peer { .. } => None,
         }
     }
 
@@ -6120,33 +6272,72 @@ impl LinkOrigin {
     pub fn naming(&self) -> Option<DeviceNaming> {
         match self {
             Self::Dialed { naming, .. } => Some(*naming),
-            Self::Inbound | Self::Wsl { .. } => None,
+            Self::Inbound | Self::Wsl { .. } | Self::Peer { .. } => None,
         }
     }
 
     pub fn wsl_distro(&self) -> Option<&str> {
         match self {
             Self::Wsl { distro } => Some(distro),
-            Self::Dialed { .. } | Self::Inbound => None,
+            Self::Dialed { .. } | Self::Inbound | Self::Peer { .. } => None,
         }
+    }
+
+    /// The connection key of a machine paired with this one.
+    pub fn peer_key(&self) -> Option<&str> {
+        match self {
+            Self::Peer { key, .. } => Some(key),
+            Self::Dialed { .. } | Self::Inbound | Self::Wsl { .. } => None,
+        }
+    }
+
+    /// Whether the device was a helper device switched to its machine's
+    /// connection, which keeps the id and the name it had as one.
+    pub fn switched(&self) -> bool {
+        matches!(self, Self::Peer { switched: true, .. })
+    }
+
+    /// Whether the core dials a helper of its own on the machine: the kind
+    /// a device is switched from (D-49).
+    pub fn dials_helper(&self) -> bool {
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+    }
+
+    /// Whether the device can be switched to its machine's own connection
+    /// now: one the core dials over SSH that has connected, so its id is
+    /// its machine's and the paired machine's device has it too (B35). A
+    /// device that never connected is switched once it has.
+    pub fn switches(&self) -> bool {
+        matches!(
+            self,
+            Self::Dialed {
+                naming: DeviceNaming::Named,
+                ..
+            }
+        )
     }
 
     /// Whether the core brings a lost link back itself; a node that dials
     /// in comes back only by dialing again.
     pub fn core_redials(&self) -> bool {
-        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+        matches!(
+            self,
+            Self::Dialed { .. } | Self::Wsl { .. } | Self::Peer { .. }
+        )
     }
 
     /// Whether removing the registration takes Hide's kit off the machine:
     /// a device the core dials, where its helper put it. A node that dials
     /// in runs Hide itself and registers again on its next link, so the kit
-    /// the core keeps there through that link stays.
+    /// the core keeps there through that link stays, and a paired machine's
+    /// own Hide removes this core's build with the pairing.
     pub fn removes_kit(&self) -> bool {
         matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether the core's helper there waits for the operator's consent; a
-    /// node that dials in was allowed by the operator's own SSH login.
+    /// node that dials in was allowed by the operator's own SSH login, and
+    /// a paired machine by both operators at pairing.
     pub fn takes_consent(&self) -> bool {
         matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
@@ -6162,9 +6353,10 @@ impl LinkOrigin {
 }
 
 /// A registration as the store and the shell spell it: the alias of a
-/// device the core dials, the flag of a node that dials in, or the WSL
-/// distribution it is, exactly one. A build that knows only the first two
-/// reads a WSL record as naming neither and drops it alone (`persistence`).
+/// device the core dials, the flag of a node that dials in, the WSL
+/// distribution it is, or the connection key of a paired machine, exactly
+/// one. A build that knows only the first two reads a WSL or a paired
+/// machine's record as naming neither and drops it alone (`persistence`).
 #[derive(Deserialize, Serialize)]
 struct StoredDeviceRegistration {
     id: String,
@@ -6177,11 +6369,25 @@ struct StoredDeviceRegistration {
     inbound: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     wsl_distro: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_key: Option<String>,
+    /// A paired machine's device that was a helper device before
+    /// ([`LinkOrigin::switched`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    peer_switched: bool,
     /// A dialed device's `DeviceNaming`; absent is `Legacy`, which every
     /// registration an earlier build wrote reads as. An earlier build reads
     /// past it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     naming: Option<String>,
+}
+
+/// Whether `key` is a connection key as a registration stores it.
+pub(crate) fn peer_key_is_spelled(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
@@ -6196,13 +6402,30 @@ impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
                 stored.id
             ));
         }
-        let origin = match (stored.ssh_alias, stored.inbound, stored.wsl_distro) {
-            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias, naming },
-            (None, true, None) => LinkOrigin::Inbound,
-            (None, false, Some(distro)) => LinkOrigin::Wsl { distro },
-            (None, false, None) => {
+        let origin = match (
+            stored.ssh_alias,
+            stored.inbound,
+            stored.wsl_distro,
+            stored.peer_key,
+        ) {
+            (Some(ssh_alias), false, None, None) => LinkOrigin::Dialed { ssh_alias, naming },
+            (None, true, None, None) => LinkOrigin::Inbound,
+            (None, false, Some(distro), None) => LinkOrigin::Wsl { distro },
+            (None, false, None, Some(key)) => {
+                if !peer_key_is_spelled(&key) {
+                    return Err(format!(
+                        "device {} names a paired machine by a key that is not 64 lower hex characters",
+                        stored.id
+                    ));
+                }
+                LinkOrigin::Peer {
+                    key,
+                    switched: stored.peer_switched,
+                }
+            }
+            (None, false, None, None) => {
                 return Err(format!(
-                    "device {} names neither an SSH alias, a node that dials in nor a WSL distribution",
+                    "device {} names neither an SSH alias, a node that dials in, a WSL distribution nor a paired machine",
                     stored.id
                 ));
             }
@@ -6232,6 +6455,8 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             host_consent: registration.host_consent,
             inbound,
             wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
+            peer_key: registration.origin.peer_key().map(str::to_owned),
+            peer_switched: registration.origin.switched(),
             naming: registration
                 .origin
                 .naming()
@@ -8225,6 +8450,9 @@ impl Snapshot {
                     options.machine_name.as_deref(),
                     None,
                 )],
+                device_not_added: None,
+                peers: Vec::new(),
+                guest_panes: Vec::new(),
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
                 agents: Vec::new(),
@@ -8344,6 +8572,7 @@ impl Snapshot {
             desk_jobs: None,
             desk_mentions: None,
             access: None,
+            automations: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -8404,6 +8633,7 @@ pub struct SnapshotDeltaPayload {
     pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
     pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
     pub access: Option<Arc<AccessSnapshot>>,
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -8466,6 +8696,8 @@ pub struct SnapshotDeltaWire<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<&'a AccessSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub automations: Option<&'a crate::automations::AutomationsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_panel: Option<&'a crate::links::LinkPanelSnapshot>,
@@ -8526,6 +8758,7 @@ impl<'a> SnapshotDeltaWire<'a> {
             desk_jobs: payload.desk_jobs.as_deref(),
             desk_mentions: payload.desk_mentions.as_deref(),
             access: payload.access.as_deref(),
+            automations: payload.automations.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
@@ -11067,6 +11300,32 @@ mod wire_enum_tests {
         );
         checked.insert("device_problem");
 
+        let switch_states = [
+            DeviceSwitchState::Checking,
+            DeviceSwitchState::Installing,
+            DeviceSwitchState::Connecting,
+            DeviceSwitchState::Failed,
+        ];
+        for variant in switch_states {
+            match variant {
+                DeviceSwitchState::Checking
+                | DeviceSwitchState::Installing
+                | DeviceSwitchState::Connecting
+                | DeviceSwitchState::Failed => {}
+            }
+        }
+        assert_wire(&contract, "device_switch_state", &switch_states);
+        checked.insert("device_switch_state");
+
+        let needs = [DeviceNeeds::AutoLogin, DeviceNeeds::Linger];
+        for variant in needs {
+            match variant {
+                DeviceNeeds::AutoLogin | DeviceNeeds::Linger => {}
+            }
+        }
+        assert_wire(&contract, "device_needs", &needs);
+        checked.insert("device_needs");
+
         let text = String::new;
         let waits = [
             SignInWait::Secret {
@@ -11415,6 +11674,150 @@ mod wire_enum_tests {
         assert_wire(&contract, "session_thread_view_kind", &views);
         checked.insert("session_thread_view_kind");
 
+        use crate::automations::{MissedReason, PauseReason, RunState, Trigger, Weekday};
+        let triggers = [Trigger::Scheduled, Trigger::Manual, Trigger::Missed];
+        for variant in triggers {
+            match variant {
+                Trigger::Scheduled | Trigger::Manual | Trigger::Missed => {}
+            }
+        }
+        assert_wire(&contract, "automation_trigger", &triggers);
+        checked.insert("automation_trigger");
+
+        let states = [
+            RunState::Starting,
+            RunState::Running,
+            RunState::Succeeded,
+            RunState::Failed,
+            RunState::Stopped,
+        ];
+        for variant in states {
+            match variant {
+                RunState::Starting
+                | RunState::Running
+                | RunState::Succeeded
+                | RunState::Failed
+                | RunState::Stopped => {}
+            }
+        }
+        assert_wire(&contract, "automation_run_state", &states);
+        checked.insert("automation_run_state");
+
+        let pauses = [
+            PauseReason::Operator,
+            PauseReason::LoginExpired,
+            PauseReason::FolderMissing,
+            PauseReason::AgentMissing,
+            PauseReason::FolderDetached,
+            PauseReason::MachineChanged,
+            PauseReason::FolderInRepository,
+        ];
+        for variant in pauses {
+            match variant {
+                PauseReason::Operator
+                | PauseReason::LoginExpired
+                | PauseReason::FolderMissing
+                | PauseReason::AgentMissing
+                | PauseReason::FolderDetached
+                | PauseReason::MachineChanged
+                | PauseReason::FolderInRepository => {}
+            }
+        }
+        assert_wire(&contract, "automation_pause_reason", &pauses);
+        checked.insert("automation_pause_reason");
+
+        let missed = [MissedReason::CoreOff, MissedReason::Asleep];
+        for variant in missed {
+            match variant {
+                MissedReason::CoreOff | MissedReason::Asleep => {}
+            }
+        }
+        assert_wire(&contract, "automation_missed_reason", &missed);
+        checked.insert("automation_missed_reason");
+
+        let days = [
+            Weekday::Sun,
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+        ];
+        for variant in days {
+            match variant {
+                Weekday::Sun
+                | Weekday::Mon
+                | Weekday::Tue
+                | Weekday::Wed
+                | Weekday::Thu
+                | Weekday::Fri
+                | Weekday::Sat => {}
+            }
+        }
+        assert_wire(&contract, "automation_weekday", &days);
+        checked.insert("automation_weekday");
+
+        {
+            use crate::peer_machines::{PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate};
+            let opens = [
+                PeerOpens::Confirming,
+                PeerOpens::Active,
+                PeerOpens::Paused,
+                PeerOpens::PausedThere,
+                PeerOpens::Removing,
+                PeerOpens::Unpaired,
+            ];
+            for variant in opens {
+                match variant {
+                    PeerOpens::Confirming
+                    | PeerOpens::Active
+                    | PeerOpens::Paused
+                    | PeerOpens::PausedThere
+                    | PeerOpens::Removing
+                    | PeerOpens::Unpaired => {}
+                }
+            }
+            assert_wire(&contract, "peer_opens", &opens);
+            checked.insert("peer_opens");
+
+            let opened_by = [PeerOpenedBy::Active, PeerOpenedBy::Paused];
+            for variant in opened_by {
+                match variant {
+                    PeerOpenedBy::Active | PeerOpenedBy::Paused => {}
+                }
+            }
+            assert_wire(&contract, "peer_opened_by", &opened_by);
+            checked.insert("peer_opened_by");
+
+            let paths = [PeerPath::Direct, PeerPath::Relay, PeerPath::Local];
+            for variant in paths {
+                match variant {
+                    PeerPath::Direct | PeerPath::Relay | PeerPath::Local => {}
+                }
+            }
+            assert_wire(&contract, "peer_path", &paths);
+            checked.insert("peer_path");
+
+            let reasons = [PeerReason::RelayUnreachable, PeerReason::RelayMonthlyLimit];
+            for variant in reasons {
+                match variant {
+                    PeerReason::RelayUnreachable | PeerReason::RelayMonthlyLimit => {}
+                }
+            }
+            assert_wire(&contract, "peer_reason", &reasons);
+            checked.insert("peer_reason");
+
+            let updates = [PeerUpdate::Here, PeerUpdate::There];
+            for variant in updates {
+                match variant {
+                    PeerUpdate::Here | PeerUpdate::There => {}
+                }
+            }
+            assert_wire(&contract, "peer_update", &updates);
+            checked.insert("peer_update");
+        }
+
         let unchecked = contract
             .keys()
             .filter(|key| !checked.contains(key.as_str()))
@@ -11502,6 +11905,7 @@ mod release_1_2_1_wire_tests {
             local_issues_path: None,
             effects_held: false,
             machine_name: None,
+            windows_drives: None,
             account_state_folder: false,
         });
         let rest = RestSections::capture(&snapshot, None, 1);

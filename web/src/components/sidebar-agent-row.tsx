@@ -8,7 +8,7 @@ import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAcc
 import { agentWithProfile, recordWords } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
 import { RowLineText } from "./row-line-text";
-import { homeTurnLine, originLine } from "../hideAiOrigin";
+import { automationNames, homeTurnLine, originLine } from "../hideAiOrigin";
 import { AgentForkMark } from "./fork-mark";
 import { RevisitStar, starred } from "./revisit-mark";
 import { RowLetterMark } from "./letter-mark";
@@ -177,12 +177,15 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   // Copy stands beside a person's turn's place wherever Done does (operator decision 2026-11-08).
   const humanActions = agent.human_turn && actions && !offline ? actions : null;
   const copy = humanActions?.copyText;
+  const names = useShellStore((s) => automationNames(s.automations));
+  // An automation run's row says which automation started it wherever it stands, its Needs You row too (PRD automations B15).
+  const origin = agent.hide_ai && (tree || agent.hide_ai.home === "automations") ? originLine(t, agent.hide_ai, names) : null;
   const titleTone = agent.state.title_emphasized || (selected && agent.state.selection_emphasizes_title) ? "text-foreground" : "text-subtle-foreground";
   // The mark's state and word ride the row's hint, which the mark sits inside (B3).
   const title = device ? `${agent.identity_label} · ${device}` : agent.identity_label;
   // Only a root in the project tree draws a resolved row (it carries `tree`); the raised lists leave it out and a child keeps its own look.
   const resting = tree && depth === 0 && agent.resolved;
-  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
+  const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place ?? origin].filter(Boolean).join("\n");
   // The hint reads as a card: the title, one muted line of what and how it stands, the summary cut at three lines, and the place.
   // A project tree's row keeps to one line, so what it is waiting on is said here.
   const sentence = offline ? null : rowSentence(t, agent);
@@ -305,9 +308,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
       >
         {/* An external tool's row leads its line with the tool's name, muted, since its first line has no room for it (operator decision 2026-11-14). */}
         <ToolLed tool={offline ? undefined : agent.tool} className="pointer-events-none text-caption leading-(--size-sidebar-line-detail)">{detail}</ToolLed>
-        {tree && agent.hide_ai ? (
-          <span aria-hidden="true" data-agent-task={originLine(t, agent.hide_ai)} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
-            {originLine(t, agent.hide_ai)}
+        {origin ? (
+          <span aria-hidden="true" data-agent-task={origin} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
+            {origin}
           </span>
         ) : null}
         {remote && !offline ? (

@@ -26,6 +26,9 @@ hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }
 hide-peer = { path = "../hide-peer" }
+# The endpoint other Hides connect to (`peer_host`); iroh stays behind this
+# crate (`scripts/check-iroh-stays-behind-the-seam.py`).
+hide-peer-iroh = { path = "../hide-peer-iroh" }
 hide-platform = { path = "../hide-platform" }
 hide-relay-protocol = { path = "../hide-relay-protocol" }
 hide-kit = { path = "../hide-kit" }
@@ -34,7 +37,7 @@ axum = { version = "=0.8.9", features = ["ws"] }
 tokio = { version = "=1.53.2", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "=0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 hex = "=0.4.3"
 getrandom = "=0.2.16"
 libc = "=0.2.190"

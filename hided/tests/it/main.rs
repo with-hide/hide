@@ -5,13 +5,17 @@
 
 mod access;
 mod agent_exec;
+mod always_on_update;
 mod arguments;
+mod automations;
 mod browser_control;
 mod closed_stdout;
 mod connect_build;
 mod connect_stop;
 mod core_move_checks;
 mod device_own_engine;
+mod fixtures;
+mod guest_node;
 mod handshake;
 mod held_letter_notice;
 mod mobile;
@@ -23,6 +27,7 @@ mod node_link_facts;
 mod node_owner;
 mod node_session_activity;
 mod opener_lifecycle;
+mod pairing;
 mod remote_delivery;
 mod seat;
 mod shell_exec;

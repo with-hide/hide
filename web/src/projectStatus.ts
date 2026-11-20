@@ -72,6 +72,16 @@ export function usd(micro: number, language: InterfaceLanguage): string {
   return new Intl.NumberFormat(language, { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol", maximumFractionDigits: 2 }).format(micro / 1_000_000);
 }
 
+/**
+ * What some calls cost when others had no price: `≥ $0.42`, a lower bound, or
+ * `$0.42` when every call had one; null when none had, so a screen says that
+ * its own way (`가격 없음`, or the tokens alone) rather than `≥ $0.00`.
+ */
+export function pricedUsd(cost: { micro_usd: number; unpriced: boolean }, language: InterfaceLanguage): string | null {
+  if (cost.unpriced && cost.micro_usd === 0) return null;
+  return `${cost.unpriced ? "≥ " : ""}${usd(cost.micro_usd, language)}`;
+}
+
 /** An amount the core said is a lower bound reads `≥`; an exact conversion reads `≈` (`UsageCost`). */
 export function costPrefix(cost: Pick<ProjectCost, "partial" | "waiting" | "limited">): "≥" | "≈" {
   return cost.partial || cost.waiting || cost.limited ? "≥" : "≈";

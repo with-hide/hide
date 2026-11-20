@@ -1715,6 +1715,77 @@
             "title": "AskHumanAnswer",
             "type": "object"
         },
+        "automation": {
+            "properties": {
+                "automation": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "automation"
+            ],
+            "type": "object"
+        },
+        "automation_list": {
+            "properties": {
+                "items": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "items"
+            ],
+            "type": "object"
+        },
+        "automation_preview": {
+            "properties": {
+                "next_run_at": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "next_run_at_unix_ms": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "reads_as": {
+                    "type": "object"
+                },
+                "reads_as_text": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "zone": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            },
+            "required": [
+                "reads_as",
+                "next_run_at_unix_ms",
+                "next_run_at",
+                "zone"
+            ],
+            "type": "object"
+        },
+        "automation_removed": {
+            "properties": {
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "removed"
+            ],
+            "type": "object"
+        },
         "confirmed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide inbox --confirm`.",
@@ -1732,6 +1803,17 @@
             "title": "Confirmed",
             "type": "object"
         },
+        "device_accepted": {
+            "properties": {
+                "accepted": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "accepted"
+            ],
+            "type": "object"
+        },
         "device_added": {
             "properties": {
                 "device": {
@@ -1747,14 +1829,104 @@
             ],
             "type": "object"
         },
-        "device_list": {
+        "device_allowed": {
             "properties": {
-                "devices": {
+                "answered": {
                     "type": "object"
                 }
             },
             "required": [
-                "devices"
+                "answered"
+            ],
+            "type": "object"
+        },
+        "device_changed": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id"
+            ],
+            "type": "object"
+        },
+        "device_joined": {
+            "properties": {
+                "host": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "object"
+                },
+                "phase": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "host",
+                "name",
+                "phase"
+            ],
+            "type": "object"
+        },
+        "device_list": {
+            "properties": {
+                "devices": {
+                    "type": "object"
+                },
+                "guest_panes": {
+                    "type": "object"
+                },
+                "peers": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "devices",
+                "peers",
+                "guest_panes"
+            ],
+            "type": "object"
+        },
+        "device_looked": {
+            "properties": {
+                "look": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "look"
+            ],
+            "type": "object"
+        },
+        "device_paired": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "object"
+                },
+                "paired": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "name",
+                "paired"
+            ],
+            "type": "object"
+        },
+        "device_projects_listed": {
+            "properties": {
+                "projects": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "projects"
             ],
             "type": "object"
         },
@@ -1786,6 +1958,36 @@
                 "started"
             ],
             "title": "Retried",
+            "type": "object"
+        },
+        "device_shared": {
+            "properties": {
+                "expires_unix_ms": {
+                    "type": "object"
+                },
+                "link": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "link",
+                "expires_unix_ms"
+            ],
+            "type": "object"
+        },
+        "device_switched": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "switch": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "switch"
+            ],
             "type": "object"
         },
         "fold_ask": {
@@ -3194,6 +3396,21 @@
             "title": "PurposeSet",
             "type": "object"
         },
+        "queued": {
+            "properties": {
+                "intent": {
+                    "type": "string"
+                },
+                "queued": {
+                    "const": true
+                }
+            },
+            "required": [
+                "queued",
+                "intent"
+            ],
+            "type": "object"
+        },
         "spawn_show": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -3813,6 +4030,13 @@
             ],
             "title": "WorktreeRemoved",
             "type": "object"
+        }
+    },
+    "away": {
+        "refusals": {
+            "outbox_full": "Too many letters wait for the Hide this work belongs to; send again once it has reconnected",
+            "outbox_unavailable": "This machine could not keep the letter; send again once the Hide this work belongs to has reconnected",
+            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide request send) is kept and delivered once it is back"
         }
     },
     "commands": [
@@ -4768,6 +4992,7 @@
             ],
             "refusals": [
                 "spawn_busy",
+                "workspace_closing",
                 "machine_unknown",
                 "machine_not_permitted",
                 "machine_unavailable",
@@ -4996,13 +5221,38 @@
         },
         {
             "answers": [
-                "device_added"
+                "device_shared"
+            ],
+            "arguments": [],
+            "command": "device share",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "peer_unavailable",
+                "pairing_ended"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_added",
+                "device_joined",
+                "device_paired"
             ],
             "arguments": [
                 {
-                    "name": "ssh_alias",
+                    "name": "link_or_ssh_alias",
                     "value": {
-                        "type": "key"
+                        "type": "link_or_key"
                     }
                 }
             ],
@@ -5026,18 +5276,182 @@
             "refusals": [
                 "machine_not_permitted",
                 "device_invalid",
-                "device_duplicate"
+                "device_duplicate",
+                "device_from_pane",
+                "link_invalid",
+                "link_newer",
+                "link_own",
+                "device_already_connected",
+                "pairing_no_offer",
+                "pairing_declined",
+                "pairing_host_full",
+                "pairing_full",
+                "pairing_unanswered",
+                "pairing_unreachable",
+                "pairing_update_needed",
+                "pairing_ended",
+                "ssh_hide_absent",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "ssh_not_reached",
+                "ssh_busy",
+                "device_own",
+                "device_limit",
+                "peer_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
         },
         {
             "answers": [
+                "device_allowed"
+            ],
+            "arguments": [],
+            "command": "device allow",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device pause",
+            "hidden": true,
+            "options": [
+                {
+                    "conflicts": [
+                        "--incoming",
+                        "--both"
+                    ],
+                    "name": "--outgoing",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--both"
+                    ],
+                    "name": "--incoming",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--incoming"
+                    ],
+                    "name": "--both",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_unknown",
+                "device_ambiguous",
+                "device_direction_needed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device resume",
+            "hidden": true,
+            "options": [
+                {
+                    "conflicts": [
+                        "--incoming",
+                        "--both"
+                    ],
+                    "name": "--outgoing",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--both"
+                    ],
+                    "name": "--incoming",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--incoming"
+                    ],
+                    "name": "--both",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous",
+                "device_direction_needed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed",
                 "device_removed"
             ],
             "arguments": [
                 {
-                    "name": "device_id",
+                    "name": "device",
                     "value": {
                         "type": "key"
                     }
@@ -5045,6 +5459,36 @@
             ],
             "command": "device remove",
             "options": [
+                {
+                    "conflicts": [
+                        "--incoming",
+                        "--both"
+                    ],
+                    "name": "--outgoing",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--both"
+                    ],
+                    "name": "--incoming",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--incoming"
+                    ],
+                    "name": "--both",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
                 {
                     "name": "--json",
                     "required": false,
@@ -5055,6 +5499,8 @@
             "refusals": [
                 "machine_not_permitted",
                 "device_unknown",
+                "device_ambiguous",
+                "device_direction_needed",
                 "device_local_remove_denied",
                 "device_files_open"
             ],
@@ -5063,11 +5509,81 @@
         },
         {
             "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device request",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous",
+                "device_not_a_guest",
+                "device_already_connected",
+                "request_waiting"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "address",
+                    "value": {
+                        "type": "address"
+                    }
+                }
+            ],
+            "command": "device address",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed",
                 "device_retried"
             ],
             "arguments": [
                 {
-                    "name": "device_id",
+                    "name": "device",
                     "value": {
                         "type": "key"
                     }
@@ -5091,8 +5607,164 @@
             "refusals": [
                 "machine_not_permitted",
                 "device_unknown",
+                "device_ambiguous",
                 "device_dials_in",
                 "device_wait_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_switched"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device switch",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--install",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "switch_unsupported",
+                "switch_running",
+                "switch_not_connected",
+                "ssh_core_not_started",
+                "ssh_not_reached",
+                "ssh_busy",
+                "ssh_mac_from_mac_only",
+                "ssh_mac_signed_out",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "device_already_connected"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_looked"
+            ],
+            "arguments": [],
+            "command": "device look-ssh",
+            "hidden": true,
+            "options": [],
+            "refusals": [
+                "hide_unavailable",
+                "request_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_accepted"
+            ],
+            "arguments": [],
+            "command": "device accept-ssh",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--request",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--key",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--device",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--wsl",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--helper",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "invalid_request",
+                "device_already_connected",
+                "device_limit"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_projects_listed"
+            ],
+            "arguments": [],
+            "command": "device projects-ssh",
+            "hidden": true,
+            "needs_one_of": [
+                "--project"
+            ],
+            "options": [
+                {
+                    "name": "--project",
+                    "repeats_at_most": 32,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5165,7 +5837,8 @@
             "refusals": [
                 "pane_required",
                 "lines_out_of_range",
-                "pane_unavailable"
+                "pane_unavailable",
+                "guest_pane_read"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5248,7 +5921,8 @@
                 "composer_not_empty",
                 "keys_not_sent",
                 "send_unconfirmed",
-                "operator_typing"
+                "operator_typing",
+                "guest_pane_keys"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5397,7 +6071,8 @@
         },
         {
             "answers": [
-                "letter"
+                "letter",
+                "queued"
             ],
             "arguments": [
                 {
@@ -5464,6 +6139,8 @@
                 "force_target_asleep",
                 "intent_conflict",
                 "no_parent",
+                "outbox_full",
+                "outbox_unavailable",
                 "participant_registering"
             ],
             "repeats_at_most": null,
@@ -5886,6 +6563,9 @@
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
                 "mission_dependency_cycle",
+                "mission_dependency_line_unknown",
+                "mission_dependency_stack_split",
+                "mission_merge_order_stack",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -6832,6 +7512,420 @@
         },
         {
             "answers": [
+                "automation"
+            ],
+            "arguments": [],
+            "command": "automation add",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [
+                        "--folder"
+                    ],
+                    "value": null
+                },
+                {
+                    "name": "--run-now",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_list"
+            ],
+            "arguments": [],
+            "command": "automation list",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation show",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation run",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation pause",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation resume",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation edit",
+            "needs_one_of": [
+                "--name",
+                "--task",
+                "--schedule",
+                "--kind",
+                "--folder",
+                "--own-folder",
+                "--worktree",
+                "--no-worktree"
+            ],
+            "options": [
+                {
+                    "name": "--name",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--own-folder"
+                    ],
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--folder"
+                    ],
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--no-worktree"
+                    ],
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--worktree"
+                    ],
+                    "name": "--no-worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation remove",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_preview"
+            ],
+            "arguments": [],
+            "command": "automation preview",
+            "options": [
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "plan"
             ],
             "arguments": [],
@@ -7009,7 +8103,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:cc1ffeab4d1fd5bdd33f7b4dcd8342d29bbe11b180d91b9522531404d4f6596b",
+    "digest": "sha256:8f49ae7b3a6cb71da71e7265ad3b8b1da6eedc091de40f85459aaadbdca14661",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -7017,6 +8111,11 @@
             "ok": "ok"
         },
         "agent": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
+        "automation": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"

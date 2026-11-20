@@ -63,6 +63,18 @@ macro_rules! wire_key {
 /// Each field has one semantic replacement and one stamp. This is a fixed
 /// projection of the supported snapshot, not a row-patch protocol.
 macro_rules! section {
+    // A section that carries its snapshot whole. Naming every field of the
+    // snapshot makes one the section does not list a compile error, where
+    // it used to be a value no window ever got: a field serde leaves out
+    // while it is empty is missing from both sides of a comparison of keys
+    // (the external tools' cells, then the paired machines).
+    (whole $name:ident, $source:ident, $s:ident,
+     { $($field:ident: $ty:ty => $value:expr),* $(,)? }) => {
+        section!($name, $source, $s, { $($field: $ty => $value),* }, {});
+        const _: fn(&$source) = |snapshot| {
+            let $source { $($field: _),* } = snapshot;
+        };
+    };
     ($name:ident, $source:ty, $s:ident,
      { $($field:ident $(as $wire:literal)?: $ty:ty => $value:expr $(; generation $generation:expr)?),* $(,)? },
      { $($group:ident: $group_ty:ident => $group_source:expr),* $(,)? }) => {
@@ -117,7 +129,7 @@ struct SectionWire<'a, T> {
     legacy: bool,
 }
 
-section!(NavigatorSections, NavigatorSnapshot, s, {
+section!(whole NavigatorSections, NavigatorSnapshot, s, {
     agent_scope: crate::agent_state::Scope => s.agent_scope,
     siblings_shown: usize => s.siblings_shown,
     root_path: Option<String> => s.root_path,
@@ -126,6 +138,9 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     focused_workspace_id: Option<String> => s.focused_workspace_id,
     focused_checkout_id: Option<String> => s.focused_checkout_id,
     devices: Vec<DeviceSnapshot> => s.devices,
+    device_not_added: Option<DeviceNotAddedSnapshot> => s.device_not_added,
+    peers: Vec<crate::peer_machines::PeerMachine> => s.peers,
+    guest_panes: Vec<crate::guest_panes::GuestPanes> => s.guest_panes,
     workspaces: Vec<WorkspaceSnapshot> => s.workspaces,
     inactive_projects: Vec<InactiveProjectGroupSnapshot> => s.inactive_projects,
     agents: Vec<SidebarAgentSnapshot> => s.agents,
@@ -133,18 +148,18 @@ section!(NavigatorSections, NavigatorSnapshot, s, {
     sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot> => s.sleeping_sessions,
     archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot> => s.archived_sessions,
     tools: Vec<crate::agent_state::ToolCell> => s.tools,
-}, {});
+});
 
-section!(TerminalSections, TerminalSnapshot, s, {
+section!(whole TerminalSections, TerminalSnapshot, s, {
     pane_id: Option<String> => s.pane_id,
     closed: bool => s.closed,
     exit_code: Option<i32> => s.exit_code,
     panes: Vec<TerminalPaneSnapshot> => s.panes,
     input_requests: Vec<InputRequestSnapshot> => s.input_requests,
     headers: BTreeMap<String, crate::agent_state::header::Header> => s.headers,
-}, {});
+});
 
-section!(StatusSections, StatusSnapshot, s, {
+section!(whole StatusSections, StatusSnapshot, s, {
     start_profiles: BTreeMap<String, StartProfilesSnapshot> => s.start_profiles,
     server_discovery: ServerDiscoverySnapshot => s.server_discovery,
     tab_rename: Option<TabRenameSnapshot> => s.tab_rename,
@@ -167,7 +182,7 @@ section!(StatusSections, StatusSnapshot, s, {
     project_adds: Vec<ProjectAddReceiptSnapshot> => s.project_adds,
     agent_definitions: Option<AgentDefinitionsSnapshot> => s.agent_definitions,
     agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer> => s.agent_profile_answer,
-}, {});
+});
 
 section!(RestSections, Snapshot, s, {
     delivery_watches: Vec<crate::delivery::watch::View> => s.delivery_watches,

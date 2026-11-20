@@ -7,7 +7,8 @@
 //! The device's helper is asked once to remove what Hide's marker lists in its
 //! `~/hide`, and its answer settles the registration: a folder Hide made that
 //! still holds something (the operator's files, or a session or pane recorded
-//! in it) keeps the project, renamed `hide`; a folder that is gone takes the
+//! in it) keeps the project, renamed `hide`; a folder that is gone, or that
+//! only the automations keep (PRD automations D-09, B31), takes the
 //! registration with it; a folder with no marker changes nothing (B8).
 //!
 //! A device whose helper has not updated is not asked (D-06); it is asked when

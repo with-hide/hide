@@ -13,23 +13,33 @@
 //!   tests run on; `hide-peer-iroh` is the real one.
 //! - [`peers`]: the first exchange, admission, which of two connections
 //!   stays, the streams of a connection and who may open them.
+//! - [`pairing`]: how two machines become a pair and stop being one: the
+//!   one-time [`link`], the [`words`] both operators compare, the requests
+//!   that wait for an operator, and the confirm and removal that are sent
+//!   until the host answers, each counted by [`rate`].
 //! - [`inbox`]: the guest's durable record of a host's events.
 //! - [`blocking`]: a stream as blocking `Read` and `Write`, for NodeLink.
 //! - [`mux`]: many streams over a carrier that is one byte stream.
 //! - [`limits`]: every cap, in one table.
+//! - [`port`]: the UDP port a state folder's endpoint binds, chosen once.
 
 pub mod blocking;
 pub mod gate;
 pub mod inbox;
 pub mod key;
 pub mod limits;
+pub mod link;
 pub mod log;
 pub mod loopback;
 pub mod mux;
+pub mod pairing;
 pub mod peers;
+pub mod port;
+pub mod rate;
 pub mod store;
 pub mod transport;
 pub mod wire;
+pub mod words;
 
 pub use hide_peer_protocol as protocol;
 pub use key::MachineKey;

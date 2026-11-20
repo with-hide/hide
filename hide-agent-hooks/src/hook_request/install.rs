@@ -78,6 +78,11 @@ pub struct PaneRequest {
     /// core's own daemon answers; a device's node refuses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<AccessAsk>,
+    /// What `hide device` asks about pairing this machine with another Hide
+    /// (PRD device-connect-iroh B1, B24), which only the core's own daemon
+    /// answers and whose shape is that daemon's; a device's node refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<serde_json::Value>,
 }
 
 /// What an external tool asks the core's bootstrap socket, with the key it
@@ -270,6 +275,7 @@ mod tests {
     fn a_daemon_or_node_refuses_only_another_installations_pane() {
         let request = |install: Option<&str>| PaneRequest {
             access: None,
+            device: None,
             pane_id: "w1:p1".to_owned(),
             nonce: "0".repeat(32),
             one_shot: false,

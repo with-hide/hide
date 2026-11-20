@@ -32,6 +32,7 @@ use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
 use serde_json::json;
 
+use crate::accepting::{CloseOnDrop, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::state_file::new_token;
 
@@ -1147,53 +1148,63 @@ pub fn bind(state_dir: &Path) -> Result<(BootstrapListener, PathBuf), String> {
     hide_node::pane_proof::bind(state_dir, new_token)
 }
 
+/// What the bootstrap socket answers with.
+pub struct Answering {
+    pub registry: Arc<Registry>,
+    pub core: Arc<CoreHandle>,
+    pub engine: Option<EngineHandle>,
+    pub port: u16,
+    pub desktop_renderers: Arc<AtomicUsize>,
+    /// What `hide device` asks about pairing (`crate::pairing`).
+    pub pairing: Arc<crate::pairing::Pairing>,
+    /// What the listener's accept thread does, for `/health`.
+    pub health: Arc<crate::accepting::ListenerHealth>,
+}
+
 /// Answers bootstrap requests until `shutdown`. The listener accepts on a
-/// thread of its own, because an accept blocks; the closer frees it when the
-/// daemon stops, and a failed accept ends the bootstrap with a diagnostic.
+/// thread of its own, because an accept blocks; a failed accept is tried
+/// again (`crate::accepting`), and the closer frees the thread when the
+/// daemon stops.
 pub async fn serve(
     listener: BootstrapListener,
-    registry: Arc<Registry>,
-    core: Arc<CoreHandle>,
-    engine: Option<EngineHandle>,
-    port: u16,
+    answering: Answering,
     shutdown: crate::ending::Ending,
-    desktop_renderers: Arc<AtomicUsize>,
 ) {
     use tokio::sync::Semaphore;
-    // Closed however this future ends, a drop included, so the accept
-    // thread never outlives it.
-    let closing = CloseOnDrop {
-        closer: listener.closer(),
-        closed: Arc::new(AtomicBool::new(false)),
-    };
-    let closed = Arc::clone(&closing.closed);
+    let Answering {
+        registry,
+        core,
+        engine,
+        port,
+        desktop_renderers,
+        pairing,
+        health,
+    } = answering;
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_BOOTSTRAPS);
-    let accepting = std::thread::Builder::new()
-        .name("pane-bootstrap-accept".to_owned())
-        .spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok(stream) => {
-                        if accepted.blocking_send(Ok(stream)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::ConnectionAborted
-                            && closed.load(Ordering::SeqCst) =>
-                    {
-                        return;
-                    }
-                    Err(error) => {
-                        let _ = accepted.blocking_send(Err(error));
-                        return;
-                    }
-                }
-            }
-        });
-    if let Err(error) = accepting {
-        note_bootstrap_stopped(&error);
-        return;
+    let accepting = {
+        let closed = closing.closed();
+        let health = Arc::clone(&health);
+        std::thread::Builder::new()
+            .name("pane-bootstrap-accept".to_owned())
+            .spawn(move || {
+                accept_until_closed(
+                    || listener.accept(),
+                    &accepted,
+                    &closed,
+                    &health,
+                    ("pane_auth", "bootstrap.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
+                );
+            })
+    };
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            note_bootstrap_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(Semaphore::new(MAX_BOOTSTRAPS));
     let mut sweep = tokio::time::interval(Duration::from_secs(5));
@@ -1208,13 +1219,11 @@ pub async fn serve(
             }
             () = shutdown.ended() => break,
         };
-        let stream = match arrival {
-            Some(Ok(stream)) => stream,
-            Some(Err(error)) => {
-                note_bootstrap_stopped(&error);
-                break;
-            }
-            None => break,
+        let Some(stream) = arrival else {
+            // The accept thread ended though the listener is open.
+            health.stopped();
+            note_bootstrap_stopped("the accept thread ended");
+            break;
         };
         let Ok(permit) = Arc::clone(&limit).try_acquire_owned() else {
             continue;
@@ -1223,6 +1232,8 @@ pub async fn serve(
         let core = Arc::clone(&core);
         let engine = engine.clone();
         let desktop_renderers = Arc::clone(&desktop_renderers);
+        let pairing = Arc::clone(&pairing);
+        let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             answer_bootstrap(
@@ -1232,32 +1243,20 @@ pub async fn serve(
                 engine.as_ref(),
                 port,
                 desktop_renderers.load(Ordering::SeqCst) > 0,
+                Some((&pairing, &runtime)),
             );
         });
     }
 }
 
-struct CloseOnDrop {
-    closer: hide_platform::ipc::ListenerCloser,
-    /// Set before the close, so the accept thread tells its own stop from an
-    /// accept that failed.
-    closed: Arc<AtomicBool>,
-}
-
-impl Drop for CloseOnDrop {
-    fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
-        self.closer.close();
-    }
-}
-
-/// The bootstrap listener stopped accepting for a reason other than the
-/// daemon's own stop; panes cannot get a capability until hided restarts.
-fn note_bootstrap_stopped(error: &std::io::Error) {
+/// The bootstrap listener stopped for a reason other than the daemon's own
+/// stop; panes cannot get a capability until hided restarts, and `/health`
+/// says so.
+fn note_bootstrap_stopped(message: &str) {
     hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": "bootstrap.stopped",
-        "message": error.to_string(),
+        "message": message,
     }));
 }
 
@@ -1270,6 +1269,7 @@ fn answer_bootstrap(
     engine: Option<&EngineHandle>,
     port: u16,
     desktop: bool,
+    pairing: Option<(&Arc<crate::pairing::Pairing>, &tokio::runtime::Handle)>,
 ) {
     use std::io::{BufRead, BufReader};
     let Some(peer) = stream
@@ -1312,6 +1312,30 @@ fn answer_bootstrap(
         {
             registry.revoke(&reference.token);
         }
+        return;
+    }
+    // What `hide device` asks about pairing (PRD device-connect-iroh B1,
+    // B24, B52): answered in this one exchange, and what only the operator
+    // may ask is refused to a caller the kernel places in a pane.
+    if let Some(request) = &parsed
+        && let Some(ask) = &request.device
+        && line.len() <= 4096
+    {
+        let answer = match (
+            pairing,
+            serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
+        ) {
+            (Some((pairing, runtime)), Ok(ask)) => {
+                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
+                    crate::pairing::Caller::Pane
+                } else {
+                    crate::pairing::Caller::Operator
+                };
+                runtime.block_on(pairing.ask(ask, caller))
+            }
+            _ => crate::pairing::refused("invalid_request"),
+        };
+        let _ = writeln!(stream, "{answer}");
         return;
     }
     if let Some(request) = &parsed
@@ -2195,6 +2219,7 @@ mod tests {
         let peer = std::process::id() as i32;
         let request = |pane_id: &str| PaneRequest {
             access: None,
+            device: None,
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,

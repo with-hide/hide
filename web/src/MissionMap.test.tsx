@@ -883,6 +883,30 @@ it("shows on the card and in the panel how long a node took from its events, and
   } finally { await stale.unmount(); }
 });
 
+it("says in the panel's head where a node's time went, work, review and CI, and the wait before it, in place of its total (mission-82)", async () => {
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
+  const at = (minutes: number) => now - minutes * 60_000;
+  const nodes = [
+    // Waited 3h for its dependency, worked 1.5h to its own lines, then 8.5h in review and CI so far.
+    node("a", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), worked_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }),
+    // A done node of a book from before the stamp keeps its total; the core sends every started mission's node its ready time.
+    node("b", { status: "done", pr: 3, pr_state: "merged", ready_at_unix_ms: at(780), started_at_unix_ms: at(90), finished_at_unix_ms: at(30) }),
+  ];
+  const move = (minutes: number, key: string, status: MissionNode["status"]): MissionEvent => ({ at_unix_ms: at(minutes), kind: "node", node: key, status });
+  const events = [move(600, "a", "working"), move(90, "b", "working"), move(30, "b", "done")];
+  const facts = async (map: Awaited<ReturnType<typeof mount>>, key: string) => {
+    await act(async () => card(map, key).click());
+    return map.q("[data-panel-fact]")?.textContent ?? null;
+  };
+  const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
+  try {
+    expect(await facts(map, "a")).toBe("work 1.5h · review·CI 8.5h · waited 3h");
+    expect(await facts(map, "b")).toBe("took 1h");
+  } finally { await map.unmount(); }
+});
+
 it("lights a picked card and the cards one edge away and dims the rest, and the same card, an empty spot or Escape lets go (B30)", async () => {
   const nodes = [node("a"), node("b", { depends_on: ["a"] }), node("c", { depends_on: ["b"] }), node("d", { depends_on: ["a"] })];
   const map = await mount({ items: [mission({ nodes })] });
@@ -1238,7 +1262,15 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     // The stack is the purple dashed edge, and nothing else marks it.
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.getAttribute("class")).toContain("text-mission-review");
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.hasAttribute("data-edge-dashed")).toBe(true);
+    expect(waiting.q("[data-edge-label]")).toBeNull();
   } finally { await waiting.unmount(); }
+  // mission-82: an edge on a finish line names the line, and the node free to start on it says it stacks there.
+  const early = [node("core", { title: "Core", status: "working", pr: 1703, branch: "m82/core" }), node("host", { title: "Host", depends_on: ["core:c1"], steps: ["Read the wire", "Open the PR"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } })];
+  const lined = await mount({ items: [mission({ nodes: early })] });
+  try {
+    expect(lined.q('[data-edge-label="core>host"]')?.textContent).toBe("c1");
+    expect(lined.q('[data-mission-node="host"] [data-node-steps-waiting]')?.textContent).toBe("2 planned steps · can start · stacked on Core");
+  } finally { await lined.unmount(); }
   // Waiting on its merges, a git mission tags the branch the core reads and has not found in main; a branch it cannot read says nothing.
   const branches = [node("notes", { title: "Notes", status: "done", delivery: "direct", branch: "release/notes", landing: { state: "left", action: "join" } }), node("bump", { title: "Bump", status: "done", delivery: "direct", branch: "release/bump", unread: true, landing: { state: "unread", action: "join" } })];
   const git = await mount({ items: [mission({ status: "merge_wait", nodes: branches, landing_order: ["notes"] })] });

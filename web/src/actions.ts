@@ -84,15 +84,16 @@ import { requestLine } from "./editor/lineRequest";
 import { paneContext, terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } from "./externalFiles";
 import type { AiItemRef } from "./hideAi";
-import { homeOpening } from "./hideAiOrigin";
+import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
 import { focusedPaneOf, useShellStore } from "./store";
-import { MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
+import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
+import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
@@ -1426,6 +1427,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
     },
     /**
+     * One thing the operator does about pairing this machine with another
+     * Hide (PRD device-connect-iroh B1-B3, B24-B26, B50): hided's pairing
+     * answers it for this window alone, and what changed comes back in the
+     * `pairing` frame and the snapshot's paired machines.
+     */
+    pairing(verb: PairingVerb, payload: Record<string, unknown> = {}) {
+      dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
+    },
+    /**
      * Settings › External tools (PRD hide-external-control B3, B4, B12,
      * B13): the operator's answer to a tool's request and the level or
      * disconnect of a connected one, each one core event; the `access`
@@ -1617,11 +1627,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** Adds an SSH device; the core gives it its id, its machine's own once it first connects. */
-    registerDevice(label: string, alias: string, options: { hostConsent: boolean }) {
+    registerDevice(label: string, alias: string, options: { hostConsent: boolean; switchFirst?: boolean }) {
       dispatch({
         schema_version: 2,
         kind: "register_device",
-        payload: { label, ssh_alias: alias, host_consent: options.hostConsent },
+        payload: { label, ssh_alias: alias, host_consent: options.hostConsent, ...(options.switchFirst ? { switch_first: true } : {}) },
       });
     },
 
@@ -2044,6 +2054,49 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * The sidebar's `자동화` row (PRD automations B1, D-01): the automation
+     * screen on its table, whatever the center showed, as the `미션` row opens
+     * the mission screen.
+     */
+    openAutomations() {
+      ui().setAutomations(AUTOMATION_ENTRY);
+      ui().setScreen({ kind: "automations" });
+    },
+
+    /**
+     * One automation on the automation screen, with the run whose terminal
+     * the detail shows, if any (B11, B15-B17): the sidebar's row, a Needs You
+     * line or a run agent's row brings it, whatever the center showed.
+     */
+    openAutomation(id: string, run: number | null = null) {
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      state.setAutomations({ selected: id, run, form: null });
+      if (state.screen?.kind !== "automations") state.setScreen({ kind: "automations" });
+    },
+
+    /**
+     * A press on an automation whose result the snapshot shows (PRD
+     * automations B11, B16, B19, B23, B25, B27): `automation_run`,
+     * `automation_pause`, `automation_resume`, `automation_remove`,
+     * `automation_seen`, `automation_run_stop` and `automation_run_viewing`,
+     * each the core's `Call` of that name. A refusal is the core's to log;
+     * the screen draws what the section then says. Opening a finished run's
+     * conversation is a call the run view waits on (`callAutomations`), since
+     * its refusal is the operator's to read.
+     */
+    automation(kind: "run" | "pause" | "resume" | "remove" | "seen", id: string) {
+      dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id } });
+    },
+    automationRunStop(id: string, run: number) {
+      dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
+    },
+    /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
+    automationRunViewing(id: string, run: number, on: boolean) {
+      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on } });
+    },
+
+    /**
      * A mission's map as a card tab on a desk, under the same rules
      * as a pull request's card (operator decision 2026-11-09, replacing PRD
      * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
@@ -2110,6 +2163,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** 미션 종료 (UI_BEHAVIOR, A mission's map): the core asks the Conductor to end it, or cancels a mission no Conductor holds. */
     endMission(missionId: string) {
       dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
+    },
+    /** 치우기 on a mission's 내 차례 row (operator decision 2026-11-20): the core keeps the row out until something newer asks the operator. */
+    putAwayMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_put_away", payload: { mission: missionId } });
     },
     /** 다시 열기 on a closed mission's map (PRD mission-node-simple B18): the operator's reopen, as the Conductor's `hide mission reopen`. */
     reopenMission(missionId: string) {
@@ -2687,6 +2744,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
+      // An automation run's row opens its terminal in the automation screen, where the run is; a View it opened opens as any row's does (PRD automations B15).
+      const run = agent?.look ? null : automationOpening(state.automations, agent);
+      if (run) return this.openAutomation(run.id, run.run);
       this.openAgent(paneId, agent?.look);
     },
 
@@ -3520,7 +3580,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openViewAt(deviceId: string, checkoutPath: string, displayId: string) {
       const front = frontViewWorkspace();
       const state = ui();
-      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && front?.device_id === deviceId && front.path === checkoutPath) {
+      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && state.screen?.kind !== "automations" && front?.device_id === deviceId && front.path === checkoutPath) {
         showDocuments();
         focusView(displayId, true);
         return;

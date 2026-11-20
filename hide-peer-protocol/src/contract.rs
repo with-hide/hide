@@ -10,10 +10,13 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::build::{self, BuildFile, FileMessage};
 use crate::event::{self, Acked, Event};
 use crate::hello::{self, GrantState, Hello, HelloFrame, LinkRange};
-use crate::launch::{self, End, EndMode, HandedTo, Idle, Installation, Ready};
-use crate::manage::{Manage, NodeStop};
+use crate::launch::{
+    self, BoxFull, EndMode, FromNode, HandedTo, Installation, Position, Ready, ToNode,
+};
+use crate::manage::{Manage, NodeStop, Release};
 use crate::pairing::{ConfirmState, PairRefusal, Pairing, Revoke};
 use crate::panes::{self, Pane, Panes};
 use crate::stream::{self, Status};
@@ -117,6 +120,9 @@ fn pairing_messages() -> Vec<Pairing> {
     fn exhaustive(message: &Pairing) {
         match message {
             Pairing::Pair { .. }
+            | Pairing::Asking { .. }
+            | Pairing::Reveal { .. }
+            | Pairing::Request { .. }
             | Pairing::Granted { .. }
             | Pairing::Refused { .. }
             | Pairing::Confirm { .. }
@@ -128,6 +134,18 @@ fn pairing_messages() -> Vec<Pairing> {
     vec![
         Pairing::Pair {
             secret: text(),
+            device: text(),
+            name: text(),
+            commit: text(),
+        },
+        Pairing::Asking {
+            device: text(),
+            name: text(),
+            words: text(),
+            nonce: text(),
+        },
+        Pairing::Reveal { nonce: text() },
+        Pairing::Request {
             device: text(),
             name: text(),
         },
@@ -183,7 +201,11 @@ fn manage_messages() -> Vec<Manage> {
             | Manage::Event(_)
             | Manage::EventAck { .. }
             | Manage::NodeReady { .. }
-            | Manage::NodeStopped { .. } => {}
+            | Manage::NodeStopped { .. }
+            | Manage::NodeStart { .. }
+            | Manage::NodePreparing { .. }
+            | Manage::NodeRetry
+            | Manage::NodeEnd { .. } => {}
         }
     }
     let _ = exhaustive;
@@ -205,6 +227,105 @@ fn manage_messages() -> Vec<Manage> {
             retry: false,
             detail: Some(String::new()),
         },
+        Manage::NodeStart {
+            build: String::new(),
+            build_id: Some(String::new()),
+            release: Some(sample_release()),
+        },
+        Manage::NodePreparing {
+            os: String::new(),
+            arch: String::new(),
+        },
+        Manage::NodeRetry,
+        Manage::NodeEnd { mode: EndMode::Now },
+    ]
+}
+
+fn sample_build_file() -> BuildFile {
+    BuildFile {
+        path: String::new(),
+        size: 0,
+        sha256: String::new(),
+        executable: false,
+    }
+}
+
+fn file_messages() -> Vec<FileMessage> {
+    fn exhaustive(message: &FileMessage) {
+        match message {
+            FileMessage::Build { .. }
+            | FileMessage::BuildPlaced { .. }
+            | FileMessage::Refused { .. } => {}
+        }
+    }
+    let _ = exhaustive;
+    vec![
+        FileMessage::Build {
+            id: String::new(),
+            files: vec![sample_build_file()],
+        },
+        FileMessage::BuildPlaced { id: String::new() },
+        FileMessage::Refused {
+            reason: String::new(),
+        },
+    ]
+}
+
+fn sample_release() -> Release {
+    Release {
+        commit: String::new(),
+        order: 0,
+    }
+}
+
+/// The one key of each line a side writes the other after the ready line.
+fn line_keys<T: Serialize>(samples: &[T]) -> Value {
+    let mut keys: Vec<String> = samples
+        .iter()
+        .map(
+            |sample| match serde_json::to_value(sample).expect("a line serializes") {
+                Value::Object(map) if map.len() == 1 => map.keys().next().expect("one key").clone(),
+                Value::String(name) => name,
+                other => panic!("a line is one key or one word, got {other}"),
+            },
+        )
+        .collect();
+    keys.sort();
+    json!(keys)
+}
+
+fn from_node_lines() -> Vec<FromNode> {
+    fn exhaustive(line: &FromNode) {
+        match line {
+            FromNode::Idle(_) | FromNode::Event(_) | FromNode::BoxFull(_) => {}
+        }
+    }
+    let _ = exhaustive;
+    vec![
+        FromNode::Idle(true),
+        FromNode::Event(sample_event()),
+        FromNode::BoxFull(BoxFull {
+            pane: Some(String::new()),
+        }),
+    ]
+}
+
+fn to_node_lines() -> Vec<ToNode> {
+    fn exhaustive(line: &ToNode) {
+        match line {
+            ToNode::End(_) | ToNode::Resume(_) | ToNode::Ack(_) | ToNode::Away => {}
+        }
+    }
+    let _ = exhaustive;
+    let position = || Position {
+        outbox: String::new(),
+        seq: 0,
+    };
+    vec![
+        ToNode::End(EndMode::Now),
+        ToNode::Resume(position()),
+        ToNode::Ack(position()),
+        ToNode::Away,
     ]
 }
 
@@ -289,15 +410,26 @@ pub fn shape() -> Value {
             .collect::<Vec<_>>(),
         "pairing": {
             "messages": messages(&Pairing::TYPES, &pairing_messages()),
-            "refusals": names!(PairRefusal: NoOffer, Declined, Full, Other),
+            "refusals": names!(PairRefusal: NoOffer, Declined, Full, Unanswered, Other),
             "confirm_states": names!(ConfirmState: Active, Paused, Unknown),
         },
         "revoke": { "messages": messages(&Revoke::TYPES, &revoke_messages()) },
         "management": {
             "messages": messages(&Manage::TYPES, &manage_messages()),
             "node_stops": names!(
-                NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, Other
+                NodeStop: Ended, BuildMissing, UpdateNeeded, FolderRefused, Crashed, HostFull, Other
             ),
+            "release_fields": fields(&sample_release()),
+        },
+        "file": {
+            "messages": messages(&FileMessage::TYPES, &file_messages()),
+            "build_file_fields": fields(&sample_build_file()),
+            "build": {
+                "id_chars": build::ID_CHARS,
+                "max_files": build::MAX_FILES,
+                "max_bytes": build::MAX_BYTES,
+                "max_path_bytes": build::MAX_PATH,
+            },
         },
         "event": {
             "version": event::BOX_VERSION,
@@ -317,7 +449,14 @@ pub fn shape() -> Value {
                 "key_file": launch::KEY_FILE,
                 "host_side": launch::HOST_SIDE,
                 "node_side": launch::NODE_SIDE,
+                "install_side": launch::INSTALL_SIDE,
+                "builds_kept": launch::BUILDS_KEPT,
                 "panes": panes::FILE,
+            },
+            "install": {
+                "name_prefix": launch::INSTALL_PREFIX,
+                "hooks_name_prefix": launch::HOOKS_INSTALL_PREFIX,
+                "build_chars": 16,
             },
             "sockets": {
                 "link": launch::LINK_ENDPOINT,
@@ -332,14 +471,30 @@ pub fn shape() -> Value {
                     "fields": fields(&ready),
                     "within_secs": launch::READY_WITHIN_SECS,
                 },
-                "idle_fields": fields(&Idle { idle: true }),
-                "end_fields": fields(&End { end: EndMode::Now }),
+                "capabilities": launch::NODE_CAPABILITIES,
+                "max_line_bytes": launch::MAX_LINE,
+                "from_node": line_keys(&from_node_lines()),
+                "to_node": line_keys(&to_node_lines()),
+                "position_fields": fields(&Position { outbox: String::new(), seq: 0 }),
+                "box_full_fields": fields(&BoxFull { pane: Some(String::new()) }),
                 "end_modes": names!(EndMode: Now, AfterLastPane),
                 "exit_codes": {
                     "ended": launch::EXIT_ENDED,
                     "unknown_word": launch::EXIT_UNKNOWN_WORD,
+                    "host_unreachable": launch::EXIT_HOST_UNREACHABLE,
                     "folder_refused": launch::EXIT_FOLDER_REFUSED,
                     "folder_held": launch::EXIT_FOLDER_HELD,
+                    "restart": launch::EXIT_RESTART,
+                },
+                "limits": {
+                    "guest_nodes": launch::MAX_GUEST_NODES,
+                    "idle_end_secs": launch::IDLE_END_SECS,
+                    "end_now_waits_secs": launch::END_NOW_WAITS_SECS,
+                    "folder_held_retry_secs": launch::FOLDER_HELD_RETRY_SECS,
+                    "folder_held_retries": launch::FOLDER_HELD_RETRIES,
+                    "crashes": launch::CRASHES,
+                    "crash_window_secs": launch::CRASH_WINDOW_SECS,
+                    "holder_lost_restart_secs": launch::HOLDER_LOST_RESTART_SECS,
                 },
             },
             "handed_to": {

@@ -539,6 +539,9 @@ impl Core {
             let desk_restored = desk.restore();
             let (access, access_restored) =
                 crate::runtime::access::restore(hide_kit::layout::access_store(directory));
+            let (automations, automations_restored, zone) = crate::runtime::automations::restore(
+                hide_kit::layout::automations_store(directory),
+            );
             let mut guard = lock_recover(&runtime);
             guard.install_mission_store(missions, restored);
             guard.install_mission_events(events, logs);
@@ -549,6 +552,7 @@ impl Core {
             }
             guard.install_desk_store(desk, desk_restored);
             guard.install_access_store(access, access_restored);
+            guard.install_automations_store(automations, automations_restored, zone);
             drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
@@ -751,6 +755,21 @@ impl Core {
         lock_recover(&self.runtime).prepare_delivery(device, caller, expected, hint, command)
     }
 
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Runtime::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: crate::delivery::Command,
+    ) -> Result<crate::delivery::worker::Prepared, String> {
+        if !check_owner_thread(self, "delivery.prepare_kept") {
+            return Err("delivery_unavailable".into());
+        }
+        lock_recover(&self.runtime).prepare_kept_letter(device, pane, terminal, command)
+    }
+
     /// One call hided makes for an external tool (PRD
     /// hide-external-control): its request, status, leave, its key's proof
     /// or a command's check, under one short lock; the list is saved by its
@@ -764,6 +783,27 @@ impl Core {
             notify_change(self);
         }
         answer
+    }
+
+    /// One call on the automations (PRD automations B10): the CLI's
+    /// `hide automation`, a form's preview, or a phone's run and pause.
+    /// One change under one short lock; the book is saved by its own thread
+    /// and the screens are told when the section moved.
+    pub fn automation(&self, call: crate::automations::Call) -> Result<serde_json::Value, String> {
+        if !check_owner_thread(self, "automation.call") {
+            return Err("automations_unavailable".into());
+        }
+        let (answer, changed) = lock_recover(&self.runtime).automation_call(call);
+        if changed {
+            notify_change(self);
+        }
+        answer
+    }
+
+    /// Whether any automation is on, which hided reads every second for its
+    /// idle exit (PRD automations D-19) without taking the runtime lock.
+    pub fn automations_on(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        lock_recover(&self.runtime).automations_on()
     }
 
     /// Runs a Conductor's `hide mission` command (PRD
@@ -1284,6 +1324,19 @@ impl Core {
             .map(str::to_owned)
     }
 
+    /// What `device`'s switch to its machine's own connection starts from
+    /// (PRD device-connect-iroh D-45, D-49), or the code of why it cannot
+    /// be switched.
+    pub fn device_switch_source(
+        &self,
+        device: &str,
+    ) -> Result<crate::DeviceSwitchSource, &'static str> {
+        if !check_owner_thread(self, "device_switch_source") {
+            return Err("hide_unavailable");
+        }
+        lock_recover(&self.runtime).device_switch_source(device)
+    }
+
     /// What a move of the core to `device` is made from (PRD
     /// core-host-node-move B4), with the device's label records, which memory
     /// holds (bar their marks), in the form `labels.json` stores them.
@@ -1418,6 +1471,21 @@ impl Core {
             return None;
         }
         lock_recover(&self.runtime).session_scope(context)
+    }
+
+    /// What a session start in `pane` reads the Project's other sessions
+    /// from, which the daemon then reads off this thread
+    /// (`links::session_brief`); none for a delegated session.
+    pub fn brief_scope(
+        &self,
+        context: &crate::workspace_control::Context,
+        pane: &str,
+        own_session_id: &str,
+    ) -> Option<crate::links::session_brief::BriefScope> {
+        if !check_owner_thread(self, "brief_scope") {
+            return None;
+        }
+        lock_recover(&self.runtime).brief_scope(context, pane, own_session_id)
     }
 
     /// The native session the registered agent `id` runs.
@@ -1754,6 +1822,7 @@ mod tests {
                     local_issues_path: None,
                     effects_held: false,
                     machine_name: None,
+                    windows_drives: None,
                     account_state_folder: false,
                 },
                 std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),

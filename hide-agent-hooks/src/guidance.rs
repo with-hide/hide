@@ -865,10 +865,11 @@ fn entry_helper(agent: GuidanceAgent, entry: &Value) -> Option<String> {
 }
 
 /// Whether `entry` is a Hide entry the installation `install` may judge and
-/// replace: one that names that installation, one an earlier build wrote
-/// without naming any, or one whose helper is gone. Another installation's
-/// entry on the same account stays (docs/agent-hooks.md, More than one Hide
-/// on an account). With no `install`, every Hide entry is.
+/// replace, by the one rule of [`crate::route::owns_entry`]: its own, and
+/// for the account's own Hide one an earlier build wrote without naming any
+/// or one whose helper is gone. Another installation's entry on the same
+/// account stays (docs/agent-hooks.md, More than one Hide on an account).
+/// With no `install`, every Hide entry is.
 fn entry_is_mine(agent: GuidanceAgent, entry: &Value, install: Option<&str>) -> bool {
     if entry_marker_version(entry).is_none() {
         return false;
@@ -882,12 +883,12 @@ fn entry_is_mine(agent: GuidanceAgent, entry: &Value, install: Option<&str>) -> 
         .into_iter()
         .map(|text| decoded_windows_command(text).unwrap_or_else(|| text.to_owned()))
         .collect();
-    match crate::route::install_in_command(&words.join(" ")) {
-        Ok(Some(named)) if named != install => {
-            entry_helper(agent, entry).is_some_and(|helper| !Path::new(&helper).exists())
-        }
-        _ => true,
-    }
+    let named = crate::route::install_in_command(&words.join(" "))
+        .ok()
+        .flatten();
+    crate::route::owns_entry(install, named.as_deref(), || {
+        entry_helper(agent, entry).is_some_and(|helper| !Path::new(&helper).exists())
+    })
 }
 
 /// Takes the installation `install`'s own hooks out of `list`

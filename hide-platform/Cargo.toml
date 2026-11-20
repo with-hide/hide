@@ -6,8 +6,9 @@ publish = false
 
 # The operating-system layer under every other crate: what differs between
 # macOS, Linux and Windows is written here once and checked by the contract
-# tests in `tests/` on all three. The crate has no hide dependencies and no
-# state, so those tests build in seconds on a runner that has no workspace.
+# tests in `tests/` on all three. The crate has no hide dependencies and
+# little state, so those tests build in seconds on a runner that has no
+# workspace.
 
 [dependencies]
 interprocess = "=2.4.4"

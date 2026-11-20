@@ -13,7 +13,10 @@ import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
 import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
 import { missionsCatalogs, missionsEnglish } from "./resources/missions";
+import { mobileAutomationsCatalogs, mobileAutomationsEnglish } from "./resources/mobileAutomations";
 import { missionScreenCatalogs, missionScreenEnglish } from "./resources/missionScreen";
+import { automationWordsCatalogs, automationWordsEnglish } from "./resources/automationWords";
+import { automationScreenCatalogs, automationScreenEnglish } from "./resources/automationScreen";
 import { kindsCatalogs, kindsEnglish } from "./resources/kinds";
 import { plansCatalogs, plansEnglish } from "./resources/plans";
 import { deskCatalogs, deskEnglish } from "./resources/desk";
@@ -49,6 +52,7 @@ import { issuesCatalogs, issuesEnglish } from "./resources/issues";
 import { mobileCatalogs, mobileEnglish } from "./resources/mobile";
 import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup";
 import { externalToolsCatalogs, externalToolsEnglish } from "./resources/externalTools";
+import { pairingCatalogs, pairingEnglish } from "./resources/pairing";
 import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
@@ -87,7 +91,10 @@ export const english = {
   ...agentSessionsEnglish,
   ...taskLensEnglish,
   ...missionsEnglish,
+  ...mobileAutomationsEnglish,
   ...missionScreenEnglish,
+  ...automationWordsEnglish,
+  ...automationScreenEnglish,
   ...plansEnglish,
   ...kindsEnglish,
   ...deskEnglish,
@@ -123,6 +130,7 @@ export const english = {
   ...wakeReasonsEnglish,
   ...mobileSetupEnglish,
   ...externalToolsEnglish,
+  ...pairingEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
   ...checkoutGitEnglish,
@@ -167,7 +175,10 @@ export const catalogs = {
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
     ...missionsCatalogs.ko,
+    ...mobileAutomationsCatalogs.ko,
     ...missionScreenCatalogs.ko,
+    ...automationWordsCatalogs.ko,
+    ...automationScreenCatalogs.ko,
     ...plansCatalogs.ko,
     ...kindsCatalogs.ko,
     ...deskCatalogs.ko,
@@ -203,6 +214,7 @@ export const catalogs = {
     ...wakeReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
     ...externalToolsCatalogs.ko,
+    ...pairingCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
     ...checkoutGitCatalogs.ko,
@@ -242,7 +254,10 @@ export const catalogs = {
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
     ...missionsCatalogs["zh-CN"],
+    ...mobileAutomationsCatalogs["zh-CN"],
     ...missionScreenCatalogs["zh-CN"],
+    ...automationWordsCatalogs["zh-CN"],
+    ...automationScreenCatalogs["zh-CN"],
     ...plansCatalogs["zh-CN"],
     ...kindsCatalogs["zh-CN"],
     ...deskCatalogs["zh-CN"],
@@ -278,6 +293,7 @@ export const catalogs = {
     ...wakeReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
     ...externalToolsCatalogs["zh-CN"],
+    ...pairingCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
     ...checkoutGitCatalogs["zh-CN"],
@@ -317,7 +333,10 @@ export const catalogs = {
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
     ...missionsCatalogs.ja,
+    ...mobileAutomationsCatalogs.ja,
     ...missionScreenCatalogs.ja,
+    ...automationWordsCatalogs.ja,
+    ...automationScreenCatalogs.ja,
     ...plansCatalogs.ja,
     ...kindsCatalogs.ja,
     ...deskCatalogs.ja,
@@ -353,6 +372,7 @@ export const catalogs = {
     ...wakeReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
     ...externalToolsCatalogs.ja,
+    ...pairingCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
     ...checkoutGitCatalogs.ja,

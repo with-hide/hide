@@ -333,6 +333,12 @@ pub(super) struct RegisterDevicePayload {
     /// (PRD S5.5 B50); absent or false registers it without file access.
     #[serde(default)]
     pub(super) host_consent: bool,
+    /// The device is added to be switched to its machine's own connection
+    /// at once, as every Add over SSH is (PRD device-connect-iroh B41): it
+    /// is not left on the helper when that switch stops before anything
+    /// was started there.
+    #[serde(default)]
+    pub(super) switch_first: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1420,6 +1426,25 @@ pub(super) struct UiAttachedPayload {
     pub(super) attached: bool,
 }
 
+/// The machines this one is paired with, sent by hided whenever its peer
+/// store or a connection changed (PRD device-connect-iroh D-72). The whole
+/// list each time: the store is the owner, and the core keeps no copy that
+/// could differ from it.
+#[derive(Debug, Deserialize)]
+pub(super) struct PeerMachinesPayload {
+    pub(super) machines: Vec<crate::peer_machines::PeerMachine>,
+}
+
+/// The panes of other machines' work on this machine, sent by hided
+/// whenever a guest's node said its panes changed (PRD device-connect-iroh
+/// D-77 (5)). The whole list each time, as the paired machines are.
+#[derive(Debug, Deserialize)]
+pub(super) struct GuestPanesPayload {
+    pub(super) guests: Vec<crate::guest_panes::GuestPanes>,
+}
+
+pub(super) use super::device_switch::DeviceSwitchPayload;
+
 /// One Hide AI settings event, carrying whatever it is about.
 ///
 /// It folds what a single screen does into one event, the way
@@ -1817,6 +1842,9 @@ pub(super) enum Event {
     MachineProfilesList(MachineProfilesListPayload),
     MachineProfileConnect(MachineProfileConnectPayload),
     UiAttached(UiAttachedPayload),
+    PeerMachines(PeerMachinesPayload),
+    GuestPanes(GuestPanesPayload),
+    DeviceSwitch(DeviceSwitchPayload),
     AiSettings(AiSettingsPayload),
     TerminalResize(TerminalResizePayload),
     TerminalScroll(TerminalScrollPayload),
@@ -1840,6 +1868,7 @@ pub(super) enum Event {
     HerdrImport(HerdrImportPayload),
     Desk(super::desk::DeskEvent),
     Access(super::access::AccessEvent),
+    Automation(crate::automations::Call),
     FirstRunDraft(FirstRunDraftPayload),
     DesktopNotificationsSet(DesktopNotificationsSetPayload),
     DesktopNotificationsDoneSet(DesktopNotificationsDoneSetPayload),
@@ -1870,6 +1899,7 @@ pub(super) enum Event {
     /// mission-node-simple B18).
     MissionReopen(MissionEndPayload),
     MissionHandover(MissionHandoverPayload),
+    MissionPutAway(MissionEndPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -2179,6 +2209,24 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "machine_profile_connect" => decode!(MachineProfileConnectPayload, MachineProfileConnect),
         "ui_attached" => decode!(UiAttachedPayload, UiAttached),
+        "guest_panes" => decode!(GuestPanesPayload, GuestPanes).and_then(|event| match &event {
+            Event::GuestPanes(payload) if crate::guest_panes::valid(&payload.guests) => Ok(event),
+            _ => Err(invalid_payload("guest_panes")),
+        }),
+        "device_switch" => {
+            decode!(DeviceSwitchPayload, DeviceSwitch).and_then(|event| match &event {
+                Event::DeviceSwitch(payload) if payload.valid() => Ok(event),
+                _ => Err(invalid_payload("device_switch")),
+            })
+        }
+        "peer_machines" => {
+            decode!(PeerMachinesPayload, PeerMachines).and_then(|event| match &event {
+                Event::PeerMachines(payload) if crate::peer_machines::valid(&payload.machines) => {
+                    Ok(event)
+                }
+                _ => Err(invalid_payload("peer_machines")),
+            })
+        }
         "ai_settings" => decode!(AiSettingsPayload, AiSettings),
         "terminal_resize" => decode!(TerminalResizePayload, TerminalResize),
         "terminal_scroll" => decode!(TerminalScrollPayload, TerminalScroll),
@@ -2236,6 +2284,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "mission_shown" => decode!(super::mission_events::MissionShownPayload, MissionShown),
         "mission_reopen" => decode!(MissionEndPayload, MissionReopen),
         "mission_handover" => decode!(MissionHandoverPayload, MissionHandover),
+        "mission_put_away" => decode!(MissionEndPayload, MissionPutAway),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -2290,6 +2339,11 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         }
         "browser_state" => decode!(BrowserStatePayload, BrowserState),
         "external_open" => decode!(ExternalOpenPayload, ExternalOpen),
+        automation if super::automations::EVENT_KINDS.contains(&automation) => {
+            super::automations::decode_event(automation, payload)
+                .map(Event::Automation)
+                .ok_or_else(|| invalid_payload(&kind))
+        }
         access if super::access::AccessEvent::KINDS.contains(&access) => {
             super::access::AccessEvent::decode(access, payload)
                 .map(Event::Access)
@@ -2575,6 +2629,23 @@ impl Runtime {
             Event::UiAttached(payload) => {
                 self.ui_attached = payload.attached;
                 false
+            }
+            Event::GuestPanes(payload) => {
+                let changed = self.snapshot.navigator.guest_panes != payload.guests;
+                if changed {
+                    self.snapshot.navigator.guest_panes = payload.guests;
+                }
+                changed
+            }
+            Event::DeviceSwitch(payload) => self.device_switch(payload),
+            Event::PeerMachines(payload) => {
+                let changed = self.snapshot.navigator.peers != payload.machines;
+                if changed {
+                    let before =
+                        std::mem::replace(&mut self.snapshot.navigator.peers, payload.machines);
+                    self.reconcile_peer_devices(&before);
+                }
+                changed
             }
             Event::AiSettings(payload) => self.apply_ai_settings(payload),
             Event::RetryConnect(payload) => self.retry_remote_device(&payload.target_id),
@@ -4215,6 +4286,7 @@ impl Runtime {
             Event::MissionHandover(payload) => {
                 self.mission_handover_event(&payload.mission, &payload.token)
             }
+            Event::MissionPutAway(payload) => self.mission_put_away_event(&payload.mission),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),
@@ -4256,6 +4328,7 @@ impl Runtime {
             Event::HerdrImport(payload) => self.herdr_import_action(payload.action, payload.device),
             Event::Desk(event) => self.desk_event(event),
             Event::Access(event) => self.access_event(event),
+            Event::Automation(call) => self.automation_event(call),
             Event::FirstRunDraft(payload) => self.update_first_run_draft(payload),
             Event::DesktopNotificationsSet(payload) => self
                 .set_desktop_notification_preferences(Some(payload.enabled), payload.done_enabled),
@@ -4667,6 +4740,7 @@ impl Runtime {
                     pane_read_records: current.pane_read_records,
                     pane_completions: current.pane_completions,
                     pane_launches: current.pane_launches,
+                    device_switch_opens: current.device_switch_opens,
                     request_verbs: current.request_verbs,
                     // `agent_sleep_set` owns the setting and the core owns
                     // the sleep records; a shared save carries both through.

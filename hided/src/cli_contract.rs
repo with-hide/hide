@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `task`, `device`, `pane`, `access`, `workspace
-//! purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
+//! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `pane`,
+//! `access`, `workspace purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -18,9 +18,43 @@ use serde_json::{Map, Value, json};
 /// The document's own format; a caller that reads another refuses it.
 pub const FORMAT: u32 = 1;
 
+/// The `hide device` verbs that only pair two Hides. The table keeps them,
+/// so a build that offers connections between two Hides takes them
+/// (`env::Env::device_connect`), and the document marks them `hidden` until
+/// that feature ships: `hide --help` lists them only with the switch on,
+/// and a build without it refuses each with `device_connect_unavailable`
+/// (`device_cli`).
+pub const PAIRING_ONLY: &[&str] = &[
+    "share",
+    "allow",
+    "pause",
+    "resume",
+    "request",
+    "address",
+    "switch",
+    "look-ssh",
+    "accept-ssh",
+    "projects-ssh",
+];
+
+/// Whether the document marks `spec` hidden: [`PAIRING_ONLY`].
+fn hidden(spec: &Spec) -> bool {
+    matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
+}
+
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "task", "device", "pane", "access",
+    "agent",
+    "ps",
+    "request",
+    "inbox",
+    "watch",
+    "mission",
+    "task",
+    "automation",
+    "device",
+    "pane",
+    "access",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -55,6 +89,11 @@ pub enum Input {
     /// Text that may also carry line breaks (LF, CR) and tabs, and no other
     /// control character: what `hide pane send --paste` admits.
     PasteText,
+    /// A pairing link another Hide shares (`hide://pair#...`, at most
+    /// `hide_peer::limits::MAX_LINK_BYTES` bytes), or a key.
+    LinkOrKey,
+    /// A socket address, `ip:port`.
+    Address,
     OneOf(&'static [&'static str]),
 }
 
@@ -73,6 +112,8 @@ impl Input {
             Unsigned => "unsigned",
             Json => "json",
             PasteText => "paste_text",
+            LinkOrKey => "link_or_key",
+            Address => "address",
             OneOf(_) => "one_of",
         }
     }
@@ -144,6 +185,18 @@ const fn optional(name: &'static str, value: Input) -> Opt {
     }
 }
 
+/// A switch that cannot be combined with `conflicts`.
+const fn exclusive(name: &'static str, conflicts: &'static [&'static str]) -> Opt {
+    Opt {
+        name,
+        value: None,
+        required: false,
+        requires: &[],
+        conflicts,
+        repeats: None,
+    }
+}
+
 const fn switch(name: &'static str) -> Opt {
     Opt {
         name,
@@ -191,6 +244,70 @@ const fn clearing(name: &'static str, conflicts: &'static [&'static str]) -> Opt
     }
 }
 
+/// An automation named by its id or its exact name.
+const AUTOMATION_ID: &[Arg] = &[Arg {
+    name: "automation",
+    value: Key,
+    required: true,
+    value_with: None,
+}];
+
+/// Why a schedule is refused: `schedule_unreadable` is the CLI's own, for
+/// words that are none of the forms; the rest are the core's check.
+const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
+    "schedule_unreadable",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
+    "schedule_cron_invalid",
+    "schedule_never",
+    "schedule_time_invalid",
+    "schedule_days_missing",
+    "schedule_hours_out_of_range",
+];
+
+/// Why an automation as written is refused (B7, B10).
+pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
+    "schedule_unreadable",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
+    "schedule_cron_invalid",
+    "schedule_never",
+    "schedule_time_invalid",
+    "schedule_days_missing",
+    "schedule_hours_out_of_range",
+    "automation_unknown",
+    "automation_name_missing",
+    "automation_name_invalid",
+    "automation_name_taken",
+    "automation_task_missing",
+    "automation_task_too_long",
+    "automation_agent_unknown",
+    "automation_folder_unknown",
+    "automation_folder_on_device",
+    "automation_worktree_needs_git",
+    "automation_home_unknown",
+    "automation_cap",
+    "automation_running",
+    "automation_changed_unread",
+];
+
+/// A command on one automation and nothing else.
+const fn automation_by_id(
+    words: &'static [&'static str],
+    answers: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments: AUTOMATION_ID,
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers,
+        refusals: &["automation_unknown"],
+    }
+}
+
 const fn spec(
     words: &'static [&'static str],
     arguments: &'static [Arg],
@@ -210,8 +327,8 @@ const fn spec(
 }
 
 use Input::{
-    Approval, Body, Commit, Json, Key, OneOf, PasteText, Ratio, Session, Sha256, Span, Text,
-    Unsigned,
+    Address, Approval, Body, Commit, Json, Key, LinkOrKey, OneOf, PasteText, Ratio, Session,
+    Sha256, Span, Text, Unsigned,
 };
 
 const ID: &[Arg] = &[Arg {
@@ -602,6 +719,7 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["agent"],
         refusals: &[
             "spawn_busy",
+            "workspace_closing",
             "machine_unknown",
             "machine_not_permitted",
             "machine_unavailable",
@@ -746,10 +864,12 @@ pub const COMMANDS: &[Spec] = &[
             "access_key_unreadable",
         ],
     },
-    // Only the core's own machine may run these. Add registers the device
-    // without Hide's helper, which the operator allows on its row. A device
-    // answers its state, what it waits on from the operator, its failure by
-    // the row's action and the next step, never ssh's words.
+    // The machines this one is connected to: the Hides it is paired with
+    // (PRD device-connect-iroh) and its SSH devices. Only the core's own
+    // machine may run these. Sharing this machine, adding a link, allowing a
+    // request, resuming, asking back and naming an address are the
+    // operator's, at a terminal outside Hide's panes: a pane or an external
+    // tool is refused `device_from_pane` (B52).
     Spec {
         words: &["device", "list"],
         arguments: &[],
@@ -760,11 +880,29 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["device_list"],
         refusals: &["machine_not_permitted"],
     },
+    // Prints a link that works once, asks about the machine that pastes it
+    // at this terminal, and waits until that machine is let in or the link
+    // ends; the link ends with the command. With --json the link is the
+    // answer line, printed before the wait.
+    Spec {
+        words: &["device", "share"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_shared"],
+        refusals: &["device_from_pane", "peer_unavailable", "pairing_ended"],
+    },
+    // A link pairs with the Hide that shared it: the command shows the four
+    // words and takes the operator's yes or no at the terminal. An SSH alias
+    // whose machine already runs its own Hide is paired over SSH and nothing
+    // is installed there; any other alias registers the core's SSH device.
     Spec {
         words: &["device", "add"],
         arguments: &[Arg {
-            name: "ssh_alias",
-            value: Key,
+            name: "link_or_ssh_alias",
+            value: LinkOrKey,
             required: true,
             value_with: None,
         }],
@@ -772,17 +910,132 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[optional("--name", Text), switch("--json")],
         rest: None,
-        answers: &["device_added"],
+        answers: &["device_added", "device_joined", "device_paired"],
         refusals: &[
             "machine_not_permitted",
             "device_invalid",
             "device_duplicate",
+            "device_from_pane",
+            "link_invalid",
+            "link_newer",
+            "link_own",
+            "device_already_connected",
+            "pairing_no_offer",
+            "pairing_declined",
+            "pairing_host_full",
+            "pairing_full",
+            "pairing_unanswered",
+            "pairing_unreachable",
+            "pairing_update_needed",
+            "pairing_ended",
+            "ssh_hide_absent",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "ssh_not_reached",
+            "ssh_busy",
+            "device_own",
+            "device_limit",
+            "peer_unavailable",
+        ],
+    },
+    // Answers, at this terminal, the machines that wait for this machine's
+    // operator: on a machine with no window to answer in.
+    Spec {
+        words: &["device", "allow"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_allowed"],
+        refusals: &["device_from_pane"],
+    },
+    // A machine paired both ways has two directions, stopped and removed
+    // apart: --outgoing is this machine opening the other, --incoming the
+    // other opening this one.
+    Spec {
+        words: &["device", "pause"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
         ],
     },
     Spec {
+        words: &["device", "resume"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
+        ],
+    },
+    // A paired machine's direction, or an SSH device by its id or alias.
+    Spec {
         words: &["device", "remove"],
         arguments: &[Arg {
-            name: "device_id",
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed", "device_removed"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
+            "device_local_remove_denied",
+            "device_files_open",
+        ],
+    },
+    // Asks a machine this one is a guest of to let this machine open it
+    // too; its operator answers there.
+    Spec {
+        words: &["device", "request"],
+        arguments: &[Arg {
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -791,21 +1044,48 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[switch("--json")],
         rest: None,
-        answers: &["device_removed"],
+        answers: &["device_changed"],
         refusals: &[
-            "machine_not_permitted",
+            "device_from_pane",
             "device_unknown",
-            "device_local_remove_denied",
-            "device_files_open",
+            "device_ambiguous",
+            "device_not_a_guest",
+            "device_already_connected",
+            "request_waiting",
         ],
     },
-    // Starts the row's Retry, an attempt that may ask the operator; with
-    // --wait it answers the attempt's outcome. Nothing answers what the
-    // attempt asks: that is the operator's, on the row.
+    // Names an address a paired machine is tried at first.
+    Spec {
+        words: &["device", "address"],
+        arguments: &[
+            Arg {
+                name: "device",
+                value: Key,
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "address",
+                value: Address,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &["device_from_pane", "device_unknown", "device_ambiguous"],
+    },
+    // A paired machine is dialed again now. An SSH device starts its row's
+    // Retry, an attempt that may ask the operator; with --wait it answers
+    // the attempt's outcome. Nothing answers what the attempt asks: that is
+    // the operator's, on the row.
     Spec {
         words: &["device", "retry"],
         arguments: &[Arg {
-            name: "device_id",
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -814,13 +1094,109 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[switch("--wait"), switch("--json")],
         rest: None,
-        answers: &["device_retried"],
+        answers: &["device_changed", "device_retried"],
         refusals: &[
             "machine_not_permitted",
             "device_unknown",
+            "device_ambiguous",
             "device_dials_in",
             "device_wait_timeout",
         ],
+    },
+    // Switches an SSH device to the connection of the Hide on its machine:
+    // the two are paired over the device's SSH login, and the device keeps
+    // its id, its name and its running terminals. `held` names the machine
+    // that switched it first; `--own-folder` goes on without its terminals.
+    // `install_needed` is a machine that runs no Hide of its own, where
+    // `--install` starts one from this machine's helper build.
+    Spec {
+        words: &["device", "switch"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            switch("--install"),
+            switch("--own-folder"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_switched"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "switch_unsupported",
+            "switch_running",
+            "switch_not_connected",
+            "ssh_core_not_started",
+            "ssh_not_reached",
+            "ssh_busy",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "device_already_connected",
+        ],
+    },
+    // What a machine about to pair over SSH runs on its target first: it
+    // changes nothing there and answers whether a Hide of that account's
+    // own runs. A refusal carries the same `look`, with `core` false on an
+    // account that never ran one.
+    Spec {
+        words: &["device", "look-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["device_looked"],
+        refusals: &["hide_unavailable", "request_timeout"],
+    },
+    // What a machine pairing over SSH or wsl.exe runs on its target, with
+    // the request it made: the target saves a grant that opens nothing
+    // until that machine confirms it over the connection, and answers its
+    // own ids and addresses. Run again with the same request, it answers
+    // the same.
+    Spec {
+        words: &["device", "accept-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--request", Key),
+            required("--key", Key),
+            required("--device", Key),
+            required("--name", Text),
+            switch("--wsl"),
+            optional("--helper", Text),
+        ],
+        rest: None,
+        answers: &["device_accepted"],
+        refusals: &[
+            "device_from_pane",
+            "invalid_request",
+            "device_already_connected",
+            "device_limit",
+        ],
+    },
+    // What a machine that switched its device here runs once this machine
+    // admitted it: each `--project` is a folder of the account that machine
+    // had registered on its device, which this machine's own Hide then
+    // lists as a project too. It answers how many it lists; a folder that
+    // is gone, outside the account's home or refused is left out.
+    Spec {
+        words: &["device", "projects-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &["--project"],
+        options: &[repeated("--project", Text, hide_core::SWITCHED_PROJECTS)],
+        rest: None,
+        answers: &["device_projects_listed"],
+        refusals: &[],
     },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
@@ -855,7 +1231,12 @@ pub const COMMANDS: &[Spec] = &[
         ],
         rest: None,
         answers: &["pane_read"],
-        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "pane_unavailable",
+            "guest_pane_read",
+        ],
     },
     Spec {
         words: &["pane", "send"],
@@ -904,6 +1285,7 @@ pub const COMMANDS: &[Spec] = &[
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_keys",
         ],
     },
     Spec {
@@ -1030,13 +1412,15 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--force", &["--now"]),
         ],
         rest: None,
-        answers: &["letter"],
+        answers: &["letter", "queued"],
         refusals: &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
             "intent_conflict",
             "no_parent",
+            "outbox_full",
+            "outbox_unavailable",
             "participant_registering",
         ],
     },
@@ -1174,6 +1558,9 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_in_progress",
             "mission_dependency_unknown",
             "mission_dependency_cycle",
+            "mission_dependency_line_unknown",
+            "mission_dependency_stack_split",
+            "mission_merge_order_stack",
             "mission_criteria_missing",
             "mission_criteria_too_many",
             "mission_steps_invalid",
@@ -1530,6 +1917,136 @@ pub const COMMANDS: &[Spec] = &[
     spec(&["mission", "list"], &[], &[], &["mission_list"]),
     spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
     Spec {
+        words: &["automation", "add"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--name", Text),
+            required("--task", Body),
+            required("--schedule", Text),
+            required("--kind", Text),
+            Opt {
+                name: "--profile",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--model",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--effort",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            optional("--folder", Text),
+            Opt {
+                name: "--worktree",
+                value: None,
+                required: false,
+                requires: &["--folder"],
+                conflicts: &[],
+                repeats: None,
+            },
+            switch("--run-now"),
+        ],
+        rest: None,
+        answers: &["automation"],
+        refusals: AUTOMATION_DRAFT_REFUSALS,
+    },
+    spec(&["automation", "list"], &[], &[], &["automation_list"]),
+    automation_by_id(&["automation", "show"], &["automation"]),
+    Spec {
+        refusals: &[
+            "automation_unknown",
+            "automation_running",
+            "automation_changed_unread",
+        ],
+        ..automation_by_id(&["automation", "run"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "pause"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "resume"], &["automation"])
+    },
+    Spec {
+        words: &["automation", "edit"],
+        arguments: AUTOMATION_ID,
+        repeats: None,
+        needs_one_of: &[
+            "--name",
+            "--task",
+            "--schedule",
+            "--kind",
+            "--folder",
+            "--own-folder",
+            "--worktree",
+            "--no-worktree",
+        ],
+        options: &[
+            optional("--name", Text),
+            optional("--task", Body),
+            optional("--schedule", Text),
+            optional("--kind", Text),
+            Opt {
+                name: "--profile",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--model",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--effort",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            cleared("--folder", Text, &["--own-folder"]),
+            clearing("--own-folder", &["--folder"]),
+            clearing("--worktree", &["--no-worktree"]),
+            clearing("--no-worktree", &["--worktree"]),
+        ],
+        rest: None,
+        answers: &["automation"],
+        refusals: AUTOMATION_DRAFT_REFUSALS,
+    },
+    automation_by_id(&["automation", "remove"], &["automation_removed"]),
+    Spec {
+        words: &["automation", "preview"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--schedule", Text)],
+        rest: None,
+        answers: &["automation_preview"],
+        refusals: AUTOMATION_SCHEDULE_REFUSALS,
+    },
+    Spec {
         words: &["task", "set"],
         arguments: &[],
         repeats: None,
@@ -1752,7 +2269,16 @@ fn command_json(spec: &Spec) -> Value {
 fn body() -> Value {
     json!({
         "format": FORMAT,
-        "commands": COMMANDS.iter().map(command_json).collect::<Vec<_>>(),
+        "commands": COMMANDS
+            .iter()
+            .map(|spec| {
+                let mut command = command_json(spec);
+                if hidden(spec) {
+                    command["hidden"] = json!(true);
+                }
+                command
+            })
+            .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
             "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
@@ -1783,6 +2309,7 @@ fn body() -> Value {
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
             "plan": {"ok": "ok", "answer": "result", "code": "reason"},
+            "automation": {"ok": "ok", "answer": "value", "code": "error.code"},
             "device": {"ok": "ok", "answer": "value", "code": "error.code"},
             "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
             "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
@@ -1799,6 +2326,19 @@ fn body() -> Value {
                 .map(|code| (
                     (*code).to_owned(),
                     json!(crate::access::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
+        },
+        // A pane of another Hide's work on this machine, while that Hide
+        // is not connected: a letter is kept and answered `queued`, and any
+        // other command above answers `owner_offline` (PRD
+        // device-connect-iroh B12, B13).
+        "away": {
+            "refusals": crate::guest_node::away::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::guest_node::away::next_action(code).unwrap_or_default()),
                 ))
                 .collect::<Map<String, Value>>(),
         },
@@ -1820,6 +2360,19 @@ fn answers() -> Value {
         json!({"type": "object", "properties": properties, "required": fields})
     };
     let map = answers.as_object_mut().expect("the answers are an object");
+    // A letter its sender's node keeps until the Hide it belongs to is
+    // back (`away`).
+    map.insert(
+        "queued".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "queued": {"const": true},
+                "intent": {"type": "string"},
+            },
+            "required": ["queued", "intent"],
+        }),
+    );
     map.insert("mission".into(), shape(&["mission"]));
     map.insert("mission_created".into(), shape(&["mission", "settings"]));
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
@@ -1842,6 +2395,27 @@ fn answers() -> Value {
     // The plan's own record and, for the caller's own plan, the summary its
     // hook keeps (`contracts/delivery-envelope.json`, `plan_context`).
     map.insert("plan".into(), shape(&["session", "plan"]));
+    // An automation as the core's `automations` section has it, worded for
+    // an agent: what its schedule reads as, its next time on the machine's
+    // wall clock and, stopped for a person, what to fix (`hide automation
+    // help`).
+    map.insert("automation".into(), shape(&["automation"]));
+    map.insert("automation_list".into(), shape(&["items"]));
+    map.insert("automation_removed".into(), shape(&["removed"]));
+    map.insert(
+        "automation_preview".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "reads_as": object,
+                "reads_as_text": {"type": ["string", "null"]},
+                "next_run_at_unix_ms": {"type": ["integer", "null"]},
+                "next_run_at": {"type": ["string", "null"]},
+                "zone": {"type": ["string", "null"]},
+            },
+            "required": ["reads_as", "next_run_at_unix_ms", "next_run_at", "zone"],
+        }),
+    );
     map.insert(
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
@@ -1872,9 +2446,27 @@ fn answers() -> Value {
         "access_list".into(),
         shape(&["machine", "limit", "pending", "connections"]),
     );
-    map.insert("device_list".into(), shape(&["devices"]));
+    // The SSH devices; under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected; and under
+    // `guest_panes`, the panes other machines' work runs in on this one.
+    map.insert(
+        "device_list".into(),
+        shape(&["devices", "peers", "guest_panes"]),
+    );
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
+    map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));
+    map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
+    map.insert("device_allowed".into(), shape(&["answered"]));
+    map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_switched".into(), shape(&["device_id", "switch"]));
+    map.insert("device_accepted".into(), shape(&["accepted"]));
+    map.insert("device_looked".into(), shape(&["look"]));
+    map.insert("device_projects_listed".into(), shape(&["projects"]));
+    map.insert(
+        "device_paired".into(),
+        shape(&["device_id", "name", "paired"]),
+    );
     map.insert(
         "device_retried".into(),
         hide_core::device_command::retried_schema(),
@@ -1954,6 +2546,8 @@ mod tests {
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
             PasteText => ("line one\nline two\tend", "\u{1b}[201~"),
+            LinkOrKey => ("k1", "-x"),
+            Address => ("192.0.2.7:7842", "nowhere"),
             OneOf(values) => (values[0], "other"),
         };
         (taken.to_owned(), refused.to_owned())
@@ -2021,6 +2615,7 @@ mod tests {
                 | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
                 | CommandKind::Plan(_)
+                | CommandKind::Automation(_)
                 | CommandKind::AgentCatalog { .. }
                 | CommandKind::AgentProfile(_)
                 | CommandKind::Ps(_)
@@ -2175,6 +2770,13 @@ mod tests {
                 .take_while(|argument| argument["required"] != false)
             {
                 base.push(exported_sample(&argument["value"]));
+            }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
             }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();
@@ -2340,6 +2942,68 @@ mod tests {
         assert!(shown > 50, "the documents show {shown} mission flags");
     }
 
+    /// The flags `hide automation`'s parser reads for each verb are the
+    /// ones the contract names for it, and every verb the contract names is
+    /// one the parser reads: a flag added to one and not the other is
+    /// refused before the parser sees it.
+    #[test]
+    fn each_automation_flag_the_parser_reads_is_one_the_contract_names() {
+        let automations: Vec<&Spec> = COMMANDS
+            .iter()
+            .filter(|spec| spec.words.first() == Some(&"automation"))
+            .collect();
+        for (verb, valued, switches) in crate::automation_cli::FLAGS {
+            let spec = automations
+                .iter()
+                .find(|spec| spec.words.get(1) == Some(verb))
+                .unwrap_or_else(|| panic!("hide automation {verb} has no spec"));
+            let read: std::collections::BTreeSet<(&str, bool)> = valued
+                .iter()
+                .map(|flag| (*flag, true))
+                .chain(switches.iter().map(|flag| (*flag, false)))
+                .collect();
+            let named: std::collections::BTreeSet<(&str, bool)> = spec
+                .options
+                .iter()
+                .map(|option| (option.name, option.value.is_some()))
+                .collect();
+            assert_eq!(read, named, "hide automation {verb}");
+        }
+        assert_eq!(automations.len(), crate::automation_cli::FLAGS.len());
+        // The usage and the guide show only flags the contract takes.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let help = std::fs::read_to_string(root.join("assets/automation/help.md")).unwrap();
+        for (name, text) in [
+            ("usage", crate::automation_cli::USAGE),
+            ("help", help.as_str()),
+        ] {
+            for line in text.lines() {
+                // Each command runs to the next one on its line.
+                for command in line.split("hide automation ").skip(1) {
+                    let command = command.split('`').next().unwrap_or_default();
+                    let Some(verb) = command.split_whitespace().next() else {
+                        continue;
+                    };
+                    if verb == "help" {
+                        continue;
+                    }
+                    let spec = automations
+                        .iter()
+                        .find(|spec| spec.words.get(1) == Some(&verb))
+                        .unwrap_or_else(|| panic!("{name} shows hide automation {verb}: {line}"));
+                    for word in command.split(|c: char| !(c.is_ascii_lowercase() || c == '-')) {
+                        if word.starts_with("--") && word.len() > 2 {
+                            assert!(
+                                spec.options.iter().any(|option| option.name == word),
+                                "{name} shows hide automation {verb} {word}: {line}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The commands the mission guide teaches pass the flag check and the
     /// parser together, as `hide` runs them.
     #[test]
@@ -2445,6 +3109,43 @@ mod tests {
         );
         assert!(admit(&args(&["inbox", "--hook", "--bell"])).is_err());
         assert!(admit(&args(&["inbox", "--prompt-digest", "d"])).is_err());
+    }
+
+    /// The verbs that only pair two Hides are marked hidden in the document
+    /// until that feature ships, and the CLI still admits them, so a build
+    /// that offers it takes them and one that does not refuses them with
+    /// their reason rather than as unknown words.
+    #[test]
+    fn the_document_marks_the_verbs_that_only_pair_hidden() {
+        let args = |line: &[&str]| {
+            line.iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let document = document();
+        let device: Vec<(&str, bool)> = document["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|command| {
+                let name = command["command"].as_str().unwrap();
+                let verb = name.strip_prefix("device ")?;
+                Some((verb, command["hidden"] == true))
+            })
+            .collect();
+        for verb in PAIRING_ONLY {
+            assert!(
+                device.contains(&(*verb, true)),
+                "device {verb} is not marked hidden"
+            );
+            assert!(admit(&args(&["device", verb])).is_ok(), "device {verb}");
+        }
+        for kept in ["list", "add", "remove", "retry"] {
+            assert!(
+                device.contains(&(kept, false)),
+                "device {kept} is not listed"
+            );
+        }
     }
 
     /// The committed copy is the contract this build exports, so a change to

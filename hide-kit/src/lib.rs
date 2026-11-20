@@ -58,7 +58,7 @@ pub use agents::{
 };
 pub use coordination_retirement::preflight as retirement_preflight;
 pub use current::CURRENT;
-pub use device::device_target;
+pub use device::{device_target, guest_target, remove_guest};
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
@@ -325,6 +325,12 @@ pub struct KitTarget {
     /// once it holds the account's lock. `None` leaves every profile account
     /// as the record has it: a caller with no profile file.
     pub profiles: Option<ProfileSource>,
+    /// The installation of another machine's work on this account (a
+    /// guest's, PRD device-connect-iroh D-77 (4)): it keeps its hook entries
+    /// and the agents' pieces and nothing else here. The account's `hide`
+    /// command, its login agents and the retirement of an old layout are
+    /// the account's own Hide's, and this pass leaves them alone.
+    pub hooks_only: bool,
 }
 
 /// What an apply is allowed to do. The launch or connection pass is the
@@ -460,6 +466,15 @@ pub(crate) enum Observed {
 
 fn observe(id: ComponentId, target: &KitTarget) -> Observed {
     match id {
+        ComponentId::Cli if target.hooks_only => Observed::Absent(Reason::with(
+            PartCause::OtherInstall,
+            cli::link_path(target).display().to_string(),
+            "the hide command of this account is its own Hide's; this installation keeps none"
+                .to_owned(),
+        )),
+        ComponentId::CoordinationRetirement if target.hooks_only => Observed::Absent(
+            Reason::not_changed("the old layout of this account is its own Hide's to retire"),
+        ),
         ComponentId::Cli => cli::observe(target),
         ComponentId::ClaudeCodeHook => hooks::observe(
             target,
@@ -626,9 +641,12 @@ pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal
 /// a re-read never lists parts and agents a pass could not install, and the
 /// operator's Try again is answered by the same check.
 pub fn status(target: &KitTarget) -> KitReport {
-    let mut record = match retirement_preflight(target)
-        .and_then(|()| record::load(&target.home, &target.install))
-    {
+    let preflight = if target.hooks_only {
+        Ok(())
+    } else {
+        retirement_preflight(target)
+    };
+    let mut record = match preflight.and_then(|()| record::load(&target.home, &target.install)) {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
@@ -812,7 +830,9 @@ pub fn apply(target: &KitTarget, scope: &Scope) -> KitReport {
 }
 
 fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
-    if let Err(refusal) = retirement_preflight(target) {
+    if !target.hooks_only
+        && let Err(refusal) = retirement_preflight(target)
+    {
         return KitReport::refused(refusal);
     }
     let _lock = match lock_account(target) {
@@ -831,7 +851,11 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         Ok(lock) => lock,
         Err(refusal) => return KitReport::refused(refusal),
     };
-    let retirement_failure = coordination_retirement::install(target).err();
+    let retirement_failure = if target.hooks_only {
+        None
+    } else {
+        coordination_retirement::install(target).err()
+    };
     let mut legacy_retirement = Retirement::default();
     let mut changed = agent_kit::hold_for_onboarding(&mut record);
     changed |= record.remember_state_route(layout::state_dir_from_process(&target.home));
@@ -1168,6 +1192,9 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     let mut components = Vec::new();
     for id in ComponentId::ALL {
         let outcome = match id {
+            ComponentId::Cli if target.hooks_only => RemoveOutcome::Kept {
+                reason: "the account's hide command is its own Hide's".to_owned(),
+            },
             ComponentId::Cli => cli::remove(target),
             ComponentId::ClaudeCodeHook => hooks::remove(
                 target,

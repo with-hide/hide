@@ -27,7 +27,7 @@
 //!   own relay failure as text to print, never to decide by.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -37,8 +37,8 @@ use hide_peer::transport::{PeerConn, PeerTransport, RelayState, TransportError};
 use hide_peer_protocol::addr::rank_self_discovered;
 use hide_peer_protocol::{ALPN, Candidate, CloseCode, PathKind, PeerAddr, PeerKey};
 use iroh::endpoint::{
-    Connection, ConnectionError, PortmapperConfig, QuicTransportConfig, RecvStream, SendStream,
-    VarInt, presets,
+    BindOpts, Connection, ConnectionError, PortmapperConfig, QuicTransportConfig, RecvStream,
+    SendStream, VarInt, presets,
 };
 use iroh::{
     Endpoint, EndpointAddr, EndpointId, RelayConfig, RelayMap, RelayMode, RelayUrl, SecretKey,
@@ -80,6 +80,11 @@ pub struct Options {
     pub mdns: bool,
     /// The one address to bind. `None` binds every interface.
     pub bind: Option<SocketAddr>,
+    /// With no [`Options::bind`], the UDP port every interface binds, IPv4
+    /// required and IPv6 where the system has it: the state folder's port,
+    /// which the Windows firewall rule names (PRD D-38). `None` is any free
+    /// port.
+    pub port: Option<u16>,
 }
 
 /// Why an endpoint could not be opened.
@@ -144,6 +149,16 @@ async fn bind(secret: &SecretKey, options: &Options) -> Result<Endpoint, BindFai
         builder = builder
             .clear_ip_transports()
             .bind_addr(address)
+            .map_err(|error| failed(&error))?;
+    } else if let Some(port) = options.port {
+        builder = builder
+            .clear_ip_transports()
+            .bind_addr(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
+            .map_err(|error| failed(&error))?
+            .bind_addr_with_opts(
+                SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)),
+                BindOpts::default().set_is_required(false),
+            )
             .map_err(|error| failed(&error))?;
     }
     if options.mdns {

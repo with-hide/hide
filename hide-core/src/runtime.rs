@@ -13,6 +13,7 @@ pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_definitions;
 mod agent_profiles;
+pub(crate) mod automations;
 pub(crate) use agent_definitions::settle_and_hand_off;
 mod add_project;
 mod agent_groups;
@@ -40,6 +41,7 @@ mod device_analytics;
 mod device_catalog;
 mod device_names;
 mod device_sign_in;
+pub(crate) mod device_switch;
 mod devices;
 mod disk_sweep;
 mod documents;
@@ -92,6 +94,7 @@ pub(crate) mod pane_move;
 mod pane_move_preview;
 mod pane_prediction;
 mod pane_reopen;
+mod peer_devices;
 pub(crate) mod plans;
 pub(crate) mod project_memory;
 mod project_open;
@@ -1246,6 +1249,9 @@ pub struct Runtime {
     /// What this machine calls itself (`CoreOptions::machine_name`), on its
     /// device row.
     machine_name: Option<String>,
+    /// Where this machine shows its Windows PC's drives
+    /// (`CoreOptions::windows_drives`), on its device row.
+    windows_drives: Option<String>,
     device_machine_ids: HashMap<String, String>,
     /// Devices renamed to their machine ids whose core state is not saved
     /// yet, each with the naming round that renamed it; each connects once a
@@ -1309,6 +1315,26 @@ pub struct Runtime {
     /// The last connection test of each device, kept apart from the device
     /// rows because those are rebuilt with every catalog.
     remote_device_tests: HashMap<String, crate::model::DeviceTestSnapshot>,
+    /// Each helper device's switch to its machine's own connection, while
+    /// one is under way or stopped (`device_switch`). Never saved: a switch
+    /// is one press of the operator, asked again after a restart.
+    device_switches: HashMap<String, device_switch::DeviceSwitch>,
+    /// Devices whose registration was rewritten to their machine's
+    /// connection and is not saved yet; each takes that connection once a
+    /// save holds it (`device_switch`).
+    device_switch_saving: HashMap<String, device_switch::SwitchSaving>,
+    /// What the Hide a switch started on a device's machine still needs
+    /// (`DeviceSnapshot::needs`), by device; an entry goes with its device.
+    device_needs: HashMap<String, crate::model::DeviceNeedsSnapshot>,
+    /// How many terminals each device's switch could not take up again
+    /// (`DeviceSnapshot::not_carried`), by device; an entry goes with its
+    /// device.
+    device_not_carried: HashMap<String, u32>,
+    /// The SSH aliases of the devices added to be switched at once whose
+    /// switch has not landed (`RegisterDevicePayload::switch_first`). By
+    /// alias, since such a device's id changes at its first connection.
+    /// Never saved: after a restart it is a helper device like any other.
+    device_fresh_adds: HashSet<String>,
     /// Each device's helper connection and the consent it runs under.
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
@@ -1473,6 +1499,7 @@ pub struct Runtime {
     desk: desk::Desk,
     /// External tools' connections (PRD hide-external-control).
     access: access::AccessRuntime,
+    automations: automations::AutomationsRuntime,
     /// When this Mac's kit is next re-read while Settings is on screen.
     local_kit_next_status: Option<Instant>,
     /// A Settings tab asked for one read of this Mac's kit.
@@ -2186,6 +2213,7 @@ impl Runtime {
         {
             local.host.helper_root = Some(host_helper_root.clone());
             local.host.cli_dir = Some(host_cli_dir.clone());
+            local.host.windows_drives = options.windows_drives.clone();
         }
         snapshot.navigator.focused_device_id = Some(
             snapshot
@@ -2439,6 +2467,7 @@ impl Runtime {
             archive_registration_waits: HashMap::new(),
             node: options.node_id.clone(),
             machine_name: options.machine_name.clone(),
+            windows_drives: options.windows_drives.clone(),
             device_machine_ids: HashMap::new(),
             device_names_saving: BTreeMap::new(),
             device_naming_round: 0,
@@ -2456,6 +2485,11 @@ impl Runtime {
             inbound_arrivals: HashMap::new(),
             retired_remote_syncs: Vec::new(),
             remote_device_tests: HashMap::new(),
+            device_switches: HashMap::new(),
+            device_switch_saving: HashMap::new(),
+            device_needs: HashMap::new(),
+            device_not_carried: HashMap::new(),
+            device_fresh_adds: HashSet::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_attempts: HashMap::new(),
@@ -2516,6 +2550,7 @@ impl Runtime {
             herdr_import: herdr_import::Import::default(),
             desk: desk::Desk::default(),
             access: access::AccessRuntime::default(),
+            automations: automations::AutomationsRuntime::default(),
             local_kit_next_status: None,
             local_kit_check_requested: false,
             device_kit_pending: BTreeMap::new(),

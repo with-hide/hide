@@ -9,6 +9,7 @@ import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
 import { MissionScreenScene, missionScreenSceneParams } from "./MissionScreenScene";
+import { AutomationScreenScene, automationScreenSceneParams } from "./AutomationScreenScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
 import { GroupTabsScene } from "./GroupTabsScene";
 import { StartPanelScene } from "./StartPanelScene";
@@ -26,6 +27,7 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { AddDeviceScene } from "./AddDeviceScene";
+import { PairingScene } from "./PairingScene";
 import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
@@ -82,6 +84,11 @@ export function mountGallery(root: Root) {
     if (scene === "add-device") {
       document.title = "hide · Add device scene";
       root.render(<StrictMode><AddDeviceScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "pairing") {
+      document.title = "hide · Pairing scene";
+      root.render(<StrictMode><PairingScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "add-project") {
@@ -174,6 +181,11 @@ export function mountGallery(root: Root) {
     // A scene seeds the app's own stores, so it is one document per scene.
     if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
+      return;
+    }
+    if (scene === "automation-screen") {
+      document.title = "hide · Automation screen scene";
+      root.render(<StrictMode><AutomationScreenScene {...automationScreenSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "mission-screen") {

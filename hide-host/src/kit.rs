@@ -5,7 +5,7 @@
 //! folder this helper runs from. Before it installs, the helper points
 //! `<root>/current` at that folder, so the hooks, the `hide` link and the
 //! plugin name a path that outlives the build (B16), and removes the builds
-//! the link no longer leads to. The root is always the one the running helper
+//! the link no longer leads to and no helper runs from. The root is always the one the running helper
 //! was installed under; no request can name another folder. A helper under
 //! the default root also retires the old layout's root and bridge folder
 //! once nothing names them (`hide_kit::legacy::device`), whose paths are
@@ -63,6 +63,18 @@ pub fn handle(
                 crate::profiles::source(env),
             );
             return settled(env, answer);
+        }
+        KitPlace::Guest { root, version } => {
+            let home = env.home.clone().ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::Unsupported,
+                    "HOME is not set, so Hide cannot tell where to install",
+                )
+            })?;
+            return settled(
+                env,
+                run_guest(root, version, &home, action, Arc::clone(&env.stop)),
+            );
         }
         KitPlace::Bundled(kit_dir) => {
             return settled(
@@ -143,6 +155,7 @@ pub(crate) fn profile_target(env: &Env) -> HostResult<hide_kit::KitTarget> {
             Ok(hide_kit::device_target(&root, &home, &cli_dir, stop))
         }
         KitPlace::Build { root, .. } => Ok(hide_kit::device_target(root, &home, &cli_dir, stop)),
+        KitPlace::Guest { root, .. } => Ok(hide_kit::guest_target(root, &home, stop)),
         KitPlace::Bundled(kit_dir) => Ok(hide_kit::local_target(kit_dir, &home, stop)),
         KitPlace::Standalone => Err(HostError::new(
             ErrorCode::Unsupported,
@@ -219,6 +232,29 @@ pub fn run_build(
                 return to_value(hide_kit::KitReport::refused(refusal));
             }
             point_current(&placement.root, &placement.version)?;
+            to_value(hide_kit::apply(&target, &scope_of(action)))
+        }
+        KitAction::Status => to_value(hide_kit::status(&target)),
+        KitAction::Remove => Err(not_removed()),
+    }
+}
+
+/// A kit request to a guest's node, which runs from the build `version`
+/// under that guest's install root `root`: the same pass a placed build
+/// runs, over the target that keeps to the installation's hook entries
+/// and agent pieces (`hide_kit::guest_target`). Its entries name
+/// `<root>/current`, pointed at this build first.
+pub fn run_guest(
+    root: &Path,
+    version: &str,
+    home: &Path,
+    action: KitAction,
+    stop: Arc<AtomicBool>,
+) -> HostResult<Value> {
+    let target = hide_kit::guest_target(root, home, stop);
+    match action {
+        KitAction::Apply | KitAction::Reinstall { .. } => {
+            point_current(root, version)?;
             to_value(hide_kit::apply(&target, &scope_of(action)))
         }
         KitAction::Status => to_value(hide_kit::status(&target)),
@@ -322,7 +358,7 @@ pub fn pane_install(executable: &Path) -> Option<PaneInstall> {
     }
     let (root, _) = build_layout(executable)?;
     Some(PaneInstall {
-        id: hide_agent_hooks::route::install_of_root(&root),
+        id: hide_kit::layout::install_of_root(&root),
         cli: root.join(hide_kit::CURRENT).join(cli),
         path_first: hide_kit::current::path_folder(&root),
     })
@@ -502,11 +538,26 @@ fn builds(root: &Path, keep: Option<&str>) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Removes the builds `current` no longer leads to. A build another
-/// connection still runs keeps running: its files stay open until it exits.
+/// Removes the builds `current` no longer leads to and no helper runs
+/// from. Two Hide builds that reach one device account take turns at
+/// `current`; a build whose helper still serves another connection is that
+/// connection's, so it stays until a pass after the helper ends.
 fn remove_other_builds(root: &Path, keep: &str) {
     for build in builds(root, Some(keep)) {
-        let _ = std::fs::remove_dir_all(build);
+        if !helper_runs(&build) {
+            let _ = std::fs::remove_dir_all(build);
+        }
+    }
+}
+
+/// Whether a process runs the helper of `build`. A build whose helper
+/// cannot be looked up counts as running, since keeping it costs only the
+/// space until the next pass.
+fn helper_runs(build: &Path) -> bool {
+    let helper = build.join(format!("hided{}", std::env::consts::EXE_SUFFIX));
+    match hide_platform::fs::identity::file_id(&helper) {
+        Ok(file) => hide_platform::process::running(&file).map_or(true, |found| !found.is_empty()),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
     }
 }
 
@@ -842,6 +893,52 @@ mod tests {
         );
         // Only build folders are Hide's to remove.
         assert!(placement.root.join("notes.txt").is_file());
+    }
+
+    /// Two Hide builds that reach one device account take turns at
+    /// `current`: the build whose helper still runs for the other
+    /// connection stays, and goes on the first pass after it ends.
+    #[test]
+    fn an_install_keeps_an_older_build_whose_helper_still_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = placed(dir.path(), "aaaaaaaaaaaaaaaa");
+        let placement = placed(dir.path(), "bbbbbbbbbbbbbbbb");
+        let helper = older
+            .root
+            .join(&older.version)
+            .join(format!("hided{}", std::env::consts::EXE_SUFFIX));
+        std::fs::copy(sleeper(), &helper).unwrap();
+        let mut running = std::process::Command::new(&helper)
+            .args(sleeper_args())
+            .spawn()
+            .unwrap();
+
+        remove_other_builds(&placement.root, &placement.version);
+        let kept = older.root.join(&older.version).is_dir();
+        running.kill().unwrap();
+        running.wait().unwrap();
+        assert!(kept, "the build a helper runs from stays");
+
+        remove_other_builds(&placement.root, &placement.version);
+        assert!(!older.root.join(&older.version).exists());
+        assert!(placement.root.join(&placement.version).is_dir());
+    }
+
+    /// A program that waits until it is ended, and the words that make it.
+    fn sleeper() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join(r"System32\PING.EXE")
+        } else {
+            PathBuf::from("/bin/sleep")
+        }
+    }
+
+    fn sleeper_args() -> &'static [&'static str] {
+        if cfg!(windows) {
+            &["-n", "60", "127.0.0.1"]
+        } else {
+            &["60"]
+        }
     }
 
     #[test]

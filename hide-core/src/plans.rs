@@ -192,8 +192,8 @@ impl dag::Node for Step {
     fn key(&self) -> &str {
         &self.key
     }
-    fn depends_on(&self) -> &[String] {
-        &self.depends_on
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on.iter().map(String::as_str)
     }
 }
 
@@ -259,8 +259,8 @@ impl dag::Node for StepInput {
     fn key(&self) -> &str {
         &self.key
     }
-    fn depends_on(&self) -> &[String] {
-        &self.depends_on
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on.iter().map(String::as_str)
     }
 }
 

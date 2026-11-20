@@ -583,6 +583,7 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: vec![checkout(id, last_commit_unix_seconds, pane_ids)],
             pinned: false,
+            unlisted: false,
             inactive_checkouts: InactiveCheckoutGroupSnapshot::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -672,6 +673,7 @@ mod tests {
             local_issues_path: None,
             effects_held: false,
             machine_name: None,
+            windows_drives: None,
             account_state_folder: false,
         })
         .navigator;

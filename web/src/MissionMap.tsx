@@ -58,6 +58,7 @@ import {
   nodeWork,
   nodeWorkWords,
   pacedSteps,
+  plannedWait,
   stopCauseWords,
   stoppedSince,
   reportLine,
@@ -466,7 +467,7 @@ function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, acti
             <span className="min-w-0 truncate text-caption text-subtle-foreground" data-node-steps-now={pace === "stopped" ? "stopped" : "true"}>{t(pace === "stopped" ? "mission.steps.stoppedAt" : "mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span>
           ) : null}
           {work.source === "plan" && node.status === "planned" ? (
-            <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-steps-waiting="true">{t("mission.steps.planned", { count: work.steps.length })} · {t("mission.steps.notStarted")}</span>
+            <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-steps-waiting="true">{t("mission.steps.planned", { count: work.steps.length })} · {plannedWait(mission, node, t) ?? t("mission.steps.notStarted")}</span>
           ) : null}
         </span>
       ) : null}

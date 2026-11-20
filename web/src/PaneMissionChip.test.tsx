@@ -88,6 +88,8 @@ async function mount(missions: Mission[], { pane = "p1", plans = [] as PlanView[
   return { container, actions, events, chip, popover, press, escape, unmount: async () => { await act(async () => root.unmount()); } };
 }
 
+const MARK_TONE: Record<string, string> = { planning: "waiting", running: "working", turn: "hold", merge_wait: "review", done: "done", cancelled: "cancelled" };
+
 it("reads each state in words with a cell per node, in the plan chip's place, and a pane that conducts nothing keeps its plan chip (B8, B36, PRD mission-pane-chip B1, B2, B17)", async () => {
   const allDone = NODES.map((row) => ({ ...row, status: "done" as const }));
   const cases: [Partial<Mission>, string, string, string | undefined][] = [
@@ -107,6 +109,8 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
       expect([view.chip()?.dataset.missionChipState, words]).toEqual([state, text]);
       // One cell per node in the plan, in its state's colour; no cell before the first plan.
       expect(view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells).toBe(cells);
+      // The mark wears the colour every mission chip wears (operator decision 2026-11-20).
+      expect(view.chip()?.querySelector<HTMLElement>("[data-mission-chip-tone]")?.dataset.missionChipTone).toBe(MARK_TONE[state]);
       // A decision and a done mission keep their colour while the popover is open.
       if (state === "turn") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-hold");
       if (state === "done") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-done");

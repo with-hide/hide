@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::Event;
 use crate::frame::{self, FrameError};
+use crate::launch::EndMode;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -33,11 +34,54 @@ pub enum Manage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// Guest to host: run my node from my build. Without `build_id` the
+    /// guest asks which platform's build the host needs
+    /// ([`Manage::NodePreparing`]); with it, the host starts that build, or
+    /// fetches it, or answers [`NodeStop::BuildMissing`] and the guest
+    /// uploads it on a file stream and asks again (D-77 (1)).
+    NodeStart {
+        /// The guest's version, as its release names it.
+        build: String,
+        /// The first 16 hex characters of the digest of the build's files
+        /// for the host's platform: the name of its folder in the guest's
+        /// install root.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        build_id: Option<String>,
+        /// The release the build was published as, when it was: the host
+        /// fetches that release's device kit itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        release: Option<Release>,
+    },
+    /// Host to guest: the host is getting the guest's node ready, and the
+    /// platform its build has to be for (B60).
+    NodePreparing { os: String, arch: String },
+    /// Guest to host: start my node again after the host stopped starting
+    /// it (B70).
+    NodeRetry,
+    /// Guest to host: end my node, now with every pane or after its last
+    /// pane, because this machine is being taken off the guest (D-77 (6)).
+    NodeEnd { mode: EndMode },
+}
+
+/// The published release a build is, as its device kit manifest names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Release {
+    pub commit: String,
+    pub order: u64,
 }
 
 impl Manage {
-    pub const TYPES: [&'static str; 5] =
-        ["resume", "event", "event_ack", "node_ready", "node_stopped"];
+    pub const TYPES: [&'static str; 9] = [
+        "resume",
+        "event",
+        "event_ack",
+        "node_ready",
+        "node_stopped",
+        "node_start",
+        "node_preparing",
+        "node_retry",
+        "node_end",
+    ];
 
     /// `None` for a type this build does not know.
     pub fn parse(body: &[u8]) -> Result<Option<Self>, FrameError> {
@@ -63,6 +107,9 @@ pub enum NodeStop {
     FolderRefused,
     /// It crashed more often than the host starts it again.
     Crashed,
+    /// The host already has as many other guests at work as it carries at
+    /// once ([`crate::launch::MAX_GUEST_NODES`]).
+    HostFull,
     #[serde(other)]
     Other,
 }

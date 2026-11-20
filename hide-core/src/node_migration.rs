@@ -109,6 +109,9 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     // External tools' connections, which name no machine: each is a tool on
     // the core's own machine.
     hide_kit::layout::ACCESS_STORE,
+    // Automations, which name no machine: each runs on the core's own, and
+    // its runs are named by ledger ids.
+    hide_kit::layout::AUTOMATIONS_STORE,
     MARKER_FILE,
 ];
 
@@ -1201,6 +1204,7 @@ pub const UNBOUND: &[&str] = &[
     "mobile.json",
     "phones.json",
     hide_kit::layout::ACCESS_STORE,
+    hide_kit::layout::AUTOMATIONS_STORE,
     "pane-capabilities",
     "attachments",
     "TerminalClipboard",

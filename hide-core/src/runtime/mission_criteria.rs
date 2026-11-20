@@ -255,6 +255,41 @@ impl Runtime {
         self.node_unmet_in(mission, node, self.mission_pulls(mission))
     }
 
+    /// Each node's lines as their owner shows them now, in the record's
+    /// order (`LinesNow`), read only for a node another names by a line, and
+    /// none for a mission that is closed or names no line: the one read
+    /// a dependency on a line takes (`Mission::dependency_met`).
+    pub(super) fn lines_now(&self, mission: &Mission) -> Vec<crate::missions::LinesNow> {
+        let names_a_line = mission.nodes.iter().any(|node| {
+            node.depends_on
+                .iter()
+                .any(|dependency| dependency.line.is_some())
+        });
+        if !mission.status.open() || !names_a_line {
+            return Vec::new();
+        }
+        let pulls = self.mission_pulls(mission);
+        mission
+            .nodes
+            .iter()
+            .map(|node| {
+                let named = mission.nodes.iter().any(|other| {
+                    other
+                        .depends_on
+                        .iter()
+                        .any(|dependency| dependency.line.is_some() && dependency.node == node.key)
+                });
+                if !named {
+                    return crate::missions::LinesNow::default();
+                }
+                crate::missions::LinesNow {
+                    unmet: self.node_unmet_in(mission, node, pulls),
+                    head_read: self.node_head(mission, node, pulls).is_some(),
+                }
+            })
+            .collect()
+    }
+
     /// `node_unmet` against `pulls`, a list GitHub may have answered just
     /// now.
     fn node_unmet_in(
@@ -713,6 +748,7 @@ impl Runtime {
                 false,
             ));
         }
+        next.note_own_met(row.own_lines_met(), now);
         let mut events = Vec::new();
         // A check failing again on the commit its rerun was for sends the
         // node back to work (B13).
@@ -833,7 +869,9 @@ impl Runtime {
             at_unix_ms: now,
         };
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+        let was_met = target.nodes[index].own_lines_met();
         let changed = target.nodes[index].criteria[at].skip(reason.clone(), decision, by);
+        target.nodes[index].note_own_met(was_met, now);
         if !changed {
             return Ok((
                 json!({"mission": self.mission_view_for(&id, &caller)}),
@@ -934,8 +972,10 @@ impl Runtime {
     }
 
     /// The node with registration `id` bound to its next free `kind`
-    /// checker of the same agent (B3, B4); the node's own worker is never
-    /// its checker.
+    /// checker of the same agent (B3, B4), else in the place of one the
+    /// mission reads as ended (`missions::worker_life`: its registration
+    /// ended or its pane closed) or whose registration is gone
+    /// (`Criterion::bind`); the node's own worker is never its checker.
     pub(super) fn bind_checker(
         &self,
         node: &MissionNode,
@@ -967,7 +1007,23 @@ impl Runtime {
             .iter_mut()
             .find(|line| line.kind == kind.kind())
             .ok_or("mission_checker_unknown")?
-            .bind(id, hide_agent_adapter::canonical_kind(&record.actor.kind))?;
+            .bind(
+                id,
+                hide_agent_adapter::canonical_kind(&record.actor.kind),
+                |bound| {
+                    ledger
+                        .agents
+                        .iter()
+                        .find(|row| row.id == bound)
+                        .is_none_or(|row| {
+                            let sleeping = self.sleeping_registrations(std::iter::once(row));
+                            matches!(
+                                super::missions::worker_life(row, &sleeping),
+                                crate::delivery::answer::Runtime::Ended
+                            )
+                        })
+                },
+            )?;
         Ok(next)
     }
 

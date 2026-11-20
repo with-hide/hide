@@ -266,6 +266,40 @@ fn holds_close(node: &MissionNode) -> bool {
     }
 }
 
+/// The node `node` stacks on (`Mission::stacks_on`) while that one's work
+/// has not reached main: its pull request merges first, and `node`'s waits.
+/// None once the lower pull request merged or its branch is read in main;
+/// the stack's own rules move what is left (`stack_waiting`, the merge into
+/// the one above, `hide mission help`).
+pub(super) fn stacked_below<'a>(
+    mission: &'a Mission,
+    node: &MissionNode,
+) -> Option<&'a MissionNode> {
+    mission
+        .stacks_on(node)
+        .filter(|lower| pull_state(lower) != Some(PullState::Merged) && in_main(lower).is_none())
+}
+
+/// Where a stacked node starts and what its pull request is based on: the
+/// node below (`stacked_below`), its branch and its current pull request,
+/// which `hide mission show` and the map name.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeStack {
+    pub on: String,
+    /// The branch the stacked node starts from and its pull request's base;
+    /// none until the node below names one.
+    pub branch: Option<String>,
+    pub pr: Option<u32>,
+}
+
+pub(super) fn node_stack(mission: &Mission, node: &MissionNode) -> Option<NodeStack> {
+    stacked_below(mission, node).map(|lower| NodeStack {
+        on: lower.key.clone(),
+        branch: lower.branch.clone(),
+        pr: lower.current_pr(),
+    })
+}
+
 /// Every pull request the mission still stands behind is merged or closed,
 /// and every direct change's branch is in main.
 pub(super) fn stack_settled(mission: &Mission) -> bool {
@@ -328,7 +362,7 @@ fn plan_order(mission: &Mission) -> Vec<&MissionNode> {
         let found = node
             .depends_on
             .iter()
-            .filter_map(|key| mission.nodes.iter().find(|other| other.key == *key))
+            .filter_map(|dependency| mission.node(&dependency.node))
             .map(|dep| depth(mission, dep, known) + 1)
             .max()
             .unwrap_or(0);

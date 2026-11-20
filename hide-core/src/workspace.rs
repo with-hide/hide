@@ -62,6 +62,12 @@ pub fn local_device(
         kit: crate::model::KitSnapshot::default(),
         machine_name: machine_name.map(str::to_owned),
         dials_in: false,
+        peer_key: None,
+        switch: None,
+        needs: None,
+        switchable: false,
+        not_carried: None,
+        switch_first: false,
     }
 }
 
@@ -100,6 +106,12 @@ pub fn devices(
                 kit: crate::model::KitSnapshot::default(),
                 machine_name: None,
                 dials_in: registration.origin == crate::model::LinkOrigin::Inbound,
+                peer_key: registration.origin.peer_key().map(str::to_owned),
+                switch: None,
+                needs: None,
+                switchable: registration.origin.switches(),
+                not_carried: None,
+                switch_first: false,
             });
         }
     }
@@ -848,6 +860,7 @@ fn inspect_space(node: &NodeId, space: &SessionSpace, places: &Places) -> Vec<Wo
                     last_activity_unix_ms: None,
                     checkouts: Vec::new(),
                     pinned: false,
+                    unlisted: false,
                     inactive_checkouts: Default::default(),
                     session_folds: Default::default(),
                     removal: Default::default(),
@@ -1161,6 +1174,7 @@ fn inspect(
         session_workspace_ids: Vec::new(),
         last_activity_unix_ms: None,
         pinned: false,
+        unlisted: false,
         checkouts,
         inactive_checkouts: Default::default(),
         session_folds: Default::default(),
@@ -1839,6 +1853,7 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: Vec::new(),
             pinned: false,
+            unlisted: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),
@@ -1907,6 +1922,7 @@ mod tests {
             last_activity_unix_ms: None,
             checkouts: Vec::new(),
             pinned: false,
+            unlisted: false,
             inactive_checkouts: Default::default(),
             session_folds: Default::default(),
             removal: Default::default(),

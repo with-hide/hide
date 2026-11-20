@@ -100,9 +100,10 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
+ * A Memory promotion or a suggestion's home is the Hide AI tool's 제안 tab, where it is one of the rows (PRD hide-ai-suggestions D-02, B2);
+ * an automation run's is the automation screen, where its terminal is (PRD automations D-11, B15).
  */
-export type HideAiHome = "suggestions";
+export type HideAiHome = "suggestions" | "automations";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 /** `branch_ready`: the agent committed on its branch and the operator decides (PRD hide-ai-branch-first-apply B3). */
@@ -1028,6 +1029,8 @@ export type Workspace = {
   registered: boolean;
   temporary: boolean;
   pinned: boolean;
+  /** An automation's own folder, registered only so its runs start there: no list draws it (PRD automations D-08, B30). Absent while false. */
+  unlisted?: boolean;
   last_activity_unix_ms?: number | null;
   /** What `Remove project…` would close, counted by the core (D-10). */
   removal?: { pane_count: number; running_agent_count: number };
@@ -1654,6 +1657,7 @@ export type MissionNode = {
   /** A general node's preset, and the icon key the core's preset table names for a general node (PRD node-presets D-02, D-08); absent on other nodes and from an older core. */
   preset?: MissionNodePreset | null;
   icon?: string | null;
+  /** What it waits on, as the plan wrote it: `<node>`, or `<node>:<line>` for one finish line of that node (`missionDependency` reads it). */
   depends_on: string[];
   status: MissionNodeStatus;
   blocked: MissionBlocked | null;
@@ -1672,6 +1676,8 @@ export type MissionNode = {
   /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
   prs: MissionNodePr[];
   base_pr: number | null;
+  /** The node it stacks on while that one's work is not in main: it starts from that node's branch and its pull request is based there (`NodeStack`); absent when not stacked and from an older core. */
+  stack?: MissionNodeStack | null;
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
@@ -1715,8 +1721,14 @@ export type MissionNode = {
   attention: MissionAttention | null;
   /** What Hide itself did to the node last (D-07, D-15). */
   hide: MissionHideMark | null;
-  /** Its review's failures in a row (hide-private issue 552); absent from an older core. */
-  review_fails?: number;
+  /** Its review's or verification's rounds against the mission's limit (`ReviewRounds`): null before a checker answered, absent from an older core. */
+  review_rounds?: MissionReviewRounds | null;
+  /** When it could have started, the mission's start or its last dependency done (`ready_at`); null while it cannot, absent from an older core. */
+  ready_at_unix_ms?: number | null;
+  /** When it last went to work, its start or back from a finish (`MissionNode::worked_at_unix_ms`): its work counts from here (`nodeSpans`); null for a node of a book from before it, absent from an older core. */
+  worked_at_unix_ms?: number | null;
+  /** When the lines its worker answers first all stood met in this run of its work (`MissionNode::own_met_at_unix_ms`): its work ends and its review and CI begin here (`nodeSpans`); null before then and for a node of a book from before it. */
+  own_met_at_unix_ms?: number | null;
   /** When Hide last read a new head on one of its pull requests. */
   pushed_at_unix_ms?: number | null;
   /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
@@ -1752,13 +1764,21 @@ export type MissionLettersHeldFor = "unreachable" | "approval" | "draft" | "unan
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
+/** The node a node stacks on, its branch and its current pull request (`NodeStack`). */
+export type MissionNodeStack = { on: string; branch: string | null; pr: number | null };
+
 /** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
 export type MissionWaitingOn =
   | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
   | { kind: "nodes"; keys: string[] }
+  /** The merge of the pull request it stacks on comes first (`WaitingOn::Below`). */
+  | { kind: "below"; node: string }
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
-/** What a node's warning is about (`WarningKind`): its review failing in a row, or a long quiet with no push. */
+/** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
+export type MissionReviewRounds = { line: string; rounds: number; limit: number };
+
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, a long quiet with no push, or its worker stopped. */
 export type MissionWarningKind = "review_fails" | "no_push" | "stopped";
 /** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
 export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
@@ -2188,7 +2208,35 @@ export type Device = {
   machine_name?: string | null;
   /** A node that dials the core rather than a device the core dials (`DeviceSnapshot::dials_in`). */
   dials_in?: boolean;
+  /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
+  peer_key?: string | null;
+  /** Where the switch of this helper device to its machine's own Hide stands (`DeviceSnapshot::switch`); absent while none runs or failed. */
+  switch?: DeviceSwitch | null;
+  /** What the Hide this core started on the device's machine over SSH still needs to stay reachable (`DeviceSnapshot::needs`); absent when it needs nothing. */
+  needs?: DeviceNeeds | null;
+  /** Whether the switch to its machine's own Hide is offered on this device (`DeviceSnapshot::switchable`): a helper device dialed over SSH that has connected. */
+  switchable?: boolean;
+  /** How many of the device's terminals its switch could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
+  not_carried?: number | null;
+  /** Added over SSH to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
+  switch_first?: boolean;
 };
+
+/**
+ * What a machine's Hide, started over SSH, needs from the operator to stay
+ * reachable with no one at it (`contracts/snapshot-wire-enums.json`:
+ * `device_needs`): automatic login on a Mac, or on Linux the `command` an
+ * administrator runs there.
+ */
+export type DeviceNeeds = { kind: "auto_login" | "linger"; command?: string | null };
+
+/**
+ * A helper device's switch to the connection of the Hide on its machine
+ * (`contracts/snapshot-wire-enums.json`: `device_switch_state`). `reason` is
+ * the code of why a `failed` one stopped; the device is the helper's until
+ * the switch lands, so a failed one changed nothing.
+ */
+export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed"; reason?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does
@@ -3247,6 +3295,111 @@ export type AccessConnection = {
   mission_count: number;
 };
 
+/** A day of the week as a schedule names it (`contracts/snapshot-wire-enums.json` `automation_weekday`). */
+export type AutomationWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/**
+ * When an automation runs (PRD automations D-06, B6): one of the form's
+ * choices or a five-field cron line, `HH:MM` in the zone of the machine that
+ * runs it. The core reads a cron line that equals a choice as that choice
+ * (`reads_as`); the screen only words it.
+ */
+export type AutomationSchedule =
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
+  | { kind: "weekly"; days: AutomationWeekday[]; time: string }
+  | { kind: "every_minutes"; minutes: number }
+  | { kind: "every_hours"; hours: number; time: string }
+  | { kind: "cron"; expr: string };
+
+/** The agent, profile, model and effort every run starts with (D-07), as the agent start names them. */
+export type AutomationAgent = { kind: string; profile?: string; model?: string; effort?: string };
+
+/** Why an automation does not run on schedule (`automation_pause_reason`): only `operator` is quiet; the rest are its own Needs You line (D-12). */
+export type AutomationPauseReason = "operator" | "login_expired" | "folder_missing" | "agent_missing" | "folder_detached" | "machine_changed" | "folder_in_repository";
+
+export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped";
+
+export type AutomationRun = {
+  number: number;
+  trigger: "scheduled" | "manual" | "missed";
+  due_unix_ms?: number;
+  started_at_unix_ms: number;
+  ended_at_unix_ms?: number;
+  state: AutomationRunState;
+  /** The attempt going now or last (D-17), from 1. */
+  attempt: number;
+  /** Why the last attempt failed or the run ended, a code the screen words. */
+  reason?: string;
+  /** The terminal the screen shows for the run: its agent's pane while it runs or its terminal is open, else its conversation's opened again (B16, B17). */
+  pane_id?: string;
+  /** Its conversation is open again: `이어서 대화 중` (B17). */
+  opened: boolean;
+  /** Its conversation can be opened again. */
+  resumable: boolean;
+  conversation_missing: boolean;
+  branch?: string;
+  seen: boolean;
+  /** What its conversation spent, absent until Hide's usage ledger read it (D-26, B39). */
+  spend?: AutomationSpend;
+};
+
+/**
+ * What a run's conversation spent as Hide's usage ledger read it from the agent's own records (D-26, B39): its new
+ * tokens and their price in millionths of a dollar; `unpriced` when some calls had no price, so the price is a lower bound.
+ */
+export type AutomationSpend = { tokens: number; micro_usd: number; unpriced: boolean };
+
+/**
+ * One record of an automation, newest first: a run, the times skipped one after another for the same reason
+ * (`count` from `at_unix_ms` to `last_unix_ms`, one time when 1), or the times missed while nothing could run them (D-15).
+ */
+export type AutomationRecord =
+  | ({ kind: "run" } & AutomationRun)
+  | { kind: "skipped"; at_unix_ms: number; last_unix_ms: number; count: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
+  | { kind: "missed"; first_unix_ms: number; last_unix_ms: number; count: number; reason: "core_off" | "asleep" };
+
+export type Automation = {
+  id: string;
+  name: string;
+  task: string;
+  /** As chosen, which the form opens on. */
+  schedule: AutomationSchedule;
+  /** The choice it reads as. */
+  reads_as: AutomationSchedule;
+  /** None while it is paused. */
+  next_run_at_unix_ms: number | null;
+  agent: AutomationAgent;
+  /** Its own folder (`default`) or a project's; `worktree` makes one per run. */
+  folder: { path: string; default: boolean; worktree: boolean };
+  paused?: { reason: AutomationPauseReason; at_unix_ms: number };
+  /** A run goes now: [지금 실행] is refused (B19). */
+  running: boolean;
+  unseen: number;
+  /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
+  recent_spend?: AutomationSpend & { runs: number };
+  records: AutomationRecord[];
+};
+
+/**
+ * The `automations` section (PRD automations D-02): the automations of this
+ * window's core, which runs them on its own machine (D-21). Its own section,
+ * absent until the core restored its book.
+ */
+export type AutomationsSection = {
+  items: Automation[];
+  /** Finished runs not looked at, over every automation: the sidebar row's number (B1). */
+  unseen: number;
+  /** The agent last chosen, the form's default (D-07). */
+  last_choice?: AutomationAgent;
+  /** The zone the schedules are read in, by its IANA name. */
+  zone?: string;
+  /** `~/hide/automations` on this machine, which the form names under its default folder (B5). */
+  own_folder_root?: string;
+  /** The saved automations could not be read and were set aside as `file`; gone once an automation is made. */
+  unreadable?: { file: string; at_unix_ms: number };
+};
+
 /** The `desk` section: absent until hided starts Desk. */
 export type DeskSection = {
   selection: { agent: DeskAgentId | null; model: string | null; effort: string | null };
@@ -3537,6 +3690,19 @@ export type OverviewGraphMetadata = {
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
 };
 
+/**
+ * One guest machine and its panes on this machine. A pane is drawn and typed
+ * into by its `id`, `guest:<device_id>:pane:<pane>`, which is not the
+ * `remote:` address of a pane on that machine.
+ */
+export type GuestPanes = {
+  /** The guest's device id, the id `navigator.peers` names it by. */
+  device_id: string;
+  /** Its connection id. */
+  key: string;
+  panes: { id: string; pane: string; since_unix_ms: number }[];
+};
+
 export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
@@ -3572,6 +3738,12 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
+    /** The device the last Add over SSH did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
+    device_not_added?: { label: string; reason: string } | null;
+    /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
+    peers?: import("./pairing").Peer[];
+    /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */
+    guest_panes?: GuestPanes[];
     focused_device_id?: string | null;
     /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
     tools?: ToolCell[];
@@ -3774,6 +3946,29 @@ export function focusedCheckout(rest: SnapshotRest | null): Checkout | null {
  */
 export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
+}
+
+const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
+
+/**
+ * The projects a person picks from: every one but an automation's own
+ * folder, which the core registers only so its runs can start there (PRD
+ * automations D-08, B30). The same array while none is unlisted, and one
+ * kept list per source array, so a store selector that returns it is stable.
+ */
+export function listedWorkspaces(workspaces: Workspace[]): Workspace[] {
+  if (!workspaces.some((workspace) => workspace.unlisted)) return workspaces;
+  let listed = listedOf.get(workspaces);
+  if (!listed) {
+    listed = workspaces.filter((workspace) => !workspace.unlisted);
+    listedOf.set(workspaces, listed);
+  }
+  return listed;
+}
+
+/** `catalogWorkspaces` as a person picks from it: every project but an automation's own folder (`listedWorkspaces`). */
+export function listedCatalog(rest: SnapshotRest | null): Workspace[] {
+  return listedWorkspaces(catalogWorkspaces(rest));
 }
 
 /** `catalogWorkspaces` from the two fields it reads, for a component that subscribes to those alone. */

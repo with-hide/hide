@@ -37,6 +37,42 @@ pub const MAX_TOMBSTONES: usize = 256;
 /// The most hosts a guest remembers.
 pub const MAX_KNOWN: usize = 64;
 
+/// How long a shared link opens a pairing (B1).
+pub const OFFER_FOR: Duration = Duration::from_secs(9 * 60);
+
+/// How long an operator has to answer an allow window, or to say whether
+/// the words match (B4, B50).
+pub const ANSWER_WITHIN: Duration = Duration::from_secs(2 * 60);
+
+/// The most requests that wait for this machine's operator at once; the
+/// next is refused.
+pub const MAX_ASKS: usize = 8;
+
+/// How often one machine may send a confirm, a revoke or a request to be
+/// let in, each counted on its own, in [`RATE_WINDOW`]; and how many
+/// machines are counted at once.
+pub const RATE_PER_WINDOW: usize = 6;
+pub const RATE_WINDOW: Duration = Duration::from_secs(60);
+pub const MAX_RATED: usize = 256;
+
+/// The longest pairing link read, and the most direct addresses one names.
+pub const MAX_LINK_BYTES: usize = 1024;
+pub const MAX_LINK_ADDRS: usize = 8;
+
+/// The longest device id and the longest machine name a peer may give.
+pub const MAX_DEVICE_BYTES: usize = 128;
+pub const MAX_NAME_BYTES: usize = 64;
+
+/// The wait before a guest sends its confirm or its removal again to a host
+/// that did not answer: it starts at the first and doubles to the second,
+/// and a new connection to the host is tried at once.
+pub const SETTLE_RETRY_FIRST: Duration = Duration::from_secs(10);
+pub const SETTLE_RETRY_MOST: Duration = Duration::from_secs(60 * 60);
+
+/// How many `accept-ssh` requests are remembered, so the same request run
+/// again gets the same answer.
+pub const MAX_ACCEPTED: usize = 32;
+
 /// The most streams one connection carries at once, of every kind: what a
 /// transport is told to allow. It is at least the sum of the kinds' caps, so
 /// a kind at its cap never takes another kind's place.
@@ -109,4 +145,9 @@ const _: () = {
     assert!(every_kind <= MAX_STREAMS);
     assert!(REDIAL_FIRST.as_secs() < REDIAL_MOST.as_secs());
     assert!(HELLO_WITHIN.as_secs() < UNGRANTED_FOR.as_secs());
+    // A link's last moment still leaves its pending grant time to be
+    // confirmed, and an operator's answer fits inside a link's life.
+    assert!(OFFER_FOR.as_secs() < PENDING_FOR.as_secs());
+    assert!(ANSWER_WITHIN.as_secs() < OFFER_FOR.as_secs());
+    assert!(SETTLE_RETRY_FIRST.as_secs() < SETTLE_RETRY_MOST.as_secs());
 };

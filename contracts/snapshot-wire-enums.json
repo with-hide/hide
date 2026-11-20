@@ -133,6 +133,8 @@
   "suggestion_attempt_purpose": ["branch", "pr", "rebase"],
   "device_problem": ["sign_in_needed", "sign_in_refused", "host_key_changed", "cannot_connect", "ssh_missing", "openssh_old", "unsupported", "hide_updated"],
   "device_sign_in_kind": ["secret", "host_key", "confirm", "touch", "browser"],
+  "device_switch_state": ["checking", "installing", "connecting", "failed"],
+  "device_needs": ["auto_login", "linger"],
   "desk_agent": ["claude", "codex", "grok", "opencode", "pi", "omp", "agy"],
   "desk_agent_state": ["checking", "ready", "preparing", "install_failed", "node_missing", "cli_missing", "no_ask_mode", "off"],
   "desk_host_state": ["idle", "starting", "ready", "thinking", "stopped"],
@@ -159,5 +161,15 @@
   "session_thread_older": ["idle", "loading", "capacity", "failed"],
   "session_thread_input_state": ["sending", "sent", "refused"],
   "session_thread_part_kind": ["plan", "spawn", "letter", "view", "mission"],
-  "session_thread_view_kind": ["browser", "file", "diff"]
+  "session_thread_view_kind": ["browser", "file", "diff"],
+  "automation_trigger": ["scheduled", "manual", "missed"],
+  "automation_run_state": ["starting", "running", "succeeded", "failed", "stopped"],
+  "automation_pause_reason": ["operator", "login_expired", "folder_missing", "agent_missing", "folder_detached", "machine_changed", "folder_in_repository"],
+  "automation_missed_reason": ["core_off", "asleep"],
+  "automation_weekday": ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+  "peer_opens": ["confirming", "active", "paused", "paused_there", "removing", "unpaired"],
+  "peer_opened_by": ["active", "paused"],
+  "peer_path": ["direct", "relay", "local"],
+  "peer_reason": ["relay_unreachable", "relay_monthly_limit"],
+  "peer_update": ["here", "there"]
 }

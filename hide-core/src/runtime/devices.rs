@@ -21,6 +21,8 @@ enum Source {
     Arrived(Box<Arrived>),
     Ssh(String),
     Wsl(String),
+    /// A paired machine, by its connection key.
+    Peer(String),
 }
 
 /// How the core reaches a connected device: over a dial of its own, or over
@@ -151,9 +153,15 @@ impl Runtime {
             },
             // A core waiting for its move's link dials nothing; releasing
             // the hold connects every registration again.
-            LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } if self.effects_held() => {
+            LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } | LinkOrigin::Peer { .. }
+                if self.effects_held() =>
+            {
                 return false;
             }
+            // A paired machine whose grant is paused, or not confirmed yet,
+            // is opened when the grant is active (`peer_devices`).
+            LinkOrigin::Peer { key, .. } if !self.peer_opens(key) => return false,
+            LinkOrigin::Peer { key, .. } => Source::Peer(key.clone()),
             LinkOrigin::Dialed { ssh_alias, .. } => Source::Ssh(ssh_alias.clone()),
             LinkOrigin::Wsl { distro } => Source::Wsl(distro.clone()),
         };
@@ -211,6 +219,10 @@ impl Runtime {
                 }
                 Source::Wsl(distro) => (
                     DeviceReach::Dialed(self.devices.wsl_transport(&device_id, &distro)?),
+                    None,
+                ),
+                Source::Peer(key) => (
+                    DeviceReach::Dialed(self.devices.peer_transport(&device_id, &key)?),
                     None,
                 ),
                 Source::Ssh(ssh_alias) => {
@@ -383,6 +395,12 @@ impl Runtime {
         self.remote_tab_creations_in_flight
             .retain(|(target_id, _, _, _)| target_id != device_id);
         self.remote_device_tests.remove(device_id);
+        if matches!(why, Retiring::Removed) {
+            self.device_switches.remove(device_id);
+            self.device_needs.remove(device_id);
+            self.device_not_carried.remove(device_id);
+            self.snapshot.ui_state.device_switch_opens.remove(device_id);
+        }
         match why {
             Retiring::Removed => self
                 .snapshot
@@ -486,9 +504,12 @@ impl Runtime {
             );
             return true;
         }
-        // A renamed device waits for the save that holds its new id; the
+        // A renamed device waits for the save that holds its new id, and a
+        // switched one for the save that holds its new connection; the
         // retry asks for that save again, and the save connects it.
-        if self.device_names_saving.contains_key(device_id) {
+        if self.device_names_saving.contains_key(device_id)
+            || self.device_switch_saving.contains_key(device_id)
+        {
             self.persist_current_ui_state();
             return true;
         }
@@ -678,6 +699,16 @@ impl Runtime {
                     .map(|sign_in| (device.id.clone(), sign_in))
             })
             .collect::<HashMap<_, _>>();
+        let switches = self
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .filter_map(|device| {
+                self.device_switch_snapshot(&device.id)
+                    .map(|switch| (device.id.clone(), switch))
+            })
+            .collect::<HashMap<_, _>>();
         let statuses = &self.snapshot.status.remote;
         let tests = &self.remote_device_tests;
         let mut changed = false;
@@ -714,17 +745,32 @@ impl Runtime {
                 .map(|problem| crate::model::DeviceProblem::of(problem).code().to_owned());
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
+            let switch = switches.get(&device.id).cloned();
+            let needs = self.device_needs.get(&device.id).cloned();
+            let not_carried = self.device_not_carried.get(&device.id).copied();
+            let switch_first = device
+                .ssh_alias
+                .as_ref()
+                .is_some_and(|alias| self.device_fresh_adds.contains(alias));
             if device.state != state
                 || device.message != message
                 || device.problem != problem
                 || device.sign_in != sign_in
                 || device.test != test
+                || device.switch != switch
+                || device.needs != needs
+                || device.not_carried != not_carried
+                || device.switch_first != switch_first
             {
                 device.state = state.to_owned();
                 device.message = message;
                 device.problem = problem;
                 device.sign_in = sign_in;
                 device.test = test;
+                device.switch = switch;
+                device.needs = needs;
+                device.not_carried = not_carried;
+                device.switch_first = switch_first;
                 changed = true;
             }
         }
@@ -735,9 +781,13 @@ impl Runtime {
             .devices
             .iter_mut()
             .find(|device| device.kind != "remote")
-            && local.host.helper_root != helper_root
+            && (local.host.helper_root != helper_root
+                || local.host.windows_drives != self.windows_drives)
         {
             local.host.helper_root = helper_root;
+            // A rebuilt row starts without it: this machine's own, as a
+            // device's helper reports its own.
+            local.host.windows_drives = self.windows_drives.clone();
             changed = true;
         }
         let ids = self
@@ -873,6 +923,11 @@ impl Runtime {
             .ui_state
             .device_registrations
             .push(registration.clone());
+        // One line at most says what the last Add did not add.
+        self.snapshot.navigator.device_not_added = None;
+        if payload.switch_first {
+            self.device_fresh_adds.insert(ssh_alias.clone());
+        }
         self.rebuild_device_rows();
         self.persist_current_ui_state();
         self.push_diagnostic(
@@ -960,6 +1015,10 @@ impl Runtime {
         self.delivery_panes.remove(device_id);
         self.forget_device_connect_outcome(device_id);
         self.device_names_saving.remove(device_id);
+        self.device_switch_saving.remove(device_id);
+        if let Some(alias) = registration.origin.ssh_alias() {
+            self.device_fresh_adds.remove(alias);
+        }
         self.device_machine_bound.remove(device_id);
         // Hide's kit comes off the device on its own helper
         // connection, which the disconnect below leaves open for it.
@@ -1044,7 +1103,28 @@ impl Runtime {
                     .filter(|device| device.kind == "remote")
                     .map(|device| self.device_answer(device))
                     .collect::<Vec<_>>();
-                Ok((serde_json::json!({ "devices": devices }), false))
+                let peers = self
+                    .snapshot
+                    .navigator
+                    .peers
+                    .iter()
+                    .map(crate::peer_machines::answer)
+                    .collect::<Vec<_>>();
+                let guest_panes = self
+                    .snapshot
+                    .navigator
+                    .guest_panes
+                    .iter()
+                    .map(crate::guest_panes::answer)
+                    .collect::<Vec<_>>();
+                Ok((
+                    serde_json::json!({
+                        "devices": devices,
+                        "peers": peers,
+                        "guest_panes": guest_panes,
+                    }),
+                    false,
+                ))
             }
             DeviceCommand::Add { ssh_alias, name } => {
                 let ssh_alias = ssh_alias.trim().to_owned();
@@ -1053,6 +1133,8 @@ impl Runtime {
                     ssh_alias,
                     host_consent: false,
                     wsl_distro: None,
+                    // A terminal registers only; its own `switch` follows.
+                    switch_first: false,
                 };
                 let id = self.register_device(payload).map_err(refused)?;
                 let device = self

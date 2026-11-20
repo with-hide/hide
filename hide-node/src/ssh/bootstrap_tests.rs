@@ -353,6 +353,47 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
     );
 }
 
+/// Two registrations of one device account connect at once, so two
+/// installs of one build make its version folder at the same moment: the
+/// one that finds the folder already made by the other uses it rather than
+/// failing as a folder that could not be made.
+#[test]
+fn installs_of_one_build_at_once_share_the_folder_either_makes() {
+    let device = Device::new();
+    let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, "helper 1");
+    for round in 0..8 {
+        let root = format!("~/.hide/helper-{round}");
+        let mut pipes: Vec<_> = (0..3).map(|_| device.connect("")).collect();
+        let facts = probe(&mut pipes[0], soon()).unwrap();
+        for pipe in &mut pipes[1..] {
+            probe(pipe, soon()).unwrap();
+        }
+        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let together = std::sync::Barrier::new(pipes.len());
+        let results: Vec<_> = std::thread::scope(|scope| {
+            let installs: Vec<_> = pipes
+                .iter_mut()
+                .map(|pipe| {
+                    let (root, payload, facts, together) = (&root, &payload, &facts, &together);
+                    scope.spawn(move || {
+                        together.wait();
+                        install(pipe, root, &facts.home, payload, facts.unpacks)
+                            .map(|installed| installed.helper_path)
+                    })
+                })
+                .collect();
+            installs
+                .into_iter()
+                .map(|install| install.join().unwrap())
+                .collect()
+        });
+        for result in results {
+            let helper = result.unwrap_or_else(|error| panic!("round {round}: {error}"));
+            assert_eq!(std::fs::read(&helper).unwrap(), b"helper 1");
+        }
+    }
+}
+
 /// with-hide/hide-private#582: a device that unpacks gzip is sent each
 /// file packed, and it lands as the same bytes; one that does not is sent
 /// the bytes as they are. Either way the install answers what crossed the
@@ -448,6 +489,31 @@ fn an_install_cut_off_mid_file_leaves_no_half_file_in_use() {
     );
 }
 
+/// A link that ends before the install finishes is told apart from a
+/// device that refused a step.
+#[test]
+fn an_install_whose_link_ends_names_the_ending() {
+    let device = Device::new();
+    let packages = device.packages(std::env::consts::OS, std::env::consts::ARCH, "helper 1");
+    let mut pipe = device.connect("");
+    let facts = probe(&mut pipe, soon()).unwrap();
+    let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+    std::process::Command::new("kill")
+        .arg(device.pid.get().to_string())
+        .status()
+        .unwrap();
+    let Err(EstablishError::Install { stop, reason }) = install(
+        &mut pipe,
+        "~/.hide/helper",
+        &facts.home,
+        &payload,
+        facts.unpacks,
+    ) else {
+        panic!("an install over an ended link succeeded");
+    };
+    assert_eq!(stop, hide_node_link::device::InstallStop::Ended, "{reason}");
+}
+
 /// The install folder and every folder above it must be ones no other
 /// account can change.
 #[test]
@@ -460,13 +526,17 @@ fn an_install_under_a_folder_others_can_change_is_refused() {
     let mut pipe = device.connect("");
     let facts = probe(&mut pipe, soon()).unwrap();
     let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-    let Err(EstablishError::Install(reason)) = install(
+    let Err(EstablishError::Install {
+        stop: hide_node_link::device::InstallStop::Refused,
+        reason,
+    }) = install(
         &mut pipe,
         "~/open/helper",
         &facts.home,
         &payload,
         facts.unpacks,
-    ) else {
+    )
+    else {
         panic!("an install under a folder anyone can change was accepted");
     };
     assert!(reason.contains("chmod go-w"), "{reason}");
@@ -613,7 +683,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
 
     std::fs::remove_dir_all(&version).unwrap();
     std::os::unix::fs::symlink(&outside, &version).unwrap();
-    let Err(EstablishError::Install(reason)) = install_once() else {
+    let Err(EstablishError::Install { reason, .. }) = install_once() else {
         panic!("an install through a link below the install folder was accepted");
     };
     assert!(reason.contains("is a link"), "{reason}");
@@ -622,7 +692,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
     std::fs::remove_file(&version).unwrap();
     std::fs::create_dir(&version).unwrap();
     std::fs::set_permissions(&version, std::fs::Permissions::from_mode(0o770)).unwrap();
-    let Err(EstablishError::Install(reason)) = install_once() else {
+    let Err(EstablishError::Install { reason, .. }) = install_once() else {
         panic!("an install into a folder others can change was accepted");
     };
     assert!(reason.contains("can be changed"), "{reason}");

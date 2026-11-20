@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeHold, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeSpans, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
 import { kindWord } from "./missionLine";
 import { missionEntry, rowLine, rowLineText } from "./missionList";
 import { missionEntries } from "./mobile/missionModel";
@@ -231,6 +231,18 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
     expect(missionTone(mission("m", { status: "done", decision: "stale ask" }))).toBe("done");
     expect([missionTone(mission("m", { status: "planning" })), missionTone(mission("m", { status: "merge_wait" })), missionTone(mission("m", { status: "cancelled" }))]).toEqual(["waiting", "review", "cancelled"]);
   });
+
+  it("turns a running mission's chip to the stopped colour once a node stopped and none works, and keeps it working while one still moves (operator decision 2026-11-20)", () => {
+    const stopped = { status: "working" as const, work: { state: "stopped" as const, cause: null, since_unix_ms: 1 } };
+    const tones = [
+      [node("a", stopped), node("b", { status: "working", work: { state: "working" } })],
+      [node("a", stopped), node("b", { status: "done" }), node("c")],
+      // A node resting on a review still moves; nothing stopped is not a stall.
+      [node("a", { status: "working", work: { state: "waiting", on: { kind: "review" } } }), node("b", stopped)],
+      [node("a", { status: "done" }), node("b")],
+    ].map((nodes) => missionTone(mission("m", { nodes })));
+    expect(tones).toEqual(["working", "stopped", "working", "working"]);
+  });
 });
 
 describe("what a running mission's pane says (PRD mission-plan-visibility B9, B10)", () => {
@@ -436,6 +448,9 @@ describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
     expect(cardLine(m, m.nodes[1]!, null, t)).toEqual({ text: "waiting for #1703", attention: false });
     // The nodes it names are the core's `waiting_on`, never worked out again from `depends_on`.
     expect(cardLine(m, { ...m.nodes[1]!, waiting_on: { kind: "start" } }, null, t)).toBeNull();
+    // mission-82: one waiting on a finish line names it after its node, and once free to start it says where it stacks.
+    expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "nodes", keys: ["core:c1"] } }, null, t)?.text).toBe("waiting for #1703 c1");
+    expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } }, null, t)?.text).toBe("can start · stacked on core");
     const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "planned" });
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
@@ -719,13 +734,34 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
   });
 });
 
+describe("where a node's time went (mission-82)", () => {
+  const minute = 60_000;
+  const end = 1_000 * minute;
+  const at = (minutes: number) => end - minutes * minute;
+  it("splits at its start and where its worker's lines first all stood met, counting a running span to the end", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }), end)).toEqual({ work: 90 * minute, review: 510 * minute, wait: 180 * minute });
+    expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(200), own_met_at_unix_ms: at(110), finished_at_unix_ms: at(20) }), end)).toEqual({ work: 90 * minute, review: 90 * minute, wait: null });
+    expect(nodeSpans(node("n", { status: "working", started_at_unix_ms: at(40), ready_at_unix_ms: at(40) }), end)).toEqual({ work: 40 * minute, review: null, wait: null });
+    expect(nodeSpans(node("n", { status: "planned", ready_at_unix_ms: at(25) }), end)).toEqual({ work: null, review: null, wait: 25 * minute });
+  });
+  it("counts a node back at work from a finish from when it went back, not the time it stood done", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(1000), started_at_unix_ms: at(1000), worked_at_unix_ms: at(60), own_met_at_unix_ms: at(20) }), end)).toEqual({ work: 40 * minute, review: 20 * minute, wait: null });
+  });
+  it("leaves out what the record cannot say: a finished node from before the stamp, and a node that could not start yet", () => {
+    expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    // Its wait alone never stands in for the total of a node that started.
+    expect(nodeSpans(node("n", { status: "done", ready_at_unix_ms: at(480), started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    expect(nodeSpans(node("n", { status: "planned" }), end)).toBeNull();
+  });
+});
+
 describe("a node's warnings", () => {
   // hide-private issue 552: the card shows the first warning's short word
   // with `+n` for the rest, and its hover says each in full as told to the
   // Conductor; a dropped node or a cancelled mission warns of nothing.
   const warned = node("n", {
     status: "working",
-    review_fails: 3,
+    review_rounds: { line: "review", rounds: 3, limit: 3 },
     warnings: [
       { kind: "review_fails", from_unix_ms: 1, since_unix_ms: 1, told_unix_ms: 1 },
       { kind: "no_push", from_unix_ms: 0, since_unix_ms: 95 * 60_000, told_unix_ms: 95 * 60_000 },
@@ -734,10 +770,15 @@ describe("a node's warnings", () => {
 
   it("names the first on the card and each in full", () => {
     expect(warningWords(mission("m"), warned, t)).toEqual({
-      short: "Review FAIL ×3 +1",
-      full: ["Warned the Conductor: review failed 3 times in a row", "Warned the Conductor: no push for 95 minutes"],
+      short: "Review limit 3/3 +1",
+      full: ["Warned the Conductor: review or verify failed in round 3: the 3-round limit is reached", "Warned the Conductor: no push for 95 minutes"],
     });
     expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("No push");
+  });
+
+  it("leaves out an older core's review warning, which carries no rounds", () => {
+    expect(warningWords(mission("m"), { ...warned, review_rounds: undefined }, t)).toEqual({ short: "No push", full: ["Warned the Conductor: no push for 95 minutes"] });
+    expect(warningWords(mission("m"), { ...warned, review_rounds: null, warnings: [warned.warnings![0]!] }, t)).toBeNull();
   });
 
   it("says a stopped worker's warning with how long and why (mission-56)", () => {

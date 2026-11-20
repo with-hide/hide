@@ -195,6 +195,18 @@ export type HostBridge = {
   /** Opens Hide's page of the system's notification settings (macOS). */
   openNotificationSettings(): void;
   /**
+   * Whether the Windows firewall rules that let same-network machines reach
+   * this PC are in place (PRD device-connect-iroh B32); `not_used` outside
+   * Windows. Absent in an older host.
+   */
+  firewallState?(): Promise<FirewallState>;
+  /**
+   * Asks Windows once, through its permission prompt, for those rules: when
+   * the operator shares this PC, allows its first pairing, or presses
+   * [허용하기] on a device's details. Never at login.
+   */
+  allowFirewall?(): Promise<FirewallAnswer>;
+  /**
    * Hands the host how many root agents are in enabled notification groups, for the app icon
    * (the Dock badge, the Windows taskbar overlay); zero clears it. Reported
    * once the page holds a live snapshot, which is also when the host hands
@@ -297,6 +309,11 @@ export const CHECK_UPDATES_COMMAND = "check_updates";
  * notification service, PRD first-run-onboarding D-24), `unknown` where macOS
  * has one Hide could not read.
  */
+/** Whether the Windows firewall rules for same-network machines are in place (`desktop/src/main/firewall.ts`). */
+export type FirewallState = "allowed" | "missing" | "no_port" | "not_used" | "unknown";
+/** What one ask of Windows for those rules came to. */
+export type FirewallAnswer = "allowed" | "declined" | "failed" | "not_used";
+
 export type NotificationPermission = "granted" | "denied" | "not_determined" | "unknown" | "unsupported" | "no_service";
 
 declare global {

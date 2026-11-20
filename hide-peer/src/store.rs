@@ -439,6 +439,28 @@ pub enum KnownState {
     PausedByMe,
     /// This machine removed it and keeps telling the host until it answers.
     RevokePending,
+    /// The host says it holds no grant for this machine: it removed it, or
+    /// the pairing never settled there. Nothing is dialed and nothing opens
+    /// until the operator pairs again, which replaces this record, or
+    /// removes it (B4, B51).
+    Unpaired,
+}
+
+impl KnownState {
+    /// Whether this machine itself keeps its side shut, whatever the host
+    /// grants.
+    pub fn held_back(self) -> bool {
+        matches!(
+            self,
+            Self::PausedByMe | Self::RevokePending | Self::Unpaired
+        )
+    }
+
+    /// Whether the host is dialed again after a drop. A removal still has
+    /// to reach it; a pause and a pairing the host dropped do not.
+    pub fn dialed(self) -> bool {
+        !matches!(self, Self::PausedByMe | Self::Unpaired)
+    }
 }
 
 /// A host this machine is a guest of.

@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::core_install::starter::CoreStarter;
 use crate::core_move::handover;
-use crate::core_move::starter::CoreStarter;
 
 const USAGE: &str = "usage: hided core-update [--state-dir <dir>] --previous <hided> --intent <id>";
 
@@ -39,7 +39,7 @@ pub const OUTPUT_CAP: usize = 64 * 1024;
 
 /// A new update's intent id.
 pub fn new_intent() -> String {
-    crate::core_move::new_intent().replacen("move-", "update-", 1)
+    crate::core_install::new_intent("update")
 }
 
 /// What an update's run prints, its one line on standard output. The
@@ -91,7 +91,7 @@ struct Args {
 
 fn parse(args: &[OsString]) -> Result<Args, String> {
     let flags =
-        crate::core_move::flags::parse(args, &["--state-dir", "--previous", "--intent"], USAGE)?;
+        crate::core_install::flags::parse(args, &["--state-dir", "--previous", "--intent"], USAGE)?;
     Ok(Args {
         state_dir: flags.state_dir,
         previous: flags.previous.ok_or(USAGE)?,

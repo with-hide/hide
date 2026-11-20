@@ -48,7 +48,7 @@ function useAgentsByPane(): Map<string, AgentRow> {
 }
 
 /** The header's agent facts as plain values, so a pane redraws only when they change. */
-function agentProps(agent: AgentRow | undefined) {
+export function agentProps(agent: AgentRow | undefined) {
   return { agentKind: agent?.agent_kind ?? null, markSymbol: agent?.mark ?? null, markStatus: agent?.status_code ?? null, markTone: agent ? markTone(agent) : "", lettersWaiting: agent?.letters_waiting ?? 0 };
 }
 

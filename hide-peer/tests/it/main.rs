@@ -10,6 +10,7 @@ mod delivery;
 mod dial;
 mod grants;
 mod pairing;
+mod pairings;
 mod raw;
 
 use std::future::Future;

@@ -38,17 +38,13 @@ struct Target {
 
 impl Target {
     fn new() -> Self {
-        // The test-only keys are read only under a HOME in `/tmp`
-        // (`hide_kit::layout::fixture_home`); the folder goes with the test.
-        let root = tempfile::Builder::new()
-            .prefix("hcmc-")
-            .tempdir_in("/tmp")
-            .unwrap();
+        // The test-only keys are read only under a fixture HOME; the
+        // folder goes with the test.
+        let root = crate::fixtures::fixture_root("hcmc-");
         let home = hide_platform::fs::identity::canonical(root.path())
             .unwrap()
             .join("home");
-        fs::create_dir_all(&home).unwrap();
-        fs::write(home.join(hided::env::FIXTURE_HOME_MARKER), "").unwrap();
+        crate::fixtures::fixture_home(&home);
         let shell = home.join("login-shell");
         stand_in(
             &shell,

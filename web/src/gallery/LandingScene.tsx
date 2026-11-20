@@ -35,6 +35,7 @@ import { MobileTab } from "../MobileTab";
 import { OverviewPage } from "../Overview";
 import { DevicesTab } from "../settings/DevicesTab";
 import { Sidebar } from "../sidebar";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import { useShellStore } from "../store";
 import { PALETTE_HIDE_CLASS } from "../theme";
 import { feedChunks, terminalFor } from "../terminals";
@@ -156,7 +157,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
   }, [shot]);
 
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
+    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
     useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");

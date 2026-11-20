@@ -23,6 +23,8 @@ import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "
 import { FirstRunWizard } from "./FirstRunWizard";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
+import { PairingDialogs } from "./PairingDialogs";
+import { DeviceSwitchDialogs, DeviceSwitchStrip } from "./settings/DeviceSwitch";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
 import { GroupNameDialog } from "./AgentGroupControls";
@@ -49,6 +51,8 @@ import { useUiStore } from "./ui";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 import { DeskScreen } from "./DeskScreen";
 import { MissionScreen } from "./MissionScreen";
+import { AutomationScreen } from "./AutomationScreen";
+import { configureAutomationCalls } from "./automationCall";
 import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
 
@@ -75,6 +79,7 @@ export function App() {
     });
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);
+    configureAutomationCalls(session.dispatch);
     configurePaneVisits(actions.paneVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {
@@ -287,6 +292,8 @@ export function App() {
     ["inline_starts", <InlineStartHost />],
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
+    ["pairing", <PairingDialogs actions={actions} />],
+    ["device_switch_dialogs", <DeviceSwitchDialogs actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],
@@ -306,6 +313,7 @@ export function App() {
             <TitleRow actions={actions} />
           </RenderBoundary>
           {leftOut(["connection", <ConnectionBadge actions={actions} />])}
+          {leftOut(["device_switch", <DeviceSwitchStrip actions={actions} />])}
           <div className="flex min-h-0 flex-1">
             <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
               <Sidebar actions={actions} />
@@ -414,7 +422,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
   return (
     <>
       <OpeningStatus actions={actions} />
-      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : <OverviewPage actions={actions} />}
+      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : screen.kind === "automations" ? <AutomationScreen actions={actions} /> : <OverviewPage actions={actions} />}
     </>
   );
 }

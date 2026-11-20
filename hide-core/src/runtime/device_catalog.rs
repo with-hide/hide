@@ -1433,7 +1433,8 @@ impl Runtime {
     }
 
     /// Sends the terminal of each of `device`'s registrations whose checkout
-    /// is now confirmed; one still waiting for the helper's facts waits on.
+    /// is now confirmed; one still waiting for the device's first session or
+    /// for the helper's facts waits on.
     pub(super) fn open_registration_terminals(&mut self, device: &str) {
         let mut waiting = Vec::new();
         self.registration_terminals.retain(|wanted| {
@@ -1463,6 +1464,18 @@ impl Runtime {
                 .get(device)
                 .is_some_and(|facts| facts.in_flight.is_none() && facts.unavailable.is_some());
             let (workspace_id, checkout_id, label) = match checkout {
+                // The device's session lists its checkouts, and a project
+                // opened the moment the device answered is registered before
+                // the first one arrives: it waits for that session
+                // (`apply_remote_session`) rather than being judged on none.
+                None if !self.device_raw_sessions.contains_key(device) => {
+                    self.registration_terminals.push_back(RegistrationTerminal {
+                        target: device.to_owned(),
+                        path,
+                        request_id: None,
+                    });
+                    continue;
+                }
                 None => {
                     self.skip_registration_terminal(device, &path, "its checkout is not listed");
                     continue;

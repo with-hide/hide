@@ -36,6 +36,7 @@ fn restarted(path: &std::path::Path) -> Runtime {
             local_issues_path: None,
             effects_held: false,
             machine_name: None,
+            windows_drives: None,
             account_state_folder: false,
         },
         environment::EnvironmentReport {

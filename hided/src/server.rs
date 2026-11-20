@@ -139,6 +139,11 @@ pub struct AppState {
     pub daemon_info: Arc<Value>,
     /// Settings > Mobile and the phones it pairs (`mobile/`).
     pub mobile: Arc<crate::mobile::Mobile>,
+    /// This machine's endpoint for other Hides (`peer_host`).
+    pub peers: Arc<crate::peer_host::PeerHost>,
+    /// Pairing this machine with other Hides, for Settings > Devices
+    /// (`pairing`).
+    pub pairing: Arc<crate::pairing::Pairing>,
     /// The desktop windows' agent notifications (`desktop_notices.rs`).
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).
@@ -147,6 +152,9 @@ pub struct AppState {
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
     pub pane_sizes: Arc<crate::pane_sizes::PaneSizes>,
+    /// What the pane bootstrap's and the node attach socket's accept threads
+    /// do, for `/health`.
+    pub listeners: Arc<crate::accepting::CoreListeners>,
     /// A `hide <path>` that brought a project in front asks this machine's
     /// windows to come forward too, showing it (`project_open`): each sends
     /// its screen a `window_call` frame with this payload.
@@ -524,6 +532,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "open_handlers_in_flight": state.opener.in_flight(),
         "idle_remaining_secs": idle_remaining_secs(&state),
         "instance": state.seat.instance(),
+        "listeners": state.listeners.report(),
     }))
 }
 
@@ -970,6 +979,23 @@ async fn screen_loop(
             return;
         }
     }
+    // Settings > Devices reads the pairings under way from one `pairing`
+    // frame. It carries a link that lets a machine in and the words two
+    // people compare, so only this machine's own windows get it: never a
+    // phone, and never a screen another machine shows of this one.
+    let mut pairing_frames = state.pairing.subscribe_frame();
+    if renderer && relay.is_none() {
+        let frame =
+            json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
+        if socket
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .is_err()
+        {
+            client_gone(&state, connection, renderer, desktop);
+            return;
+        }
+    }
     let Ok(first) = send_snapshot(&mut socket, &state, &mut have_revision, granular).await else {
         client_gone(&state, connection, renderer, desktop);
         return;
@@ -1140,6 +1166,15 @@ async fn screen_loop(
                     break;
                 }
             }
+            changed = pairing_frames.changed(), if renderer && relay.is_none() => {
+                if changed.is_err() {
+                    break;
+                }
+                let frame = json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
+                if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
             Some(frame) = device_bytes.recv() => {
                 if socket.send(frame).await.is_err() {
                     break;
@@ -1194,6 +1229,18 @@ async fn screen_loop(
                                 } else if send_file_bytes(&mut socket, &state.boundary, &state.roots, &event).await.is_err() {
                                     break;
                                 }
+                            }
+                            Ok(ClientAction::Pairing(event)) => {
+                                // Answered off this loop, which keeps the
+                                // terminals moving while a share waits for
+                                // the relay; the answer is this client's.
+                                let pairing = Arc::clone(&state.pairing);
+                                let answers = device_frames_tx.clone();
+                                let own = renderer && relay.is_none();
+                                tokio::spawn(async move {
+                                    let answer = pairing.window_event(&event, own).await;
+                                    let _ = answers.send(answer.to_string()).await;
+                                });
                             }
                             Ok(ClientAction::CoreMove(event)) => {
                                 // A node's window moves the core from its own
@@ -1265,6 +1312,9 @@ async fn screen_loop(
                                     continue;
                                 }
                                 spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
+                            Ok(ClientAction::Automation(event)) => {
+                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
                             }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
@@ -1378,6 +1428,9 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "workspace_closing" => {
+            "The folder's last terminal is still closing; wait a moment, then run the same command again with the same intent"
+        }
         "holder_cap" => {
             "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
         }
@@ -1670,6 +1723,9 @@ enum ScopedRequest {
     Mission(Box<hide_core::missions::MissionCommand>),
     /// `hide task`: the caller's session's own plan, the core's record.
     Plan(hide_core::plans::PlanCommand),
+    /// `hide automation`: the operator's automations, the core's book
+    /// (`automation_cli`).
+    Automation(Box<hide_core::automations::Call>),
     /// `hide session fold-ask`: one of the caller's session's open questions,
     /// folded with its reason in the link record.
     FoldAsk {
@@ -1727,6 +1783,7 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::Plan(..)
+                | Self::Automation(..)
                 | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
@@ -1754,6 +1811,10 @@ impl ScopedRequest {
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
+            // Reading the automations is a view; a change starts agents
+            // later with no one present.
+            Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
+            Self::Automation(..) => Need::Act,
             Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
                 Need::Agent
             }
@@ -1879,6 +1940,8 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("automation") => crate::automation_cli::from_wire(&value["call"])
+                            .map(|call| ScopedRequest::Automation(Box::new(call))),
                         Some("fold_ask") => {
                             match (value["id"].as_str(), value["reason"].as_str()) {
                                 (Some(id), Some(reason))
@@ -1964,12 +2027,14 @@ async fn scoped_client_loop(
                         Some("access_list") => Some(ScopedRequest::AccessList),
                         _ => None,
                     };
-                    // A plan carries its whole node list, so a mission
-                    // command may use the frame's full size like a letter.
+                    // A plan carries its whole node list, and an automation
+                    // its task, so a mission, plan or automation command may
+                    // use the frame's full size like a letter.
                     if command.is_none()
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "automation"
                             && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
@@ -2142,6 +2207,10 @@ async fn scoped_client_loop(
                                             );
                                             (code, next)
                                         })?
+                                }
+                                ScopedRequest::Automation(call) => {
+                                    let from_device = cap.context.device_id != core.node().as_str();
+                                    crate::automation_cli::answer(&core, *call, from_device)?
                                 }
                                 ScopedRequest::FoldAsk { id, reason } => {
                                     core.fold_ask_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
@@ -2521,6 +2590,9 @@ enum ClientAction {
     FileBytes(Value),
     /// A move of the core, which this process's supervisor takes.
     CoreMove(Value),
+    /// Something the operator does about pairing (`pairing_*`), which the
+    /// daemon's pairing answers for this client alone.
+    Pairing(Value),
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
     /// Add a project's question for a machine's node: a folder under its
@@ -2528,6 +2600,9 @@ enum ClientAction {
     /// (`importable_projects`), or where a clone or a new project would
     /// land on a device (`clone_target`, `project_target`).
     NodeAsk(Value),
+    /// A window's call on the automations that waits for the core's answer
+    /// (`automation_screen`).
+    Automation(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2592,6 +2667,7 @@ fn handle_client_text(
         Some("home_folder_list" | "importable_projects") => {
             return Ok(ClientAction::NodeAsk(event));
         }
+        Some(crate::automation_screen::KIND) => return Ok(ClientAction::Automation(event)),
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {
@@ -2777,6 +2853,20 @@ fn handle_client_text(
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.
         Some("ui_attached") => return Err("ui_attached is sent by the daemon only".to_owned()),
+        // The paired machines are what the daemon's pairing settled; a
+        // client that named them would draw machines nobody allowed.
+        Some("peer_machines") => {
+            return Err("peer_machines is sent by the daemon only".to_owned());
+        }
+        // A device's switch is the daemon's own pairing with its machine; a
+        // client that named a step would hand the device to a key nobody
+        // paired.
+        Some("device_switch") => {
+            return Err("device_switch is sent by the daemon only".to_owned());
+        }
+        Some(kind) if kind.starts_with("pairing_") => {
+            return Ok(ClientAction::Pairing(event));
+        }
         Some(kind) if kind.starts_with("mobile_") => {
             state.mobile.handle_event(connection, &event)?;
             return Ok(ClientAction::Replies(Vec::new()));
@@ -5283,6 +5373,7 @@ fn log_refusal(reason: CloseReason, extra: Option<usize>) {
 pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::JoinHandle<()> {
     let shutdown = state.shutdown.clone();
     let mobile = Arc::clone(&state.mobile);
+    let core = Arc::clone(&state.core);
     let idle_task = watch_idle(
         Idle {
             idle_secs: state.idle_secs,
@@ -5293,15 +5384,21 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             // The core's own engine is this process's, so it answers while
             // the daemon runs and keeps nothing alive; its panes do (PRD
             // engine-bundle-3-core-owns D-10).
-            live_panes: {
+            live_work: {
                 let holders = Arc::clone(state.core.pane_holders());
-                Arc::new(move || holders.live_panes())
+                let state_dir = state.core.state_dir().to_path_buf();
+                let device_connect = state.peers.device_connect();
+                Arc::new(move || {
+                    let paired = crate::always_on::paired(&state_dir, device_connect)?;
+                    Ok(holders.live_panes()? + usize::from(paired))
+                })
             },
         },
         // Mobile on with a phone paired: the phone may come back at any
-        // time and push has to keep going (PRD D-10). The idle clock starts
-        // over when that ends.
-        move || mobile.keep_alive(),
+        // time and push has to keep going (PRD D-10), and an automation on
+        // has to run at its time (PRD automations D-19). The idle clock
+        // starts over when both end.
+        move || mobile.keep_alive() || core.automations_on(),
     );
     seat.mount(router(state));
     idle_task
@@ -5314,10 +5411,11 @@ pub(crate) struct Idle {
     pub clients: Arc<AtomicUsize>,
     pub last_client_gone: Arc<Mutex<Instant>>,
     pub shutdown: crate::ending::Ending,
-    /// How many of this machine's holder panes may still run
-    /// (`hide_kit::panes::Panes::live`): they keep the daemon alive while
-    /// one may.
-    pub live_panes: Arc<dyn Fn() -> Result<usize, String> + Send + Sync>,
+    /// How many things that keep the daemon may still run: this machine's
+    /// holder panes (`hide_kit::panes::Panes::live`), and for a core, its
+    /// pairing with another machine (`always_on::paired`), whose peers reach
+    /// it with no window open (PRD device-connect-iroh D-41).
+    pub live_work: Arc<dyn Fn() -> Result<usize, String> + Send + Sync>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
@@ -5351,7 +5449,7 @@ pub(crate) fn watch_idle(
             // with no core.
             if panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL) {
                 panes_probed = Some(Instant::now());
-                let live = Arc::clone(&idle.live_panes);
+                let live = Arc::clone(&idle.live_work);
                 panes_live = tokio::task::spawn_blocking(move || panes_running(&*live))
                     .await
                     .unwrap_or(true);
@@ -5471,7 +5569,7 @@ mod tests {
                 clients: Arc::new(AtomicUsize::new(0)),
                 last_client_gone: Arc::new(Mutex::new(Instant::now())),
                 shutdown: shutdown.clone(),
-                live_panes: Arc::new(move || live.clone()),
+                live_work: Arc::new(move || live.clone()),
             },
             || false,
         );
@@ -5640,6 +5738,7 @@ mod tests {
         assert!(blank.ends_with("The shell was waited for 30 s"), "{blank}");
         for code in [
             "spawn_busy",
+            "workspace_closing",
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",

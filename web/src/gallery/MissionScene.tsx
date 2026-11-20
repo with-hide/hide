@@ -44,7 +44,8 @@ import { withCoreWaits } from "./missionWaits";
 /** The Conductor's pane, as its agent row and the mission name it. */
 const CONDUCTOR_PANE = "w1:p1";
 /** A pane state reads the map state it draws small. */
-const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan", "pane-done": "done", "pane-cancelled": "cancelled" };
+// `pane-stopped` has a node stopped while another works, `pane-all-stopped` none moving (its chip's mark turns grey), `pane-merge-wait` merges left to the operator.
+const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan", "pane-done": "done", "pane-cancelled": "cancelled", "pane-stopped": "stopped", "pane-all-stopped": "all-stopped", "pane-merge-wait": "stack" };
 
 /** The report a finished mission's Conductor left, invented for the boards, in Markdown as a Conductor writes it. */
 const REPORT = "# 이슈 정리 보고: 네 개 끝, 화면 PR까지 머지\n\n## 남은 일\n- [ ] 알림 문구 다듬기는 다음 미션으로\n\n## 검증\n- 격리 앱에서 **6개 항목** 통과\n- 머지 순서는 API, 화면";
@@ -140,8 +141,8 @@ function plan(state: string, now: number): MissionNode[] {
       node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), agent_id: "agent-1481", ...done(290, 60), branch: "fix-1481", stage: 4, landing: inMain("4f1c9a27be03"), ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass")) }),
       node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), agent_id: "agent-1487", ...done(250, 90), pr: 1506, pr_state: "merged", landing: MERGED, stage: 4, attempts: 2, ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ci("pass")) }),
       cancelled
-        ? node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2, ...finish(own(1, "새 API로 목록을 그린다", "open"), reviewed(opus("high"), "reviewer-screen", "open")) })
-        : node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api"], worker: astra("high"), agent_id: "agent-screen", ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", landing: MERGED, stage: 4, ...finish(own(1, "새 API로 목록을 그린다"), reviewed(opus("high"), "reviewer-screen"), ci("pass")) }),
+        ? node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api:c1"], worker: astra("high"), agent_id: "agent-screen", status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2, ...finish(own(1, "새 API로 목록을 그린다", "open"), reviewed(opus("high"), "reviewer-screen", "open")) })
+        : node("screen", "API 쓰는 화면: 목록·검색·필터를 새 페이지 API로 옮기기", { depends_on: ["api:c1"], worker: astra("high"), agent_id: "agent-screen", ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", landing: MERGED, stage: 4, ...finish(own(1, "새 API로 목록을 그린다"), reviewed(opus("high"), "reviewer-screen"), ci("pass")) }),
       node("together", "함께 확인", { kind: "general", preset: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(cancelled ? {} : { ...done(55, 25), agent_id: "agent-together" }), line: cancelled ? null : "6개 항목 통과", ...finish(line("verify", "verify", cancelled ? "open" : "pass", { rule: "all", checkers: [checker(sonnet, cancelled ? "open" : "pass", cancelled ? undefined : "checker-1"), checker(astra("medium"), cancelled ? "open" : "pass", cancelled ? undefined : "checker-2")] })) }),
     ];
   }
@@ -179,8 +180,8 @@ function plan(state: string, now: number): MissionNode[] {
     node("check-1487", `${no(1487)} 실제 앱 확인`, { kind: "general", preset: "verify", delivery: null, depends_on: ["fix-1487"], worker: sonnet, ...(stack ? done(16, 6) : {}), line: stack ? "5개 항목 통과" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "all", checkers: [checker(sonnet, stack ? "pass" : "open")] })) }),
     node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: decision ? "closed" : stack ? "merged" : "pending" }, status: decision ? "working" : stack ? "done" : "planned", pr: 1232, landing: stack ? OUTSIDE_LANDED : null, attention: decision ? { reason: "pr_closed", pr: 1232, to: "conductor", since_unix_ms: ago(4), on_row: false, item: false, choices: ["leave" as const, "drop" as const] } : null }),
     decision
-      ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "working", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
-      : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), agent_id: "agent-screen", launched: { agent_id: "agent-screen", agent: "codex", model: "Sol", effort: null }, pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
+      ? node("screen", "API 쓰는 화면", { depends_on: ["api:c1", "outside"], worker: astra("high"), status: "working", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
+      : node("screen", "API 쓰는 화면", { depends_on: ["api:c1", "outside"], worker: astra("high"), agent_id: "agent-screen", launched: { agent_id: "agent-screen", agent: "codex", model: "Sol", effort: null }, pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, landing: stack ? MERGE_LEFT : null, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
     node("together", "함께 확인", { kind: "general", preset: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "majority", tally: { passed: stack ? 3 : 0, total: 3 }, checkers: [checker(sonnet, stack ? "pass" : "open"), checker(astra("medium"), stack ? "pass" : "open"), checker(opus("high"), stack ? "pass" : "open")] })) }),
   ];
 }
@@ -206,11 +207,11 @@ function rejectedReview(one: MissionNode): MissionNode {
 
 /**
  * The warned state (hide-private issue 552): the rejected search fix
- * failed its review twice in a row, and the reopen fix went ninety-five
+ * failed the review round at its strength's limit, and the reopen fix went ninety-five
  * minutes with no push; Hide told the Conductor about each.
  */
 function warned(one: MissionNode, now: number): MissionNode {
-  if (one.key === "fix-1490") return { ...one, review_fails: 2, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
+  if (one.key === "fix-1490") return { ...one, review_rounds: { line: "review", rounds: 3, limit: 3 }, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
   if (one.key === "fix-1487") return { ...one, pushed_at_unix_ms: now - 95 * MINUTE, warnings: [{ kind: "no_push", from_unix_ms: now - 95 * MINUTE, since_unix_ms: now - 5 * MINUTE, told_unix_ms: now - 5 * MINUTE }] };
   return one;
 }
@@ -422,6 +423,13 @@ export function missionFixture(shown: string, now: number): { mission: Mission; 
   }
   // `close-refused`: the no-Conductor mission with every node's work finished, whose close Hide could not make because three nodes' check lines are empty.
   if (shown === "close-refused") return closeRefused(missionFixture("no-conductor", now), now);
+  // `all-stopped`: the stopped state with its last working node stopped too, so no one moves the mission.
+  if (shown === "all-stopped") {
+    const fixture = missionFixture("stopped", now);
+    const nodes = fixture.mission.nodes;
+    nodes.splice(0, nodes.length, ...nodes.map((one) => (one.status === "working" && one.work?.state === "working" ? { ...one, work: { state: "stopped" as const, cause: null, since_unix_ms: now - 3 * MINUTE } } : one)));
+    return fixture;
+  }
   // `delay`: the running mission held by a delay that ends in 40 minutes; `stall`: one of its nodes could start and was not, unsettled 31 minutes behind the safety net; `hold`: its Conductor holds one node back for nine hours.
   if (shown === "delay" || shown === "stall" || shown === "hold") return stalledOrHeld(missionFixture("running", now), now, shown);
   // `decided`: nothing is the operator's turn and the Conductor's own skips are listed; `net`: one cause on five nodes behind one safety net card.
@@ -707,10 +715,13 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
         {state === "settings" ? (
           <div className="p-xl"><SettingsPageTitle /><ConductorTab actions={actions} /></div>
         ) : pane ? (
-          <div className="flex h-(--size-pane-header) min-w-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption" data-mission-scene-pane="true">
-            <AgentMark kind="claude" />
-            <span className="truncate">Conductor</span>
-            <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
+          // The pane's container, so `width` below 440 draws the narrow pane head.
+          <div className="@container/pane">
+            <div className="flex h-(--size-pane-header) min-w-0 items-center gap-xs border-b border-border bg-muted px-sm text-caption" data-mission-scene-pane="true">
+              <AgentMark kind="claude" />
+              <span className="truncate">Conductor</span>
+              <PaneWorkChip paneId={CONDUCTOR_PANE} actions={actions} />
+            </div>
           </div>
         ) : (
           <MissionScreen actions={actions} />

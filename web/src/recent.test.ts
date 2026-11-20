@@ -108,6 +108,13 @@ describe("Recent Panels order", () => {
     expect(order().some((row) => row.startsWith("c-feature/"))).toBe(false);
   });
 
+  it("leaves out an automation's own folder, which is no project to move to", () => {
+    // PRD automations B30: the core registers that folder only so its runs can start there.
+    const own = { agent_scope: emptyScope(), id: "w-auto", label: "a-1", device_id: "local", unlisted: true, checkouts: [checkout("c-auto", "w-auto", "a-1", { t9: ["p9"] })] } as unknown as Workspace;
+    use(session("c-main", "t1", [], [...workspaces(), own]));
+    expect(order()).toEqual(["c-main/t1", "c-main/t2", "c-feature/t3", "c-notes/t4"]);
+  });
+
   it("records a commit's target, not the frames it passes through on the way", () => {
     use(session("c-main", "t1"));
     const target = displayKey("c-notes", "d1");

@@ -18,12 +18,16 @@
 use super::*;
 #[path = "bootstrap.rs"]
 pub(super) mod bootstrap;
+#[path = "guest_build.rs"]
+pub mod guest_build;
 #[path = "inbound.rs"]
 pub mod inbound;
 #[path = "kit/mod.rs"]
 mod kit;
 #[path = "link_streams.rs"]
 mod link_streams;
+#[path = "peer.rs"]
+pub mod peer;
 #[path = "wsl.rs"]
 pub mod wsl;
 use hide_node_link::HostError;
@@ -1142,10 +1146,13 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 impl HelperPackages {
-    /// A core update's install (`bootstrap::install_build`) on this
-    /// machine: this build in its version folder
+    /// A core's install on this machine: this build in its version folder
     /// under `root`, the folder a remote install of it would name, for a
-    /// core update run where the core runs (PRD core-host-node-move Q13).
+    /// core update run where the core runs (PRD core-host-node-move Q13) and
+    /// for a paired machine's login item (PRD device-connect-iroh D-41). It
+    /// carries what a device's kit carries, the pane holder and on Windows
+    /// its ConPTY runtime included, since the core runs its panes from the
+    /// holder beside it (`Holders::local_source`).
     /// A file already there is kept only when its bytes are this build's;
     /// any other is replaced whole. Answers where the build's `hided` is
     /// (`hided.exe` on Windows).
@@ -1153,7 +1160,7 @@ impl HelperPackages {
         use hide_platform::fs::atomic::{self, DurableAccess};
         use hide_platform::fs::private;
         let payload = self
-            .payload(std::env::consts::OS, std::env::consts::ARCH)
+            .payload_for(std::env::consts::OS, std::env::consts::ARCH)
             .map_err(|error| error.to_string())?;
         if !payload.missing.is_empty() {
             return Err(format!(
@@ -1169,9 +1176,20 @@ impl HelperPackages {
             )
         })?;
         for file in &payload.files {
-            let path = version_dir.join(&file.relative);
+            // A part may sit in a folder of the build (the holder's ConPTY
+            // runtime, `holder-conpty/x64/OpenConsole.exe`), named with `/`
+            // on every system.
+            let path = file
+                .relative
+                .split('/')
+                .fold(version_dir.clone(), |path, name| path.join(name));
             if std::fs::read(&path).is_ok_and(|bytes| hex_digest(&bytes) == file.digest) {
                 continue;
+            }
+            if let Some(folder) = path.parent() {
+                private::create_dir_all(folder).map_err(|error| {
+                    format!("The folder {} could not be made: {error}", folder.display())
+                })?;
             }
             let access = if file.executable {
                 DurableAccess::PrivateExecutable
@@ -1268,14 +1286,36 @@ pub fn over_local_stream(
     panes: Option<PaneHook>,
     on_close: Box<dyn FnOnce(String) + Send + 'static>,
 ) -> std::io::Result<RemoteHost> {
+    let shutdown = stream.shutdown_handle();
+    over_stream(
+        target,
+        Box::new(stream.duplicate()),
+        Box::new(stream),
+        Box::new(move || shutdown.shutdown()),
+        panes,
+        on_close,
+    )
+}
+
+/// A link over any blocking byte stream: a local stream's two handles, or
+/// the node link stream of a connection to another Hide (PRD
+/// device-connect-iroh D-79). `reading` is read on a thread of its own
+/// until it ends; `close` ends the stream from outside, which ends that
+/// read, and runs once as the link goes.
+pub fn over_stream(
+    target: &str,
+    mut reading: Box<dyn std::io::Read + Send>,
+    writing: Box<dyn std::io::Write + Send>,
+    close: Box<dyn FnOnce() + Send>,
+    panes: Option<PaneHook>,
+    on_close: Box<dyn FnOnce(String) + Send + 'static>,
+) -> std::io::Result<RemoteHost> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("node-link")
         .enable_all()
         .build()?;
     let runtime = Arc::new(RemoteRuntime(Some(runtime)));
-    let shutdown = stream.shutdown_handle();
-    let mut reading = stream.duplicate();
     let (chunks, arrivals) = tokio::sync::mpsc::channel::<Vec<u8>>(LOCAL_READ_CHUNKS);
     std::thread::Builder::new()
         .name("node-link-read".into())
@@ -1294,14 +1334,14 @@ pub fn over_local_stream(
                 }
             }
         })?;
-    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter::new(stream));
+    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter::new(writing));
     // The read thread ends with the stream, whichever side ended it. The
-    // stream is shut down as this closure goes, run or not: a link dropped
+    // stream is closed as this closure goes, run or not: a link dropped
     // right after its close (a refused node) tears its runtime down before
     // the reader runs it, and the peer would otherwise never read the end.
-    let shutdown = ShutdownOnDrop(shutdown);
+    let close = CloseOnDrop(Some(close));
     let ended = Box::new(move |reason: String| {
-        drop(shutdown);
+        drop(close);
         on_close(reason);
     });
     Ok(start_reader(
@@ -2063,12 +2103,14 @@ fn close_unless_writing(input: &Mutex<Option<Box<dyn std::io::Write + Send>>>) -
     }
 }
 
-/// Shuts a local link's stream down when it goes.
-struct ShutdownOnDrop(hide_platform::ipc::ShutdownHandle);
+/// Closes a link's stream when it goes.
+struct CloseOnDrop(Option<Box<dyn FnOnce() + Send>>);
 
-impl Drop for ShutdownOnDrop {
+impl Drop for CloseOnDrop {
     fn drop(&mut self) {
-        self.0.shutdown();
+        if let Some(close) = self.0.take() {
+            close();
+        }
     }
 }
 
@@ -2087,9 +2129,9 @@ struct BlockingWriter {
 }
 
 impl BlockingWriter {
-    fn new(stream: hide_platform::ipc::LocalStream) -> Self {
+    fn new(stream: Box<dyn std::io::Write + Send>) -> Self {
         Self {
-            stream: Arc::new(std::sync::Mutex::new(Some(Box::new(stream)))),
+            stream: Arc::new(std::sync::Mutex::new(Some(stream))),
             writing: None,
         }
     }
@@ -2974,11 +3016,12 @@ mod tests {
         );
     }
 
-    /// A core update installs this build in its version folder and answers
-    /// the `hided` it wrote there, under its system's program name, which
-    /// is what the update then starts.
+    /// A core install, for an update or a login item, puts this build with
+    /// its pane holder in its version folder and answers the `hided` it
+    /// wrote there, under its system's program name, which is what the
+    /// update or the item then starts.
     #[test]
-    fn a_core_update_answers_the_hided_it_installed_under_its_exe_name() {
+    fn a_core_install_answers_the_hided_it_installed_under_its_exe_name_with_its_holder() {
         let directory = tempfile::tempdir().unwrap();
         own_package(directory.path());
         let root = tempfile::tempdir().unwrap();
@@ -2989,6 +3032,21 @@ mod tests {
             Some(device_program(HELPER_NAME, std::env::consts::OS).as_str())
         );
         assert_eq!(std::fs::read(&installed).unwrap(), HELPER_NAME.as_bytes());
+        // The core runs its panes from the holder beside it, so the build
+        // carries it, and on Windows its ConPTY runtime.
+        let folder = installed.parent().unwrap();
+        let holder = folder.join(device_program(HOLDER_NAME, std::env::consts::OS));
+        assert_eq!(std::fs::read(holder).unwrap(), HOLDER_NAME.as_bytes());
+        if cfg!(windows) {
+            // The ConPTY runtime's parts sit in folders of their own.
+            assert!(
+                folder
+                    .join(hide_kit::holders::CONPTY_SOURCE)
+                    .join("x64")
+                    .join("OpenConsole.exe")
+                    .is_file()
+            );
+        }
     }
 
     fn relative(payload: &Payload) -> Vec<(String, bool)> {

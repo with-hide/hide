@@ -258,8 +258,11 @@ fn run_coordinator(
                         // core's, or a node's that dials it.
                         changed
                             | match &context.target {
+                                // Automations run on this core's own machine
+                                // (PRD automations D-21).
                                 SessionSyncTarget::Local { .. } => {
                                     guard.tick_agent_sleep(now_unix_ms)
+                                        | guard.tick_automations(now_unix_ms)
                                 }
                                 SessionSyncTarget::Remote { target_id, .. } => {
                                     guard.tick_node_agent_sleep(target_id, now_unix_ms)
@@ -638,6 +641,10 @@ fn publish_session(
                 let tokens =
                     guard.observe_device_session(target_id, &mut payload, overlay.as_ref());
                 guard.end_unresumed(target_id, None, &payload, not_resumed);
+                // The restore after the device's switch said what it closed.
+                if let Some(left) = &session.published_state().not_carried {
+                    guard.settle_switch_open(target_id, left);
+                }
                 tokens
             }
             Err(_) => return false,

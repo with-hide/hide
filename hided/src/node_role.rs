@@ -1441,6 +1441,7 @@ fn serve(
                 let home = hide_platform::host::home_dir().ok();
                 hide_host::serve::KitPlace::of_program(&exe, home.as_deref())
             }),
+            panes: None,
         },
     )
     .map(|()| "link_closed".to_owned())

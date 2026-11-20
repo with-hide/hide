@@ -354,9 +354,11 @@ pub enum WaitingOn {
     Decision,
     /// A node it depends on was dropped.
     Blocked,
-    /// The nodes it depends on that are not done, in its order.
+    /// The dependencies it names that are not met
+    /// (`Mission::dependency_met`), in its order, each written as the plan
+    /// wrote it: `<node>`, or `<node>:<line>` for a finish line of it.
     Nodes {
-        keys: Vec<String>,
+        keys: Vec<Dependency>,
     },
     /// Nothing before it: it waits to be started.
     Start,
@@ -367,6 +369,11 @@ pub enum WaitingOn {
     Ci,
     /// The merge of its pull request.
     Merge,
+    /// The merge of the pull request under it first: it stacks on `node`
+    /// (`Mission::stacks_on`), whose work has not reached main.
+    Below {
+        node: String,
+    },
     /// Every line is met and nothing waits on GitHub: the Conductor's move.
     Conductor,
 }
@@ -560,8 +567,9 @@ pub struct Woken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningKind {
-    /// The review line failed `mission_health::REVIEW_FAILS_THAT_WARN` times
-    /// in a row.
+    /// The review or verification line failed
+    /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
+    /// (`MissionNode::review_fails`).
     ReviewFails,
     /// The node worked `mission_health::QUIET_THAT_WARNS_MS` with no push and its pull
     /// request does not just wait on others.
@@ -586,7 +594,7 @@ impl WarningKind {
     /// stall (`warning_stood`): the one rule raising and keeping that stall
     /// read. A warning the worker's own move takes off (a push, the stopped
     /// worker at work again) stands only while no move came. A failed review
-    /// goes only once a review passes, which a worker fixing the findings
+    /// or verification goes only once that line passes, which a worker fixing the findings
     /// does not reach for a whole round, so standing says nothing of a move:
     /// it stays the Conductor's warning and never reaches the operator.
     pub fn stalls(self) -> bool {
@@ -811,6 +819,10 @@ pub struct PendingWake {
     /// The CI result a `ci` wake tells, on `head`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<CiNews>,
+    /// The finish line a `line_met` or `line_reopened` wake is about,
+    /// `<node>:<line>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<Dependency>,
     /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
     /// letter's intent with the mission and the recipient: the same facts
     /// evaluated again, after a restart or a lost save, are the same letter
@@ -867,6 +879,13 @@ pub enum WakeEvent {
     /// The operator's answer to a node's gate sent it back with their words
     /// as a defect: to the Conductor, and to the node's worker (`to`).
     GateFix,
+    /// The finish line `line` names is met and the node could start now,
+    /// stacked on the node that line is of (`Mission::stacks_on`).
+    LineMet,
+    /// Finish line `line` of the node opened again (failed, reopened, or a
+    /// check passed on a commit its work folder left, `Criterion::shown`)
+    /// after nodes that wait on it started; they go on.
+    LineReopened,
 }
 
 impl WakeEvent {
@@ -889,6 +908,8 @@ impl WakeEvent {
             Self::MaterialAsked => "material_asked",
             Self::GatePassed => "gate_passed",
             Self::GateFix => "gate_fix",
+            Self::LineMet => "line_met",
+            Self::LineReopened => "line_reopened",
         }
     }
 }
@@ -1148,7 +1169,7 @@ pub struct MissionNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
     #[serde(default)]
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<Dependency>,
     pub status: NodeStatus,
     #[serde(default)]
     pub delivery: Option<Delivery>,
@@ -1282,6 +1303,12 @@ pub struct MissionNode {
     /// What Hide itself did to the node last (D-07, D-15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide: Option<HideMark>,
+    /// Its finish-line dependencies (`<node>:<line>`) Hide last saw met, so
+    /// that a line passing is told once and a line opening again after is
+    /// told once (`runtime::mission_health::follow_lines`); at most its own
+    /// dependencies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines_met: Vec<Dependency>,
     /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub woken: Vec<Woken>,
@@ -1301,6 +1328,16 @@ pub struct MissionNode {
     /// from before it has none, and `started_at_unix_ms` stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worked_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers (`CriterionKind::worker_answers`)
+    /// first all stood passed or skipped: where its own work ended and the
+    /// review, CI and fix rounds began, the split of the node's time
+    /// (`hide mission show`, the map's panel), counted from
+    /// `worked_at_unix_ms`. Set once a run of its work, on the record or
+    /// skip that met the last of them; going back to work from a finish
+    /// starts the next run (`back_to_work`). A book from before it has none,
+    /// and a node whose lines were already met then never gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_met_at_unix_ms: Option<u64>,
     /// The warnings the node carries now, at most one of each kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<NodeWarning>,
@@ -1554,6 +1591,9 @@ impl MissionNode {
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
+        // Its time splits again from here: work until its lines stand met
+        // again, now when nothing of its own is left open.
+        self.own_met_at_unix_ms = self.own_lines_met().then_some(now);
         self.done_head = None;
         for line in &mut self.criteria {
             line.shown.clear();
@@ -1579,14 +1619,55 @@ impl MissionNode {
         }
     }
 
-    /// The node's review line's failures in a row; 0 with no review line.
-    pub fn review_fails(&self) -> u32 {
-        self.criteria
+    /// Whether every line its worker answers stands passed or skipped, with
+    /// at least one such line.
+    pub(crate) fn own_lines_met(&self) -> bool {
+        let mut own = self
+            .criteria
             .iter()
-            .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Review)
-            .map(|line| line.fails_in_a_row)
-            .max()
-            .unwrap_or(0)
+            .filter(|line| line.kind.worker_answers())
+            .peekable();
+        own.peek().is_some()
+            && own.all(|line| {
+                matches!(
+                    line.state,
+                    crate::mission_criteria::CriterionState::Pass
+                        | crate::mission_criteria::CriterionState::Skipped
+                )
+            })
+    }
+
+    /// Stamps `own_met_at_unix_ms` at `now` when a record or skip met the
+    /// last of its worker's lines, which were not all met before it
+    /// (`was_met`): a node whose lines a book from before it already held
+    /// met gets no stamp, rather than one at a later record's time.
+    pub(crate) fn note_own_met(&mut self, was_met: bool, now: u64) {
+        if self.own_met_at_unix_ms.is_none() && !was_met && self.own_lines_met() {
+            self.own_met_at_unix_ms = Some(now);
+        }
+    }
+
+    /// The node's review rounds line (`Criterion::rounds`): the review or
+    /// verification line past `limit` (`Criterion::past_limit`), a failed
+    /// one first and then the one with more rounds, else the one with the
+    /// most rounds; none
+    /// before any checker answered. The one rule the limit's warning, its
+    /// letter and the screens that count rounds read.
+    pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        let lines = || {
+            self.criteria
+                .iter()
+                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
+        };
+        lines()
+            .filter(|line| line.past_limit(limit))
+            .max_by_key(|line| {
+                (
+                    line.state == crate::mission_criteria::CriterionState::Fail,
+                    line.rounds,
+                )
+            })
+            .or_else(|| lines().max_by_key(|line| line.rounds))
     }
 }
 
@@ -1736,6 +1817,12 @@ pub struct Mission {
     /// (`Runtime::warn_missions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay_until_unix_ms: Option<u64>,
+    /// When the operator put the mission's 내 차례 row away
+    /// (`mission_put_away`): the mission stays out of its device's Needs You
+    /// until something asks them that was raised after this, so a put-away
+    /// row never hides a newer turn (operator decision 2026-11-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put_away_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
     /// The line about the operator's checkout Hide added to `report` when
@@ -1867,6 +1954,70 @@ impl Mission {
                 .is_some_and(|question| question.names(key))
     }
 
+    /// The pull-request change `node`, itself one, starts on by one of its
+    /// finish lines (`<node>:<line>`) rather than by its merge: `node`'s
+    /// branch starts from that node's branch and its pull request takes
+    /// that branch as its base. A plan names at most one node by a line
+    /// (`mission_dependency_stack_split`); none when it names none, or when
+    /// either node opens no pull request.
+    pub(crate) fn stacks_on(&self, node: &MissionNode) -> Option<&MissionNode> {
+        if !pull_change(node) {
+            return None;
+        }
+        node.depends_on
+            .iter()
+            .find(|dependency| dependency.line.is_some())
+            .and_then(|dependency| self.node(&dependency.node))
+            .filter(|lower| pull_change(lower))
+    }
+
+    /// When `key`, a dependency of a node of this mission, is met: `None`
+    /// while it is not, else when, which is none when the record cannot say
+    /// (a key naming no node holds nothing back, and a book may keep no
+    /// finish time). A plain key is met when its node is done, at its
+    /// finish, and `<node>:<line>` then at the line's record if it came
+    /// first; `<node>:<line>` also when that line is met now as its owner
+    /// shows it (`Criterion::met` against the node's heads, read into
+    /// `lines` by `Runtime::lines_now`), at the line's record, so a check
+    /// line passed on an older commit is open again. A dropped node meets
+    /// nothing. The one rule a planned node waits by (`waiting_on`), could
+    /// start by (`mission_health::could_start`) and is told about by
+    /// (`mission_health::follow_lines`).
+    pub(crate) fn dependency_met(
+        &self,
+        key: &Dependency,
+        lines: &[LinesNow],
+    ) -> Option<Option<u64>> {
+        let Some(at) = self.nodes.iter().position(|node| node.key == key.node) else {
+            return Some(None);
+        };
+        let before = &self.nodes[at];
+        let recorded = |line: &str| {
+            let known = before.criteria.iter().find(|known| known.key == line)?;
+            known.by.as_ref().map(|by| by.at_unix_ms)
+        };
+        match before.status {
+            // A line of a node done stays met when it was recorded, so the
+            // wait of the node behind it does not move to the finish.
+            NodeStatus::Done => {
+                let line = key.line.as_deref().and_then(recorded);
+                return Some(match (line, before.finished_at_unix_ms) {
+                    (Some(line), Some(finished)) => Some(line.min(finished)),
+                    (line, finished) => line.or(finished),
+                });
+            }
+            NodeStatus::Dropped => return None,
+            NodeStatus::Planned | NodeStatus::Working => {}
+        }
+        let line = key.line.as_deref()?;
+        let known = before.criteria.iter().find(|known| known.key == line)?;
+        // A node `lines` was not read for shows no line met.
+        let open = lines
+            .get(at)
+            .is_none_or(|now| now.unmet.iter().any(|unmet| unmet == line));
+        (!open).then(|| known.by.as_ref().map(|by| by.at_unix_ms))
+    }
+
     /// The node a spawn's intent names as its worker's,
     /// `<mission id>:<node key>` (`hide mission help`); none for another
     /// intent, such as a checker's.
@@ -1906,8 +2057,10 @@ impl crate::dag::Node for MissionNode {
     fn key(&self) -> &str {
         &self.key
     }
-    fn depends_on(&self) -> &[String] {
-        &self.depends_on
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on
+            .iter()
+            .map(|dependency| dependency.node.as_str())
     }
 }
 
@@ -1915,8 +2068,76 @@ impl crate::dag::Node for NodeInput {
     fn key(&self) -> &str {
         &self.key
     }
-    fn depends_on(&self) -> &[String] {
-        &self.depends_on
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on
+            .iter()
+            .map(|dependency| dependency.node.as_str())
+    }
+}
+
+/// Whether `node` is a change that reaches its destination through a pull
+/// request, the only node a stack holds.
+fn pull_change(node: &MissionNode) -> bool {
+    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Pr)
+}
+
+/// A node's finish lines as their owner shows them now
+/// (`Runtime::lines_now`), which a dependency on one of them reads
+/// (`Mission::dependency_met`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinesNow {
+    /// The keys of its lines not met now (`Runtime::node_unmet`).
+    pub unmet: Vec<String>,
+    /// Hide read the commit its work folder is on: a check line it cannot
+    /// read shows open, which is not known to be open again.
+    pub head_read: bool,
+}
+
+/// One entry of a node's `depends_on`, written as the plan wrote it: another
+/// node, `<node>`, met once that node is done, or one finish line of it,
+/// `<node>:<line>`, met once that line is met, or the node is done
+/// (`Mission::dependency_met`). A node key has no `:`, so each text reads one
+/// way, and a plan of plain keys reads and writes as it did.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(from = "String", into = "String")]
+pub struct Dependency {
+    pub node: String,
+    pub line: Option<String>,
+}
+
+impl From<String> for Dependency {
+    fn from(text: String) -> Self {
+        match text.split_once(':') {
+            Some((node, line)) => Self {
+                node: node.to_owned(),
+                line: Some(line.to_owned()),
+            },
+            None => Self {
+                node: text,
+                line: None,
+            },
+        }
+    }
+}
+
+impl From<&str> for Dependency {
+    fn from(text: &str) -> Self {
+        Self::from(text.to_owned())
+    }
+}
+
+impl From<Dependency> for String {
+    fn from(dependency: Dependency) -> Self {
+        dependency.to_string()
+    }
+}
+
+impl std::fmt::Display for Dependency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.line {
+            Some(line) => write!(f, "{}:{line}", self.node),
+            None => f.write_str(&self.node),
+        }
     }
 }
 
@@ -1980,8 +2201,10 @@ impl Default for ConductorSettings {
 }
 
 /// How strongly the Conductor has a mission's nodes checked: which nodes
-/// get a review or a run-it check, and how many review rounds. The Conductor
-/// follows it by `hide mission help`; the gate does not read it.
+/// get a review or a run-it check, which the Conductor follows by `hide
+/// mission help`, and how many review rounds a node gets
+/// (`Strength::review_rounds`), which Hide counts. A mission from before it
+/// counts as `Normal`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strength {
@@ -1989,6 +2212,31 @@ pub enum Strength {
     #[default]
     Normal,
     Thorough,
+}
+
+impl Strength {
+    /// Its stored spelling, which the Conductor's plan names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Normal => "normal",
+            Self::Thorough => "thorough",
+        }
+    }
+
+    /// The review rounds a node's review or verification gets at this
+    /// strength (`Criterion::rounds`): a review and its re-reviews. When the
+    /// round at the limit fails, its Conductor is told once to move the
+    /// ordinary and minor findings to follow-up issues and skip the line
+    /// (`mission_health::warn_acts`). The one place these numbers live;
+    /// `hide mission help` (Verification strength) says the same.
+    pub fn review_rounds(self) -> u32 {
+        match self {
+            Self::Fast => 1,
+            Self::Normal => 3,
+            Self::Thorough => 4,
+        }
+    }
 }
 
 fn default_clean_merged() -> bool {
@@ -2717,7 +2965,7 @@ pub struct NodeInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
     #[serde(default)]
-    pub depends_on: Vec<String>,
+    pub depends_on: Vec<Dependency>,
     #[serde(default)]
     pub delivery: Option<Delivery>,
     #[serde(default)]
@@ -3140,9 +3388,28 @@ pub(crate) fn apply_plan(
             }
         }
     }
+    // A node stacks on one branch: its finish-line dependencies name one node.
+    for node in &input.nodes {
+        let mut by_line = node
+            .depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_some())
+            .map(|dependency| dependency.node.as_str());
+        if let Some(first) = by_line.next()
+            && by_line.any(|other| other != first)
+        {
+            return Err(crate::coordination::refusal(
+                "mission_dependency_stack_split",
+                &node.key,
+            ));
+        }
+    }
     let edges = crate::dag::check_edges(&input.nodes);
-    if matches!(edges, Err(crate::dag::Refusal::Unknown { .. })) {
-        return Err("mission_dependency_unknown".into());
+    if let Err(crate::dag::Refusal::Unknown { node, dependency }) = &edges {
+        return Err(crate::coordination::refusal(
+            "mission_dependency_unknown",
+            &format!("{node} → {dependency}"),
+        ));
     }
     // Each node at most once, so the order is never longer than the plan.
     let mut ordered = BTreeSet::new();
@@ -3155,6 +3422,24 @@ pub(crate) fn apply_plan(
     }
     if edges.is_err() {
         return Err("mission_dependency_cycle".into());
+    }
+    // A stacked pull request merges after the one under it; a node the
+    // order leaves out merges after every node it names
+    // (`mission_landing::landing_order`).
+    let merged_at = |key: &str| input.merge_order.iter().position(|named| named == key);
+    for node in &input.nodes {
+        if let Some(lower) = node
+            .depends_on
+            .iter()
+            .find(|dependency| dependency.line.is_some())
+            && let Some(upper) = merged_at(&node.key)
+            && merged_at(&lower.node).is_none_or(|below| upper < below)
+        {
+            return Err(crate::coordination::refusal(
+                "mission_merge_order_stack",
+                &node.key,
+            ));
+        }
     }
     // A node that ran keeps its record; one that is gone from the plan must
     // be dropped first, so a replan cannot hide work that was done (B28).
@@ -3217,9 +3502,11 @@ pub(crate) fn apply_plan(
                 round: 0,
                 hide: None,
                 woken: Vec::new(),
+                lines_met: Vec::new(),
                 launched: None,
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
+                own_met_at_unix_ms: None,
                 warnings: Vec::new(),
                 hold: None,
                 operator_merge: None,
@@ -3276,6 +3563,21 @@ pub(crate) fn apply_plan(
             node
         })
         .collect();
+    // A finish line a node waits on is one its node has after this plan.
+    for node in &next.nodes {
+        for dependency in &node.depends_on {
+            if let Some(line) = &dependency.line
+                && next
+                    .node(&dependency.node)
+                    .is_none_or(|lower| !lower.criteria.iter().any(|known| known.key == *line))
+            {
+                return Err(crate::coordination::refusal(
+                    "mission_dependency_line_unknown",
+                    &format!("{} → {dependency}", node.key),
+                ));
+            }
+        }
+    }
     // The question a gate asked goes with that gate when the plan changes
     // or takes it away, so the next gate can ask; a question of the
     // Conductor's own stays (PRD mission-human-gate D-15, B14).
@@ -3884,6 +4186,15 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_dependency_unknown" | "mission_dependency_cycle" => {
             "Check depends_on and merge_order: they must name other nodes of the plan, merge_order each at most once, without a cycle"
         }
+        "mission_dependency_line_unknown" => {
+            "Name a finish line the node has, as <node>:<line> with a key hide mission show <node> lists (c1, check, review, verify); a line Hide adds later, such as ci, cannot be named before it exists"
+        }
+        "mission_dependency_stack_split" => {
+            "A node stacks on one node only: name finish lines of one node in depends_on, and wait on any other by its key alone"
+        }
+        "mission_merge_order_stack" => {
+            "Name the node a stacked node waits on by a line before it in merge_order, or leave both out: a stacked pull request merges after the one under it, and a node merge_order leaves out merges after every node it names"
+        }
         "mission_delivery_required" | "mission_delivery_invalid" => {
             "Give each change node a delivery (pr or direct) and no other node one"
         }
@@ -4458,6 +4769,7 @@ pub(crate) mod tests {
             answer_failed: None,
             delay: None,
             delay_until_unix_ms: None,
+            put_away_unix_ms: None,
             report: None,
             folder_line: None,
             created_at_unix_ms: 1,
@@ -4522,7 +4834,7 @@ pub(crate) mod tests {
             title: format!("node {key}"),
             kind: kind.into(),
             preset: None,
-            depends_on: depends.iter().map(|key| (*key).to_owned()).collect(),
+            depends_on: depends.iter().map(|key| Dependency::from(*key)).collect(),
             delivery: (kind == NodeKind::Change).then_some(Delivery::Pr),
             worker: None,
             criteria: vec![format!("{key} works")],
@@ -4564,8 +4876,8 @@ pub(crate) mod tests {
         );
         let unknown = plan(vec![node("a", NodeKind::Change, &["z"])]);
         assert_eq!(
-            apply_plan(&mission(), &unknown, 2).unwrap_err(),
-            "mission_dependency_unknown"
+            crate::coordination::split_refusal(&apply_plan(&mission(), &unknown, 2).unwrap_err()),
+            ("mission_dependency_unknown", Some("a → z"))
         );
         let mut repeated = plan(vec![node("a", NodeKind::Change, &[])]);
         repeated.merge_order = vec!["a".into(), "a".into()];
@@ -4573,6 +4885,158 @@ pub(crate) mod tests {
             apply_plan(&mission(), &repeated, 2).unwrap_err(),
             "mission_dependency_unknown"
         );
+    }
+
+    /// mission-82: a dependency on one finish line of another node is
+    /// `<node>:<line>`; a line the node does not have, line dependencies on
+    /// two nodes, or a merge order that puts a stacked node first are
+    /// refused, each naming where.
+    #[test]
+    fn a_dependency_on_a_finish_line_names_a_line_of_one_node_and_merges_after_it() {
+        let refused = |plan: PlanInput| {
+            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            let (code, detail) = crate::coordination::split_refusal(&code);
+            (code.to_owned(), detail.map(str::to_owned))
+        };
+        let stacked = plan(vec![
+            node("core", NodeKind::Change, &[]),
+            node("host", NodeKind::Change, &["core:c1"]),
+        ]);
+        let planned = apply_plan(&mission(), &stacked, 2).unwrap();
+        assert_eq!(
+            planned.nodes[1].depends_on,
+            vec![Dependency {
+                node: "core".into(),
+                line: Some("c1".into())
+            }]
+        );
+        assert_eq!(
+            refused(plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c9"]),
+            ])),
+            (
+                "mission_dependency_line_unknown".into(),
+                Some("host → core:c9".into())
+            )
+        );
+        assert_eq!(
+            refused(plan(vec![node("host", NodeKind::Change, &["gone:c1"])])),
+            (
+                "mission_dependency_unknown".into(),
+                Some("host → gone".into())
+            )
+        );
+        assert_eq!(
+            refused(plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("wire", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c1", "wire:c1"]),
+            ])),
+            ("mission_dependency_stack_split".into(), Some("host".into()))
+        );
+        let mut upside_down = stacked.clone();
+        upside_down.merge_order = vec!["host".into(), "core".into()];
+        assert_eq!(
+            refused(upside_down),
+            ("mission_merge_order_stack".into(), Some("host".into()))
+        );
+        let mut lower_left_out = stacked.clone();
+        lower_left_out.merge_order = vec!["host".into()];
+        assert_eq!(
+            refused(lower_left_out),
+            ("mission_merge_order_stack".into(), Some("host".into()))
+        );
+        let mut both_left_out = stacked.clone();
+        both_left_out.merge_order = Vec::new();
+        assert!(apply_plan(&mission(), &both_left_out, 2).is_ok());
+        let mut in_order = stacked;
+        in_order.merge_order = vec!["core".into(), "host".into()];
+        assert!(apply_plan(&mission(), &in_order, 2).is_ok());
+    }
+
+    /// A dependency on a line reads the line as its owner shows it now
+    /// (`LinesNow`, so a check passed on a commit the folder left is not
+    /// met), a dropped node meets nothing, and only a pull-request change
+    /// stacks, on a pull-request change.
+    #[test]
+    fn a_line_dependency_reads_the_line_as_shown_and_stacks_only_pull_requests() {
+        let mut planned = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c1"]),
+                node("note", NodeKind::General, &["core:c1"]),
+            ]),
+            2,
+        )
+        .unwrap();
+        planned.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
+        let key = Dependency::from("core:c1");
+        let shown = |unmet: &[&str]| {
+            let core = LinesNow {
+                unmet: unmet.iter().map(|key| (*key).to_owned()).collect(),
+                head_read: true,
+            };
+            vec![core, LinesNow::default(), LinesNow::default()]
+        };
+        assert!(planned.dependency_met(&key, &shown(&[])).is_some());
+        assert_eq!(planned.dependency_met(&key, &shown(&["c1"])), None);
+        // Met at the line's record, and still then once its node is done.
+        planned.nodes[0].criteria[0].by = Some(crate::mission_criteria::Recorded {
+            role: crate::mission_criteria::Role::Worker,
+            name: "core".into(),
+            agent_id: None,
+            at_unix_ms: 40,
+        });
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), Some(Some(40)));
+        planned.nodes[0].status = NodeStatus::Done;
+        planned.nodes[0].finished_at_unix_ms = Some(90);
+        assert_eq!(planned.dependency_met(&key, &[]), Some(Some(40)));
+        assert_eq!(
+            planned.dependency_met(&Dependency::from("core"), &[]),
+            Some(Some(90))
+        );
+        planned.nodes[0].finished_at_unix_ms = None;
+        planned.nodes[0].status = NodeStatus::Working;
+        assert_eq!(planned.dependency_met(&key, &[]), None, "a node not read");
+        planned.nodes[0].status = NodeStatus::Dropped;
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), None);
+        planned.nodes[0].status = NodeStatus::Working;
+
+        let on = |mission: &Mission, at: usize| {
+            mission
+                .stacks_on(&mission.nodes[at])
+                .map(|lower| lower.key.clone())
+        };
+        assert_eq!(on(&planned, 1).as_deref(), Some("core"));
+        assert_eq!(on(&planned, 2), None, "a general node has no branch");
+        planned.nodes[1].delivery = Some(Delivery::Direct);
+        assert_eq!(
+            on(&planned, 1),
+            None,
+            "a direct change opens no pull request"
+        );
+        planned.nodes[1].delivery = Some(Delivery::Pr);
+        planned.nodes[0].delivery = Some(Delivery::Direct);
+        assert_eq!(on(&planned, 1), None, "nothing to stack on");
+    }
+
+    /// mission-82 c2: a node written with plain keys reads and writes its
+    /// `depends_on` as it was, with nothing added, and a line key keeps its
+    /// spelling.
+    #[test]
+    fn a_plan_of_plain_keys_reads_and_writes_as_before() {
+        let written = serde_json::json!({"key": "b", "title": "B", "kind": "change", "depends_on": ["a"],
+            "status": "planned", "delivery": "pr"});
+        let node: MissionNode = serde_json::from_value(written).unwrap();
+        assert_eq!(node.depends_on, vec![Dependency::from("a")]);
+        let back = serde_json::to_value(&node).unwrap();
+        assert_eq!(back["depends_on"], serde_json::json!(["a"]));
+        assert!(back.get("lines_met").is_none());
+        let lines: Vec<Dependency> =
+            serde_json::from_value(serde_json::json!(["a", "core:c1"])).unwrap();
+        assert_eq!(serde_json::to_string(&lines).unwrap(), r#"["a","core:c1"]"#);
     }
 
     #[test]
@@ -5744,6 +6208,42 @@ pub(crate) mod tests {
         let mut node = one("b");
         node.back_to_work(5);
         assert_eq!(node.round, 1);
+    }
+
+    /// mission-82 review O5: a node back at work from a finish splits its
+    /// time again from then, so the time it stood done is neither work nor
+    /// review: its own lines all met, its work is already done; a defect
+    /// left open, its work runs until that line is met.
+    #[test]
+    fn a_node_back_at_work_from_a_finish_splits_its_time_again_from_then() {
+        use crate::mission_criteria::{Criterion, CriterionKind, CriterionState};
+        let mut node = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2)
+            .unwrap()
+            .nodes[0]
+            .clone();
+        for line in node
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.worker_answers())
+        {
+            line.state = CriterionState::Pass;
+        }
+        node.own_met_at_unix_ms = Some(3);
+        node.back_to_work(50);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(50), Some(50))
+        );
+        node.criteria
+            .push(Criterion::new("d1", CriterionKind::Defect));
+        node.back_to_work(90);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(90), None)
+        );
+        node.criteria.last_mut().unwrap().state = CriterionState::Pass;
+        node.note_own_met(false, 120);
+        assert_eq!(node.own_met_at_unix_ms, Some(120));
     }
 
     /// A mission created before verification strength keeps the checkers

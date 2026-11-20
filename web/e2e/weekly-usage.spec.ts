@@ -1,9 +1,10 @@
 // The weekly usage chips and popover on an isolated engine and hided
 // (#153). The daemon's PATH carries a `claude` that answers `/usage` with a
 // fixed reading once the test releases it, so its row is first loading and
-// then available with a Fable bucket; this HOME has no Codex login, so that
-// row is unavailable. Along the way the page tells the core when the popover
-// opens and closes and when the page is hidden.
+// then available with a Fable bucket; the same PATH carries a `codex` and
+// this HOME has no Codex CLI login, so that row is unavailable as signed out.
+// Along the way the page tells the core when the popover opens and closes and
+// when the page is hidden.
 
 import { expect, test, type Page } from "@playwright/test";
 import { startFixture } from "./engine-fixture";

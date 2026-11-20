@@ -69,6 +69,8 @@ So every review covers the perspectives below, and names the perspective of each
   - **minor**: anything else worth saying.
 - Serious and ordinary findings block the merge until fixed or until the person who owns the decision accepts them in writing on the pull request.
   Minor findings do not block; the author fixes them or lists them as follow-ups.
+- In a mission, after the last review round its verification strength allows (`hide mission help`, Verification strength), the Conductor owns that decision for ordinary findings: it may accept them as follow-up issues, named on the pull request, and go on without asking the operator.
+  Serious findings still block until fixed in the node.
 - A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed.
 
 ## Work spread over several pull requests

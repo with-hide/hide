@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 pub struct HomeRetired {
     /// Absolute path of `<user home>/hide`, in wire spelling (`/`).
     pub home: String,
-    /// Whether the folder is still there after the call: it holds something
-    /// Hide did not make, a session or pane was recorded in it, it has no
-    /// marker of Hide's, or it is not a folder.
+    /// Whether the folder is still there after the call as something of the
+    /// operator's: it holds something Hide did not make, a session or pane
+    /// was recorded in it, it has no marker of Hide's, or it is not a folder.
+    /// A folder only the automations keep (`automations/`, PRD automations
+    /// D-09) stays on disk and is not kept.
     pub kept: bool,
     /// Hide's marker was found, so its entries were Hide's to remove.
     pub marked: bool,

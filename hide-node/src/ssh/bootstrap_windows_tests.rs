@@ -591,7 +591,7 @@ fn an_install_under_a_folder_others_can_change_or_a_link_is_refused() {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
         let payload = packages.payload(&facts.os, &facts.arch).unwrap();
-        let Err(EstablishError::Install(reason)) =
+        let Err(EstablishError::Install { reason, .. }) =
             install(&mut pipe, root, &facts.home, &payload, facts.unpacks)
         else {
             panic!("an install under {root} was accepted");
@@ -655,7 +655,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
         .output()
         .unwrap();
     assert!(linked.status.success(), "{linked:?}");
-    let Err(EstablishError::Install(reason)) = install_once() else {
+    let Err(EstablishError::Install { reason, .. }) = install_once() else {
         panic!("an install through a junction below the install folder was accepted");
     };
     assert!(reason.contains("is a link"), "{reason}");
@@ -670,7 +670,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
         .output()
         .unwrap();
     assert!(granted.status.success(), "{granted:?}");
-    let Err(EstablishError::Install(reason)) = install_once() else {
+    let Err(EstablishError::Install { reason, .. }) = install_once() else {
         panic!("an install into a folder others can change was accepted");
     };
     assert!(reason.contains("can be changed"), "{reason}");

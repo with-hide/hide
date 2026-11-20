@@ -94,3 +94,13 @@ before it is loaded; contracts/conpty.json pins it, the Windows app package
 carries it in holder-conpty, and it is not copied into this repository.
 Copyright (c) Microsoft Corporation.
 Licensed under the MIT License.
+
+hide-peer/src/words/en.txt and hide-peer/src/words/ko.txt are the English
+and Korean word lists of BIP-39 (Bitcoin Improvement Proposal 39), as
+trezor/python-mnemonic ships them in src/mnemonic/wordlist
+(https://github.com/trezor/python-mnemonic).
+Copyright (c) 2013 Pavol Rusnak, (c) 2017 mruddy.
+Licensed under the MIT License, whose full text the app ships in
+desktop/resources/THIRD_PARTY_NOTICES/bip39-wordlists-MIT.txt.
+Hide changed them: the Korean list is stored in Unicode NFC, with the same
+words in the same order; the English list is unchanged.

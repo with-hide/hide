@@ -101,6 +101,7 @@ pub fn serve_with_terminals(
                 hide_kit::layout::worktree_facts(&hide_kit::layout::state_dir_from_process(&home))
             }),
             kit: KitPlace::Installed,
+            panes: None,
         },
     )
 }
@@ -136,6 +137,12 @@ pub struct Services<'a> {
     /// is installed under its helper root, and a node that dialed its core
     /// runs from the program its machine has (`KitPlace::of_program`).
     pub kit: KitPlace,
+    /// The pane holders of a node that outlives its links, already owned
+    /// (a guest's node, PRD device-connect-iroh D-77 (5)): this link asks
+    /// them and leaves their ownership as it found it when it ends. `None`
+    /// for a node whose link starts its holders and whose ownership ends
+    /// with that link.
+    pub panes: Option<crate::pane_holders::PaneSlot>,
 }
 
 /// The checkout roots a node's core opened on it over one link, which are
@@ -202,6 +209,7 @@ impl Services<'_> {
             browser: None,
             worktree_facts: None,
             kit: KitPlace::Installed,
+            panes: None,
         }
     }
 }
@@ -237,6 +245,11 @@ fn serve_in(
             worktrees: Arc::new(worktrees::Measured::kept_in(folder)),
             ..env
         },
+        None => env,
+    };
+    let resident_panes = services.panes.is_some();
+    let env = match services.panes {
+        Some(panes) => Env { panes, ..env },
         None => env,
     };
     let terminals = services.terminals;
@@ -452,7 +465,11 @@ fn serve_in(
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
         env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        env.panes.close();
+        // A resident node's ownership of its panes is the node's, not this
+        // link's.
+        if !resident_panes {
+            env.panes.close();
+        }
         panes.stop();
         result
     });
@@ -460,11 +477,12 @@ fn serve_in(
     result
 }
 
-/// Where this machine shows the Windows PC's drives, for `Hello`: none on a
-/// machine that is not a WSL distribution, and none, logged, on one whose
-/// `/etc/wsl.conf` cannot be read or names no usable root, so a pasted
-/// Windows path stays as typed rather than becoming a guess.
-fn windows_drives() -> Option<String> {
+/// Where this machine shows the Windows PC's drives, for `Hello` and for a
+/// core's own device row: none on a machine that is not a WSL distribution,
+/// and none, logged, on one whose `/etc/wsl.conf` cannot be read or names
+/// no usable root, so a pasted Windows path stays as typed rather than
+/// becoming a guess.
+pub fn windows_drives() -> Option<String> {
     match hide_platform::host::windows_drives() {
         Ok(root) => Some(root),
         Err(error)
@@ -880,6 +898,13 @@ pub enum KitPlace {
     /// removes no build, since the core update keeps the one it may go back
     /// to (`kit::adopt_build`).
     Build { root: PathBuf, version: String },
+    /// A guest's node, run from that guest's install root on another
+    /// machine's account (PRD device-connect-iroh D-77 (2), (4)): the kit
+    /// installs the hook entries and the agents' pieces from
+    /// `<root>/current`, which it points at this build, and nothing else of
+    /// the account (`hide_kit::guest_target`). The host's Hide places and
+    /// removes the builds.
+    Guest { root: PathBuf, version: String },
     /// The resources folder of the desktop package the node runs from
     /// (`hide_kit::bundled_kit_dir`).
     Bundled(PathBuf),
@@ -1232,6 +1257,10 @@ pub fn handle_with_progress(
             to_value(crate::browse::new_folder_target(
                 &parent, &name, kind, &home,
             )?)
+        }
+        Call::AutomationFolder { name } => {
+            let home = env.home("HOME is not set, so no automation folder can be made under it")?;
+            to_value(crate::project::automation_folder(&home, &name)?)
         }
         Call::ProjectCreate {
             path,

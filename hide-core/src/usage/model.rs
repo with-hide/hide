@@ -216,11 +216,29 @@ impl UsageSnapshot {
             }
         })
     }
-    /// Wait through the latest exhausted window, including the five-hour
-    /// window and scoped weekly limits. Stale/fallback readings retain the
-    /// same reset boundary; an unavailable reading never blocks work.
-    pub fn exhausted_until(&self, agent: &str, now_s: u64) -> Option<u64> {
-        let Cell::Reading { value, .. } = &self.own_agent(agent)?.limits else {
+    /// The limits of the account a start of `agent` with `profile` runs
+    /// in: the profile's own account's, or the agent's default account's
+    /// for no profile or a profile in that account (whose row carries no
+    /// limits of its own). None when this machine's row or the profile's is
+    /// not there.
+    pub fn account_limits(
+        &self,
+        agent: &str,
+        profile: Option<&str>,
+    ) -> Option<&Cell<LimitReading>> {
+        let row = self.own_agent(agent)?;
+        let Some(profile) = profile else {
+            return Some(&row.limits);
+        };
+        let profile = row.profiles.iter().find(|row| row.id == profile)?;
+        Some(profile.limits.as_ref().unwrap_or(&row.limits))
+    }
+    /// Wait through the latest exhausted window of the account `agent` with
+    /// `profile` runs in, including the five-hour window and scoped weekly
+    /// limits. Stale/fallback readings retain the same reset boundary; an
+    /// unavailable reading never blocks work.
+    pub fn exhausted_until(&self, agent: &str, profile: Option<&str>, now_s: u64) -> Option<u64> {
+        let Cell::Reading { value, .. } = self.account_limits(agent, profile)? else {
             return None;
         };
         value

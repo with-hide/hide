@@ -52,6 +52,15 @@ export const NOTIFY_PERMISSION_CHANNEL = "hide:notify-permission";
 export const NOTIFY_SETTINGS_CHANNEL = "hide:notify-settings";
 
 /**
+ * The Windows firewall rules for same-network machines (PRD
+ * device-connect-iroh D-38, B32): whether they are in place, and the one
+ * ask of Windows for them when the operator shares this PC or allows its
+ * first pairing (both invoke).
+ */
+export const FIREWALL_STATE_CHANNEL = "hide:firewall-state";
+export const FIREWALL_ALLOW_CHANNEL = "hide:firewall-allow";
+
+/**
  * The app icon's badge: how many root agents need the operator, which the
  * shell reports once it holds a live snapshot and again only when the number
  * changes (renderer -> main).

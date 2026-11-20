@@ -20,6 +20,7 @@ import {
 
 export type { AgentRow, SnapshotRest } from "./snapshot";
 import type { MobileState } from "./mobileSettings";
+import type { PairingResult, PairingView } from "./pairing";
 
 /** The pane holding the keyboard on the device in front, as the core reports it. */
 export function focusedPaneOf(rest: SnapshotRest): string | null {
@@ -114,6 +115,7 @@ export type Frame = {
     desk_jobs?: import("./snapshot").DeskJobsSection;
     desk_mentions?: import("./snapshot").DeskMentions;
     access?: import("./snapshot").AccessSection;
+    automations?: import("./snapshot").AutomationsSection;
     link_panel?: import("./snapshot").LinkPanel;
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
@@ -143,6 +145,8 @@ export type DaemonInfo = {
   core_state_path: string;
   keep_alive: boolean;
   idle_secs: number;
+  /** Whether this build offers connections between two Hides (hided's `HIDE_DEVICE_CONNECT`); read through `deviceConnectOffered`. */
+  device_connect?: boolean;
 };
 
 type Store = {
@@ -151,6 +155,10 @@ type Store = {
   daemon: DaemonInfo | null;
   /** Settings > Mobile as the daemon reports it (`mobile` frame); null until the first one. */
   mobile: MobileState | null;
+  /** The pairings under way as the daemon reports them (`pairing` frame), sent to this machine's own windows only; null until the first one. */
+  pairing: PairingView | null;
+  /** The daemon's answer to the last `pairing_*` event this window sent. */
+  pairingResult: PairingResult | null;
   /** The core move as the process's supervisor reports it (`core_move` frame); null until the first one. */
   coreMove: MoveView | null;
   /** Why the last `core_move` event was refused (`move_busy`, ...); cleared by the next frame of the move. */
@@ -205,6 +213,8 @@ type Store = {
   deskMentions: import("./snapshot").DeskMentions | null;
   /** Settings › External tools (`access`): its own section, absent until the core sends it. */
   access: import("./snapshot").AccessSection | null;
+  /** The automations of this window's core (`automations`, PRD automations D-02): its own section, absent until the core restored its book. */
+  automations: import("./snapshot").AutomationsSection | null;
   /** The link record of the open PR or issue panel (`link_panel`); null until one opens. */
   linkPanel: import("./snapshot").LinkPanel | null;
   /** Each Project's link counts and chips (`link_summaries`). */
@@ -368,6 +378,8 @@ export const useShellStore = create<Store>((set, get) => ({
   connection: "connecting",
   daemon: null,
   mobile: null,
+  pairing: null,
+  pairingResult: null,
   coreMove: null,
   coreMoveRefusal: null,
   coreLink: null,
@@ -386,6 +398,7 @@ export const useShellStore = create<Store>((set, get) => ({
   deskJobs: null,
   deskMentions: null,
   access: null,
+  automations: null,
   linkPanel: null,
   linkSummaries: null,
   sessionRecord: null,
@@ -493,6 +506,7 @@ export const useShellStore = create<Store>((set, get) => ({
         deskJobs: payload.desk_jobs ?? null,
         deskMentions: payload.desk_mentions ?? null,
         access: payload.access ?? null,
+        automations: payload.automations ?? null,
         linkPanel: payload.link_panel ?? null,
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
@@ -507,7 +521,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.memory !== undefined ||
       payload.suggestions !== undefined ||
       payload.desk !== undefined || payload.desk_live !== undefined ||
-      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined || payload.access !== undefined ||
+      payload.desk_jobs !== undefined || payload.desk_mentions !== undefined || payload.access !== undefined || payload.automations !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined ||
       payload.session_thread !== undefined || payload.session_thread_history !== undefined
@@ -523,6 +537,7 @@ export const useShellStore = create<Store>((set, get) => ({
         deskJobs: payload.desk_jobs ? share(get().deskJobs, payload.desk_jobs) : get().deskJobs,
         deskMentions: payload.desk_mentions ? share(get().deskMentions, payload.desk_mentions) : get().deskMentions,
         access: payload.access ? share(get().access, payload.access) : get().access,
+        automations: payload.automations ? share(get().automations, payload.automations) : get().automations,
         linkPanel: payload.link_panel ? share(get().linkPanel, payload.link_panel) : get().linkPanel,
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,
@@ -660,6 +675,14 @@ export const useShellStore = create<Store>((set, get) => ({
     }
     if (frame.type === "mobile") {
       set({ mobile: frame.payload as unknown as MobileState });
+      return [];
+    }
+    if (frame.type === "pairing") {
+      set({ pairing: frame.payload as unknown as PairingView });
+      return [];
+    }
+    if (frame.type === "pairing_result") {
+      set({ pairingResult: frame.payload as unknown as PairingResult });
       return [];
     }
     if (frame.type === "core_move") {
