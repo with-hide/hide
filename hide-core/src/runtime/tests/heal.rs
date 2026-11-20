@@ -426,7 +426,7 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
     runtime.drive_heal_letters(1_000 + 24 * 60 * 60 * 1000);
     assert_eq!(
         runtime.heal_letters_owed(),
-        ["not-woken:agent-2", "resumed:agent-9:1000"]
+        ["children:agent-9:1", "resumed:agent-9:1000"]
     );
     observe(&mut runtime, &parent);
     assert_eq!(
@@ -528,6 +528,103 @@ fn a_second_heal_waits_until_the_first_line_is_admitted() {
     assert!(!runtime.hook_facts.lock().unwrap().cut_pending("w1:p1"));
     // The parent, away, is still owed its count.
     assert_eq!(runtime.heal_letters_owed(), ["resumed:agent-9:1000"]);
+}
+
+/// B17, B18: a pending heal is about the agent it was cut for. When that
+/// agent ends and another takes the pane before the line could be owed,
+/// the newcomer gets nothing and the parent hears the cut one could not be
+/// told, once.
+#[test]
+fn a_pending_heal_never_tells_the_agent_that_took_the_pane_next() {
+    let root = tempfile::tempdir().unwrap();
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    let parent = actor(&node, "w1:p9", "s-9");
+    let cut = actor(&node, "w1:p1", "s-1");
+    let next = actor(&node, "w1:p1", "s-2");
+    registered(
+        &mut runtime,
+        vec![
+            record("agent-9", &parent, None),
+            record("agent-1", &cut, Some("agent-9")),
+        ],
+    );
+    started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 1_000);
+    started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 5_000);
+    assert!(due(&mut runtime).is_empty());
+    assert_eq!(runtime.heal_pending(), ["w1:p1"]);
+
+    // The cut agent ends; another child registers in its pane.
+    let mut ended = record("agent-1", &cut, Some("agent-9"));
+    ended.ended = true;
+    registered(
+        &mut runtime,
+        vec![
+            record("agent-9", &parent, None),
+            ended,
+            record("agent-2", &next, Some("agent-9")),
+        ],
+    );
+    observe(&mut runtime, &next);
+    observe(&mut runtime, &parent);
+    runtime.note_healing(&node, &[], 6_000);
+    assert_eq!(
+        admit(&mut runtime),
+        [(
+            "w1:p9".to_owned(),
+            "Could not tell agent w1:p1 to carry on".to_owned()
+        )]
+    );
+    assert!(runtime.heal_pending().is_empty());
+    assert!(runtime.heal_letters_owed().is_empty());
+    assert!(!runtime.hook_facts.lock().unwrap().cut_pending("w1:p1"));
+}
+
+/// B18: what a parent hears of its lost children is one entry for that
+/// parent, however many fail while it cannot be reached, naming the first
+/// and counting the rest; it ends with the parent.
+#[test]
+fn a_parent_away_owes_one_entry_for_all_its_lost_children() {
+    let mut runtime = runtime();
+    let node = runtime.node().as_str().to_owned();
+    let parent = actor(&node, "w1:p9", "s-9");
+    let children: Vec<AgentRecord> = (0..50)
+        .map(|n| {
+            let pane = format!("w2:p{n}");
+            record(
+                &format!("agent-{}", 100 + n),
+                &actor(&node, &pane, &format!("s-{n}")),
+                Some("agent-9"),
+            )
+        })
+        .collect();
+    let ids: Vec<String> = children.iter().map(|record| record.id.clone()).collect();
+    let mut records = vec![record("agent-9", &parent, None)];
+    records.extend(children);
+    registered(&mut runtime, records.clone());
+    runtime.heal_not_woken(&ids);
+    assert!(due(&mut runtime).is_empty(), "the parent is away");
+    assert_eq!(runtime.heal_letters_owed(), ["children:agent-9:50"]);
+
+    observe(&mut runtime, &parent);
+    let said = admit(&mut runtime);
+    assert_eq!(said.len(), 1);
+    assert!(
+        said[0]
+            .1
+            .starts_with("Could not wake agent w2:p0, agent w2:p1")
+    );
+    assert!(said[0].1.ends_with("\nand 18 more"), "{:?}", said[0].1);
+    assert!(runtime.heal_letters_owed().is_empty());
+
+    // Owed again, then the parent ends: the entry goes with it.
+    runtime.heal_not_woken(&ids[..2]);
+    records[0].ended = true;
+    registered(&mut runtime, records);
+    assert!(due(&mut runtime).is_empty());
+    assert!(runtime.heal_letters_owed().is_empty());
 }
 
 /// B19: a node's worker is healing while its engine names its pane so and

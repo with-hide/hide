@@ -22,8 +22,9 @@
 //! hears once per heal how many of its children came back
 //! (`Body::Resumed`), once each was seen in its pane, could not be woken or
 //! is healing no more; a child its engine could not resume is said by name
-//! (`Body::NotWoken`), and a child whose registration ended before its line
-//! could go is said too (`Body::NotTold`). A mission worker the engine could
+//! (`Lost::NotWoken`), and a child whose registration ended before its line
+//! could go is said too (`Lost::NotTold`), both in the parent's one entry
+//! of such children (`Body::Children`). A mission worker the engine could
 //! not resume is its Conductor's `worker_ended` raise already, so it is not
 //! said twice.
 //!
@@ -68,10 +69,11 @@ const NAMES_SAID: usize = 8;
 pub(in crate::runtime) struct HealLetters {
     /// The resumes taken and not settled yet, by machine and when taken,
     /// oldest first; one per pane of a machine.
-    pending: Vec<(String, ResumedPane, u64)>,
-    /// The lines owed, one of each kind per registration (`go-on:<id>`,
-    /// `resumed:<parent>`, `not-woken:<id>`, `not-told:<id>`), until the
-    /// ledger admits them.
+    pending: Vec<Pending>,
+    /// The lines owed, one of each kind per live registration: the line to
+    /// go on (`go-on:<id>`), and for a parent its count (`resumed:<id>`)
+    /// and its children lost (`children:<id>`), until the ledger admits
+    /// them.
     owed: BTreeMap<String, Owed>,
     /// The children each parent's count waits on, by the parent's
     /// registration id.
@@ -81,6 +83,22 @@ pub(in crate::runtime) struct HealLetters {
     /// The panes each machine's engine names healing, by the machine's own
     /// pane ids, from the core's first read of each.
     healing: BTreeMap<String, BTreeMap<String, Healing>>,
+}
+
+/// A resume taken and not settled yet.
+struct Pending {
+    device: String,
+    resume: ResumedPane,
+    since: u64,
+    /// The registration cut in the pane, once the core read it: a retry
+    /// settles that one or none, never another agent that took the pane.
+    cut: Option<Cut>,
+}
+
+struct Cut {
+    id: String,
+    parent: Option<String>,
+    name: String,
 }
 
 struct Owed {
@@ -102,11 +120,25 @@ enum Body {
     },
     /// This many of your children came back, these by name.
     Resumed { count: usize, names: Vec<String> },
-    /// This child could not be brought back.
-    NotWoken(String),
-    /// This child came back but ended before it could be told to go on.
-    NotTold(String),
+    /// These children were lost to the heal, oldest first; the ones past
+    /// [`CHILDREN_SAID`] only counted. `told` is how many were said before.
+    Children {
+        told: usize,
+        lost: Vec<(Lost, String)>,
+        more: usize,
+    },
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lost {
+    /// The child could not be brought back.
+    NotWoken,
+    /// The child came back but ended before it could be told to go on.
+    NotTold,
+}
+
+/// The most lost children a parent's entry names; the rest are counted.
+const CHILDREN_SAID: usize = 32;
 
 /// A parent's count: its children the heal is bringing back, by id.
 struct Resumed {
@@ -156,14 +188,42 @@ impl Body {
                     English => format!("Resumed: {count} · {names}"),
                 }
             }
-            (Self::NotWoken(name), Korean) => format!("깨우지 못함: {name}"),
-            (Self::NotWoken(name), Japanese) => format!("再開できませんでした: {name}"),
-            (Self::NotWoken(name), SimplifiedChinese) => format!("未能恢复：{name}"),
-            (Self::NotWoken(name), English) => format!("Could not wake {name}"),
-            (Self::NotTold(name), Korean) => format!("이어서 하라고 전하지 못함: {name}"),
-            (Self::NotTold(name), Japanese) => format!("続行を伝えられませんでした: {name}"),
-            (Self::NotTold(name), SimplifiedChinese) => format!("未能告知继续：{name}"),
-            (Self::NotTold(name), English) => format!("Could not tell {name} to carry on"),
+            (Self::Children { lost, more, .. }, language) => {
+                let names = |kind: Lost| -> String {
+                    lost.iter()
+                        .filter(|(at, _)| *at == kind)
+                        .map(|(_, name)| name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let mut lines = Vec::new();
+                let (not_woken, not_told) = (names(Lost::NotWoken), names(Lost::NotTold));
+                if !not_woken.is_empty() {
+                    lines.push(match language {
+                        Korean => format!("깨우지 못함: {not_woken}"),
+                        Japanese => format!("再開できませんでした: {not_woken}"),
+                        SimplifiedChinese => format!("未能恢复：{not_woken}"),
+                        English => format!("Could not wake {not_woken}"),
+                    });
+                }
+                if !not_told.is_empty() {
+                    lines.push(match language {
+                        Korean => format!("이어서 하라고 전하지 못함: {not_told}"),
+                        Japanese => format!("続行を伝えられませんでした: {not_told}"),
+                        SimplifiedChinese => format!("未能告知继续：{not_told}"),
+                        English => format!("Could not tell {not_told} to carry on"),
+                    });
+                }
+                if *more > 0 {
+                    lines.push(match language {
+                        Korean => format!("그 밖에 {more}명"),
+                        Japanese => format!("ほか{more}件"),
+                        SimplifiedChinese => format!("另外 {more} 个"),
+                        English => format!("and {more} more"),
+                    });
+                }
+                lines.join("\n")
+            }
         }
     }
 }
@@ -197,9 +257,14 @@ impl Runtime {
             let pending = &mut self.heal_letters.pending;
             if !pending
                 .iter()
-                .any(|(at, held, _)| at == device && held.pane == resume.pane)
+                .any(|held| held.device == device && held.resume.pane == resume.pane)
             {
-                pending.push((device.to_owned(), resume.clone(), now_unix_ms));
+                pending.push(Pending {
+                    device: device.to_owned(),
+                    resume: resume.clone(),
+                    since: now_unix_ms,
+                    cut: None,
+                });
             }
         }
         self.settle_pending();
@@ -208,17 +273,20 @@ impl Runtime {
     /// Settles the pending resumes that can be, oldest first.
     fn settle_pending(&mut self) {
         let pending = std::mem::take(&mut self.heal_letters.pending);
-        for (device, resume, since) in pending {
-            if !self.heal_one(&device, &resume, since) {
-                self.heal_letters.pending.push((device, resume, since));
+        for mut held in pending {
+            if !self.heal_one(&mut held) {
+                self.heal_letters.pending.push(held);
             }
         }
     }
 
-    /// Settles one resume taken at `since`; false while it cannot be: the
-    /// ledger cannot be read, or the registration is still owed the line
-    /// of an earlier heal. The cut is spent only when it settles.
-    fn heal_one(&mut self, device: &str, resume: &ResumedPane, since: u64) -> bool {
+    /// Settles one resume; false while it cannot be: the ledger cannot be
+    /// read, or the registration is still owed the line of an earlier heal,
+    /// which it then keeps in `held` as the one this resume is about. The
+    /// cut is spent only when it settles.
+    fn heal_one(&mut self, held: &mut Pending) -> bool {
+        let (device, resume, since) = (held.device.clone(), held.resume.clone(), held.since);
+        let device = device.as_str();
         let node = self.node.as_str().to_owned();
         let saved = crate::address::named_pane_id(&node, device, &resume.saved);
         let typed = crate::address::named_pane_id(&node, device, &resume.pane);
@@ -228,9 +296,29 @@ impl Runtime {
             }));
             return false;
         };
-        let Some(record) = ledger.agents.iter().find(|record| {
-            !record.ended && (record.pane_on(&node) == saved || record.pane_on(&node) == typed)
-        }) else {
+        let in_pane =
+            |record: &AgentRecord| record.pane_on(&node) == saved || record.pane_on(&node) == typed;
+        let found = ledger.agents.iter().find(|record| {
+            !record.ended
+                && in_pane(record)
+                && held.cut.as_ref().is_none_or(|cut| cut.id == record.id)
+        });
+        let Some(record) = found else {
+            // The agent it was cut for ended or left the pane before its
+            // line could be owed: its parent hears it could not be told.
+            if let Some(cut) = held.cut.take() {
+                self.hook_facts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take_cut(&saved);
+                crate::diagnostic!(json!({
+                    "component": "heal", "kind": "heal.gone",
+                    "pane_id": typed, "agent_id": cut.id,
+                }));
+                if let Some(parent) = cut.parent {
+                    self.tell_parent(&parent, Lost::NotTold, cut.name);
+                }
+            }
             return true;
         };
         let mut facts = self
@@ -245,6 +333,11 @@ impl Runtime {
                 "component": "heal", "kind": "heal.pending",
                 "pane_id": typed, "agent_id": record.id,
             }));
+            held.cut = Some(Cut {
+                id: record.id.clone(),
+                parent: record.parent.clone(),
+                name: agent_name(record),
+            });
             return false;
         }
         facts.take_cut(&saved);
@@ -305,9 +398,9 @@ impl Runtime {
             }));
             return;
         }
-        let pending = self.heal_letters.pending.iter().any(|(at, resume, _)| {
-            at == device
-                && [&resume.pane, &resume.saved]
+        let pending = self.heal_letters.pending.iter().any(|held| {
+            held.device == device
+                && [&held.resume.pane, &held.resume.saved]
                     .iter()
                     .any(|held| crate::address::named_pane_id(&node, device, held) == pane)
         });
@@ -352,13 +445,40 @@ impl Runtime {
             if worker {
                 continue;
             }
-            let key = format!("not-woken:{id}");
-            self.heal_letters.owed.entry(key.clone()).or_insert(Owed {
-                letter: key,
-                to: parent.clone(),
-                body: Body::NotWoken(agent_name(record)),
-            });
+            self.tell_parent(parent, Lost::NotWoken, agent_name(record));
         }
+    }
+
+    /// Adds the child `name`, lost as `lost`, to the parent's one entry of
+    /// lost children: a new letter, so one being sent says the ones before.
+    fn tell_parent(&mut self, parent: &str, lost: Lost, name: String) {
+        let owed = self
+            .heal_letters
+            .owed
+            .entry(format!("children:{parent}"))
+            .or_insert_with(|| Owed {
+                letter: String::new(),
+                to: parent.to_owned(),
+                body: Body::Children {
+                    told: 0,
+                    lost: Vec::new(),
+                    more: 0,
+                },
+            });
+        if let Body::Children {
+            lost: said, more, ..
+        } = &mut owed.body
+        {
+            if said.iter().any(|(at, named)| *at == lost && *named == name) {
+                return;
+            }
+            if said.len() < CHILDREN_SAID {
+                said.push((lost, name));
+            } else {
+                *more += 1;
+            }
+        }
+        owed.letter = children_letter(owed);
     }
 
     /// Keeps the panes `device`'s engine named healing in its last read,
@@ -415,9 +535,9 @@ impl Runtime {
         let letters = &self.heal_letters;
         self.still_healing(&record.machine, &record.pane)
             || letters.owed.contains_key(&format!("go-on:{}", record.id))
-            || letters.pending.iter().any(|(device, resume, _)| {
-                *device == record.machine
-                    && (resume.pane == record.pane || resume.saved == record.pane)
+            || letters.pending.iter().any(|held| {
+                held.device == record.machine
+                    && (held.resume.pane == record.pane || held.resume.saved == record.pane)
             })
     }
 
@@ -454,11 +574,34 @@ impl Runtime {
         }
     }
 
-    /// Settles the lines the ledger admitted, by their letters.
+    /// Settles the lines the ledger admitted, by their letters. A parent's
+    /// lost children named since its letter left stay owed.
     pub(in crate::runtime) fn heal_lines_admitted(&mut self, admitted: &[String]) {
-        self.heal_letters
-            .owed
-            .retain(|_, owed| !admitted.contains(&owed.letter));
+        self.heal_letters.owed.retain(|key, owed| {
+            if admitted.contains(&owed.letter) {
+                return false;
+            }
+            let Body::Children { told, lost, more } = &mut owed.body else {
+                return true;
+            };
+            let Some(said) = admitted.iter().find_map(|letter| {
+                letter
+                    .strip_prefix(key.as_str())?
+                    .strip_prefix(':')?
+                    .parse::<usize>()
+                    .ok()
+            }) else {
+                return true;
+            };
+            let mut gone = said.saturating_sub(*told);
+            let named = gone.min(lost.len());
+            lost.drain(..named);
+            gone -= named;
+            *more = more.saturating_sub(gone);
+            *told = said.max(*told);
+            owed.letter = children_letter(owed);
+            true
+        });
     }
 
     /// The notes to send now. The pending resumes are settled first, as
@@ -544,13 +687,7 @@ impl Runtime {
             ) = (ended, owed.body)
                 && self.registration(&parent).is_some()
             {
-                let key = format!("not-told:{}", owed.to);
-                let letter = format!("not-told:{}", owed.letter.trim_start_matches("go-on:"));
-                self.heal_letters.owed.entry(key).or_insert(Owed {
-                    letter,
-                    to: parent,
-                    body: Body::NotTold(name),
-                });
+                self.tell_parent(&parent, Lost::NotTold, name);
             }
         }
 
@@ -624,6 +761,17 @@ impl Runtime {
     }
 }
 
+/// The letter of a parent's lost children: how many it has said in all, so
+/// each name added makes a new letter.
+fn children_letter(owed: &Owed) -> String {
+    match &owed.body {
+        Body::Children { told, lost, more } => {
+            format!("children:{}:{}", owed.to, told + lost.len() + more)
+        }
+        _ => owed.letter.clone(),
+    }
+}
+
 /// The name a parent knows its child by.
 fn agent_name(record: &AgentRecord) -> String {
     record.name.clone().unwrap_or_else(|| record.id.clone())
@@ -648,7 +796,7 @@ impl Runtime {
         self.heal_letters
             .pending
             .iter()
-            .map(|(_, resume, _)| resume.pane.clone())
+            .map(|held| held.resume.pane.clone())
             .collect()
     }
 
