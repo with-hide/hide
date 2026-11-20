@@ -2419,7 +2419,7 @@ impl Runtime {
             };
             if record.ended && record.successor.is_some() {
                 succeeded = true;
-                handed_over.insert(record.machine.clone());
+                handed_over.insert(record.id.clone());
             }
             !record.ended
         });
@@ -2467,13 +2467,17 @@ impl Runtime {
         if succeeded {
             self.follow_successors();
         }
-        // The pane's lineage tokens name the agent before it until the
-        // lineage writer, which runs on that machine's session reads, sees
-        // the successor with the parent it took; nothing on the engine moves
-        // to read it again, so it is asked to (PRD letters-missions-simplify
-        // D-24). One read per machine with a handover in this ledger.
-        for machine in handed_over {
-            self.read_machine_again(&machine);
+        // The panes' lineage tokens name the agent before the successor
+        // until each machine's lineage writer, which runs on its session
+        // reads, sees the successor with the parent and the children it
+        // took; nothing on the engines moves to read them again, so they are
+        // asked to (PRD letters-missions-simplify D-24), once per machine.
+        if !handed_over.is_empty()
+            && let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone)
+        {
+            for machine in crate::coordination::handover_machines(&ledger, &handed_over) {
+                self.read_machine_again(&machine);
+            }
         }
         let continued = self.settle_dormant_registrations();
         self.feed_link_parents();

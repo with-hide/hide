@@ -3346,6 +3346,35 @@ fn hand_over(ledger: &mut Ledger, old: &AgentRecord, successor: &str, now: u64) 
     }
 }
 
+/// The machines whose panes carry lineage tokens a handover of the
+/// registrations `handed_over` changed (`hand_over`): each one's own, which
+/// its successor runs in now, and those of the registrations whose parent,
+/// or whose fork's source, is that successor, the children it took, on
+/// whichever machine they run.
+pub(crate) fn handover_machines(
+    ledger: &Ledger,
+    handed_over: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let successors: std::collections::BTreeSet<&str> = ledger
+        .agents
+        .iter()
+        .filter(|record| handed_over.contains(&record.id))
+        .filter_map(|record| record.successor.as_deref())
+        .collect();
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            successors.contains(record.id.as_str())
+                || [&record.parent, &record.origin]
+                    .into_iter()
+                    .flatten()
+                    .any(|id| successors.contains(id.as_str()))
+        })
+        .map(|record| record.machine.clone())
+        .collect()
+}
+
 fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
     let id = ledger.next_id;
     ledger.next_id = id.checked_add(1).ok_or("capacity")?;
@@ -6696,6 +6725,62 @@ mod tests {
         let heir = heir_of(&mut ledger, &child, fork);
         assert_eq!((heir.parent, heir.origin), (None, Some(parent.id)));
         assert!(heir.forked);
+    }
+
+    /// PRD letters-missions-simplify D-24: a handover asks a session read of
+    /// every machine whose pane tokens it changed: the successor's own and
+    /// each machine a child it took or a fork of it runs on; a root with no
+    /// children asks only its own.
+    #[test]
+    fn a_handover_reads_every_machine_its_lineage_moved_on() {
+        let (mut ledger, parent, child, _) = succession_fixture();
+        let child_record = ledger
+            .agents
+            .iter_mut()
+            .find(|record| record.id == child.id)
+            .unwrap();
+        child_record.machine = "device-b".into();
+        let mut fork = record("f1", "fork-conversation", None);
+        fork.machine = "device-c".into();
+        fork.origin = Some(parent.id.clone());
+        fork.forked = true;
+        fork.id = "agent-90".into();
+        ledger.agents.push(fork);
+        let successions = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            Succession {
+                successor: record("p1", "second-conversation", None),
+            },
+        )]);
+        assert_eq!(
+            succeed(&mut ledger, &successions, 5, &Held::default()).len(),
+            1
+        );
+        let handed = std::collections::BTreeSet::from([parent.id.clone()]);
+        assert_eq!(
+            handover_machines(&ledger, &handed),
+            ["device-b", "device-c", "local"].map(str::to_owned).into(),
+        );
+
+        let (mut ledger, ..) = succession_fixture();
+        let root = ledger
+            .agents
+            .iter()
+            .find(|record| record.pane == "x1")
+            .unwrap()
+            .clone();
+        let successions = std::collections::BTreeMap::from([(
+            root.id.clone(),
+            Succession {
+                successor: record("x1", "other-second", None),
+            },
+        )]);
+        succeed(&mut ledger, &successions, 5, &Held::default());
+        let handed = std::collections::BTreeSet::from([root.id]);
+        assert_eq!(
+            handover_machines(&ledger, &handed),
+            ["local".to_owned()].into()
+        );
     }
 
     /// Only another agent in the same pane of the same machine takes a
