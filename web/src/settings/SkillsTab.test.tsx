@@ -19,7 +19,7 @@ afterEach(() => {
 
 const agents = [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: false, skill: { state: "installed", why: null, location: null }, hook: null, doc_url: "https://example.test" }];
 
-async function render(store: StoreReport | undefined) {
+async function render(store: StoreReport | undefined, send: (event: unknown) => void = () => {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("en");
   const rest = { status: { remote: [] }, navigator: { devices: [{ id: "mac", kind: "local", kit: { agents, components: [], store } }] } } as unknown as SnapshotRest;
@@ -27,7 +27,7 @@ async function render(store: StoreReport | undefined) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><SkillsTab actions={createActions(() => {})} /></TooltipProvider>));
+  await act(async () => root.render(<TooltipProvider><SkillsTab actions={createActions(send as never)} /></TooltipProvider>));
   return { container, unmount: () => act(async () => root.unmount()) };
 }
 
@@ -74,5 +74,51 @@ it("draws a GitHub skill's tile from the picture the store keeps, never from the
     expect(bare.container.querySelector('[data-store-tile="github"]')).not.toBeNull();
   } finally {
     await bare.unmount();
+  }
+});
+
+// Taking over an agent's own copy of a server shows that copy's command, as
+// its place holds it, not the store's own server of the name (B20); Cancel
+// sends nothing, Apply takes in that place. A server Hide cannot read offers
+// no Apply.
+const sent = (events: unknown[]) => events.map((event) => JSON.stringify(event)).filter((text) => text.includes('"op":"adopt"'));
+
+it("confirms taking over an agent's own server with that server's command, and Cancel sends nothing", async () => {
+  const mine = { name: "github", reach: { kind: "local", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], env: ["GITHUB_TOKEN"] } };
+  const theirs = { name: "github", reach: { kind: "local", command: "docker", args: ["run", "-i", "ghcr.io/github/github-mcp-server"], env: ["GITHUB_TOKEN"] } };
+  const item = { id: "mcp:github", kind: "mcp", name: "github", source: { kind: "pasted" }, version: { kind: "folder" }, on: true, server: mine, cells: [{ column: "claude", state: "hand_written", place: "claude-file", path: "/home/al/.claude.json", server: theirs }] };
+  const events: unknown[] = [];
+  const { container, unmount } = await render({ ...report([]), columns: { mcp: [{ id: "claude", agents: ["claude-code"] }] }, items: [item] } as unknown as StoreReport, (event) => events.push(event));
+  const press = (selector: string) => act(async () => document.querySelector<HTMLElement>(selector)!.click());
+  try {
+    await act(async () => container.querySelector<HTMLElement>('[data-store-row="mcp:github"] td')!.click());
+    await press('[data-store-take-over="mcp:github:claude"]');
+    const dialog = () => document.querySelector('[data-store-dialog="adopt"]')?.textContent ?? "";
+    expect(dialog()).toContain("docker run -i ghcr.io/github/github-mcp-server");
+    expect(dialog()).toContain("GITHUB_TOKEN");
+    expect(dialog()).not.toContain("npx");
+    await press('[data-store-dialog="adopt"] [data-store-cancel]');
+    expect(document.querySelector('[data-store-dialog="adopt"]')).toBeNull();
+    expect(sent(events)).toEqual([]);
+    await press('[data-store-take-over="mcp:github:claude"]');
+    await press('[data-store-dialog="adopt"] [data-store-mcp-add]');
+    expect(sent(events)).toHaveLength(1);
+    expect(JSON.parse(sent(events)[0]!).payload.changes).toEqual([{ op: "adopt", kind: "mcp", name: "github", from: "claude-file" }]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("offers no Apply for an agent's server Hide cannot read", async () => {
+  const unmanaged = [{ kind: "mcp", name: "broken", same: true, copies: [{ place: "claude-file", agents: ["claude-code"], path: "/home/al/.claude.json", digest: "", refused: null, server: null }] }];
+  const events: unknown[] = [];
+  const { container, unmount } = await render({ ...report([]), columns: { mcp: [{ id: "claude", agents: ["claude-code"] }] }, unmanaged } as unknown as StoreReport, (event) => events.push(event));
+  try {
+    await act(async () => container.querySelector<HTMLElement>('[data-store-adopt="mcp:broken"]')!.click());
+    expect(document.querySelector('[data-store-dialog="adopt"] [data-store-adopt-unreadable]')).not.toBeNull();
+    expect(document.querySelector('[data-store-dialog="adopt"] [data-store-install]')).toBeNull();
+    expect(document.querySelector('[data-store-dialog="adopt"] [data-store-mcp-add]')).toBeNull();
+  } finally {
+    await unmount();
   }
 });

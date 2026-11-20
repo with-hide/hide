@@ -249,10 +249,19 @@ test("a store whose keys' secret is lost says so with the start-over, and the st
     await check(fixture);
     await expect(note).toHaveCount(0, { timeout: 60_000 }); // wait-ok: the kit's pass after the start-over
     await expect(machine.locator('[data-store-unmanaged="mcp:linear"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's pass after the start-over
+    // The confirm shows what would run, read from the agent's file: the address and the header's name, never its value; Cancel takes nothing in.
     await machine.locator('[data-store-adopt="mcp:linear"]').click();
     const take = page.locator('[data-store-dialog="adopt"]');
     await expect(take).toContainText("Take linear into Hide");
-    await take.locator("[data-store-install]").click();
+    await expect(take).toContainText("https://mcp.linear.app/mcp");
+    await expect(take).toContainText("Authorization");
+    await expect(take).not.toContainText("e2e-fixture-value");
+    await take.locator("[data-store-cancel]").click();
+    await expect(take).toHaveCount(0);
+    await expect(machine.locator('[data-store-unmanaged="mcp:linear"]')).toBeVisible();
+    await expect(machine.locator('[data-store-row="mcp:linear"]')).toHaveCount(0);
+    await machine.locator('[data-store-adopt="mcp:linear"]').click();
+    await take.locator("[data-store-mcp-add]").click();
     await expect(machine.locator('[data-store-row="mcp:linear"]')).toBeVisible({ timeout: 60_000 }); // wait-ok: the kit's adopt pass
   } finally {
     stopStore(fixture);

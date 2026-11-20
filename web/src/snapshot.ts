@@ -2446,6 +2446,8 @@ export type StoreCell = {
   changed_at_unix_ms?: number | null;
   /** The key of the place the state speaks of, which a take-over names (decisions 2026-11-19). */
   place?: string | null;
+  /** A hand-written MCP cell's server as that place holds it, key names only: what a take-over brings in (B20). */
+  server?: McpServer | null;
 };
 
 /** How an MCP server is reached; the names of its keys, never a value. */
@@ -2477,7 +2479,8 @@ export type StoreItem = {
 };
 
 /** One copy of an entry Hide did not write (`FoundCopy`). */
-export type StoreFoundCopy = { place: string; agents: string[]; profiles?: string[]; path: string; link?: string | null; digest: string; refused?: string | null };
+/** An agent's copy Hide does not manage; an MCP copy carries its server as that place holds it, key names only (B20). */
+export type StoreFoundCopy = { place: string; agents: string[]; profiles?: string[]; path: string; link?: string | null; digest: string; refused?: string | null; server?: McpServer | null };
 
 /** What agents hold that Hide does not manage ('에이전트에만 있음', B19). */
 export type StoreUnmanaged = { kind: StoreItemKind; name: string; copies: StoreFoundCopy[]; same: boolean };

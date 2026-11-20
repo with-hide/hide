@@ -759,7 +759,7 @@ function CellFix({ first, item, column, cell, page }: { first: boolean; item: St
             {t("store.retry")}
           </Button>
         ) : (
-          <Button variant="secondary" size="sm" className="shrink-0" disabled={page.readOnly} onClick={() => page.openAdopt({ kind: item.kind, name: item.name, from: cell.place ?? undefined, path: cell.path ? (item.kind === "skill" ? joinPath(cell.path, item.name) : cell.path) : null })} data-store-take-over={`${item.id}:${column.id}`}>
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={page.readOnly} onClick={() => page.openAdopt({ kind: item.kind, name: item.name, from: cell.place ?? undefined, path: cell.path ? (item.kind === "skill" ? joinPath(cell.path, item.name) : cell.path) : null, server: cell.server ?? null })} data-store-take-over={`${item.id}:${column.id}`}>
             {t("store.cell.takeOver")}
           </Button>
         )}
@@ -848,7 +848,7 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
         </span>
       </span>
       {row.same || row.copies.length < 2 ? (
-        <Button variant="secondary" size="sm" disabled={page.readOnly} onClick={() => page.openAdopt({ kind: row.kind, name: row.name, path: copyPath(row.copies[0]) })} data-store-adopt={`${row.kind}:${row.name}`}>
+        <Button variant="secondary" size="sm" disabled={page.readOnly} onClick={() => page.openAdopt({ kind: row.kind, name: row.name, path: copyPath(row.copies[0]), server: row.copies[0]?.server ?? null })} data-store-adopt={`${row.kind}:${row.name}`}>
           {t("store.unmanaged.applyAll")}
         </Button>
       ) : (
@@ -860,7 +860,7 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {row.copies.map((copy) => (
-              <DropdownMenuItem key={copy.place} onSelect={() => page.openAdopt({ kind: row.kind, name: row.name, from: copy.place, path: copyPath(copy) })} data-store-adopt-from={copy.place}>
+              <DropdownMenuItem key={copy.place} onSelect={() => page.openAdopt({ kind: row.kind, name: row.name, from: copy.place, path: copyPath(copy), server: copy.server ?? null })} data-store-adopt-from={copy.place}>
                 {t("store.unmanaged.fromWhich", { agent: where(copy.agents) })}
               </DropdownMenuItem>
             ))}

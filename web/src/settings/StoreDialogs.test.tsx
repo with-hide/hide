@@ -75,7 +75,7 @@ it("keeps an empty argument the server was read with, and leaves out only an add
 const folderPreview = (id: string, path: string, name: string, at: number): StorePreview => ({
   id,
   source: { kind: "folder", path },
-  skills: [{ name, path: name, files: [{ path: `${name}.md`, executable: false }], digest: `digest-${id}`, taken: false }],
+  skills: [{ name, path: name, files: [{ path: `${name}.md`, executable: false, size: 10 }], digest: `digest-${id}`, taken: false }],
   agents: ["claude-code"],
   at_unix_ms: at,
 });

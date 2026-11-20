@@ -282,14 +282,16 @@ function InstallConfirm({ preview, skills, shown, pending, refusal, onClose, onI
   );
 }
 
-/** A copy an agent holds that Hide is asked to take in: its kind and name, the place it is taken from, and where it is on the machine. */
-export type AdoptTarget = { kind: StoreItemKind; name: string; from?: string; path: string | null };
+/** A copy an agent holds that Hide is asked to take in: its kind and name, the place it is taken from, where it is on the machine, and an MCP copy's server as that place holds it. */
+export type AdoptTarget = { kind: StoreItemKind; name: string; from?: string; path: string | null; server?: McpServer | null };
 
 /**
  * [모두에 적용] or [가져오기]: what is taken in, shown before anything moves
  * (B20). A skill's copy is read like a folder added: where it is, every file
- * (▲ an executable one) and the agents it goes to; a server's, the agent file
- * it is in and the agents it goes to. Only Apply takes it in.
+ * (▲ an executable one) and the agents it goes to; a server's, as MCP 추가's
+ * confirm shows one (B9): the command and arguments or the address, its
+ * keys' names and the agents, read from the copy's own place. A server Hide
+ * cannot read offers no Apply. Only Apply takes it in.
  */
 export function AdoptDialog({ device, target, report, shown, actions, onClose }: { device: Device; target: AdoptTarget; report: StoreReport; shown: ReadonlySet<string>; actions: Actions; onClose: () => void }) {
   const { t } = useInterfaceTranslation();
@@ -315,6 +317,27 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
     return <InstallConfirm title={title} data="adopt" preview={preview} skills={preview.skills} shown={shown} pending={apply.pending} refusal={apply.refusal} onClose={onClose} onInstall={adopt} confirmLabel={t("store.adopt.apply")} header={header} />;
   }
   const agents = (report.columns[target.kind] ?? []).flatMap((column) => column.agents).filter((agent, index, all) => shown.has(agent) && all.indexOf(agent) === index);
+  if (target.kind === "mcp" && target.server) {
+    const names = keyNames(target.server);
+    return (
+      <McpConfirm
+        data="adopt"
+        title={title}
+        header={header}
+        server={target.server}
+        keys={{}}
+        pasted={null}
+        shown={new Set(agents)}
+        pending={apply.pending}
+        refusal={apply.refusal}
+        confirmLabel={t("store.adopt.apply")}
+        onClose={onClose}
+        onConfirm={adopt}
+        keyEntry={<span className="flex flex-col font-mono">{names.map((key) => <span key={key}>{key}</span>)}</span>}
+      />
+    );
+  }
+  const unreadable = target.kind === "mcp";
   const reading = reads && !read.refusal && !lost;
   return (
     <StoreDialog
@@ -324,7 +347,7 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-store-cancel="true">{t("common.cancel")}</Button>
-          {reads ? null : (
+          {reads || unreadable ? null : (
             <Button disabled={apply.pending} aria-busy={apply.pending} onClick={adopt} data-store-install="true">{t("store.adopt.apply")}</Button>
           )}
         </>
@@ -340,6 +363,7 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
         </Facts>
       )}
       {read.refusal || lost ? <Note tone="error" data-store-adopt-refused={read.refusal ?? "not_found"}>{refusalText(read.refusal ?? "not_found", t)}</Note> : null}
+      {unreadable ? <Note tone="error" data-store-adopt-unreadable="true">{t("store.adopt.unreadable")}</Note> : null}
       {apply.refusal ? <Note tone="error" data-store-install-refused={apply.refusal}>{refusalText(apply.refusal, t)}</Note> : null}
     </StoreDialog>
   );
@@ -475,7 +499,7 @@ export function McpFields({ report, server, pasted, onClose, onNext }: { report:
 }
 
 /** MCP 추가: name — how it is reached, its keys hidden, the agents it reaches with those that cannot struck out (scene 3, right). */
-function McpConfirm({ server, keys, pasted, shown, pending, refusal, confirmLabel, title, onClose, onConfirm, header, keyEntry }: { server: McpServer; keys: Record<string, string>; pasted: McpPastedServer | null; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; confirmLabel: string; title?: string; onClose: () => void; onConfirm: () => void; header?: ReactNode; keyEntry?: ReactNode }) {
+function McpConfirm({ server, keys, pasted, shown, pending, refusal, confirmLabel, title, onClose, onConfirm, header, keyEntry, data = "mcp-confirm" }: { server: McpServer; keys: Record<string, string>; pasted: McpPastedServer | null; shown: ReadonlySet<string>; pending: boolean; refusal: StoreRefusalCause | "unavailable" | null; confirmLabel: string; title?: string; onClose: () => void; onConfirm: () => void; header?: ReactNode; keyEntry?: ReactNode; data?: string }) {
   const { t } = useInterfaceTranslation();
   const every = [...shown];
   const reaching = pasted?.agents?.filter((agent) => shown.has(agent));
@@ -485,7 +509,7 @@ function McpConfirm({ server, keys, pasted, shown, pending, refusal, confirmLabe
     <StoreDialog
       title={title ?? t("store.mcp.titleNamed", { name: server.name })}
       onClose={onClose}
-      data="mcp-confirm"
+      data={data}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} data-store-cancel="true">{t("common.cancel")}</Button>
