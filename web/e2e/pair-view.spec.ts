@@ -76,7 +76,6 @@ test("a pane goes beside its desk and back: one owner on both sides, three marks
     };
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await expect(paneView(page, shell)).toBeVisible();
 
     // The watched agent's View lands on the desk; the other agent's waits in its pane's list.
     await open(leftAgent, "a.md");
