@@ -59,6 +59,7 @@ fn registration(id: &str, pane: &str, parent: Option<&str>) -> AgentRecord {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     }
 }
 
@@ -357,10 +358,11 @@ fn letter_wakes_run_four_at_a_time_in_the_order_the_letters_came() {
 }
 
 /// B6: a wake that fails leaves the `request` and `block` letters waiting on
-/// it to the store to fail, with the wake's reason, and leaves a `report`
-/// waiting; the next `request` tries the wake again.
+/// it pending, with the wake's reason for their senders, as it leaves a
+/// `report` (PRD letters-missions-simplify B6); the next `request` tries the
+/// wake again.
 #[test]
-fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
+fn a_failed_letter_wake_leaves_its_requests_pending_and_the_next_one_tries_again() {
     let mut runtime = sleepers(&[WORKER]);
     let report = letter(&mut runtime, WORKER, "report");
     let request = letter(&mut runtime, WORKER, "request");
@@ -375,23 +377,21 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
         },
     );
     runtime.drive_letter_wakes();
-    let failed = runtime.delivery_wake_failures();
+    let failed = runtime.letter_wake_failures();
     assert_eq!(
         failed.get(&request).map(String::as_str),
         Some(crate::agent_sleep_engine::WAKE_FOLDER_MISSING)
     );
     assert!(!failed.contains_key(&report));
-    // The store's pass applies it.
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    assert!(ledger.fail_undeliverable(&failed, unix_milliseconds()));
-    let undelivered = ledger
+    let ledger = runtime.delivery_state().unwrap();
+    let waiting = ledger
         .letters
         .iter()
         .find(|letter| letter.id == request)
         .unwrap();
-    assert_eq!(undelivered.state, State::Undelivered);
-    assert!(!undelivered.waiting_answer);
-    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(waiting.state, State::Pending);
+    assert!(waiting.waiting_answer);
+    runtime.publish_delivery(ledger, true);
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
     letter(&mut runtime, WORKER, "request");
@@ -411,12 +411,11 @@ fn refused_wake() -> WakeOutcome {
 }
 
 /// with-hide/hide-private#660, #675: a letter wake the engine refused before
-/// typing anything does not fail its `request` at once; the same wake is
-/// asked again once its wait has passed, and the letter fails, with the
-/// wake's reason for its sender, only when the third wake in a row is
-/// refused as well.
+/// typing anything is not given up at once; the same wake is asked again
+/// once its wait has passed, and the sender is told the wake's reason only
+/// when the third wake in a row is refused as well.
 #[test]
-fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_the_third() {
+fn a_letter_wake_refused_before_typing_is_tried_again_and_given_up_on_the_third() {
     let mut runtime = sleepers(&[WORKER]);
     let request = letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
@@ -425,7 +424,7 @@ fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_th
         runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
         runtime.drive_letter_wakes();
         assert!(
-            runtime.delivery_wake_failures().is_empty(),
+            runtime.letter_wake_failures().is_empty(),
             "wake {wake} was refused and its letter still waits"
         );
         // Nothing starts again before the wait has passed.
@@ -445,7 +444,7 @@ fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_th
     runtime.drive_letter_wakes();
     assert_eq!(
         runtime
-            .delivery_wake_failures()
+            .letter_wake_failures()
             .get(&request)
             .map(String::as_str),
         Some(crate::agent_sleep_engine::WAKE_NOT_RESUMED)
@@ -473,7 +472,7 @@ fn a_letter_wake_that_comes_back_on_its_next_try_keeps_its_letter() {
     runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
     runtime.letter_wakes.touch();
     runtime.drive_letter_wakes();
-    assert!(runtime.delivery_wake_failures().is_empty());
+    assert!(runtime.letter_wake_failures().is_empty());
     let ledger = runtime.delivery_state().unwrap();
     let kept = ledger
         .letters
@@ -484,9 +483,9 @@ fn a_letter_wake_that_comes_back_on_its_next_try_keeps_its_letter() {
 }
 
 /// A wake that may have typed its start, or failed for a cause that stays,
-/// is not asked again: its letters fail at once, as before.
+/// is not asked again: its sender is told at once.
 #[test]
-fn a_letter_wake_that_may_have_typed_fails_its_letter_at_once() {
+fn a_letter_wake_that_may_have_typed_is_given_up_at_once() {
     let mut runtime = sleepers(&[WORKER]);
     let request = letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
@@ -502,21 +501,19 @@ fn a_letter_wake_that_may_have_typed_fails_its_letter_at_once() {
     runtime.drive_letter_wakes();
     assert_eq!(
         runtime
-            .delivery_wake_failures()
+            .letter_wake_failures()
             .get(&request)
             .map(String::as_str),
         Some(crate::agent_sleep_engine::WAKE_NOT_READY)
     );
 }
 
-/// D-13, D-16: an agent whose wake failed takes letters but no longer
-/// pauses their hour, since nothing will wake it; and a `request` that finds
-/// no connection to wake it on waits, rather than failing with the earlier
+/// D-16: a `request` to an agent whose wake failed that finds no
+/// connection to wake it on waits, rather than failing with the earlier
 /// wake's reason.
 #[test]
-fn a_failed_sleeper_runs_its_letters_deadline_and_waits_for_a_connection() {
+fn a_failed_sleeper_waits_for_a_connection() {
     let mut runtime = sleepers(&[WORKER]);
-    assert!(runtime.delivery_asleep().contains_key(WORKER));
     runtime
         .snapshot
         .ui_state
@@ -525,11 +522,10 @@ fn a_failed_sleeper_runs_its_letters_deadline_and_waits_for_a_connection() {
         .get_mut(WORKER)
         .unwrap()
         .phase = SleepPhase::Failed;
-    assert!(!runtime.delivery_asleep().contains_key(WORKER));
     runtime.live = None;
     let request = letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
-    assert!(!runtime.delivery_wake_failures().contains_key(&request));
+    assert!(!runtime.letter_wake_failures().contains_key(&request));
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
 }
 
@@ -549,18 +545,6 @@ fn a_restart_queues_the_wake_a_pending_request_still_needs() {
     runtime.publish_delivery(ledger, false);
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
-}
-
-/// D-13: the store's pass reads the asleep recipients with the session the
-/// letters to them address.
-#[test]
-fn the_store_reads_a_sleeper_with_its_session() {
-    let runtime = sleepers(&[WORKER]);
-    let asleep = runtime.delivery_asleep();
-    let sleeper = &asleep[WORKER];
-    assert_eq!(sleeper.session, actor(WORKER).session);
-    assert_eq!(sleeper.device_id, crate::node::TEST_NODE);
-    assert_eq!(sleeper.since, 1_000);
 }
 
 /// The machine's memory pressure at `level`, read at `now`.
@@ -721,7 +705,8 @@ fn a_letter_whose_bell_was_typed_but_not_taken_wakes_its_recipient_after_a_later
 
 /// The letters that hold their recipient awake: a pending one whose bell
 /// was not typed and that no prompt hook was handed, and none that rang, was
-/// handed over, taken in, cancelled, left undelivered or expired.
+/// handed over, taken in, cancelled, superseded, ended with no recipient or
+/// expired.
 #[test]
 fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
     let mut runtime = live(session("w-order:t1", Some("idle")));
@@ -741,7 +726,8 @@ fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
         (State::Delivered, false, false, false),
         (State::Acknowledged, false, false, false),
         (State::Cancelled, false, false, false),
-        (State::Undelivered, false, false, false),
+        (State::Superseded, false, false, false),
+        (State::NoRecipient, false, false, false),
         (State::Expired, false, false, false),
     ] {
         edit_letter(&mut runtime, &id, |letter| {

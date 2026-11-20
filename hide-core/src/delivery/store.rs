@@ -8,12 +8,13 @@
 //! and spawn record is a row of its own table, the record's JSON encoding
 //! keyed by its number in the ledger's one id sequence, so rows read back in
 //! the order they were made. The rest of the ledger (its next id, watches,
-//! machine clocks, identity waits and declared turns, each bounded by the
+//! identity waits and declared turns, each bounded by the
 //! records) is one row. What each registered agent saw of its status cells
 //! (`Ledger::status_seen`) is a row of its own per agent, in the `seen`
 //! table. That table is additive: every open makes it when it is missing
 //! ([`ADDITIVE`]) and the schema version stays 1, so a build that does not
-//! know it opens the file as before and leaves the table alone. A write is the rows that changed between the ledger
+//! know it opens the file as before and leaves the table alone. A write is
+//! the rows that changed between the ledger
 //! the file holds and the one to keep, in one transaction
 //! ([`LedgerStore::write`]): a sent letter is one new row, not a new file.
 //!
@@ -27,10 +28,21 @@
 //! `delivery-ledger.json` in the transaction that makes the tables (D-08,
 //! D-20): a start cut short before it commits imports again, and the old file
 //! is only ever read, so an older build started on the same folder finds the
-//! ledger as it was before the update (B27). A file that fails its integrity
-//! check, or that a newer build made, is refused and kept as it is, never
-//! made again by guess: the core then refuses every letter until it is fixed,
-//! as it did for a JSON file it could not read.
+//! ledger as it was before the update (B27). A file whose rest row lacks the
+//! `addressed` mark, which a build before letters named their registrations
+//! (1.2.11) wrote, has its letters addressed in one transaction at its first
+//! open (`upgrade`, PRD letters-missions-simplify B25), as the ledger an
+//! import reads has.
+//!
+//! Going back to that build still opens the file: the version stays 1, every
+//! field this build adds is one it ignores and every field it dropped one
+//! that build defaults, and a letter's row spells its state in that build's
+//! words (`Row::encode` of a letter). That build drops the mark when it
+//! writes the rest row again, so the letters it wrote are addressed at the
+//! next update. A file that fails its integrity check, or that a newer build
+//! made, is refused and kept as it is, never made again by guess: the core
+//! then refuses every letter until it is fixed, as it did for a JSON file it
+//! could not read.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -41,7 +53,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::ledger::{Ledger, Letter, NodeClock, SaveError, StoreFailure};
+use super::ledger::{Ledger, Letter, SaveError, State, StoreFailure};
 use super::watch::Watch;
 use super::{FILE_LIMIT, LETTER_LIMIT};
 use crate::coordination::human_turn::HumanTurn;
@@ -89,6 +101,9 @@ pub enum Opened {
     Imported,
     /// The file was made empty: there was no `delivery-ledger.json`.
     Fresh,
+    /// The file held tables a build before this one wrote, whose letters
+    /// were addressed in it (`upgrade`).
+    Upgraded,
 }
 
 /// The writer's connection to the ledger's file. One per open; the core's
@@ -101,9 +116,13 @@ impl LedgerStore {
     /// Opens the file at `path`, making it, private, when it is not there,
     /// and answers the ledger it holds. A file without this build's tables
     /// gets them in one transaction with what `delivery-ledger.json` beside
-    /// it holds, which is read and never written.
+    /// it holds, which is read and never written; one an earlier build wrote
+    /// has its letters addressed (`upgrade`).
     pub fn open(path: &Path) -> Result<(Self, Ledger, Opened), String> {
-        let (store, opened) = Self::open_file(path)?;
+        let (mut store, mut opened) = Self::open_file(path)?;
+        if opened == Opened::Existing {
+            opened = upgrade(&mut store.connection, path)?;
+        }
         let ledger = read_from(&store.connection).map_err(|code| refused(path, &code))?;
         Ok((store, ledger, opened))
     }
@@ -207,7 +226,8 @@ fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
         .execute_batch(SCHEMA)
         .and_then(|()| transaction.execute_batch(ADDITIVE))
         .map_err(|error| failed(path, &error))?;
-    let ledger = imported.clone().unwrap_or_default();
+    let mut ledger = imported.clone().unwrap_or_default();
+    upgraded(&mut ledger, true);
     Changes::all(&ledger)
         .write(&transaction)
         .map_err(|error| refused(path, error.code()))?;
@@ -226,6 +246,60 @@ fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
     })
 }
 
+/// Addresses the letters of a file whose rest row lacks the `addressed`
+/// mark to the registrations they are between (`upgraded`), and writes the
+/// letters that changed and the rest row with the mark, in one transaction;
+/// a file with the mark is left as it is. A start cut short before it
+/// commits finds the file without the mark again.
+fn upgrade(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| failed(path, &error))?;
+    let rest: String = transaction
+        .query_row("SELECT body FROM ledger WHERE only = 1", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| failed(path, &error))?;
+    let rest: Value = serde_json::from_str(&rest).map_err(|_| refused(path, "unreadable"))?;
+    if rest["addressed"] == true {
+        return Ok(Opened::Existing);
+    }
+    let before = read_records(&transaction).map_err(|code| refused(path, &code))?;
+    let mut ledger = before.clone();
+    upgraded(&mut ledger, false);
+    let mut changes = Changes::between(&before, &ledger);
+    changes.rest = Some(split(&ledger).0);
+    changes
+        .write(&transaction)
+        .map_err(|error| refused(path, error.code()))?;
+    transaction.commit().map_err(|error| failed(path, &error))?;
+    Ok(Opened::Upgraded)
+}
+
+/// Addresses the letters of a ledger an earlier build kept, in its JSON file
+/// (`imported`) or its tables, as this build does
+/// (`Ledger::address_letters`), and says so.
+fn upgraded(ledger: &mut Ledger, imported: bool) {
+    let addressed = ledger.address_letters(crate::runtime::hide_notice, super::worker::now());
+    crate::diagnostic!(json!({"component":"delivery","kind":"ledger.upgraded",
+        "imported":imported,"letters":ledger.letters.len(),
+        "no_recipient":addressed.no_recipient,"expired":addressed.expired}));
+}
+
+/// `ledger`, an earlier build's, as an import or an upgrade keeps it: its
+/// letters addressed (`Ledger::address_letters`), each it ended finished at
+/// the time `kept`, the store's, gives it, which the start's clock set.
+#[cfg(test)]
+pub(crate) fn as_upgraded(mut ledger: Ledger, kept: &Ledger) -> Ledger {
+    ledger.address_letters(crate::runtime::hide_notice, 0);
+    for (letter, kept) in ledger.letters.iter_mut().zip(&kept.letters) {
+        if letter.finished_at_unix_ms == Some(0) {
+            letter.finished_at_unix_ms = kept.finished_at_unix_ms;
+        }
+    }
+    ledger
+}
+
 /// `delivery-ledger.json` beside the store at `path`: where builds before it
 /// kept the ledger.
 pub fn legacy_path(path: &Path) -> PathBuf {
@@ -237,13 +311,19 @@ pub fn legacy_path(path: &Path) -> PathBuf {
 /// ledger. A core move asks it of the copy it is about to place
 /// (`node_migration::copy::check_loadable`).
 pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
-    let unavailable = |_| "ledger_unavailable".to_owned();
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(unavailable)?;
+        .map_err(|_| "ledger_unavailable".to_owned())?;
     if version != SCHEMA_VERSION {
         return Err("ledger_unavailable".into());
     }
+    read_records(connection)
+}
+
+/// The ledger `connection`'s tables hold, whichever version wrote them, under
+/// the rules [`read_from`] reads them by.
+fn read_records(connection: &Connection) -> Result<Ledger, String> {
+    let unavailable = |_| "ledger_unavailable".to_owned();
     // A file this store wrote holds no more than the limit the core keeps
     // its ledger within; one that does was not, and is not read into memory.
     // Counted in bytes, as the limit is: `length` of text counts characters.
@@ -322,7 +402,7 @@ fn rows<T: Row>(connection: &Connection) -> Result<Vec<T>, String> {
         let seq: i64 = row.get(0).map_err(unavailable)?;
         let id: String = row.get(1).map_err(unavailable)?;
         let body: String = row.get(2).map_err(unavailable)?;
-        let record: T = serde_json::from_str(&body).map_err(|_| "ledger_unavailable")?;
+        let record = T::decode(&body).map_err(|_| "ledger_unavailable")?;
         // A row is the record its key names.
         if record.id() != id || sequence(&id) != Some(seq) {
             return Err("ledger_unavailable".into());
@@ -470,12 +550,51 @@ pub fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
 trait Row: Serialize + DeserializeOwned + PartialEq {
     const TABLE: &'static str;
     fn id(&self) -> &str;
+
+    /// The record as its row's body spells it.
+    fn encode(&self) -> serde_json::Result<String> {
+        serde_json::to_string(self)
+    }
+
+    fn decode(body: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(body)
+    }
 }
+
+/// The field of a letter's row that names an end the build before the four
+/// ends (1.2.11) has no word for.
+const END: &str = "end";
 
 impl Row for Letter {
     const TABLE: &'static str = "letters";
     fn id(&self) -> &str {
         &self.id
+    }
+
+    /// A letter whose end the build before the four ends has no word for is
+    /// spelled in its words, so going back to it still reads the ledger
+    /// (`Ledger::validate` there refuses a state it does not know):
+    /// `superseded` as `cancelled` and `no_recipient` as `undelivered`, each
+    /// a letter that waits for nothing, with `end` naming the end for this
+    /// build.
+    fn encode(&self) -> serde_json::Result<String> {
+        let older = match self.state {
+            State::Superseded => "cancelled",
+            State::NoRecipient => "undelivered",
+            _ => return serde_json::to_string(self),
+        };
+        let mut row = serde_json::to_value(self)?;
+        let end = std::mem::replace(&mut row["state"], older.into());
+        row[END] = end;
+        serde_json::to_string(&row)
+    }
+
+    fn decode(body: &str) -> serde_json::Result<Self> {
+        let mut row: Value = serde_json::from_str(body)?;
+        if let Some(end) = row.as_object_mut().and_then(|row| row.remove(END)) {
+            row["state"] = end;
+        }
+        serde_json::from_value(row)
     }
 }
 
@@ -510,8 +629,6 @@ struct Rest {
     #[serde(default)]
     spawn_placement_revision: u64,
     #[serde(default)]
-    node_clocks: BTreeMap<String, NodeClock>,
-    #[serde(default)]
     human_turns: BTreeMap<String, HumanTurn>,
 }
 
@@ -530,7 +647,6 @@ impl Rest {
             watches,
             identity_waits,
             spawn_placement_revision,
-            node_clocks,
             human_turns,
         } = self;
         Ledger {
@@ -542,7 +658,6 @@ impl Rest {
             spawns,
             identity_waits,
             spawn_placement_revision,
-            node_clocks,
             human_turns,
             // The `seen` table's, read beside the row (`seen_rows`).
             status_seen: BTreeMap::new(),
@@ -558,8 +673,11 @@ struct RestRef<'a> {
     watches: &'a [Watch],
     identity_waits: &'a [IdentityWait],
     spawn_placement_revision: u64,
-    node_clocks: &'a BTreeMap<String, NodeClock>,
     human_turns: &'a BTreeMap<String, HumanTurn>,
+    /// Always true: the ledger's letters name the registrations they are
+    /// between. A build before this one drops the mark when it writes the
+    /// row again, and `upgrade` addresses its letters at the next open.
+    addressed: bool,
 }
 
 /// `ledger` as its one row and its three tables' records. Every field is
@@ -583,7 +701,6 @@ fn split(
         spawns,
         identity_waits,
         spawn_placement_revision,
-        node_clocks,
         human_turns,
         status_seen,
     } = ledger;
@@ -594,8 +711,8 @@ fn split(
             watches,
             identity_waits,
             spawn_placement_revision: *spawn_placement_revision,
-            node_clocks,
             human_turns,
+            addressed: true,
         },
         letters,
         agents,
@@ -658,7 +775,7 @@ impl<'a, T: Row> Rows<'a, T> {
                 ))
                 .map_err(refused)?;
             for record in &self.put {
-                let body = serde_json::to_string(record).map_err(|_| unencodable())?;
+                let body = record.encode().map_err(|_| unencodable())?;
                 put.execute(params![
                     sequence(record.id()).ok_or_else(unencodable)?,
                     record.id(),
@@ -871,6 +988,239 @@ mod tests {
         .id
     }
 
+    /// B25: a store the build before this one wrote, its letters addressed
+    /// to agents and its rest row keeping the machines' clocks, has its
+    /// letters addressed in one transaction at its first open: each letter
+    /// names the registrations it is between; a pending letter to an agent
+    /// whose registration lives keeps waiting for it, one to an agent with
+    /// none ends with no recipient, a pending notice Hide wrote ends expired,
+    /// and a letter Hide handed for work keeps waiting. A letter that build
+    /// left undelivered reads as expired. The next open finds the letters
+    /// addressed and changes nothing.
+    #[test]
+    fn a_store_the_build_before_wrote_has_its_letters_addressed_once() {
+        let (_root, state) = state();
+        let path = hide_kit::layout::delivery_store(&state);
+        let session = |name: &str| crate::engine::tokens::session_digest(name);
+        let agent = |id: &str, pane: &str, ended: bool| {
+            json!({
+                "id": id, "name": format!("{pane}-agent"), "machine": "node",
+                "host_scope": "/tmp/engine.sock", "native_machine": "node",
+                "session": format!("{pane}-native"), "instance": pane, "pane": pane,
+                "parent": null, "origin": null, "project": null,
+                "actor": {"pane_id": pane, "name": pane, "kind": "claude",
+                          "device_id": "node", "session": session(&format!("{pane}-native"))},
+                "ended": ended, "forked": false,
+            })
+        };
+        let mut ledger = Ledger {
+            agents: vec![
+                serde_json::from_value(agent("agent-1", "w1:p2", false)).unwrap(),
+                serde_json::from_value(agent("agent-2", "w1:p3", true)).unwrap(),
+            ],
+            next_id: 3,
+            ..Ledger::default()
+        };
+        let to = |pane: &str| {
+            let mut actor = actor(pane);
+            actor.session = session(&format!("{pane}-native"));
+            actor
+        };
+        let sent = |ledger: &mut Ledger, from: &Actor, to: &Actor, intent: &str| {
+            mailbox::send(ledger, from, to, intent, "body", "request", None, 5)
+                .unwrap()
+                .id
+        };
+        let agent_letter = sent(&mut ledger, &actor("w1:p1"), &to("w1:p2"), "live");
+        let to_ended = sent(&mut ledger, &actor("w1:p1"), &to("w1:p3"), "ended");
+        let notice = sent(
+            &mut ledger,
+            &Actor::hide("wake", "node"),
+            &to("w1:p2"),
+            "wake",
+        );
+        let unregistered = sent(&mut ledger, &actor("w1:p1"), &actor("w1:p4"), "none");
+        let left = sent(&mut ledger, &actor("w1:p1"), &to("w1:p2"), "left");
+        let work = sent(
+            &mut ledger,
+            &Actor::hide("desk", "node"),
+            &to("w1:p2"),
+            "work",
+        );
+        // The file as the build before this one wrote it.
+        hide_platform::fs::private::create_new_file(&path).unwrap();
+        let mut connection = Connection::open(&path).unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction.execute_batch(SCHEMA).unwrap();
+        Changes::all(&ledger).write(&transaction).unwrap();
+        let rows: Vec<(i64, String)> = transaction
+            .prepare("SELECT seq, body FROM letters")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for (seq, body) in rows {
+            let mut letter: Value = serde_json::from_str(&body).unwrap();
+            let object = letter.as_object_mut().unwrap();
+            object.remove("from");
+            object.remove("to");
+            if object["id"] == left.as_str() {
+                object.insert("state".into(), json!("undelivered"));
+                object.insert("waiting_answer".into(), json!(false));
+                object.insert("finished_at_unix_ms".into(), json!(6));
+            }
+            transaction
+                .execute(
+                    "UPDATE letters SET body = ?1 WHERE seq = ?2",
+                    params![letter.to_string(), seq],
+                )
+                .unwrap();
+        }
+        let rest: String = transaction
+            .query_row("SELECT body FROM ledger", [], |row| row.get(0))
+            .unwrap();
+        let mut rest: Value = serde_json::from_str(&rest).unwrap();
+        rest.as_object_mut().unwrap().remove("addressed");
+        rest["node_clocks"] = json!({"mini": {"connected_ms": 60_000, "since": null}});
+        transaction
+            .execute("UPDATE ledger SET body = ?1", [rest.to_string()])
+            .unwrap();
+        transaction.pragma_update(None, "user_version", 1).unwrap();
+        transaction.commit().unwrap();
+        drop(connection);
+
+        let ((_, read, opened), records) =
+            crate::diagnostics::capture(|| LedgerStore::open(&path).unwrap());
+        assert_eq!(opened, Opened::Upgraded);
+        use ledger::State;
+        let of = |id: &str| read.letters.iter().find(|letter| letter.id == id).unwrap();
+        let cases = [
+            (&agent_letter, State::Pending, Some("agent-1")),
+            (&to_ended, State::NoRecipient, Some("agent-2")),
+            (&notice, State::Expired, Some("agent-1")),
+            (&unregistered, State::NoRecipient, None),
+            (&left, State::Expired, Some("agent-1")),
+            (&work, State::Pending, Some("agent-1")),
+        ];
+        for (id, state, to) in cases {
+            assert_eq!((of(id).state, of(id).to.as_deref()), (state, to), "{id}");
+            assert_eq!(of(id).from, None, "{id}: no registration sent it");
+        }
+        for id in [&to_ended, &notice, &unregistered] {
+            assert!(
+                !of(id).open() && of(id).finished_at_unix_ms.is_some(),
+                "{id}"
+            );
+        }
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "ledger.upgraded"
+                    && record["imported"] == false
+                    && record["no_recipient"] == 2
+                    && record["expired"] == 1)
+        );
+        let connection = Connection::open(&path).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let rest: String = connection
+            .query_row("SELECT body FROM ledger", [], |row| row.get(0))
+            .unwrap();
+        assert!(!rest.contains("node_clocks"), "{rest}");
+        assert!(rest.contains(r#""addressed":true"#), "{rest}");
+        drop(connection);
+        let (_, again, opened) = LedgerStore::open(&path).unwrap();
+        assert_eq!(opened, Opened::Existing);
+        assert_eq!(again, read);
+    }
+
+    /// Going back to the build before the four ends (1.2.11) still reads the
+    /// ledger: every letter's row spells its state in that build's words,
+    /// and this build reads each end back as it was.
+    #[test]
+    fn every_letter_row_spells_its_state_in_the_words_of_the_build_before() {
+        let (_root, state) = state();
+        let path = hide_kit::layout::delivery_store(&state);
+        let (mut store, before, _) = LedgerStore::open(&path).unwrap();
+        let mut ledger = before.clone();
+        use ledger::State;
+        let ends = [
+            State::Pending,
+            State::Delivered,
+            State::Acknowledged,
+            State::Cancelled,
+            State::Superseded,
+            State::NoRecipient,
+            State::Expired,
+        ];
+        for (index, end) in ends.iter().enumerate() {
+            let id = send(&mut ledger, &format!("intent-{index}"), "body", 1);
+            let letter = ledger.letters.iter_mut().find(|l| l.id == id).unwrap();
+            letter.state = *end;
+            if *end != State::Pending {
+                letter.waiting_answer = false;
+                letter.finished_at_unix_ms = Some(2);
+            }
+            // A superseded letter may carry the receipt that came after it
+            // was replaced, as the build before lets a cancelled one.
+            if matches!(
+                end,
+                State::Delivered | State::Acknowledged | State::Superseded
+            ) {
+                letter.hook_confirmed = Some(true);
+            }
+            // A report keeps how much of its body its sender wrote, a field
+            // the build before ignores.
+            if *end == State::Pending {
+                letter.body = "body and the core's list".into();
+                letter.written = Some("body".len());
+            }
+        }
+        ledger.validate().unwrap();
+        store.write(&before, &ledger).unwrap();
+        // The words of `State` in the build before (1.2.11).
+        let words = [
+            "pending",
+            "delivered",
+            "acknowledged",
+            "cancelled",
+            "expired",
+            "undelivered",
+        ];
+        let connection = Connection::open(&path).unwrap();
+        let rows: Vec<Value> = connection
+            .prepare("SELECT body FROM letters ORDER BY seq")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|body| serde_json::from_str(&body.unwrap()).unwrap())
+            .collect();
+        let spelled: Vec<&str> = rows
+            .iter()
+            .map(|row| row["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            spelled,
+            [
+                "pending",
+                "delivered",
+                "acknowledged",
+                "cancelled",
+                "cancelled",
+                "undelivered",
+                "expired"
+            ]
+        );
+        assert!(spelled.iter().all(|state| words.contains(state)));
+        drop((connection, store));
+        let (_, read, opened) = LedgerStore::open(&path).unwrap();
+        assert_eq!(opened, Opened::Existing);
+        assert_eq!(read, ledger);
+    }
+
     /// B24: the ledger each released build left is what the first start of
     /// this one reads, imported whole, and the file it was in stays as it
     /// was; a later start reads the store.
@@ -889,9 +1239,9 @@ mod tests {
             let expected = ledger::load(&old).unwrap();
             assert!(!expected.letters.is_empty() && !expected.agents.is_empty());
             let path = hide_kit::layout::delivery_store(&state);
-            let ((), records) = crate::diagnostics::capture(|| {
-                assert_eq!(ledger::recover(&path).unwrap(), expected, "{fixture:?}");
-            });
+            let (kept, records) = crate::diagnostics::capture(|| ledger::recover(&path).unwrap());
+            let expected = as_upgraded(expected, &kept);
+            assert_eq!(kept, expected, "{fixture:?}");
             assert!(
                 records
                     .iter()
@@ -941,7 +1291,7 @@ mod tests {
         let old = old_file(&state, &bytes);
         let (_, read, opened) = LedgerStore::open(&path).unwrap();
         assert_eq!(opened, Opened::Imported);
-        assert_eq!(read, ledger);
+        assert_eq!(read, as_upgraded(ledger, &read));
         assert_eq!(std::fs::read(&old).unwrap(), bytes);
     }
 

@@ -237,7 +237,6 @@
     "hided/tests/it/agent_exec.rs": 2,
     "hided/tests/it/connect_build.rs": 3,
     "hided/tests/it/handshake.rs": 7,
-    "hided/tests/it/held_letter_notice.rs": 1,
     "hided/tests/it/mobile.rs": 4,
     "hided/tests/it/node_contract.rs": 3,
     "hided/tests/it/node_session_activity.rs": 2,

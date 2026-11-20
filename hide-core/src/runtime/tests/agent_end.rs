@@ -291,6 +291,7 @@ fn registered(
                     actor: record.clone(),
                     ended: false,
                     forked: false,
+                    successor: None,
                 },
                 check: false,
             },

@@ -958,7 +958,7 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
       expect(turn, `${cause}: 내 차례 and 확인 필요 agree`).toBe(held);
       return turn;
     };
-    for (const cause of ["draft", "parent_blocked", "bell_exhausted", "undelivered"] as const) {
+    for (const cause of ["draft", "parent_blocked"] as const) {
       expect(shown(cause, true), cause).toBe(false);
       expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters"]);
       // Without the letters line the worker's own item still says it, on both.
@@ -971,7 +971,7 @@ describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
   });
 
   it("puts a running mission's held Conductor letters in 내 차례 and says a node's work only while it is in progress", () => {
-    const letters = { count: 3, reason: "unreachable" as const, since_unix_ms: 1 };
+    const letters = { count: 3, reason: "approval" as const, since_unix_ms: 1 };
     expect(turnItems(mission("m", { conductor_letters: letters }), () => null)).toEqual([{ kind: "letters", letters }]);
     expect(turnItems(mission("m", { conductor_letters: letters, status: "done" }), () => null)).toEqual([]);
     expect(turnItems(mission("m"), () => null)).toEqual([]);

@@ -786,7 +786,7 @@ export function escalationWhy(escalation: WorkerEscalation, t: TFunction<"transl
 }
 
 /** The escalations a held letter to the parent raises. */
-const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked", "bell_exhausted", "undelivered"]);
+const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked"]);
 
 /**
  * A node worker's escalation as the mission shows it, the one rule 내 차례

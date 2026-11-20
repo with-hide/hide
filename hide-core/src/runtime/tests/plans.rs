@@ -434,6 +434,7 @@ fn another_agents_plan_is_read_but_never_changed_and_an_unknown_agent_is_named()
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     ledger.next_id = 2;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
@@ -493,6 +494,7 @@ fn registered(runtime: &mut Runtime) -> (Actor, Actor) {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
     }
     ledger.next_id = 10;

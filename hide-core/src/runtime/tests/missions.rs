@@ -639,6 +639,7 @@ impl Resumed {
             ended: false,
             terminal_id: Some(format!("t-{}", actor.pane_id)),
             forked: false,
+            successor: None,
         };
         self.submit(
             by,
@@ -788,6 +789,158 @@ impl Resumed {
                 .is_empty()
         );
     }
+}
+
+/// PRD letters-missions-simplify B2: a new conversation started in the
+/// Conductor's pane takes its registration over, and with it the mission it
+/// conducts and the worker it started; the next read of the pane, still the
+/// same conversation, hands nothing over again.
+#[test]
+fn a_new_conversation_in_the_conductors_pane_takes_its_mission_over() {
+    let fixture = conducting();
+    let observe = |runtime: &mut Runtime, session: &str| {
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+            resumed_agent("sender", "codex", session),
+        ]}))
+        .unwrap();
+        runtime.observe_delivery_laid(crate::node::TEST_NODE, &payload, Some("scope"), None);
+    };
+    let (client, conductor) = {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        observe(&mut runtime, "sender-session");
+        runtime.snapshot.navigator.agents = vec![conductor_row()];
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Fix the bug"}),
+        )
+        .unwrap();
+        (
+            runtime.delivery_client.clone().unwrap(),
+            runtime.delivery_observations["sender"].actor.clone(),
+        )
+    };
+    let register = |actor: &Actor, by: &Actor, session: &str, parent: Option<String>| {
+        let record = crate::coordination::AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: crate::node::TEST_NODE.into(),
+            session: session.into(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent,
+            origin: None,
+            project: Some(PROJECT.into()),
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        };
+        client
+            .submit(
+                crate::delivery::worker::Effect::Agents {
+                    authority: authority(by),
+                    actor: by.clone(),
+                    mutation: Box::new(crate::coordination::Mutation::Register {
+                        record,
+                        check: false,
+                    }),
+                },
+                Duration::from_secs(10),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let former = register(&conductor, &conductor, "sender-session", None);
+    let worker = Actor {
+        pane_id: "worker".into(),
+        name: "worker".into(),
+        kind: "codex".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest("worker-session"),
+    };
+    let worker = register(&worker, &conductor, "worker-session", Some(former.clone()));
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        // The pane's row shows the next conversation, as the engine reads it.
+        runtime.snapshot.navigator.agents[0].session_id = Some("next-session".into());
+        observe(&mut runtime, "next-session");
+        assert!(runtime.delivery_successions().contains_key(&former));
+    }
+    // The store's next batch hands the registration over.
+    client
+        .submit(
+            crate::delivery::worker::Effect::HumanClaim,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+    let runtime = fixture.runtime.lock().unwrap();
+    let ledger = runtime.delivery_state().unwrap();
+    let old = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == former)
+        .unwrap();
+    let successor = old.successor.clone().expect("taken over");
+    assert!(old.ended);
+    let next = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == successor)
+        .unwrap();
+    assert_eq!(
+        next.actor.session,
+        crate::engine::tokens::session_digest("next-session")
+    );
+    let child = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == worker)
+        .unwrap();
+    assert_eq!(child.parent.as_ref(), Some(&successor));
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
+    assert!(mission.conductor.actor.same_identity(&next.actor));
+    assert!(runtime.delivery_successions().is_empty());
+    assert_eq!(
+        child.parent.as_ref(),
+        Some(&successor),
+        "it takes the children"
+    );
+    assert_eq!(next.parent, None, "and is the child of no one");
+    drop(runtime);
+
+    // A stop after the ledger kept the takeover and before the mission book
+    // did: the book the next start reads names the former registration as
+    // the Conductor, a node's worker and a line's checker, and the first
+    // ledger that start gets moves each to the agent after it.
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(&mut runtime, "sender", plan()).unwrap();
+    let stored = runtime.delivery_state().unwrap();
+    {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.conductor.agent_id = Some(former.clone());
+        let node = &mut mission.nodes[0];
+        node.agent_id = Some(former.clone());
+        node.criteria[0].checkers.push(
+            serde_json::from_value(json!({"worker": {"agent": "codex"}, "agent_id": former}))
+                .unwrap(),
+        );
+    }
+    runtime.delivery_ledger = Err("delivery_unavailable".into());
+    runtime.publish_delivery(stored, true);
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(mission.conductor.agent_id.as_ref(), Some(&successor));
+    assert_eq!(mission.nodes[0].agent_id.as_ref(), Some(&successor));
+    assert_eq!(
+        mission.nodes[0].criteria[0].checkers[0].agent_id.as_ref(),
+        Some(&successor)
+    );
 }
 
 /// The pane the conversation came back in is registered as the mission
@@ -4897,6 +5050,7 @@ fn with_worker_and_reviewer(runtime: &mut Runtime) {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
     }
     runtime.delivery_ledger = Ok(Arc::new(ledger));
@@ -8669,6 +8823,7 @@ fn a_raise_is_on_a_row_only_while_a_row_shown_carries_it() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     let mission = runtime.missions.book.get_mut("mission-1").unwrap();
@@ -9484,6 +9639,7 @@ fn far_agent(id: &str, pane: &str) -> (Actor, crate::coordination::AgentRecord) 
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     (actor, record)
 }
@@ -11592,10 +11748,11 @@ fn conductor_letter(runtime: &mut Runtime, ago: u64) -> String {
 
 /// with-hide/hide-private#678: letters to a running mission's Conductor
 /// that the doorbell holds for something only the operator can lift, for
-/// two minutes or more, are counted on the mission with what to do (a pane
-/// it cannot reach named first); a hold that ends on its own and a letter
-/// held for less than two minutes are not, a delivered letter leaves the
-/// count, the line going with the last, and an undelivered one never joins.
+/// two minutes or more, are counted on the mission with what to do (an
+/// approval named first); a hold that ends on its own, a pane Hide cannot
+/// reach (PRD letters-missions-simplify B14) and a letter held for less
+/// than two minutes are not, a delivered letter leaves the count, the line
+/// going with the last, and one that ended with no recipient never joins.
 #[test]
 fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     use crate::delivery::doorbell::Hold;
@@ -11626,8 +11783,15 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         Some((1, HeldFor::Draft))
     );
 
+    let unreachable = conductor_letter(&mut runtime, 3 * MINUTE);
+    runtime.delivery_holds.insert(unreachable, Hold::Absent);
+    assert_eq!(
+        held(&runtime),
+        Some((1, HeldFor::Draft)),
+        "a pane Hide cannot reach is Hide's to settle"
+    );
     let gone = conductor_letter(&mut runtime, 3 * MINUTE);
-    runtime.delivery_holds.insert(gone.clone(), Hold::Absent);
+    runtime.delivery_holds.insert(gone.clone(), Hold::Blocked);
     let shown = runtime
         .mission_view_of("mission-1")
         .unwrap()
@@ -11635,8 +11799,8 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .unwrap();
     assert_eq!(
         (shown.count, shown.reason),
-        (2, HeldFor::Unreachable),
-        "an unreachable pane is named before a draft"
+        (2, HeldFor::Approval),
+        "an approval is named before a draft"
     );
     assert!(shown.since_unix_ms <= crate::delivery::worker::now() - 5 * MINUTE);
 
@@ -11650,11 +11814,9 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
     assert_eq!(held(&runtime), None, "delivered letters leave");
     assert!(runtime.delivery_holds.contains_key(&fresh));
 
-    // A letter that ended undelivered asks nothing of the operator: one to
-    // a Conductor still in its pane is not ended by its deadline, and the
-    // rest went to a Conductor that is gone or were told to their sender
-    // (operator decision 2026-11-14; a settings worker's report stood here
-    // for good once that worker had ended).
+    // A letter that ended with no recipient asks nothing of the operator:
+    // it went to a Conductor that is gone, and only its sender sees it
+    // (D-05).
     let lost = conductor_letter(&mut runtime, 0);
     let mut ledger = (*runtime.delivery_state().unwrap()).clone();
     ledger
@@ -11662,7 +11824,7 @@ fn a_conductors_held_letters_show_on_its_mission_until_they_are_delivered() {
         .iter_mut()
         .find(|letter| letter.id == lost)
         .unwrap()
-        .state = crate::delivery::ledger::State::Undelivered;
+        .state = crate::delivery::ledger::State::NoRecipient;
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     assert_eq!(held(&runtime), None);
 }
@@ -12772,6 +12934,7 @@ fn a_decision_lists_the_views_named_or_opened_for_it_and_nothing_else() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let worker = Actor {
         pane_id: "worker".into(),
@@ -12954,6 +13117,7 @@ fn a_done_nodes_views_list_what_its_worker_opened_and_open_a_closed_one_again() 
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let worker = Actor {
         pane_id: "worker".into(),
@@ -16384,6 +16548,7 @@ fn a_closed_missions_map_draws_after_its_ended_workers_registration_was_dropped(
         ended: true,
         terminal_id: None,
         forked: false,
+        successor: None,
     });
     runtime.delivery_ledger = Ok(Arc::new(ledger));
     // Until the book is read, even a registration with no mission spawn
@@ -18948,6 +19113,7 @@ fn what_a_registered_conductor_saw_outlives_a_restart_of_the_core() {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     };
     let (_worker, client) =
         Worker::spawn(Arc::downgrade(&runtime), ChangeNotifier::noop(), path).unwrap();
@@ -19223,6 +19389,7 @@ fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         };
         let registered = client
             .submit(

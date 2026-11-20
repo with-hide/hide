@@ -1283,6 +1283,7 @@ mod tests {
             ended: false,
             terminal_id: None,
             forked: false,
+            successor: None,
         });
         runtime.delivery_ledger = Ok(Arc::new(ledger));
         for key in ["agent-7", "reviewer"] {
