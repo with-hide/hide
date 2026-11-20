@@ -299,14 +299,26 @@ fn scoped_parse_failure_keeps_other_windows_and_wall_time_year_rules() {
 }
 #[test]
 fn cost_fallback_is_signed_out_never_zero() {
-    let frame: Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/claude-usage/cost-2.1.274.json"
-    ))
-    .unwrap();
-    assert_eq!(
-        claude_text(frame["result"].as_str().unwrap(), CAPTURED_AT),
-        Err(Cause::SignedOut)
-    );
+    for body in [
+        include_str!("../../../tests/fixtures/claude-usage/cost-2.1.274.json"),
+        include_str!("../../../tests/fixtures/claude-usage/cost-2.1.329.json"),
+    ] {
+        let frame: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            claude_text(frame["result"].as_str().unwrap(), CAPTURED_AT),
+            Err(Cause::SignedOut)
+        );
+    }
+}
+#[test]
+fn usage_text_with_neither_windows_nor_the_summary_is_not_a_sign_out() {
+    for text in ["", "Loading usage…", "Current"] {
+        assert_eq!(
+            claude_text(text, CAPTURED_AT),
+            Err(Cause::FormatChanged),
+            "{text:?}"
+        );
+    }
 }
 #[test]
 fn agys_gemini_bucket_is_the_weekly_window_and_other_groups_are_scoped() {
