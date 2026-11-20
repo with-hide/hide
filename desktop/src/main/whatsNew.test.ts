@@ -1,7 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { WhatsNewState } from "../../../web/src/host";
+import { rememberedCliPath } from "./cli";
 import type { HostLog } from "./log";
-import { fetchReleasesFile, REFETCH_AFTER_MS, RELEASES_BYTES_CAP, WhatsNew } from "./whatsNew";
+import { fetchReleasesFile, REFETCH_AFTER_MS, RELEASES_BYTES_CAP, WhatsNew, whatsNewIo } from "./whatsNew";
+import { windowStatePath } from "./windowState";
 
 const file = (...versions: string[]) => ({
   schema: 1,
@@ -94,6 +99,10 @@ describe("WhatsNew", () => {
     advance(REFETCH_AFTER_MS);
     await whatsNew.refresh();
     expect(versions(whatsNew.state())).toEqual(["1.2.11", "1.2.10"]);
+    // Try again right after a fetch waits out the floor, then fetches whatever the copy's age.
+    await whatsNew.refresh(true);
+    expect(versions(whatsNew.state())).toEqual(["1.2.11", "1.2.10"]);
+    advance(5_000);
     await whatsNew.refresh(true);
     expect(versions(whatsNew.state())).toEqual(["1.2.11", "1.2.10", "1.2.9"]);
   });
@@ -122,6 +131,22 @@ describe("WhatsNew", () => {
     expect(whatsNew.state().record).toBeNull();
     expect(disk.record).toEqual({ unreadable: "not JSON" });
     expect(events[0]).toEqual(["whats_new.record_unreadable", { detail: "not JSON" }]);
+  });
+});
+
+describe("whatsNewIo", () => {
+  const profile = () => fs.mkdtempSync(path.join(os.tmpdir(), "whats-new-profile-"));
+
+  it("reads a profile with no file of an earlier launch as a new install, and one with the window's bounds or the CLI it found as not", () => {
+    for (const [file, earlier] of [[null, false], [windowStatePath, true], [rememberedCliPath, true]] as const) {
+      const dir = profile();
+      try {
+        if (file) fs.writeFileSync(file(dir), "{}");
+        expect(whatsNewIo(dir, async () => null).earlierLaunch, String(file?.name)).toBe(earlier);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
   });
 });
 

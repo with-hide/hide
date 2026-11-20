@@ -77,7 +77,7 @@ function ChangeList({ changes, language }: { changes: readonly Change[]; languag
 
 function Stage({ drawing, playing }: { drawing: string; playing: boolean }) {
   return isDrawing(drawing) ? (
-    <div className="overflow-hidden rounded-md border border-border" data-whats-new-stage={drawing}>
+    <div className="shrink-0 overflow-hidden rounded-md border border-border" data-whats-new-stage={drawing}>
       <PracticePreview kind={drawing} playing={playing} large />
     </div>
   ) : null;

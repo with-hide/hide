@@ -20,7 +20,7 @@ export async function fetchBoundedJson(
     await response.body?.cancel();
     throw new Error(over);
   }
-  if (!response.body) return JSON.parse("");
+  if (!response.body) throw new Error(`${what} had no body`);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;

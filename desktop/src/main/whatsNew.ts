@@ -15,8 +15,10 @@ import path from "node:path";
 import type { WhatsNewState } from "../../../web/src/host";
 import { announces, mergeRecord, parseReleaseFeed, parseVersion, VERSION_LIMIT, type ReleaseFeed, type WhatsNewRecord } from "../../../web/src/releases";
 import { fetchBoundedJson, type FetchImpl } from "./boundedJson";
+import { rememberedCliPath } from "./cli";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLog } from "./log";
+import { windowStatePath } from "./windowState";
 
 /** The published file; `HIDE_RELEASES_FEED_URL` stands in for it in tests. */
 export const RELEASES_URL = "https://withhide.dev/app/releases.json";
@@ -28,8 +30,16 @@ export const REFETCH_AFTER_MS = 60 * 60 * 1000;
 
 export const releasesCacheFile = (userData: string) => path.join(userData, "releases.json");
 export const whatsNewRecordFile = (userData: string) => path.join(userData, "whats-new.json");
-/** Files every earlier launch leaves in the profile; none of them before the window opens on a new install. */
-const EARLIER_LAUNCH_FILES = ["window-state.json", "cli-path.json"];
+/**
+ * Files an earlier launch leaves in the profile, named by their owners: the
+ * window's bounds, kept when it closes, and the `hide` CLI that attached.
+ * Neither exists before the window opens on a new install; a first launch
+ * killed before either was written reads as new again, which only records
+ * its version again.
+ */
+const earlierLaunchFiles = (userData: string) => [windowStatePath(userData), rememberedCliPath(userData)];
+/** Try again fetches at once, but not more often than this. */
+const RETRY_FLOOR_MS = 5_000;
 
 export type WhatsNewIo = {
   fetch: () => Promise<unknown>;
@@ -50,6 +60,7 @@ export class WhatsNew {
   private fetchedAt: number | null = null;
   private fetching = false;
   private failed = false;
+  private triedAt: number | null = null;
   private record: WhatsNewRecord | null = null;
   private readonly launchedAt: number;
   private readonly listeners = new Set<(state: WhatsNewState) => void>();
@@ -81,7 +92,7 @@ export class WhatsNew {
       }
     }
     this.emit();
-    return this.refresh(true);
+    return this.fetch();
   }
 
   state(): WhatsNewState {
@@ -93,14 +104,25 @@ export class WhatsNew {
   }
 
   /**
-   * Fetches the file unless a fetch is running or, without `always`, the copy
-   * is younger than `REFETCH_AFTER_MS`. A bad answer keeps the copy (B22).
+   * The history opening fetches once the copy is `REFETCH_AFTER_MS` old; its
+   * Try again (`always`) fetches whatever the copy's age, at most once per
+   * `RETRY_FLOOR_MS`. A time ahead of the clock (the clock was set back)
+   * counts as long ago.
    */
-  async refresh(always = false): Promise<void> {
+  refresh(always = false): Promise<void> {
+    const since = (at: number | null) => (at === null ? null : this.io.now() - at);
+    const recent = (at: number | null, ms: number) => {
+      const age = since(at);
+      return age !== null && age >= 0 && age < ms;
+    };
+    if (always ? recent(this.triedAt, RETRY_FLOOR_MS) : recent(this.fetchedAt, REFETCH_AFTER_MS)) return Promise.resolve();
+    return this.fetch();
+  }
+
+  /** Fetches the file now unless a fetch is running; a bad answer keeps the copy (B22). */
+  private async fetch(): Promise<void> {
     if (this.fetching) return;
-    // A copy dated ahead of the clock (the clock was set back) counts as old.
-    const age = this.fetchedAt === null ? null : this.io.now() - this.fetchedAt;
-    if (!always && age !== null && age >= 0 && age < REFETCH_AFTER_MS) return;
+    this.triedAt = this.io.now();
     this.fetching = true;
     this.emit();
     try {
@@ -188,6 +210,6 @@ export function whatsNewIo(userData: string, fetch: () => Promise<unknown>): Wha
     writeCache: (value) => writeJsonFile(releasesCacheFile(userData), value),
     readRecord: () => readJsonFile(whatsNewRecordFile(userData)),
     writeRecord: (record) => writeJsonFile(whatsNewRecordFile(userData), record),
-    earlierLaunch: EARLIER_LAUNCH_FILES.some((file) => fs.existsSync(path.join(userData, file))),
+    earlierLaunch: earlierLaunchFiles(userData).some((file) => fs.existsSync(file)),
   };
 }
