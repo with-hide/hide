@@ -3569,7 +3569,7 @@ mod tests {
 
     #[test]
     fn completed_spawn_replay_after_restart_preserves_report_stop_end_and_explicit_watch() {
-        use crate::delivery::{ledger, mailbox, watch, worker::Worker};
+        use crate::delivery::{ledger, mailbox, store, watch, worker::Worker};
         use crate::handle::ChangeNotifier;
         use crate::runtime::delivery::tests::{authority, fixture};
         use crate::sidebar::SessionSnapshotPayload;
@@ -3775,8 +3775,8 @@ mod tests {
                     }
                 }
             }
-            ledger::save(&path, &state).unwrap();
-            let restored = ledger::load(&path).unwrap();
+            store::save(&path, &state).unwrap();
+            let restored = store::load(&path).unwrap();
             let expected_watch = restored.watches.first().map(|watch| watch.id.clone());
             let next_id = restored.next_id;
             runtime
@@ -3798,7 +3798,7 @@ mod tests {
                 "{ending}"
             );
             drop(worker);
-            let after = ledger::load(&path).unwrap();
+            let after = store::load(&path).unwrap();
             assert_eq!(after.agents.len(), 2, "{ending}");
             assert_eq!(after.next_id, next_id, "{ending}");
             assert!(after.spawns[0].completed);

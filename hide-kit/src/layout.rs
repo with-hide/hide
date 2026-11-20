@@ -153,7 +153,17 @@ pub fn holder_restart_lock(state_dir: &Path) -> PathBuf {
     state_dir.join("holder-restart.lock")
 }
 
-/// Durable local requests and watches; its owner is the core delivery worker.
+/// The delivery ledger: letters, watches, agent registrations and spawns;
+/// its owner is the core's delivery store (`hide_core::delivery::store`).
+pub fn delivery_store(state_dir: &Path) -> PathBuf {
+    state_dir.join(DELIVERY_STORE)
+}
+
+pub const DELIVERY_STORE: &str = "delivery.sqlite3";
+
+/// The delivery ledger as builds before [`delivery_store`] kept it. The first
+/// start of a build with the store imports it and no build writes it again,
+/// so an older build started on the folder finds it as it left it.
 pub fn delivery_ledger(state_dir: &Path) -> PathBuf {
     state_dir.join("delivery-ledger.json")
 }

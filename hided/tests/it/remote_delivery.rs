@@ -355,13 +355,10 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
             once.status == 0 && context(&once.stdout)?.is_empty(),
             "reconnect caused duplicate prompt intake"
         );
+        let remote_state = fixture.remote.environment.home.join(".hide/state");
         ensure!(
-            !fixture
-                .remote
-                .environment
-                .home
-                .join(".hide/state/delivery-ledger.json")
-                .exists(),
+            !hide_kit::layout::delivery_store(&remote_state).exists()
+                && !hide_kit::layout::delivery_ledger(&remote_state).exists(),
             "remote account gained a mailbox spool"
         );
         Ok(())

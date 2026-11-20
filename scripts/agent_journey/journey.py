@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import secrets
+import sqlite3
 import time
 
 from agent_live_check.processes import Cancelled, ProcessError
@@ -79,6 +80,27 @@ def created_branch(runtime, repository, branch, worktree):
 
 def git_env(runtime):
     return {**runtime.env, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+
+
+def ledger_spawns(state):
+    """The spawn records of the candidate's delivery ledger: its store,
+    `delivery.sqlite3`, read without writing beside it, or, for a build from
+    before the store, `delivery-ledger.json`. Empty while neither reads."""
+    store = state / "delivery.sqlite3"
+    if store.exists():
+        try:
+            connection = sqlite3.connect(store.as_uri() + "?mode=ro", uri=True, timeout=2)
+            try:
+                rows = connection.execute("SELECT body FROM spawns ORDER BY seq").fetchall()
+            finally:
+                connection.close()
+            return [json.loads(body) for (body,) in rows]
+        except (sqlite3.Error, ValueError):
+            return []
+    try:
+        return json.loads((state / "delivery-ledger.json").read_text(encoding="utf-8")).get("spawns") or []
+    except (OSError, ValueError):
+        return []
 
 
 def token():
@@ -556,14 +578,10 @@ class Journey:
         is confirmed, or as it stands after BRIEF_RECORD_SECONDS. The record is
         posted to the ledger's worker as the agent's hook or session read
         arrives and saved by its save thread, so it can trail the turn."""
-        path = self.runtime.state / "delivery-ledger.json"
         end = time.monotonic() + BRIEF_RECORD_SECONDS
         found = None
         while True:
-            try:
-                spawns = json.loads(path.read_text(encoding="utf-8")).get("spawns") or []
-            except (OSError, ValueError):
-                spawns = []
+            spawns = ledger_spawns(self.runtime.state)
             found = next((spawn for spawn in spawns if spawn.get("intent") == intent), None)
             if (found or {}).get("brief_input", {}).get("confirmed_at_unix_ms") is not None or time.monotonic() > end:
                 return found

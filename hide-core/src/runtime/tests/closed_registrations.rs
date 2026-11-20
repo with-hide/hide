@@ -308,7 +308,7 @@ fn a_letter_to_a_closed_agent_waits_and_follows_it_to_the_reopened_pane() {
     let (_worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&shared),
         crate::handle::ChangeNotifier::noop(),
-        root.path().join("ledger.json"),
+        root.path().join("delivery.sqlite3"),
     )
     .unwrap();
     shared

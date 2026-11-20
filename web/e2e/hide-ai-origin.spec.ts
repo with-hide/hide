@@ -11,7 +11,7 @@ import { openProject, openWorktree, withControl } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { sessionIn, startAgentInProject } from "./fixture-agents";
 import { git, ledgerOf } from "./hide-ai-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { openOtherCheckouts } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
@@ -58,8 +58,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
 async function seed(stack: Stack, task: { kind: string; target: string } | null): Promise<void> {
   const session = await sessionIn(stack.daemon, stack.hideAiPane);
   stack.daemon = await stack.daemon.restart((dir) => {
-    const file = path.join(dir, "delivery-ledger.json");
-    fs.writeFileSync(file, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task }]), { mode: 0o600 });
+    seedLedger(dir, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task }]));
   });
 }
 
@@ -107,8 +106,7 @@ test("a start whose kind this build has no home for stays an operator's row nami
 
     const session = await sessionIn(stack.daemon, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
-      const file = path.join(dir, "delivery-ledger.json");
-      fs.writeFileSync(file, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task: { kind: "future_kind", target: "m43" } }]), { mode: 0o600 });
+      seedLedger(dir, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task: { kind: "future_kind", target: "m43" } }]));
     });
     await open(page, stack.daemon);
     await expect(row.locator("[data-agent-task]")).toHaveText("future_kind · m43", { timeout: 30_000 });
