@@ -7,7 +7,7 @@
 //! hooks, so after the kit writes or re-checks them this module records that
 //! trust, through Codex's own app-server (`hooks/list` to read each entry's
 //! key, hash and status, `config/batchWrite` to store `trusted_hash`).
-//! Hide never computes a hash and never writes `config.toml`.
+//! Hide never computes a hash and writes no trust into `config.toml`.
 //!
 //! Which entries are trusted is the one decision here and it is narrow
 //! ([`select_targets`]): an entry is a target only when Codex lists it from

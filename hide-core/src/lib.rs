@@ -94,6 +94,7 @@ mod sidebar;
 mod split_tree;
 mod start_claim;
 mod start_prompt;
+pub mod store_command;
 pub mod suggestions;
 pub mod tasks;
 mod terminal_attachments;

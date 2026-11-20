@@ -2381,6 +2381,7 @@ fn regrouping_a_device_session_keeps_its_agents_lineage() {
     runtime.ingest_kit_report(
         TARGET,
         &hide_kit::KitReport {
+            store: None,
             components: vec![hide_kit::ComponentReport {
                 id: hide_kit::ComponentId::ClaudeCodeHook,
                 state: hide_kit::ComponentState::Installed,
@@ -2529,6 +2530,7 @@ fn a_device_agent_pane_is_judged_against_its_own_kit() {
     runtime.ingest_kit_report(
         TARGET,
         &hide_kit::KitReport {
+            store: None,
             components: vec![hide_kit::ComponentReport {
                 id: hide_kit::ComponentId::ClaudeCodeHook,
                 state: hide_kit::ComponentState::Installed,

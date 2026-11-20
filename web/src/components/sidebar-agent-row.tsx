@@ -76,7 +76,7 @@ export type SidebarTreeSlot = {
   /** Where a root's chevron centers, left of its mark: on its tab's guide, the column the checkout's own chevron and glyph share. */
   fold: string;
   /** Set on a grandchild with children: its chevron opens the tree popover rooted on it. */
-  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "copyText"> } | null;
+  popover: { agents: AgentRow[]; onOpenChild: (paneId: string, label: string) => void; onTask: () => void; actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> } | null;
 };
 
 /**
@@ -150,7 +150,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   /** Opens a mission's map from the Conductor's mark (PRD software-factory-conductor B14). */
   onOpenMission?: (missionId: string) => void;
   /** Done on the person's turn the row carries (PRD ask-human B19); without it the row draws none. */
-  actions?: Pick<Actions, "finishHumanTurn" | "copyText"> | null;
+  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const main = useRef<HTMLButtonElement>(null);

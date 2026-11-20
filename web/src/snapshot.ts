@@ -254,8 +254,8 @@ export type OpenAsks = { session: WorkSession; items: OpenAsk[] };
 /** One question that still waits on the operator; `id` is the record's, which 무시하기 names. */
 export type OpenAsk = { id: string; text: string; at_unix_ms: number };
 
-export const HUMAN_KINDS = ["auth", "permission"] as const;
-/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, or a permission. */
+export const HUMAN_KINDS = ["auth", "permission", "install"] as const;
+/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, a permission, or the confirm of an install an agent asked for with `hide skill` / `hide mcp`, which the core lays itself. */
 export type HumanKind = typeof HUMAN_KINDS[number];
 
 /**
@@ -2418,7 +2418,190 @@ export type Kit = {
   codex_daemon_off?: CodexDaemonOff | null;
   /** The machine's agent profiles as its node lists them (PRD agent-profiles D-04); null until first read. */
   profiles?: MachineAgentProfiles | null;
+  /** The machine's store of skills and MCP items as its kit last reported it (PRD skill-mcp-manager); null until the machine was read. */
+  store?: StoreReport | null;
+  /** The cells whose change waits for a new agent session (B17). */
+  store_new_session?: { item: string; column: string }[];
 };
+
+/** What a store item is (`store_item_kind`). */
+export type StoreItemKind = "skill" | "mcp";
+
+/** Where an item came from (`hide_kit::store::Source`). */
+export type StoreSource =
+  | { kind: "git"; url: string; path?: string; reference?: string | null; commit: string; tag?: string | null }
+  | { kind: "folder"; path: string }
+  | { kind: "copy"; from: string }
+  | { kind: "pasted" };
+
+/** The short version a row shows beside the name (B36). */
+export type StoreVersion =
+  | { kind: "tag" | "commit" | "pinned"; value: string }
+  | { kind: "folder" | "copy" | "remote" | "npm_latest" | "unpinned" };
+
+/** One cell column of a kind's rows: a skill folder or an agent (`Column`). */
+export type StoreColumn = { id: string; agents: string[]; also?: string[] };
+
+/** One file of a skill (`FileEntry`); `executable` is the ▲ of the confirm screens. */
+export type StoreFile = { path: string; size: number; executable: boolean };
+
+/** One agent's cell of an item's row (`store_cell_state`). */
+export type StoreCellState = "on" | "off" | "waiting" | "hand_written" | "failed" | "unsupported" | "agent_off";
+
+/** What kind of failure a failed cell's is (`store_cell_failure`), which the screen words in one line. */
+export type StoreCellFailure = "unreadable" | "unwritable" | "keys" | "pending";
+export type StoreCell = {
+  column: string;
+  state: StoreCellState;
+  /** The kit's own sentence, for the log; the screen words the state and the failure. */
+  reason?: string | null;
+  failure?: StoreCellFailure | null;
+  /** The real path of `place`, the agent's file or folder. */
+  path?: string | null;
+  changed_at_unix_ms?: number | null;
+  /** The key of the place the state speaks of, which a take-over names (decisions 2026-11-19). */
+  place?: string | null;
+  /** A hand-written MCP cell's server as that place holds it, key names only: what a take-over brings in (B20). */
+  server?: McpServer | null;
+};
+
+/** How an MCP server is reached; the names of its keys, never a value. */
+export type McpReach =
+  | { kind: "local"; command: string; args?: string[]; env?: string[] }
+  | { kind: "remote"; transport: "http" | "sse"; url: string; headers?: string[] };
+
+export type McpServer = { name: string; reach: McpReach };
+
+/** One item's row (`ItemReport`). */
+export type StoreItem = {
+  id: string;
+  kind: StoreItemKind;
+  name: string;
+  /** The GitHub account a git source belongs to, whose kept picture is in `StoreReport.avatars`. */
+  owner?: string | null;
+  source: StoreSource;
+  version: StoreVersion;
+  update?: StoreVersion | null;
+  on: boolean;
+  folder_missing?: boolean;
+  files?: StoreFile[];
+  /** A skill's own description, when its SKILL.md gives one. */
+  description?: string | null;
+  server?: McpServer | null;
+  /** The columns the operator switched off while the item is on. */
+  off_for?: string[];
+  cells: StoreCell[];
+};
+
+/** One copy of an entry Hide did not write (`FoundCopy`). */
+/** An agent's copy Hide does not manage; an MCP copy carries its server as that place holds it, key names only (B20). */
+export type StoreFoundCopy = { place: string; agents: string[]; profiles?: string[]; path: string; link?: string | null; digest: string; refused?: string | null; server?: McpServer | null };
+
+/** What agents hold that Hide does not manage ('에이전트에만 있음', B19). */
+export type StoreUnmanaged = { kind: StoreItemKind; name: string; copies: StoreFoundCopy[]; same: boolean };
+
+export type StoreTrashCause = { kind: "deleted" } | { kind: "replaced"; place: string; path: string };
+
+export type StoreTrash = { id: string; kind: StoreItemKind; name: string; at_unix_ms: number; cause: StoreTrashCause };
+
+/** What the operator gave as a source (B3, B5). */
+export type StoreSourceSpec = { kind: "git"; url: string } | { kind: "folder"; path: string };
+
+export type StoreFoundSkill = { name: string; path: string; description?: string | null; digest: string; taken?: boolean };
+
+/** What a source answered (B3-B6). */
+export type StorePreview = {
+  id: string;
+  source: StoreSourceSpec;
+  url?: string | null;
+  commit?: string | null;
+  tag?: string | null;
+  reference?: string | null;
+  skills: StoreFoundSkill[];
+  agents: string[];
+  at_unix_ms: number;
+};
+
+/** What an update would change (B23). */
+export type StoreUpdateDiff = {
+  id: string;
+  item: string;
+  from: StoreVersion;
+  to: StoreVersion;
+  commit: string;
+  summary: string[];
+  at_unix_ms: number;
+};
+
+/** One server a paste read as (B8, B9). */
+export type McpPastedServer = { server: McpServer; given?: string[]; taken?: boolean; agents?: string[] };
+
+export type McpPreview = { id: string; servers: McpPastedServer[]; at_unix_ms: number };
+
+/** Why a store pass could not run at all (`store_pass_refusal`); the sentence stays in the log. */
+export type StorePassRefusal = "keys_secret_gone" | "unreadable";
+
+/** A machine's store after a pass or a read (`StoreReport`). */
+export type StoreReport = {
+  columns: Partial<Record<StoreItemKind, StoreColumn[]>>;
+  items: StoreItem[];
+  unmanaged: StoreUnmanaged[];
+  trash: StoreTrash[];
+  previews: StorePreview[];
+  diffs: StoreUpdateDiff[];
+  mcp_previews?: McpPreview[];
+  checked_at_unix_ms?: number | null;
+  follows?: boolean;
+  refused?: string | null;
+  refusal?: StorePassRefusal | null;
+  /** The machine's home folder, which the screen spells as `~`. */
+  home?: string | null;
+  /** The kept pictures of the items' GitHub owners, as data addresses: the screen never loads one from the web. */
+  avatars?: Record<string, string>;
+};
+
+/** Why a change was refused (`store_refusal_cause`). */
+export type StoreRefusalCause = "not_found" | "no_skills" | "no_access" | "unreachable" | "no_git" | "too_large" | "name_taken" | "differs" | "too_many" | "unsupported" | "failed";
+
+/** The operator's change to a machine's store (`StoreChange`), as the screen sends it. */
+export type StoreAdoptConfirmation = { kind: "skill"; digest: string } | { kind: "mcp"; server: McpServer };
+
+export type StoreChange =
+  | { op: "inspect"; source: StoreSourceSpec }
+  | { op: "install"; preview: string; names: string[] }
+  | { op: "set"; item: string; column?: string; on: boolean }
+  | { op: "delete"; item: string }
+  | { op: "restore"; entry: string }
+  | { op: "forget"; entry: string }
+  | { op: "adopt"; kind: StoreItemKind; name: string; from?: string; confirmed?: StoreAdoptConfirmation }
+  | { op: "check_updates" }
+  | { op: "preview_update"; item: string }
+  | { op: "update"; item: string; commit: string }
+  | { op: "read_mcp"; text: string }
+  | { op: "add_mcp"; server: McpServer; keys?: Record<string, string>; from?: { preview: string; index: number } }
+  | { op: "cancel_mcp"; preview: string }
+  | { op: "set_mcp"; item: string; server: McpServer; keys?: Record<string, string> }
+  | { op: "receive"; item: unknown };
+
+/** How one change of a pass ended; `made` names what it made for its asker to show (an inspect's preview, a paste's MCP preview, an update preview's diff). */
+export type StoreChangeOutcome = { change: StoreChange; refused?: { cause: StoreRefusalCause; reason: string } | null; made?: string | null };
+
+/** What one store request came to (`status.store_answers`), found by its request id. */
+export type StoreAnswer = { request_id: string; device_id: string; state: "pending" | "done" | "refused"; outcomes: StoreChangeOutcome[]; refused?: { cause: StoreRefusalCause; reason: string } };
+
+/** An install or update an agent asked for with `hide skill` / `hide mcp`, waiting on the operator's confirm (B32). */
+export type StoreAsk = {
+  id: string;
+  device_id: string;
+  /** The asking agent's pane. */
+  pane_id: string;
+  since_unix_ms: number;
+} & (
+  | { what: "install"; preview: string; names: string[] }
+  | { what: "update"; item: string; diff: string }
+  | { what: "add_mcp"; server: McpServer }
+  | { what: "set_mcp"; item: string; server: McpServer }
+);
 
 /** Whether a machine's profiles could be read (`contracts/snapshot-wire-enums.json`: `profiles_state`). */
 export type AgentProfilesState = "listed" | "unsupported" | "unreadable";
@@ -3875,6 +4058,10 @@ export type SnapshotRest = {
     machine_profiles?: MachineProfiles;
     /** What Settings › Agents' last profile request came to; absent until one was made. */
     agent_profile_answer?: AgentProfileAnswer;
+    /** What the latest store requests came to, oldest first and bounded; a request finds its own by id (PRD skill-mcp-manager). */
+    store_answers?: StoreAnswer[];
+    /** The installs and updates agents asked for that wait on the operator's confirm (B32). */
+    store_asks?: StoreAsk[];
     /** The core's final automatic start choice for each project and agent. */
     start_profiles?: Record<string, { device_id: string; root: string; profiles: Record<string, string> }>;
     diagnostics?: CoreDiagnostic[];

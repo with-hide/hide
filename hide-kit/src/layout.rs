@@ -89,6 +89,19 @@ fn temporary_roots(own: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// The store of the skills and MCP items the operator installs, which Hide
+/// applies to every agent of the account (PRD skill-mcp-manager): its
+/// record, each item's files, the undo list and what a source answered, all
+/// private. It is the account's, like the kit's record beside it, so a
+/// device keeps its own (`hide_kit::store`).
+pub fn store_dir(home: &Path) -> PathBuf {
+    hide_home(home).join(STORE_PARTS[1])
+}
+
+/// [`store_dir`] as the folders below the home, which the kit makes private
+/// and checks one by one.
+pub const STORE_PARTS: [&str; 2] = [HIDE_HOME, "store"];
+
 /// The state folder builds before this layout used by default; moved once to
 /// [`default_state_dir`] by `hide connect` (D-05).
 pub fn legacy_state_dir(home: &Path) -> PathBuf {

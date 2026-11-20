@@ -382,13 +382,21 @@ impl AgentRuntime {
     /// Codex's is the `config.toml` in its folder, which only Codex writes.
     pub fn trust_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
         let at = at.into();
-        if self == Self::ClaudeCode {
-            let legacy = self.home_directory(at).join(".config.json");
-            if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
-                return legacy;
-            }
+        self.older_config(at)
+            .unwrap_or_else(|| at.place(self.dialect().adapter(), AccountPath::FolderTrust))
+    }
+
+    /// Claude Code's older global config, `.config.json`, which it reads in
+    /// place of `.claude.json` while that file has content: for its folder
+    /// trust and its MCP servers alike (`crate::mcp::McpFile::of`).
+    pub(crate) fn older_config(self, at: AccountAt<'_>) -> Option<PathBuf> {
+        if self != Self::ClaudeCode {
+            return None;
         }
-        at.place(self.dialect().adapter(), AccountPath::FolderTrust)
+        let legacy = self.home_directory(at).join(".config.json");
+        std::fs::metadata(&legacy)
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+            .then_some(legacy)
     }
 }
 

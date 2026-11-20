@@ -1737,6 +1737,9 @@ enum ScopedRequest {
     AgentCatalog(Option<String>),
     /// `hide agent profile`: planned on the owner thread, run off it.
     AgentProfile(hide_core::agent_profiles::ProfileCommand),
+    /// `hide skill` / `hide mcp`: planned on the owner thread, waited on off
+    /// it, an install or an update until the operator answers its confirm.
+    Store(hide_core::store_command::StoreCommand),
     /// `hide ps [--all]`: the live panes and agents, read from the core's
     /// own state.
     Ps {
@@ -1787,6 +1790,7 @@ impl ScopedRequest {
                 | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
                 | Self::AgentProfile(..)
+                | Self::Store(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::AgentArchive { .. }
@@ -1811,6 +1815,11 @@ impl ScopedRequest {
             Self::Mission(command) => access::mission_need(command),
             Self::Device(command) => access::device_need(command),
             Self::Ps { .. } | Self::AccessList => Need::View,
+            Self::Store(command) => match command {
+                hide_core::store_command::StoreCommand::List { .. }
+                | hide_core::store_command::StoreCommand::Show { .. } => Need::View,
+                _ => Need::Act,
+            },
             // Reading the automations is a view; a change starts agents
             // later with no one present.
             Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
@@ -1961,6 +1970,12 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(hide_core::agent_profiles::ProfileCommand::valid)
                         .map(ScopedRequest::AgentProfile),
+                        Some("store") => serde_json::from_value::<
+                            hide_core::store_command::StoreCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(hide_core::store_command::StoreCommand::valid)
+                        .map(ScopedRequest::Store),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -2225,6 +2240,16 @@ async fn scoped_client_loop(
                                         .and_then(hide_core::agent_profiles::Prepared::run)
                                         .map_err(|code| {
                                             let next = hide_core::agent_profiles::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Store(command) => {
+                                    core.prepare_store(&cap.context.device_id, &cap.pane_id, command)
+                                        .and_then(hide_core::store_command::Prepared::run)
+                                        .map_err(|code| {
+                                            let next = hide_core::store_command::next_action(
                                                 hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)

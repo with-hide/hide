@@ -1387,6 +1387,25 @@ pub(super) struct KitAgentSetPayload {
     pub(super) enabled: bool,
 }
 
+/// The store screen asked for changes to one machine's store of skills and
+/// MCP items (PRD skill-mcp-manager), in order; the answer lands in
+/// `status.store_answers` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStorePayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
+    pub(super) changes: Vec<hide_kit::store::StoreChange>,
+}
+
+/// The store screen's [이 Mac에서 복사] for one device (PRD skill-mcp-manager
+/// B28): this Mac's store goes to that device's; the answer lands in
+/// `status.store_answers` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStoreCopyPayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
+}
+
 /// A Settings tab that shows the kit opened: this Mac's parts are read again
 /// once, so a part removed by hand shows as removed.
 #[derive(Debug, Deserialize)]
@@ -1834,6 +1853,9 @@ pub(super) enum Event {
     CancelRepositoryClone(CancelRepositoryClonePayload),
     KitReinstall(KitReinstallPayload),
     KitAgentSet(KitAgentSetPayload),
+    KitStore(KitStorePayload),
+    KitStoreCopy(KitStoreCopyPayload),
+    StoreAskAnswer(super::store_cli::StoreAskAnswerPayload),
     AgentPermissionSet(super::agent_permission::AgentPermissionSetPayload),
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
@@ -2195,6 +2217,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "cancel_repository_clone" => decode!(CancelRepositoryClonePayload, CancelRepositoryClone),
         "kit_reinstall" => decode!(KitReinstallPayload, KitReinstall),
         "kit_agent_set" => decode!(KitAgentSetPayload, KitAgentSet),
+        "kit_store" => decode!(KitStorePayload, KitStore),
+        "kit_store_copy" => decode!(KitStoreCopyPayload, KitStoreCopy),
+        "store_ask_answer" => decode!(super::store_cli::StoreAskAnswerPayload, StoreAskAnswer),
         "agent_permission_set" => decode!(
             super::agent_permission::AgentPermissionSetPayload,
             AgentPermissionSet
@@ -2610,6 +2635,13 @@ impl Runtime {
             Event::KitAgentSet(payload) => {
                 self.request_kit_agent_set(&payload.device_id, &payload.agent, payload.enabled)
             }
+            Event::KitStore(payload) => {
+                self.request_store_change(&payload.device_id, payload.request_id, payload.changes)
+            }
+            Event::KitStoreCopy(payload) => {
+                self.request_store_copy(&payload.device_id, payload.request_id)
+            }
+            Event::StoreAskAnswer(payload) => self.answer_store_ask(payload),
             Event::CodexDaemonDisable(payload) => {
                 self.request_codex_daemon_disable(&payload.device_id)
             }
