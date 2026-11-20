@@ -312,19 +312,31 @@ export function missionHeadCells(mission: Mission): HeadCell[] {
   });
 }
 
-/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): the operator's turn, else its state. */
+/** The colour a mission's own chip wears on the sidebar row, the Overview and its Conductor's pane (B35): the operator's turn, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  return missionToneOf(mission.status, missionTurn(mission) !== null);
+  return missionToneOf(mission.status, missionTurn(mission) !== null, missionStalled(mission));
 }
 
-/** A mission chip's colour from its status and whether the operator's turn waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
-export function missionToneOf(status: Mission["status"], turn: boolean): CellTone {
+/**
+ * Whether no one moves a mission's work: a node stopped (`nodePace`) and none
+ * at work, so its chips turn from the working colour to the stopped one
+ * (operator decision 2026-11-20). A node waiting on CI or a review still
+ * counts as at work, and a mission between steps with nothing stopped is not
+ * stalled.
+ */
+export function missionStalled(mission: MissionBrief): boolean {
+  const cells = missionCells(mission);
+  return cells.includes("stopped") && !cells.includes("working");
+}
+
+/** A mission chip's colour from its status, whether the operator's turn waits and whether it stalled: the one rule every mission chip follows. */
+export function missionToneOf(status: Mission["status"], turn: boolean, stalled: boolean): CellTone {
   if (turn) return "hold";
   switch (status) {
     case "planning":
       return "waiting";
     case "running":
-      return "working";
+      return stalled ? "stopped" : "working";
     case "merge_wait":
       return "review";
     case "done":
