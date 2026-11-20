@@ -15,7 +15,8 @@ Building or serving the site locally does not publish it or configure the domain
 
 | Path | What it is |
 | --- | --- |
-| `public/` | The introduction page exactly as before: `index.html`, `download.html`, `styles.css`, `scenes.js`, `site.js`, `one-terminal.js`, `downloads.js`, `platform-marks.js`, `llms.txt`, `vercel.json` and `assets/`. Every other path in this README that names `index.html` or `assets/` means this folder. |
+| `public/` | The introduction page exactly as before: `index.html`, `download.html`, `styles.css`, `scenes.js`, `site.js`, `one-terminal.js`, `downloads.js`, `platform-marks.js`, `llms.txt`, `vercel.json`, `assets/` and `app/releases.json`. Every other path in this README that names `index.html` or `assets/` means this folder. |
+| `public/app/releases.json` | What each released version of the desktop app brought, which the app reads for the window it opens after an update and its update history (`docs/UI_BEHAVIOR.md`, What's new and Update history): newest first, at most three main features a version with a practice drawing and chapter, and its changes and fixes, in every interface language. The release skill adds a version before the release is published and deploys the site; `web/src/releasesFile.test.ts` checks the file on every pull request, and `vercel.json` gives `/app/` a five-minute cache. |
 | `src/content/docs/docs/{start,guides,features,reference}/` | The docs, in the four sidebar groups. The folder carries the `docs/` prefix, so a page's address is its path under it. |
 | `src/data/cli-notes.json` | One human line and an example per `hide` command, which the generated CLI page needs. |
 | `src/components/`, `src/styles/owl-field.css` | The header, the "Used in guides" list and the theme: the landing's Owl Field variables (`public/styles.css`) mapped onto Starlight's, in dark and light, with the landing's two fonts from `public/assets/fonts/`. |
