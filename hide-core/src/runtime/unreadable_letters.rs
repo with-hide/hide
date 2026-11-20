@@ -126,7 +126,7 @@ impl Runtime {
             unsent: "delivery.unreadable_note_unsent",
             now: false,
         };
-        self.unreadable_letters.noting = self.send_hide_notes(kind, notes, |runtime| {
+        self.unreadable_letters.noting = self.send_hide_notes(kind, notes, |runtime, _| {
             runtime.unreadable_letters.noting = false;
         });
     }
