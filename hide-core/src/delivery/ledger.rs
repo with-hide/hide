@@ -917,116 +917,42 @@ impl Ledger {
     }
 
     /// The check [`Self::bytes`] makes, counting the encoding instead of
-    /// keeping it, so it can follow every request of a batch.
+    /// keeping it.
     pub fn check(&self) -> Result<(), String> {
         self.validate()?;
-        encoded(self, FILE_LIMIT).map(drop)
+        match serde_json::to_writer(&mut Length::up_to(FILE_LIMIT), self) {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_io() => Err("capacity".into()),
+            Err(_) => Err("ledger_unavailable".into()),
+        }
     }
 
-    /// [`Self::check`], making room first when the encoding is past
-    /// [`FILE_LIMIT`] (engineering #15): it drops finished letters, the one
-    /// that finished first first (`mailbox::finished_oldest_first`), then
-    /// finished spawn records nothing names, the oldest first
-    /// (`room::droppable_spawns`), until the file is down to [`ROOM_GOAL`],
-    /// so the writes after it do not make room again one at a time. It is
-    /// refused with `capacity`, dropping nothing, only when everything it
-    /// may drop would not bring the file within its limit. A ledger within
-    /// its limit costs what `check` costs; one past it is encoded twice more
-    /// in all, and each record it drops once on its own.
-    pub(crate) fn fit(
-        &mut self,
-        holds: &dyn crate::coordination::Holds,
-    ) -> Result<Option<Room>, String> {
+    /// The length of the file [`Self::bytes`] would write, past the limit
+    /// too, counted without keeping it, so it can follow every request of a
+    /// batch and say how much room a full ledger has to make.
+    pub(crate) fn size(&self) -> Result<usize, String> {
         self.validate()?;
-        match encoded(self, FILE_LIMIT) {
-            Err(code) if code == "capacity" => {}
-            within => return within.map(|_| None),
-        }
-        let size = encoded(self, usize::MAX)?;
-        let over = size - FILE_LIMIT;
-        let goal = size.saturating_sub(ROOM_GOAL);
-        let mut room = Room {
-            bytes: size,
-            ..Room::default()
-        };
-        // A record's encoding is what leaving it out takes off the file, but
-        // for the comma beside it: counting without that comma never takes
-        // the file for smaller than it is.
-        let mut letters = HashSet::new();
-        for index in super::mailbox::finished_oldest_first(self) {
-            if room.freed >= goal {
-                break;
-            }
-            room.freed += encoded(&self.letters[index], usize::MAX)?;
-            letters.insert(index);
-        }
-        let mut spawns = HashSet::new();
-        if room.freed < goal {
-            for index in crate::coordination::droppable_spawns(self, holds)? {
-                if room.freed >= goal {
-                    break;
-                }
-                room.freed += encoded(&self.spawns[index], usize::MAX)?;
-                spawns.insert(index);
-            }
-        }
-        if room.freed < over {
-            crate::diagnostic!(serde_json::json!({
-                "component": "delivery", "kind": "ledger.full", "bytes": size,
-                "droppable_bytes": room.freed, "letters": self.letters.len(),
-                "open": self.letters.iter().filter(|letter| letter.open()).count(),
-                "spawns": self.spawns.len(), "agents": self.agents.len(),
-            }));
-            return Err("capacity".into());
-        }
-        leave_out(&mut self.letters, &letters);
-        leave_out(&mut self.spawns, &spawns);
-        room.letters = letters.len();
-        room.spawns = spawns.len();
-        encoded(self, FILE_LIMIT)?;
-        Ok(Some(room))
+        encoded_len(self)
     }
 }
 
-/// What [`Ledger::fit`] dropped to bring the file within its limit: the
-/// size it found, and the bytes and records it took off.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Room {
-    pub(crate) bytes: usize,
-    pub(crate) freed: usize,
-    pub(crate) letters: usize,
-    pub(crate) spawns: usize,
-}
-
-/// The size a ledger past [`FILE_LIMIT`] is brought down to: an eighth
-/// under it, about 2 MiB, so a full ledger makes room once for many writes
-/// rather than again for each.
-pub(crate) const ROOM_GOAL: usize = FILE_LIMIT - FILE_LIMIT / 8;
-
-/// Takes the items at `indexes` out of `items`, keeping the rest in order.
-fn leave_out<T>(items: &mut Vec<T>, indexes: &HashSet<usize>) {
-    let mut index = 0;
-    items.retain(|_| {
-        index += 1;
-        !indexes.contains(&(index - 1))
-    });
-}
-
-/// The length of `value`'s encoding, counted and not kept; `capacity` once
-/// it passes `limit`.
-fn encoded(value: &impl Serialize, limit: usize) -> Result<usize, String> {
-    let mut length = Length { written: 0, limit };
-    match serde_json::to_writer(&mut length, value) {
-        Ok(()) => Ok(length.written),
-        Err(error) if error.is_io() => Err("capacity".into()),
-        Err(_) => Err("ledger_unavailable".into()),
-    }
+/// The length of `value`'s encoding in the file, counted without keeping it.
+pub(crate) fn encoded_len(value: &impl Serialize) -> Result<usize, String> {
+    let mut length = Length::up_to(usize::MAX);
+    serde_json::to_writer(&mut length, value).map_err(|_| "ledger_unavailable")?;
+    Ok(length.written)
 }
 
 /// Counts the bytes written to it and refuses those past `limit`.
 struct Length {
     written: usize,
     limit: usize,
+}
+
+impl Length {
+    fn up_to(limit: usize) -> Self {
+        Self { written: 0, limit }
+    }
 }
 
 impl std::io::Write for Length {

@@ -7,10 +7,10 @@ pub mod human_turn;
 pub(crate) mod identity_wait;
 pub(crate) mod lineage;
 pub(crate) mod naming;
-mod room;
+pub(crate) mod room;
 pub(crate) mod started;
 
-pub(crate) use room::{Held, Holds, droppable_spawns, dropped, shed_finished_briefs};
+pub(crate) use room::{Held, Holds, dropped, shed_finished_briefs};
 
 use crate::delivery::answer::{AgentView, Connection, RegisterCheck, Runtime};
 use crate::delivery::{Actor, ledger::Ledger, watch};
@@ -68,6 +68,10 @@ pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
             | "mission_conducted"
             | "mission_criteria_missing"
             | "mission_criteria_too_many"
+            | "mission_dependency_unknown"
+            | "mission_dependency_line_unknown"
+            | "mission_dependency_stack_split"
+            | "mission_merge_order_stack"
             | "mission_steps_invalid"
             | "mission_criteria_unmet"
             | "mission_criteria_protected"

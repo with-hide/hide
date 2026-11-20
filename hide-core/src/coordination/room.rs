@@ -5,6 +5,16 @@
 //! and that nothing still names, and is refused with `capacity` only when
 //! every record is live or named.
 //!
+//! The file holds at most [`FILE_LIMIT`] bytes, which finished spawn records
+//! reached long before their count did while each kept its brief. Any change
+//! that would take the file past it, whatever it adds, drops the oldest
+//! finished spawn records nothing keeps, then the finished letters that
+//! finished first (`mailbox::finished_oldest_first`, the rule of the letter
+//! total), then the oldest ended registrations nothing names, until the file
+//! fits; it is refused with `capacity` only when what is left still does not
+//! ([`for_size`]). A completed spawn whose child ended lets its brief and
+//! launch words go ([`shed_finished_briefs`]), so its record stays small.
+//!
 //! A registration is named, and kept, by:
 //! - another registration, as its `parent` or `origin`;
 //! - a spawn record that stays, as its `parent` or `child`;
@@ -34,8 +44,8 @@ use serde_json::json;
 
 use super::identity_wait::Owed;
 use super::{AGENT_LIMIT, AgentRecord, SPAWN_LIMIT, SpawnRecord};
-use crate::delivery::Actor;
-use crate::delivery::ledger::Ledger;
+use crate::delivery::ledger::{Ledger, encoded_len};
+use crate::delivery::{Actor, FILE_LIMIT};
 
 /// The registrations and spawn records the core's books outside the ledger
 /// still need (`Runtime::delivery_held`).
@@ -140,7 +150,13 @@ pub(super) fn for_spawn(ledger: &mut Ledger, holds: &dyn Holds) -> Result<(), St
     if ledger.spawns.len() < SPAWN_LIMIT {
         return Ok(());
     }
-    let Some(&index) = droppable_spawns(ledger, holds)?.first() else {
+    let held = holds.held()?;
+    let named = Named::of(ledger, held);
+    let Some(index) = ledger
+        .spawns
+        .iter()
+        .position(|spawn| !named.spawns.contains(spawn.id.as_str()))
+    else {
         crate::diagnostic!(json!({
             "component": "coordination", "kind": "spawns.full",
             "spawns": ledger.spawns.len(),
@@ -152,18 +168,90 @@ pub(super) fn for_spawn(ledger: &mut Ledger, holds: &dyn Holds) -> Result<(), St
     Ok(())
 }
 
-/// Where every spawn record a full ledger may drop stands, the oldest
-/// first: finished, and kept by nothing ([`Named`]). Both the spawn limit
-/// ([`for_spawn`]) and the file's (`Ledger::fit`) drop in this order.
-pub(crate) fn droppable_spawns(ledger: &Ledger, holds: &dyn Holds) -> Result<Vec<usize>, String> {
-    let named = Named::of(ledger, holds.held()?);
-    Ok(ledger
+/// Keeps `ledger` within [`FILE_LIMIT`] after a change: a ledger past it
+/// drops its oldest finished spawn records nothing keeps, then its finished
+/// letters, the one that finished first first, then its oldest ended
+/// registrations nothing names, until it fits, and answers what it dropped.
+/// It is refused with `capacity`, unchanged, only when dropping all of them
+/// would not be enough. The core's books are read only once the ledger is
+/// past the limit, and a ledger within it is left as it is.
+pub(crate) fn for_size(ledger: &mut Ledger, holds: &dyn Holds) -> Result<Option<Made>, String> {
+    let size = ledger.size()?;
+    let over = size.saturating_sub(FILE_LIMIT);
+    if over == 0 {
+        return Ok(None);
+    }
+    let held = holds.held()?;
+    let named = Named::of(ledger, held);
+    let mut spawns = Room::of(ledger.spawns.len());
+    for spawn in &ledger.spawns {
+        if spawns.freed >= over {
+            break;
+        }
+        if !named.spawns.contains(spawn.id.as_str()) {
+            spawns.take(&spawn.id, spawn)?;
+        }
+    }
+    // A finished letter names no one, so letting it go keeps every record.
+    let mut letters = Room::of(ledger.letters.len());
+    for index in crate::delivery::mailbox::finished_oldest_first(ledger) {
+        if spawns.freed + letters.freed >= over {
+            break;
+        }
+        let letter = &ledger.letters[index];
+        letters.take(&letter.id, letter)?;
+    }
+    // A registration goes only once every spawn record that can has gone:
+    // one naming it is either kept, and so names it, or gone above.
+    let mut agents = Room::of(ledger.agents.len());
+    for agent in &ledger.agents {
+        if spawns.freed + letters.freed + agents.freed >= over {
+            break;
+        }
+        if agent.ended && !named.agents.contains(agent.id.as_str()) {
+            agents.take(&agent.id, agent)?;
+        }
+    }
+    let freed = spawns.freed + letters.freed + agents.freed;
+    if freed < over {
+        crate::diagnostic!(json!({
+            "component": "coordination", "kind": "ledger.full",
+            "bytes": size, "agents": ledger.agents.len(),
+            "ended": ledger.agents.iter().filter(|agent| agent.ended).count(),
+            "spawns": ledger.spawns.len(), "letters": ledger.letters.len(),
+            "open": ledger.letters.iter().filter(|letter| letter.open()).count(),
+        }));
+        return Err("capacity".into());
+    }
+    ledger
         .spawns
-        .iter()
-        .enumerate()
-        .filter(|(_, spawn)| !named.spawns.contains(spawn.id.as_str()))
-        .map(|(index, _)| index)
-        .collect())
+        .retain(|spawn| !spawns.gone.contains(&spawn.id));
+    ledger
+        .letters
+        .retain(|letter| !letters.gone.contains(&letter.id));
+    ledger
+        .agents
+        .retain(|agent| !agents.gone.contains(&agent.id));
+    // The count above is exact; this raises if it ever is not.
+    ledger.check()?;
+    Ok(Some(Made {
+        bytes: size,
+        freed,
+        spawns: spawns.gone.len(),
+        letters: letters.gone.len(),
+        agents: agents.gone.len(),
+    }))
+}
+
+/// What [`for_size`] dropped: the size it found and the bytes it took off,
+/// and how many records of each list went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Made {
+    pub(crate) bytes: usize,
+    pub(crate) freed: usize,
+    pub(crate) spawns: usize,
+    pub(crate) letters: usize,
+    pub(crate) agents: usize,
 }
 
 /// Lets the brief and launch words of each completed spawn whose child
@@ -201,6 +289,32 @@ pub(crate) fn shed_finished_briefs(ledger: &mut Ledger) {
         .collect();
     for index in shed {
         ledger.spawns[index].shed_brief();
+    }
+}
+
+/// What dropping records from one of the ledger's lists takes off the file.
+struct Room {
+    /// How many records the list holds.
+    len: usize,
+    gone: HashSet<String>,
+    freed: usize,
+}
+
+impl Room {
+    fn of(len: usize) -> Self {
+        Self {
+            len,
+            gone: HashSet::new(),
+            freed: 0,
+        }
+    }
+
+    /// Drops `record`: its encoding and the comma beside it, which the
+    /// list's last record has none of.
+    fn take(&mut self, id: &str, record: &impl serde::Serialize) -> Result<(), String> {
+        self.gone.insert(id.to_owned());
+        self.freed += encoded_len(record)? + usize::from(self.gone.len() < self.len);
+        Ok(())
     }
 }
 
@@ -321,14 +435,14 @@ pub(crate) fn dropped<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::coordination::human_turn::{HumanKind, HumanTurn};
     use crate::coordination::identity_wait::IdentityWait;
     use crate::coordination::tests::command;
     use crate::coordination::{Mutation, apply_with};
+    use crate::delivery::BODY_LIMIT;
     use crate::delivery::ledger::{State, from_bytes};
-    use crate::delivery::{BODY_LIMIT, FILE_LIMIT};
     use serde_json::Value;
 
     const NOW: u64 = 1_000;
@@ -454,6 +568,49 @@ mod tests {
     fn holds_spawn(ledger: &Ledger, n: u64) -> bool {
         let id = format!("spawn-{n}");
         ledger.spawns.iter().any(|spawn| spawn.id == id)
+    }
+
+    /// A start whose brief is as long as a brief may be.
+    pub(crate) fn briefed(intent: &str) -> crate::coordination::Command {
+        let mut command = command(intent);
+        if let crate::coordination::Command::Spawn { brief, .. } = &mut command {
+            *brief = Some("n".repeat(BODY_LIMIT));
+        }
+        command
+    }
+
+    /// Adds spawn records of `parent`, `spawn-3000` on, each keeping a
+    /// brief, until the file is `room` bytes short of its limit.
+    pub(crate) fn fill_with_briefs(ledger: &mut Ledger, parent: &str, room: usize) {
+        let mut size = ledger.size().unwrap();
+        let target = FILE_LIMIT - room;
+        for n in 3000.. {
+            let mut record: SpawnRecord = serde_json::from_value(json!({
+                "id": format!("spawn-{n}"), "parent": parent,
+                "intent": format!("intent-{n}"), "name": "worker", "kind": "codex",
+                "repo": "/repo", "branch": "topic", "requested_path": null, "args": [],
+                "path": null, "pane": null, "child": null,
+            }))
+            .unwrap();
+            record.brief = Some("b".repeat(BODY_LIMIT / 2));
+            let grown =
+                size + encoded_len(&record).unwrap() + usize::from(!ledger.spawns.is_empty());
+            if grown > target {
+                break;
+            }
+            size = grown;
+            ledger.spawns.push(record);
+        }
+        // A brief's `b` is one byte in the file too.
+        let mut need = target - size;
+        for spawn in ledger.spawns.iter_mut().rev() {
+            let brief = spawn.brief.as_mut().unwrap();
+            let add = need.min(BODY_LIMIT - brief.len());
+            brief.push_str(&"b".repeat(add));
+            need -= add;
+        }
+        assert_eq!(need, 0);
+        assert_eq!(ledger.size().unwrap(), target);
     }
 
     /// The ledger a core would load from what this one saves.
@@ -739,34 +896,96 @@ mod tests {
         assert_eq!(ledger, before);
     }
 
-    /// What the store does with a request: applies it, then holds the file
-    /// to its limit, making room by size (`Ledger::fit`).
-    fn landed(
-        ledger: &mut Ledger,
-        caller: &Actor,
-        mutation: Mutation,
-        held: &Held,
-    ) -> Result<Value, String> {
-        let value = apply_with(ledger, caller, &mutation, NOW, held)?;
-        ledger.fit(held)?;
-        Ok(value)
+    #[test]
+    fn a_ledger_past_its_file_limit_drops_its_oldest_finished_spawn_records_first() {
+        // agent-2 made every spawn record and ended; agent-3 ended too.
+        let mut ledger = Ledger {
+            agents: vec![agent(1, false), agent(2, true), agent(3, true)],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        let spawns = ledger.spawns.len();
+        let answer = apply_with(
+            &mut ledger,
+            &actor(1),
+            &Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: briefed("new-start"),
+            },
+            NOW,
+            &Held::default(),
+        )
+        .unwrap();
+        assert!(ledger.size().unwrap() > FILE_LIMIT);
+        for_size(&mut ledger, &Held::default()).unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
+        assert!(!holds_spawn(&ledger, 3000) && !holds_spawn(&ledger, 3001));
+        assert!(holds_spawn(&ledger, 3002));
+        assert_eq!(ledger.spawns.len(), spawns + 1 - 2);
+        assert!(ledger.spawns.iter().any(|spawn| spawn.id == answer["id"]));
+        // A registration goes only once no spawn record can.
+        assert!((1..=3).all(|n| holds_agent(&ledger, n)));
+        assert_eq!(reloaded(&ledger), ledger);
     }
 
-    /// The live lead asks for a new spawn whose brief is as long as a
-    /// brief may be.
-    fn long_spawn() -> Mutation {
-        let mut command = command("new-start");
-        if let crate::coordination::Command::Spawn { brief, .. } = &mut command {
-            *brief = Some("b".repeat(BODY_LIMIT));
-        }
-        Mutation::Reserve {
-            parent: "agent-1".into(),
-            command,
-        }
+    #[test]
+    fn a_ledger_past_its_file_limit_of_kept_spawn_records_drops_ended_registrations_or_refuses() {
+        // agent-2 runs, so none of its spawn records has finished.
+        let mut ledger = Ledger {
+            agents: (1..=8).map(|n| agent(n, n > 2)).collect(),
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 0);
+        let spawns = ledger.spawns.len();
+        // A new root registers itself in a file already at its limit.
+        let mut record = agent(90_000, false);
+        record.id = String::new();
+        let mutation = Mutation::Register {
+            record,
+            check: false,
+        };
+        let answer = apply_with(
+            &mut ledger,
+            &actor(90_000),
+            &mutation,
+            NOW,
+            &Held::default(),
+        );
+        for_size(&mut ledger, &Held::default()).unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
+        assert!(holds_agent(&ledger, 100_000) && answer.unwrap()["id"] == "agent-100000");
+        assert!(!holds_agent(&ledger, 3) && holds_agent(&ledger, 8));
+        assert_eq!(ledger.spawns.len(), spawns);
+
+        let mut ledger = Ledger {
+            agents: vec![agent(1, false), agent(2, false)],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        apply_with(
+            &mut ledger,
+            &actor(1),
+            &Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: briefed("new-start"),
+            },
+            NOW,
+            &Held::default(),
+        )
+        .unwrap();
+        let before = ledger.clone();
+        assert_eq!(
+            for_size(&mut ledger, &Held::default()).unwrap_err(),
+            "capacity"
+        );
+        assert_eq!(ledger, before);
     }
 
     /// The live lead's letter to `agent-3`, as long as a body may be.
-    fn long_letter(ledger: &mut Ledger) -> Result<(), String> {
+    fn long_letter(ledger: &mut Ledger) {
         crate::delivery::mailbox::send(
             ledger,
             &actor(1),
@@ -776,89 +995,113 @@ mod tests {
             "progress",
             None,
             NOW,
-        )?;
-        ledger.fit(&Held::default())?;
-        Ok(())
+        )
+        .unwrap();
     }
 
-    /// Adds child-less spawn records of `parent`, `spawn-3000` on, whose
-    /// briefs fill the file until it is `left` bytes short of its limit.
-    fn fill_with_spawns(ledger: &mut Ledger, parent: u64, left: usize) {
-        const BRIEF: usize = 12_000;
-        let record = |n| SpawnRecord {
-            brief: Some("x".into()),
-            ..spawn(n, parent, None)
-        };
-        let goal = FILE_LIMIT - left;
-        let one = serde_json::to_vec(&record(3000)).unwrap().len() + 1;
-        let count = (goal - ledger.bytes().unwrap().len()) / (one + BRIEF) + 1;
-        ledger.spawns.extend((3000..).take(count).map(record));
-        // The brief's `x` is one byte in the file too.
-        let mut need = goal - ledger.bytes().unwrap().len();
-        for record in &mut ledger.spawns {
-            let brief = record.brief.as_mut().unwrap();
-            let add = need.min(BRIEF - brief.len());
-            brief.push_str(&"x".repeat(add));
-            need -= add;
-        }
-        assert_eq!(need, 0);
-        assert_eq!(ledger.bytes().unwrap().len(), goal);
+    /// Letter `n` from `agent-2` to the lead, `body` bytes long, read and
+    /// finished at `NOW + n`.
+    fn finished_letter(ledger: &mut Ledger, n: u64, body: usize) -> String {
+        let sent = crate::delivery::mailbox::send(
+            ledger,
+            &actor(2),
+            &actor(1),
+            &format!("read-{n}"),
+            &"r".repeat(body),
+            "progress",
+            None,
+            NOW,
+        )
+        .unwrap();
+        let letter = ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == sent.id)
+            .unwrap();
+        letter.state = State::Delivered;
+        letter.hook_confirmed = Some(true);
+        letter.finished_at_unix_ms = Some(NOW + n);
+        sent.id
     }
 
-    /// The live lead `agent-1`, the ended `agent-2`, and `agent-2`'s
-    /// child-less spawns, all finished, filling the file to 100 bytes short
-    /// of its limit.
-    fn full_of_finished_spawns() -> Ledger {
+    #[test]
+    fn a_ledger_at_its_file_limit_of_finished_spawn_records_takes_a_new_letter() {
         let mut ledger = Ledger {
             agents: vec![agent(1, false), agent(2, true)],
             next_id: 100_000,
             ..Ledger::default()
         };
-        fill_with_spawns(&mut ledger, 2, 100);
-        ledger
-    }
-
-    #[test]
-    fn a_ledger_at_its_byte_limit_of_finished_spawns_takes_a_new_spawn_and_a_new_letter() {
-        let mut ledger = full_of_finished_spawns();
+        fill_with_briefs(&mut ledger, "agent-2", 100);
         let last = 3000 + ledger.spawns.len() as u64 - 1;
-        let answer = landed(&mut ledger, &actor(1), long_spawn(), &Held::default()).unwrap();
-        assert_eq!(answer["id"], "spawn-100000");
-        assert!(holds_spawn(&ledger, 100_000));
-        // The oldest go first; the newest stay.
-        assert!(!holds_spawn(&ledger, 3000));
-        assert!(holds_spawn(&ledger, last));
-        // Room is made down to an eighth under the limit, so the next
-        // writes fit without making room again.
-        assert!(ledger.bytes().unwrap().len() <= FILE_LIMIT / 8 * 7);
-        assert_eq!(reloaded(&ledger), ledger);
-
-        let mut ledger = full_of_finished_spawns();
-        long_letter(&mut ledger).unwrap();
+        long_letter(&mut ledger);
+        let made = for_size(&mut ledger, &Held::default()).unwrap().unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
         assert!(
             ledger
                 .letters
                 .iter()
                 .any(|letter| letter.intent == "new-letter")
         );
-        assert!(!holds_spawn(&ledger, 3000));
-        assert!(ledger.bytes().unwrap().len() <= FILE_LIMIT);
+        // The oldest go, only as many as the letter needs.
+        assert!(!holds_spawn(&ledger, 3000) && holds_spawn(&ledger, last));
+        assert!(made.spawns > 0 && made.spawns < 5);
+        assert_eq!((made.letters, made.agents), (0, 0));
         assert_eq!(reloaded(&ledger), ledger);
     }
 
     #[test]
-    fn a_ledger_at_its_byte_limit_whose_every_record_is_live_refuses_with_capacity() {
-        // The lead runs, so each spawn it started is still under way, and
-        // its letter is still to be read.
+    fn a_ledger_past_its_file_limit_drops_finished_letters_after_spawn_records_and_before_registrations()
+     {
+        // agent-2 runs, so its spawn records stay; agents 3 to 8 ended and
+        // nothing names them.
         let mut ledger = Ledger {
-            agents: vec![agent(1, false)],
+            agents: (1..=8).map(|n| agent(n, n > 2)).collect(),
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        let open = crate::delivery::mailbox::send(
+            &mut ledger,
+            &actor(1),
+            &actor(2),
+            "open",
+            "still waiting to be read",
+            "progress",
+            None,
+            NOW,
+        )
+        .unwrap()
+        .id;
+        // Sent in this order, finished the other way round: the one that
+        // finished first goes first.
+        let late = finished_letter(&mut ledger, 9, 9_000);
+        let early = finished_letter(&mut ledger, 1, 9_000);
+        let middle = finished_letter(&mut ledger, 5, 9_000);
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        let spawns = ledger.spawns.len();
+        long_letter(&mut ledger);
+        let made = for_size(&mut ledger, &Held::default()).unwrap().unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
+        let kept = |id: &str| ledger.letters.iter().any(|letter| letter.id == id);
+        assert!(!kept(&early) && !kept(&middle));
+        assert!(kept(&late) && kept(&open));
+        assert_eq!(ledger.spawns.len(), spawns);
+        assert!((1..=8).all(|n| holds_agent(&ledger, n)));
+        assert_eq!((made.spawns, made.letters, made.agents), (0, 2, 0));
+    }
+
+    #[test]
+    fn a_ledger_at_its_file_limit_whose_every_record_is_live_refuses_a_letter_unchanged() {
+        // agent-2 runs, so its spawn records stay, and the one letter is
+        // still to be read.
+        let mut ledger = Ledger {
+            agents: vec![agent(1, false), agent(2, false)],
             next_id: 100_000,
             ..Ledger::default()
         };
         crate::delivery::mailbox::send(
             &mut ledger,
             &actor(1),
-            &actor(3),
+            &actor(2),
             "open",
             "still waiting to be read",
             "progress",
@@ -866,32 +1109,36 @@ mod tests {
             NOW,
         )
         .unwrap();
-        fill_with_spawns(&mut ledger, 1, 100);
-        let mut spawned = ledger.clone();
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        long_letter(&mut ledger);
+        let before = ledger.clone();
         assert_eq!(
-            landed(&mut spawned, &actor(1), long_spawn(), &Held::default()).unwrap_err(),
+            for_size(&mut ledger, &Held::default()).unwrap_err(),
             "capacity"
         );
-        let mut sent = ledger.clone();
-        assert_eq!(long_letter(&mut sent).unwrap_err(), "capacity");
-        // Nothing was dropped on the way to the refusal.
-        assert_eq!(sent.spawns, ledger.spawns);
-        assert_eq!(sent.letters.len(), ledger.letters.len() + 1);
+        assert_eq!(ledger, before);
     }
 
     #[test]
     fn a_named_spawn_record_is_never_dropped_to_make_room_by_size() {
-        let mut ledger = full_of_finished_spawns();
+        let mut ledger = Ledger {
+            agents: vec![
+                agent(1, false),
+                agent(2, true),
+                AgentRecord {
+                    parent: Some("agent-2".into()),
+                    ..agent(4, true)
+                },
+            ],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 100);
         // spawn-3000 is owed a registration, spawn-3001 is a plan step still
         // handed, and spawn-3002's child, which ended, is an open mission's
         // worker.
-        ledger.agents.push(AgentRecord {
-            parent: Some("agent-2".into()),
-            ..agent(4, true)
-        });
-        let filler = ledger.spawns[2].brief.clone();
         ledger.spawns[2] = SpawnRecord {
-            brief: filler,
+            brief: ledger.spawns[2].brief.take(),
             ..spawn(3002, 2, Some(4))
         };
         ledger.identity_waits = vec![IdentityWait {
@@ -909,10 +1156,21 @@ mod tests {
             agents: ["agent-4"].map(str::to_owned).into(),
             spawns: ["spawn-3001"].map(str::to_owned).into(),
         };
-        landed(&mut ledger, &actor(1), long_spawn(), &held).unwrap();
+        apply_with(
+            &mut ledger,
+            &actor(1),
+            &Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: briefed("new-start"),
+            },
+            NOW,
+            &held,
+        )
+        .unwrap();
+        for_size(&mut ledger, &held).unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
         assert!((3000..=3002).all(|n| holds_spawn(&ledger, n)));
         assert!(!holds_spawn(&ledger, 3003));
-        assert!(ledger.bytes().unwrap().len() <= FILE_LIMIT);
     }
 
     #[test]
@@ -940,14 +1198,14 @@ mod tests {
                 ..spawn(n, 1, Some(child))
             });
         }
-        let before = ledger.bytes().unwrap().len();
+        let before = ledger.size().unwrap();
         shed_finished_briefs(&mut ledger);
         // The ended child's spawn keeps neither; the running one's keeps both.
         assert_eq!(ledger.spawns[0].brief, None);
         assert!(ledger.spawns[0].launch_words.is_empty());
         assert_eq!(ledger.spawns[1].brief.as_deref(), Some(brief));
         assert_eq!(ledger.spawns[1].launch_words.len(), 2);
-        assert!(ledger.bytes().unwrap().len() < before);
+        assert!(ledger.size().unwrap() < before);
         assert_eq!(reloaded(&ledger), ledger);
         // Asked again with the same brief, it is the same completed spawn;
         // with another, a conflict.

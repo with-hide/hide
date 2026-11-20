@@ -1653,6 +1653,7 @@ export type MissionNode = {
   /** A general node's preset, and the icon key the core's preset table names for a general node (PRD node-presets D-02, D-08); absent on other nodes and from an older core. */
   preset?: MissionNodePreset | null;
   icon?: string | null;
+  /** What it waits on, as the plan wrote it: `<node>`, or `<node>:<line>` for one finish line of that node (`missionDependency` reads it). */
   depends_on: string[];
   status: MissionNodeStatus;
   blocked: MissionBlocked | null;
@@ -1671,6 +1672,8 @@ export type MissionNode = {
   /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
   prs: MissionNodePr[];
   base_pr: number | null;
+  /** The node it stacks on while that one's work is not in main: it starts from that node's branch and its pull request is based there (`NodeStack`); absent when not stacked and from an older core. */
+  stack?: MissionNodeStack | null;
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
@@ -1751,10 +1754,15 @@ export type MissionLettersHeldFor = "unreachable" | "approval" | "draft" | "unan
 /** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
 export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
 
+/** The node a node stacks on, its branch and its current pull request (`NodeStack`). */
+export type MissionNodeStack = { on: string; branch: string | null; pr: number | null };
+
 /** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
 export type MissionWaitingOn =
   | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
   | { kind: "nodes"; keys: string[] }
+  /** The merge of the pull request it stacks on comes first (`WaitingOn::Below`). */
+  | { kind: "below"; node: string }
   | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
 
 /** What a node's warning is about (`WarningKind`): its review or verification failing in a row, a long quiet with no push, or its worker stopped. */

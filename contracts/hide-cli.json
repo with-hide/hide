@@ -6481,6 +6481,9 @@
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
                 "mission_dependency_cycle",
+                "mission_dependency_line_unknown",
+                "mission_dependency_stack_split",
+                "mission_merge_order_stack",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
@@ -7604,7 +7607,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:6399aa58cb0eb60318b60778bed052333f86dd34ecd6dba63db0c20792f07c44",
+    "digest": "sha256:51cd16120eb3603dcedbb9c7445bbd2e68a2fcd465ef87d17ac4d4e095ad1817",
     "envelopes": {
         "access": {
             "answer": "value",
