@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// A mission's page in the 보기 slot (PRD software-factory-conductor B43; PRD
+// A mission's page as a card tab on a desk (PRD software-factory-conductor B43; PRD
 // mission-plan-visibility B25-B30, B39; PRD mission-map-git-criteria
 // B21-B35): what it shows in each state of the record and its events, what a
 // pick lights and opens, and the one event each press sends.

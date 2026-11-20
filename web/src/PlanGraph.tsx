@@ -18,7 +18,7 @@ import { useShellStore } from "./store";
 
 // A plan's steps top down by what they wait on (PRD hide-plan D-10, B12):
 // the mission map's graph with a two-line card per step, all one height
-// (PRD hide-plan-delegate D-33), drawn only in the 보기 slot. A card leads
+// (PRD hide-plan-delegate D-33), drawn only as a card tab on a desk. A card leads
 // with its step's number drawn as its state, where a mission's card leads
 // with the state and its worker, since one agent carries the steps in turn;
 // only a step handed to another agent names that agent. A card is picked as a

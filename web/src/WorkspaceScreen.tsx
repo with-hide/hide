@@ -4,7 +4,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { EntryContextMenu, type MenuEntry } from "./components/entry-menu";
 import { Button } from "./components/ui/button";
-import { Hint } from "./components/ui/tooltip";
+import { escapeConsumed, Hint } from "./components/ui/tooltip";
 import { RemotePaneCanvas } from "./PaneGrid";
 import { remoteTabView, remoteView } from "./remote";
 import { canRetryDevice, deviceAwayLine, deviceLine } from "./settings";
@@ -181,11 +181,17 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
  * ⌘E does and gives the keyboard to the focused pane, so a
  * tool or an open afterwards brings its own column alone (B4, B8, B15;
  * operator decision 2026-10-23); Escape in a terminal stays the program's.
+ * Escape in a document's editor stays the editor's too: it lets the next Tab
+ * leave the editor rather than indent, the keyboard's way out of a document,
+ * and an Escape from there (the tab strip, the toolbar) closes the lane
+ * (PRD lane-desk-pair-view B30, which took away the docked lane that kept it).
+ * A hint that Escape closes (a focused tab's full name) is no answer.
  */
 function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, actions: Actions): void {
-  if (event.key !== "Escape" || event.defaultPrevented) return;
+  if (event.key !== "Escape" || escapeConsumed(event)) return;
   if (frame.mode === "expanded") useUiStore.getState().setLaneExpanded(false);
   else if (frame.mode === "overlay") {
+    if (event.target instanceof Element && event.target.closest("[data-editor-body]")) return;
     actions.closeLane();
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);

@@ -1,7 +1,7 @@
 // Flow 4's world: one invented project with an agent at work, two
 // finished tasks in the sidebar's 태스크 list, and a session from yesterday
 // that only search still finds, with the pull request it made. It answers
-// ⌘K's session search, the record and the card the lane's 보기 slot shows,
+// ⌘K's session search, the record and the card a desk's card tab shows,
 // the record's Restore session, and the ★ that puts a task in 다시 볼 것.
 
 import type { AgentScope } from "../../agentScope";
@@ -26,7 +26,7 @@ export const PR_ROW = `[data-palette-row="pr:${PLACE.project}:${PR_NUMBER}"]`;
 const RESTORED_PANE = "login";
 
 /**
- * What the world can change: the desk, what ⌘K asked last, the 보기 slot,
+ * What the world can change: the desk, what ⌘K asked last, the card tabs,
  * which tasks wear the ★, and the start that brought yesterday's session back.
  */
 export type FindModel = { desk: DeskModel; searched: boolean; query: string | null; detail: DetailItem[]; starred: string[]; restore: { requestId: string | null } | null };

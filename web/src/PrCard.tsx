@@ -23,6 +23,7 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { useRequestViewDemand } from "./requestViewDemand";
 import { RowButton } from "./components/ui/row-button";
+import { KeptDrawings } from "./deskFront";
 
 // The PR card keeps its list identity, CI counts, merge controls, timeline,
 // changed files and Markdown body in the lane's existing detail slot.
@@ -31,7 +32,7 @@ import { RowButton } from "./components/ui/row-button";
 
 /**
  * Whether the operator opened the files line, per card. The card leaves the
- * screen when a changed file turns the lane to Files, and the 보기 slot
+ * screen when a changed file turns the lane to Files, and a desk
  * brings it back as it was left (B49); the page keeps it while it runs,
  * never stored.
  */
@@ -65,7 +66,11 @@ function useCardTarget(workspaceId: string, number: number) {
   }, [rest, agents, workspaceId, number]);
 }
 
-export function PrCardView({ workspaceId, number, actions }: { workspaceId: string; number: number; actions: Actions }) {
+/** The link panels pull request cards out of front drew last (`deskFront.ts`). */
+const keptPanels = new KeptDrawings<LinkPanel>(8);
+
+/** `front` says the card is the one the core reads; a card drawn alone (a gallery, the docs) always is. */
+export function PrCardView({ workspaceId, number, actions, front = true }: { workspaceId: string; number: number; actions: Actions; front?: boolean }) {
   const { t } = useInterfaceTranslation();
   const { project, entry, pr } = useCardTarget(workspaceId, number);
   const card = useShellStore((state) => (project ? state.rest?.pr_work?.cards?.find((row) => row.workspace_id === project.id && row.number === number) ?? null : null));
@@ -85,21 +90,28 @@ export function PrCardView({ workspaceId, number, actions }: { workspaceId: stri
   }, [actions, live, projectId, reads, number, updatedAt, checks]);
   // Share the visible-board demand so pending checks are read again every minute (B44).
   useRequestViewDemand(actions, live);
-  // The link record: the sessions that made or worked on it and what it is linked to.
+  // The link record: the sessions that made or worked on it and what it is linked to. The core
+  // holds one, so only the desk's front card asks for it (PRD lane-desk-pair-view D-13); a card
+  // out of front keeps the timeline it last drew.
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId || !front) return;
     actions.openLinks(projectId, { kind: "pr", number });
     return () => actions.closeLinks();
-  }, [actions, projectId, number]);
+  }, [actions, projectId, number, front]);
+  const livePanel = record && projectId && record.workspace_id === projectId && record.target.kind === "pr" && record.target.number === number ? record : null;
+  const keyOf = `${workspaceId}#${number}`;
+  useEffect(() => {
+    if (livePanel && !livePanel.loading && !livePanel.failure) keptPanels.keep(keyOf, livePanel);
+  }, [livePanel, keyOf]);
   const scroller = useRef<HTMLElement>(null);
   if (!project) return <p className="p-lg text-caption text-muted-foreground" data-pr-card-missing={number}>{t("work.card.unlisted", { number })}</p>;
-  const panel: LinkPanel | null = record && record.workspace_id === project.id && record.target.kind === "pr" && record.target.number === number ? record : null;
+  const panel: LinkPanel | null = front ? livePanel : livePanel ?? keptPanels.get(keyOf);
   return (
     <article ref={scroller} aria-label={t("work.card.aria", { number })} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [overflow-wrap:anywhere] text-foreground" data-pr-card={number} data-pr-card-project={project.id} data-pr-card-head={card?.head ?? undefined}>
       <div className="flex w-full flex-col gap-lg p-lg">
         {pr ? <Head project={project} pr={pr} entry={entry} card={card} panel={panel} actions={actions} /> : <p className="text-caption text-muted-foreground" data-pr-card-unlisted={number}>{t("work.card.unlisted", { number })}</p>}
         {pr ? <DecisionBox project={project} pr={pr} entry={entry} card={card} actions={actions} /> : null}
-        <Timeline project={project} pr={pr} card={card} panel={panel} number={number} actions={actions} />
+        <Timeline project={project} pr={pr} card={card} panel={panel} waiting={!front && !panel} number={number} actions={actions} />
         {pr ? <FilesRow pr={pr} project={project} card={card} actions={actions} open={filesOpen} onToggle={toggleFiles} /> : null}
         {pr ? <Body card={card} actions={actions} projectId={project.id} number={number} scroller={scroller} /> : null}
       </div>
@@ -379,7 +391,7 @@ function preCheck(project: Workspace, pr: PullRequest) {
  * the link record, whose spinner, failure, fold and empty
  * line keep their rules inside the section.
  */
-function Timeline({ project, pr, card, panel, number, actions }: { project: Workspace; pr: PullRequest | null; card: PrCard | null; panel: LinkPanel | null; number: number; actions: Actions }) {
+function Timeline({ project, pr, card, panel, waiting, number, actions }: { project: Workspace; pr: PullRequest | null; card: PrCard | null; panel: LinkPanel | null; waiting: boolean; number: number; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const holder: LinkPanel = panel ?? { workspace_id: project.id, target: { kind: "pr", number }, loading: true, failure: null, pr: null, prs: [], sessions: [], total: 0 };
   const rows = useMemo(() => (pr ? milestones(pr, card) : []), [pr, card]);
@@ -389,7 +401,8 @@ function Timeline({ project, pr, card, panel, number, actions }: { project: Work
         <span>{t("work.card.timeline")}</span>
         {holder.loading || !holder.total ? null : <span className="font-normal" data-pr-card-sessions={holder.total}>· {t("links.sessionsCount", { count: holder.total })}</span>}
       </h3>
-      <LinkTimeline panel={holder} project={project} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />
+      {/* A card out of front with no timeline drawn yet waits quietly for its turn rather than spinning. */}
+      {waiting ? <p className="text-caption text-muted-foreground" data-pr-card-waiting="true">{t("detail.readInFront")}</p> : <LinkTimeline panel={holder} project={project} pr={pr} milestones={rows} branchOf={() => pr?.head_branch ?? null} onRetry={() => actions.openLinks(project.id, { kind: "pr", number })} actions={actions} />}
     </section>
   );
 }
@@ -416,7 +429,7 @@ function PartState({ part, card, actions, projectId, number }: { part: "body" | 
  * 바뀐 파일 N (B11, B36, B49): one folded line between the timeline and the
  * body, +/- at the right; opened, the files with generated ones folded into
  * one line. A file opens as D-27 says: the diff in this checkout's Files,
- * where the lane turns while the 보기 slot stays on the rail, or GitHub's
+ * where the lane turns while a desk stays on the rail, or GitHub's
  * files page.
  */
 function FilesRow({ pr, project, card, actions, open, onToggle }: { pr: PullRequest; project: Workspace; card: PrCard | null; actions: Actions; open: boolean; onToggle: () => void }) {

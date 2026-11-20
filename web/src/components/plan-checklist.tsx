@@ -18,7 +18,7 @@ import { useShellStore } from "../store";
 // hide-plan-delegate B30). A done step's tail is what it left, a handed step
 // names its child and the child's current step, and the child's name goes to
 // its pane where `openPane` is given (B26, B28). The map is drawn only in the
-// 보기 slot. Every screen that lists a plan's steps draws this one list (PRD
+// desk. Every screen that lists a plan's steps draws this one list (PRD
 // session-docs-and-assistant D-72).
 
 export function PlanChecklist({ plan, popover = false, openPane, planned }: { plan: PlanView; popover?: boolean; openPane?: (paneId: string) => void; planned?: readonly string[] }) {

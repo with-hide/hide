@@ -264,6 +264,12 @@ test("the card opens as a desk tab and Merge goes out on the head it showed", as
     const rail = await page.locator("[data-tool-rail] > [data-lane-tool], [data-tool-rail] > [data-tool-rail-divider]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-lane-tool") ?? "divider"));
     expect(rail).toEqual(["documents", "divider", "project", "memory", "divider", "explorer", "changes"]);
     await expect(page.locator('[role="tab"][data-tab-kind="card"] [data-detail-mark]')).toHaveAttribute("data-detail-mark", "mergeable");
+    // The tab carries its mark and short name alone, a desk being one checkout's; its full name is
+    // the tab's tooltip and the card's path line (PRD lane-desk-pair-view D-30, B13).
+    const cardTab = page.locator('[role="tab"][data-tab-kind="card"]');
+    await expect(cardTab).toHaveText("PR #31");
+    await expect(cardTab).toHaveAttribute("aria-label", /^PR #31 · \S/);
+    await expect(page.locator("[data-card] [data-card-name]")).toHaveText("PR #31 · 머지할 수 있는 PR");
     await expect(card.locator('[data-pr-card-reason="merge"]')).toBeVisible();
     // Issue linking lives in the menu and hands focus to its picker.
     // The other actions still assign, create an issue or copy the branch; with

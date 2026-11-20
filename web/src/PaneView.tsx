@@ -3,8 +3,8 @@ import { usePaneMove } from "./PaneMoveControls";
 import { useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { agentWithProfile, markWords } from "./agentRow";
-import { CircleAlertIcon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
-import { memo, useCallback, useEffect, useRef } from "react";
+import { CircleAlertIcon, Columns2Icon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useOutsidePressSurface } from "./components/ui/layer";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
@@ -26,7 +26,8 @@ import { ToolMark } from "./components/tool-mark";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
 import { PaneMention } from "./PaneMention";
-import { AncestorPath, usePaneMenu, type TerminalMenuContext } from "./PaneRelations";
+import { AncestorPath, usePaneMenu, type PaneHeadOffer, type TerminalMenuContext } from "./PaneRelations";
+import { workspaceViewOf } from "./workspace";
 import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -199,7 +200,7 @@ export const PaneView = memo(function PaneView({
   const paneId = pane.id;
   const owner = useKeyboardOwner();
   const input = owner.kind === "pane" && owner.paneId === paneId;
-  // The grip, `@` and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
+  // The grip, ◧ and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
   const tools = input ? "" : "opacity-0 group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100";
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
@@ -210,7 +211,15 @@ export const PaneView = memo(function PaneView({
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
   const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
-  const paneMenu = usePaneMenu(pane, title, actions);
+  // ◧ (PRD lane-desk-pair-view B19, B20, B22): pressed while this pane is
+  // its tab's pair view's; a pane with no agent has no view or session to
+  // show beside it, so its ◧ is off with why.
+  const paired = useShellStore((s) => workspaceViewOf(s.rest)?.tray.pair?.pane_id === paneId);
+  const head: PaneHeadOffer = { mention: Boolean(agentKind), pair: paired ? "on" : agentKind ? "off" : "none" };
+  const pairLabel = t(head.pair === "on" ? "panes.menu.pairOff" : head.pair === "off" ? "panes.menu.pair" : "panes.menu.pairNone");
+  // `@` is an item of the pane menu (D-32, B21); its list opens under the `…`.
+  const [mention, setMention] = useState(false);
+  const paneMenu = usePaneMenu(pane, title, actions, head, () => setMention(true));
 
   // A dropped file or a pasted image stages through hided and reaches the
   // terminal as the core's own `terminal_attachment` (B14).
@@ -447,8 +456,23 @@ export const PaneView = memo(function PaneView({
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
-        {/* A narrow pane draws neither `@` nor zoom: zoom waits in the pane menu, and `@` comes back as the pane widens. */}
-        {agentKind ? <PaneMention paneId={paneId} actions={actions} className={`${tools} pane-head-narrow:hidden`} /> : null}
+        {/* ◧ stands left of the zoom and follows its rule (B20): shown on the pane that holds the keyboard or is pointed at, kept
+            drawn while pressed, and in the pane menu below the narrow breakpoint (`pane-head-narrow`), where the head draws neither. Its chord joins the hint once pair
+            view has one. `aria-disabled` keeps the hint of an off ◧, which says why. */}
+        <Hint label={pairLabel}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={`shrink-0 hover:bg-popover aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent ${paired ? "bg-secondary text-foreground" : `text-subtle-foreground ${tools}`} pane-head-narrow:hidden`}
+            aria-label={pairLabel}
+            aria-pressed={paired}
+            aria-disabled={head.pair === "none"}
+            data-pane-pair={head.pair}
+            onClick={() => head.pair !== "none" && actions.togglePairView(paneId)}
+          >
+            <Columns2Icon aria-hidden="true" />
+          </Button>
+        </Hint>
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button
@@ -470,6 +494,7 @@ export const PaneView = memo(function PaneView({
             </Button>
           </Hint>
         ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        <PaneMention paneId={paneId} actions={actions} open={mention} setOpen={setMention} anchor={
         <Hint label={t("panes.actions", { name: title })}>
           <Button
             variant="ghost"
@@ -491,6 +516,7 @@ export const PaneView = memo(function PaneView({
             <EllipsisIcon />
           </Button>
         </Hint>
+        } />
         <Hint label={t("panes.close", { name: title })}>
           <Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground" disabled={moving} onClick={() => actions.closePane(paneId)}>
             <XIcon />
