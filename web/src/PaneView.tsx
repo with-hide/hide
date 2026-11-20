@@ -212,14 +212,9 @@ export const PaneView = memo(function PaneView({
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
   const titleContent = <span data-pane-move-title="true" className="flex min-w-0 items-center">{recordAgent && recordAgent.identity_label === title ? <AgentRecordTitle agent={recordAgent} /> : <span className="min-w-0 truncate">{title}</span>}</span>;
-  // ◧ (PRD lane-desk-pair-view B19, B20, B22): pressed while this pane is
-  // its tab's pair view's, off with why on a pane the core lists with
-  // nothing to show beside the desk (`pairOffer`, the menus' rule too).
+  // What ◧ offers for this pane (`pairOffer`), which the head's split button and the menus read (PRD lane-desk-pair-view B19, D-43).
   const pair = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
-  const paired = pair === "on";
   const head: PaneHeadOffer = { mention: Boolean(agentKind), pair };
-  const pairLabel = t(pairLabelKey(pair));
-  const pairChord = commandLabel("pair_view");
   // `@` is an item of the pane menu (D-32, B21); its list opens under the `…`.
   const [mention, setMention] = useState(false);
   const paneMenu = usePaneMenu(pane, title, actions, head, () => setMention(true));
@@ -450,30 +445,18 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <span className="contents pane-head-tight:hidden"><PanePrChip paneId={paneId} actions={actions} /></span> : null}
         {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
         {/* The views chip gives way below the tight breakpoint too: the View area already shows what it lists. The ask and the letters after it stay, since the operator acts on them here. */}
-        {agentKind ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={title} actions={actions} /></span> : null}
+        {/* The views chip and ◧ are one two-cell button (D-43): the left cell lists what the agent opened, the right puts the
+            pane beside its desk, always drawn and filled with the pair view accent while pressed. An agent with no View keeps ◧
+            alone; a pane with nothing to show draws neither. Below the tight breakpoint the views cell gives way, below the
+            narrow one ◧ too, which the pane menu then holds; its hint carries ⌘. */}
+        <PaneSplit paneId={paneId} name={title} agent={Boolean(agentKind)} actions={actions} />
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind ? <PaneOpenAsksMark paneId={paneId} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>
-        {/* ◧ and the zoom show only on the pane that holds the keyboard or is pointed at, so they lead the right side: the controls
-            always drawn stay at its end, and the place the two keep while hidden reads as the title's own margin (B20).
-            ◧ stays drawn while pressed, and both are in the pane menu below the narrow breakpoint (`pane-head-narrow`), where the head draws neither.
-            Its hint carries ⌘. while it can act; `aria-disabled` keeps the hint of an off ◧, which says why. */}
-        <Hint label={pairLabel} shortcut={head.pair === "none" ? undefined : pairChord}>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className={`shrink-0 hover:bg-popover aria-disabled:opacity-(--opacity-disabled) aria-disabled:hover:bg-transparent ${paired ? "bg-pair-view text-primary-foreground hover:bg-pair-view" : `text-subtle-foreground ${tools}`} pane-head-narrow:hidden`}
-            aria-label={pairLabel}
-            aria-pressed={paired}
-            aria-disabled={head.pair === "none"}
-            data-pane-pair={head.pair}
-            onClick={() => head.pair !== "none" && actions.togglePairView(paneId)}
-          >
-            <Columns2Icon aria-hidden="true" />
-          </Button>
-        </Hint>
+        {/* The zoom shows only on the pane that holds the keyboard or is pointed at, so it leads the right side: the controls
+            always drawn stay at its end, and the place it keeps while hidden reads as the title's own margin (B20). */}
         {!zoomed && paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools} pane-head-narrow:hidden`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
@@ -571,3 +554,33 @@ export const PaneView = memo(function PaneView({
     </section>
   );
 });
+
+/** The pane head's views chip and ◧ as one button of two cells (PRD lane-desk-pair-view D-43, B19, B20). */
+function PaneSplit({ paneId, name, agent, actions }: { paneId: string; name: string; agent: boolean; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const offer = useShellStore((s) => pairOffer(workspaceViewOf(s.rest), paneId));
+  const views = useShellStore((s) => agent && (workspaceViewOf(s.rest)?.feedback?.opened ?? []).some((row) => row.pane_id === paneId));
+  if (!views && offer === "none") return null;
+  const label = t(pairLabelKey(offer));
+  const pressed = offer === "on";
+  return (
+    <span data-pane-split={paneId} className="flex shrink-0 items-center overflow-hidden rounded-xs border border-border">
+      {views ? <span className="contents pane-head-tight:hidden"><PaneViews paneId={paneId} name={name} actions={actions} /></span> : null}
+      {offer !== "none" ? (
+        <Hint label={label} shortcut={commandLabel("pair_view") || undefined}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className={`shrink-0 rounded-none ${views ? "border-l border-border" : ""} ${pressed ? "bg-pair-view text-primary-foreground hover:bg-pair-view" : "text-subtle-foreground hover:bg-popover"} pane-head-narrow:hidden`}
+            aria-label={label}
+            aria-pressed={pressed}
+            data-pane-pair={offer}
+            onClick={() => actions.togglePairView(paneId)}
+          >
+            <Columns2Icon aria-hidden="true" />
+          </Button>
+        </Hint>
+      ) : null}
+    </span>
+  );
+}

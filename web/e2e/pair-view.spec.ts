@@ -240,7 +240,7 @@ test("the desk's pin pairs the tab in front with its agent, pair view stays the 
   }
 });
 
-test("⌘. puts the focused pane beside its desk, and on a shell with nothing to show it changes nothing and ◧ says why", async ({ page }) => {
+test("⌘. puts the focused pane beside its desk, and a shell with nothing to show draws no ◧ and ⌘. on it changes nothing", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   const sent = { pair: 0 };
   page.on("websocket", (ws) => ws.on("framesent", (frame) => {
@@ -258,12 +258,10 @@ test("⌘. puts the focused pane beside its desk, and on a shell with nothing to
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
 
-    // B19: the shell's ◧ is off and its hint says why, with no chord.
-    await expect(pairButton(page, shell)).toHaveAttribute("data-pane-pair", "none");
-    await expect(pairButton(page, shell)).toHaveAttribute("aria-disabled", "true");
-    await pairButton(page, shell).hover();
-    await expect(page.getByRole("tooltip")).toContainText("Nothing to show beside it yet");
-    await expect(page.getByRole("tooltip")).not.toContainText(commandLabel("pair_view"));
+    // B19, D-43: a shell with nothing to show draws no views and ◧ button at all; the agent with only its session draws ◧ alone.
+    await expect(paneView(page, shell).locator("[data-pane-split]")).toHaveCount(0);
+    await expect(pairButton(page, left!)).toHaveAttribute("data-pane-pair", "off");
+    await expect(paneView(page, left!).locator("[data-pane-split] [data-pane-views]")).toHaveCount(0);
 
     // ⌘. on the shell sends nothing and the screen stays as it is.
     await paneView(page, shell).locator("[data-terminal-host]").click();
