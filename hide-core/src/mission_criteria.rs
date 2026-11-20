@@ -342,6 +342,19 @@ pub struct Criterion {
     pub when: GateWhen,
 }
 
+/// A review's or verification's verdict from how many of its `total`
+/// deciding checkers passed and failed, under `rule` (D-07).
+fn decide(rule: Rule, passed: usize, failed: usize, total: usize) -> CriterionState {
+    match rule {
+        _ if total == 0 => CriterionState::Open,
+        Rule::All if failed > 0 => CriterionState::Fail,
+        Rule::All if passed == total => CriterionState::Pass,
+        Rule::Majority if passed * 2 > total => CriterionState::Pass,
+        Rule::Majority if failed * 2 >= total => CriterionState::Fail,
+        _ => CriterionState::Open,
+    }
+}
+
 fn is_zero(value: &u8) -> bool {
     *value == 0
 }
@@ -491,14 +504,38 @@ impl Criterion {
         }
         let (passed, total) = self.deciding();
         let failed = self.deciding_failed();
-        self.state = match self.rule.unwrap_or_default() {
-            _ if total == 0 => CriterionState::Open,
-            Rule::All if failed > 0 => CriterionState::Fail,
-            Rule::All if passed == total => CriterionState::Pass,
-            Rule::Majority if passed * 2 > total => CriterionState::Pass,
-            Rule::Majority if failed * 2 >= total => CriterionState::Fail,
-            _ => CriterionState::Open,
+        self.state = decide(self.rule.unwrap_or_default(), passed, failed, total);
+    }
+
+    /// The line's verdict in the round its node's last check opened
+    /// (`MissionNode::check_signal`, PRD mission-speed-2 D-02): of the
+    /// checkers bound to it, only the answers given since `since` count, an
+    /// answer from before being the round before's; open while the rule
+    /// waits on a checker that has not answered since. A skipped line is
+    /// skipped.
+    pub(crate) fn round_state(&self, since: u64) -> CriterionState {
+        if self.skip.is_some() {
+            return CriterionState::Skipped;
+        }
+        let bound: Vec<&Checker> = self
+            .checkers
+            .iter()
+            .filter(|checker| checker.agent_id.is_some())
+            .collect();
+        let answered = |state: CriterionState| {
+            bound
+                .iter()
+                .filter(|checker| {
+                    checker.state == state && checker.at_unix_ms.is_some_and(|at| at >= since)
+                })
+                .count()
         };
+        decide(
+            self.rule.unwrap_or_default(),
+            answered(CriterionState::Pass),
+            answered(CriterionState::Fail),
+            bound.len(),
+        )
     }
 
     /// The checkers whose answers decide the line now: the bound ones, on

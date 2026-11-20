@@ -2064,6 +2064,7 @@ fn a_workers_new_status_cell_wakes_it_asleep_once() {
             since_unix_ms: None,
             notified: false,
             opened_seq: None,
+            round: None,
         };
         crate::runtime::missions::push_wake(mission, wake).unwrap();
         runtime.letter_wakes.touch();
@@ -2132,6 +2133,7 @@ fn a_cell_wake_that_fails_is_tried_again_and_then_raised_to_the_conductor() {
             since_unix_ms: None,
             notified: false,
             opened_seq: None,
+            round: None,
         };
         crate::runtime::missions::push_wake(mission, wake).unwrap();
     }

@@ -158,6 +158,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
 - A pull-request change that needs only another pull-request change's contract (a wire, a schema, an API) does not wait for that node's merge: give the node before it a finish line of its own for the contract, such as `"the wire format is fixed and its test passes"` as its first line (`c1`), and name that line in the later node's `depends_on` as `"core:c1"`, in place of the plain `"core"`.
   A plain key waits until its node is done; a line key is met while that line shows passed or skipped in `hide mission show <node>` (a `check` passed on a commit the work folder has left is open again), so the later node can start while the node before still goes through its other lines, its review and its CI.
   Use it when the contract settles hours before the review rounds end; a contract still moving starts nothing early, since each change of it is rework above.
+  When a plan makes a pull-request change wait for the whole of another, Hide takes the plan as written and gives you one cell per such node suggesting the line key; ignore it when the later node needs the merge itself.
   The later node stacks: its worker cuts its branch from the branch of the node before and opens its pull request with `gh pr create --base <that branch>`, Hide sets its `--base-pr` to the pull request below, and it merges after that one; `hide mission show <node>` prints the stack as `쌓기 <node> 위` with the branch, and the node waits on `<node> 머지 먼저` once its own lines are met.
   When the lower pull request merges, the stack moves as any stack does: merge the destination into the branch above and point its pull request at the destination.
   Name lines of one node only (`mission_dependency_stack_split`) and a line that node has when you plan, from `hide mission show <node>` (`mission_dependency_line_unknown`; `ci` is added later and cannot be named), and in `merge_order` name the one under it before the stacked node, or leave both out (`mission_merge_order_stack`).
@@ -253,6 +254,7 @@ Every worker's brief, code or general, says in its first line what the node is, 
 - the destination, and that its pull request is opened with `gh pr create --base <destination>` (a stacked one with the lower pull request's branch as its base), never a push to the destination itself; `hide mission show <node>` prints it as `도착 <branch>`;
 - the checks the diff touches, by the repository's own commands, run before every push, since a push that fails a check the worker could run is a whole CI round lost;
 - the push rhythm: each push starts the CI again and cancels the run before it, so the worker fixes every finding of a review round, runs those checks, and pushes once for the round, never once per finding;
+- that recording its `check` line (on a node without a check command, every line of its own passed) is what starts its node's review and verification, so it runs the local checks its change touches first (section 9); Hide adds a line saying so at the end of the brief;
 - the pull request rules: the repository's template, its title form, no agent attribution anywhere;
 - the limits: start no agents of its own, merge nothing, never touch the operator's app, terminals or panes, never force push or rebase, stop and write a letter when the goal or scope would change, and declare a step only a person can take with `hide agent ask-human` rather than in a letter (section 9);
 - its plan: the node's `steps` from your plan, copied into the brief as a numbered list; before code the worker puts exactly those steps up with `hide task set` as `hide task help` says (a node planned without `steps`, of three steps or more, gets three to eight of its own, each something it delivers or checks inside this node, never research and never the node itself restated); it changes a step only when the work turns out different, and then says why with `--reason`; no `--ask`, since you read the plan, not the operator; each step marked `working` when it starts and `done` when it ends, so the node's panel on the map shows where the work is;
@@ -303,7 +305,9 @@ Every worker's brief, code or general, says in its first line what the node is, 
   A new commit alone sends no letter: wait for its CI letter rather than watching the checks in a shell.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
 - While a node waits on CI, start the next work that does not depend on it, as the cap allows.
-  A node's reviewer and verifier are such work: start them the moment its pull request opens and read the head they record with `--commit`, so the review and CI run together; never hold a checker until the CI letter comes.
+  A node's reviewer and verifier are such work: start and bind them the moment its pull request opens and read the head they record with `--commit`, so the review and CI run together; never hold a checker until the CI letter comes.
+  The worker's check starts each round, not you and not a push: when the worker records its `check` line (on a node without a check command, every line of its own passed), Hide asks each live checker bound to the node to check that commit, the same checker every round until the node ends; a checker's result goes to the worker straight, so you are not told each result and read them in `hide mission show <node>`.
+  When the check comes while a checker line has no live checker (none bound, or the one bound ended), Hide asks you instead, naming the node and the line: bind a fresh checker, which takes the ended one's place.
   The one exception is a node whose gate is a screen the operator has not said is right yet: its checkers start after their OK (below).
   A later push needs the next review round only when the strength allows one, and that round reads only what changed.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
@@ -367,7 +371,8 @@ Hide looks at the mission whenever a fact it rests on arrives (a GitHub read, a 
 
 - A node at work whose pull requests are all merged (scope `merge`), or all merged or green and approved (scope `pr`, or a node with `operator_merge`), and whose lines all pass, is set `done`; a general or `direct` node with no pull request is set `done` when its lines all pass.
 - A new pull request opened from the node's own branch (not a fork) is added to the node; a done node it joins works again.
-- A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a `request` letter naming it, once per pull request, reason and commit.
+- A sleeping worker whose pull request fails CI, conflicts with its base or gets a review asking for changes is woken with a cell naming it, once per pull request, reason and commit.
+  A worker at work is told of a conflict too, since its pull request's CI does not run until it is gone: once while the conflict lasts, within the five minutes GitHub is read in, and told again only after GitHub read it gone.
 - When every node is done or dropped and nothing waits on anyone, Hide closes the mission (`merge_wait` while a pull request is not merged or a `direct` change's branch is not in the destination, `done` otherwise), with a report of each node's result, and tells you; `hide mission reopen` opens it again.
 - A destination Hide cannot find, locally or as last fetched, counts for nothing: a worker's start is refused with Git's reason, a done `direct` change reads unread (`hide mission show <node>` says `읽지 못함` with the reason, which names the branch), and Hide does not close the mission by itself.
   It happens when the branch was never pushed, was deleted here and on the remote, or was merged into main and deleted; GitHub closes or moves the pull requests whose base went away, which is raised to you as `pr_closed`.
@@ -483,6 +488,12 @@ Write it so a reader who saw none of the mission can act, in four parts:
 
 For each node, the evidence of its lines goes with its pull request or branch.
 
+End the report with three lines that measure the mission, from `hide mission show`:
+
+- review and CI time against work time, node by node (`작업` and `리뷰·CI`);
+- the review rounds each node took;
+- every conflict that stopped a pull request's CI before anyone noticed it (none, or which).
+
 A `pr`-scope mission that leaves a stack waiting for the operator's merge, or a mission whose `operator_merge` node the operator has not merged yet, closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged, and every `direct` change's `--branch` is in the destination, Hide closes the mission as done itself, with or without you there.
 Hide reads a branch in the destination from git, as this repository or its last fetch has it, with no GitHub needed. A mission from before destinations records none and is read against main, which in a repository with no remote is the branch its main worktree has out. A `direct` change that names no branch keeps the mission waiting and shows unread, so name each one's branch before the close.
 A waiting mission closes itself only as your close would be allowed: a node a defect sent back to work keeps it waiting, and so does a branch you changed, one with new commits past the destination, or one Hide could not read this time (shown unread), until Hide reads it in the destination again; a reopened mission reads its branches again. A `direct` change's branch is read from the moment its node is done, so the map shows it in the destination while the mission still runs, and a close `--as merge_wait` with every branch already in the destination is done at once.
@@ -512,7 +523,14 @@ A worker or checker of a mission records its own lines from its own pane; the Co
 - A record from a pane whose registration belongs to an earlier agent session than the one running there is refused `participant_session_changed`, and one from a pane with no registration `participant_unavailable`: tell your Conductor rather than retry, since only a new agent bound to the line can record it; `participant_registering` means the spawn that started you has not registered you yet, so run the same record again in a few seconds.
   A worker's or checker's record that Hide cannot judge because it could not read its agent ledger is refused `ledger_unavailable`: stop and tell the operator; the Conductor's record on a node that never had a worker needs no ledger.
   Each of these refusals (`mission_criterion_not_yours`, `participant_session_changed`, `participant_registering`, `participant_unavailable`, `ledger_unavailable`) leaves one `mission.record_refused` line in Hide's diagnostic log with your session's digest, the registrations it found for your pane and the agents bound to the line.
-- Recording the same result on the same commit again changes nothing.
+- Recording the same result on the same commit again changes nothing, and wakes no checker again.
+- A round of review goes like this, and Hide's cells say each step's line at its moment:
+  - Before you record your `check` (on a node without a check command, your own lines), run the local checks your change touches: the record is what starts the node's review and verification, and a push alone starts nothing.
+  - A checker's first round gives every finding at once, each graded serious, ordinary or minor (`docs/CODE_REVIEW.md`); a later round reads only its earlier findings and what changed since, and raises a new finding only when it is serious.
+  - A failed result reaches the worker as it comes, while it works too: start fixing the first one at once, and record your next check once both the review and the verification answered, or after 30 minutes without the second.
+  - Confirm your plan for each serious finding with the checker that raised it, in a letter; the checker answers only OK or what to change; go on with your plan when no answer comes in 10 minutes, and with the changes it named without asking again. Fix ordinary and minor findings at once.
+  - Fix every other place the same kind of problem appears, not only the line it was found on.
+  - Nothing here is refused: a check before both results, or a fix without the checker's answer, only costs another round.
 - `hide mission show` and `hide mission show <node>` read your mission without `--mission`, as they do for its Conductor; while you work or check nodes of two open missions, every such command names one with `--mission <id>` (`mission_ambiguous` otherwise).
 - A change node's pull request takes the mission's destination as its base, which `hide mission show <node>` prints as `도착 <branch>`: `gh pr create --base <that branch>`; a pull request stacked on another takes that one's branch.
 - A worker attaches its own node's pull request, branch and one line itself: `hide mission node <its node> --pr <n> | --no-pr`, `--branch <name>` and `--line <text>`.

@@ -1871,6 +1871,7 @@ fn a_ci_result_refused_by_a_full_queue_is_told_once_there_is_room() {
             since_unix_ms: None,
             notified: false,
             opened_seq: None,
+            round: None,
         })
         .collect();
     let failed = checked(7, "b2", PullRequestChecks::Failed, &["verify"]);
@@ -9231,6 +9232,7 @@ fn a_full_wake_queue_keeps_what_waits() {
         since_unix_ms: None,
         notified: false,
         opened_seq: None,
+        round: None,
     };
     assert!(crate::runtime::missions::push_wake(mission, worker).is_some());
 }
@@ -10426,6 +10428,7 @@ fn a_warning_raised_while_the_letters_are_full_is_told_once_there_is_room() {
             since_unix_ms: None,
             notified: false,
             opened_seq: None,
+            round: None,
         })
         .collect();
     runtime.warn_missions(worked + 90 * minute);
@@ -13998,7 +14001,11 @@ fn a_fix_answer_goes_back_to_the_worker_and_the_gate_asks_again() {
     assert_eq!(fixes, [None, Some("agent-2")]);
     let letter = crate::runtime::missions::wake_body(
         mission,
-        mission.wakes.iter().find(|wake| wake.to.is_some()).unwrap(),
+        mission
+            .wakes
+            .iter()
+            .find(|wake| wake.event == WakeEvent::GateFix && wake.to.is_some())
+            .unwrap(),
     );
     assert!(letter.contains("the error banner overlaps the map") && letter.contains(&defect.key));
     let line = defect.key.clone();
@@ -18136,6 +18143,7 @@ fn a_stall_letter_asks_for_a_move_and_a_failed_review_promises_no_stall() {
                 since_unix_ms: None,
                 notified: false,
                 opened_seq: None,
+                round: None,
             },
         )
     };
@@ -19090,6 +19098,7 @@ fn a_warning_that_becomes_a_raise_keeps_its_safety_net_clock_and_notice() {
             since_unix_ms: Some(start),
             notified: false,
             opened_seq: None,
+            round: None,
         };
         crate::runtime::missions::push_wake(mission, wake).unwrap();
     }
@@ -19256,7 +19265,7 @@ fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
         runtime.drive_blocked_notes();
         let ledger = runtime.delivery_state().ok();
         runtime
-            .take_status_of(&agent, ledger.as_deref(), None)
+            .take_status_of(&agent, ledger.as_deref(), crate::runtime::StatusTake::Inbox)
             .into_iter()
             .map(|cell| cell.subject)
             .collect::<Vec<_>>()
@@ -19298,4 +19307,407 @@ fn a_blocked_childs_cell_the_parent_read_is_not_handed_again_after_a_restart() {
     rows(&mut guard, "blocked", STOPPED + 40_000);
     assert_eq!(take(&mut guard), ["child:w1:p2"], "the new block");
     assert!(take(&mut guard).is_empty());
+}
+
+const HEAD_2: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0f98765432";
+
+/// `running_criteria_mission`'s fix node at work under `recipient`
+/// (agent-2) with pull request 7, reviewed by `reviewer` (agent-3).
+fn reviewed_fix(runtime: &mut Runtime) {
+    running_criteria_mission(runtime);
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+}
+
+/// The lines of the cells standing for `recipient`, taken as read.
+fn read_cells(runtime: &mut Runtime, recipient: &str) -> Vec<String> {
+    let ledger = runtime.delivery_ledger.clone().ok();
+    runtime
+        .take_status_of(
+            recipient,
+            ledger.as_deref(),
+            crate::runtime::StatusTake::Inbox,
+        )
+        .into_iter()
+        .map(|cell| cell.line)
+        .collect()
+}
+
+/// PRD mission-speed-2 B1, B3, B4, B8, B9, B16, B17: the worker's check
+/// wakes the node's own reviewer, a push alone and the same check again
+/// wake no one, the reviewer's failure goes to the worker with what to do,
+/// a re-check names the commit read before and asks only for what changed,
+/// a pass after it tells the worker nothing, and the Conductor is told no
+/// result.
+#[test]
+fn a_check_wakes_the_nodes_reviewer_and_its_failure_goes_to_the_worker() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    // A push is no signal: nothing for the reviewer before the check.
+    assert!(read_cells(&mut runtime, "agent-3").is_empty());
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "c1", json!({"evidence": "test added"})),
+    )
+    .unwrap();
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "an own line of a node with a check is no signal"
+    );
+    let check = record_of("fix", "check", json!({"commit": HEAD}));
+    command(&mut runtime, "recipient", check.clone()).unwrap();
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(
+        asked[0].contains("ready for your review: its worker recorded its check on commit a1b2c3d"),
+        "{}",
+        asked[0]
+    );
+    assert!(asked[0].contains("each graded serious, ordinary or minor"));
+    assert!(asked[0].contains("answer only OK or what to change"));
+    // The same check again changes nothing and wakes no one.
+    assert!(!command(&mut runtime, "recipient", check).unwrap().1);
+    assert!(read_cells(&mut runtime, "agent-3").is_empty());
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "fix",
+            "review",
+            json!({"commit": HEAD, "pass": false, "evidence": "parser drops v1"}),
+        ),
+    )
+    .unwrap();
+    let told = read_cells(&mut runtime, "agent-2");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(
+        told[0].contains("review FAIL · round 1 of 3"),
+        "{}",
+        told[0]
+    );
+    assert!(
+        told[0]
+            .contains("Confirm your plan for each serious finding with the checker that raised it"),
+        "every line answered: plan, fix, and the same kind elsewhere"
+    );
+    assert!(told[0].contains("same kind of problem elsewhere"));
+    // The next check opens the next round with the same reviewer.
+    checkout_at(&mut runtime, HEAD_2);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    let again = read_cells(&mut runtime, "agent-3");
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert!(
+        again[0].contains(
+            "ready for your review again: you last checked commit a1b2c3d, and its worker recorded its check on commit f0e1d2c"
+        ),
+        "{}",
+        again[0]
+    );
+    assert!(again[0].contains("raise a new finding only when it is serious"));
+    assert!(again[0].contains("answer only OK or what to change"));
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD_2})),
+    )
+    .unwrap();
+    assert!(
+        read_cells(&mut runtime, "agent-2").is_empty(),
+        "a passed round tells the worker nothing"
+    );
+    let conductor = runtime.take_conductor_cells("mission-1");
+    assert!(
+        conductor
+            .iter()
+            .all(|cell| !cell.line.contains("review FAIL") && !cell.line.contains("ready for")),
+        "{conductor:?}"
+    );
+}
+
+/// PRD mission-speed-2 B5: a check while the node's reviewer ended asks
+/// the Conductor for a fresh one, naming the node and the line, and the
+/// ended one is asked nothing.
+#[test]
+fn a_check_with_its_reviewer_ended_asks_the_conductor_for_one() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for record in &mut ledger.agents {
+        if record.id == "agent-3" {
+            record.ended = true;
+        }
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert!(runtime.cells_of("agent-3").is_empty());
+    let asked: Vec<String> = runtime
+        .take_conductor_cells("mission-1")
+        .into_iter()
+        .map(|cell| cell.line)
+        .filter(|line| line.contains("no live checker"))
+        .collect();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(
+        asked[0].starts_with("Node fix is ready for its review, and no live checker holds it"),
+        "{}",
+        asked[0]
+    );
+    assert!(asked[0].contains("hide mission node fix --reviewer <agent-id>"));
+}
+
+/// PRD mission-speed-2 B2, B6, B7: on a node with no check command every
+/// line of the worker's passed is the signal, recording them again after a
+/// fix is the next; with a review and a verification, the first failure
+/// tells the worker to start fixing while the other runs, and the second
+/// result tells it what to do with both. Cells for a node's worker or
+/// checker reach it mid-turn; the Conductor's wait for its turn.
+#[test]
+fn a_general_nodes_lines_wake_its_checkers_and_each_result_reaches_the_worker() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Research"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "docs", "title": "Docs", "kind": "research", "criteria": ["the guide says it"],
+             "checks": [
+                {"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]},
+                {"as": "verify", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}
+             ]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"agent_id": "agent-2", "reviewer": "agent-3", "verifier": "agent-1"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({})),
+    )
+    .unwrap();
+    // The reviewer's cell reaches it while it works; it rings mid-turn.
+    let rings = runtime.status_rings_due();
+    assert!(
+        rings
+            .iter()
+            .any(|ring| ring.recipient == "agent-3" && ring.mid_turn),
+        "{:?}",
+        rings
+            .iter()
+            .map(|ring| (&ring.recipient, ring.mid_turn))
+            .collect::<Vec<_>>()
+    );
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(
+        asked[0].contains("its worker recorded every one of its lines passed"),
+        "{}",
+        asked[0]
+    );
+    read_cells(&mut runtime, "agent-1");
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of(
+            "docs",
+            "review",
+            json!({"pass": false, "evidence": "a step is missing"}),
+        ),
+    )
+    .unwrap();
+    // At a tool use only the cells that reach it mid-turn are given.
+    let ledger = runtime.delivery_ledger.clone().ok();
+    let first = runtime.take_status_of(
+        "agent-2",
+        ledger.as_deref(),
+        crate::runtime::StatusTake::Tool(4_096),
+    );
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(first[0].mid_turn);
+    assert!(
+        first[0].line.contains("review FAIL · verify running"),
+        "{}",
+        first[0].line
+    );
+    assert!(first[0].line.contains("Start fixing now; record your next check once both results are in (after 30 minutes without the other, go on)"));
+    command(
+        &mut runtime,
+        "sender",
+        record_of("docs", "verify", json!({})),
+    )
+    .unwrap();
+    let second = read_cells(&mut runtime, "agent-2");
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert!(
+        second[0].contains("review FAIL · verify PASS"),
+        "{}",
+        second[0]
+    );
+    assert!(second[0].contains("Confirm your plan"));
+    // Recorded again after the fix: the next round, the same checkers.
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("docs", "c1", json!({"evidence": "the step is in"})),
+    )
+    .unwrap();
+    let again = read_cells(&mut runtime, "agent-3");
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert!(
+        again[0].contains("ready for your review again: after your last answer"),
+        "{}",
+        again[0]
+    );
+}
+
+/// PRD mission-speed-2 B14: a change node the plan makes wait for the
+/// whole of another change node gets its Conductor one suggestion to wait
+/// on a line instead; the same plan again, or a line key, gets none.
+#[test]
+fn a_plan_that_waits_for_a_whole_change_node_suggests_its_line() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Stack"}),
+    )
+    .unwrap();
+    let plan = |depends: &str| {
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "core", "title": "Core", "kind": "change", "delivery": "pr", "criteria": ["the API holds"]},
+            {"key": "screen", "title": "Screen", "kind": "change", "delivery": "pr", "criteria": ["it shows"], "depends_on": [depends]},
+            {"key": "notes", "title": "Notes", "kind": "research", "criteria": ["written"], "depends_on": ["core"]},
+        ]}})
+    };
+    command(&mut runtime, "sender", plan("core")).unwrap();
+    // The Conductor's cell waits for its turn.
+    assert!(runtime.status_rings_due().iter().all(|ring| !ring.mid_turn));
+    let hints: Vec<String> = runtime
+        .take_conductor_cells("mission-1")
+        .into_iter()
+        .map(|cell| cell.line)
+        .filter(|line| line.contains("waits for the whole"))
+        .collect();
+    assert_eq!(hints.len(), 1, "{hints:?}");
+    assert!(
+        hints[0].starts_with("Node screen waits for the whole of node core"),
+        "{}",
+        hints[0]
+    );
+    assert!(hints[0].contains("`\"core:c1\"`"), "{}", hints[0]);
+    command(&mut runtime, "sender", plan("core")).unwrap();
+    command(&mut runtime, "sender", plan("core:c1")).unwrap();
+    assert!(
+        runtime
+            .take_conductor_cells("mission-1")
+            .iter()
+            .all(|cell| !cell.line.contains("waits for the whole")),
+    );
+}
+
+/// PRD mission-speed-2 B15: a node worker's brief ends with what starts its
+/// checkers, the same each time it is asked; a node without checkers, and
+/// another intent, keep the brief as written.
+#[test]
+fn a_node_workers_brief_ends_with_what_starts_its_checkers() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let conductor = fixture.conductor.clone();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug", "cap": 3}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let brief = |runtime: &mut Runtime, intent: &str| {
+        runtime
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                &conductor.pane_id,
+                &authority(&conductor).context,
+                None,
+                spawn(None, intent, Some("Fix it.")),
+            )
+            .unwrap()
+            .spawn_brief()
+            .map(str::to_owned)
+    };
+    let first = brief(&mut runtime, "mission-1:fix").unwrap();
+    assert_eq!(
+        first,
+        "Fix it.\n\nBefore you record your `check` line, run the local checks the change touches: recording `check` starts the node's review and verification."
+    );
+    assert_eq!(brief(&mut runtime, "mission-1:fix").unwrap(), first);
+    assert_eq!(brief(&mut runtime, "mission-1:docs").unwrap(), "Fix it.");
+    assert_eq!(
+        brief(&mut runtime, "mission-1:review-fix").unwrap(),
+        "Fix it."
+    );
+}
+
+/// PRD mission-speed-2 review: a round wake rides the event every build
+/// reads (`new_head`), so an older build loads the book, and a kind a later
+/// build adds reads as unknown rather than refusing it.
+#[test]
+fn a_round_wake_is_stored_as_news_an_older_build_reads() {
+    use crate::missions::{PendingWake, RoundWake};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    let wake = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .wakes
+        .last()
+        .unwrap()
+        .clone();
+    let stored = serde_json::to_value(&wake).unwrap();
+    assert_eq!(
+        (&stored["event"], &stored["round"]),
+        (&json!("new_head"), &json!("check_asked"))
+    );
+    let mut later = stored.clone();
+    later["round"] = json!("a_kind_from_a_later_build");
+    let read: PendingWake = serde_json::from_value(later).unwrap();
+    assert_eq!(read.round, Some(RoundWake::Unknown));
 }

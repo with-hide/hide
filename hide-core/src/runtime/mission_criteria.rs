@@ -665,6 +665,8 @@ impl Runtime {
             agent_id,
             at_unix_ms: now,
         };
+        let kind = line.kind;
+        let signal_before = row.check_signal();
         let mut next = row.clone();
         let effect = match line.kind {
             CriterionKind::Review | CriterionKind::Verify => {
@@ -771,6 +773,7 @@ impl Runtime {
             "component": "missions", "kind": "mission.criterion_recorded",
             "mission": id, "node": node, "line": key, "pass": pass,
         }));
+        self.mission_round_moved(&id, node, kind, signal_before);
         self.record_mission_events(&id, events);
         Ok((
             json!({"mission": self.mission_view_for(&id, &caller)}),

@@ -200,18 +200,36 @@ impl Prepared {
         self
     }
 
+    /// The brief a spawn will start its agent on, as the core prepared it.
+    #[cfg(test)]
+    pub(crate) fn spawn_brief(&self) -> Option<&str> {
+        match &self.command {
+            Command::Agents {
+                command: crate::coordination::Command::Spawn { brief, .. },
+            } => brief.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Called by the request worker after owner-thread preparation. Its wait
     /// never holds Runtime's mutex.
     pub fn run(self, timeout: Duration) -> Result<Value, String> {
         // Hide's own notices are status cells, not letters (PRD
         // letters-missions-simplify D-17): a turn's prompt reads the ones
         // that changed after its letters, and `hide inbox` lists them.
+        // A tool event's ask gives the cells that reach a working agent
+        // (PRD mission-speed-2 B7): a mission's cells for a node's worker or
+        // checker, as a `--now` letter goes there.
         let status = match &self.command {
             Command::Pull {
                 point: hide_node_link::panes::PullPoint::Prompt,
                 ..
-            } => Some(false),
-            Command::Inbox { bundle: true } => Some(true),
+            } => Some(crate::runtime::StatusPoint::Prompt),
+            Command::Pull {
+                point: hide_node_link::panes::PullPoint::Tool,
+                ..
+            } => Some(crate::runtime::StatusPoint::Tool),
+            Command::Inbox { bundle: true } => Some(crate::runtime::StatusPoint::Inbox),
             _ => None,
         };
         let caller = status.map(|_| {
@@ -252,15 +270,15 @@ impl Prepared {
                 timeout,
             )
         };
-        if let (Some(inbox), Some((runtime, device, pane)), Ok(value)) =
+        if let (Some(point), Some((runtime, device, pane)), Ok(value)) =
             (status, caller, result.as_mut())
             && let Some(runtime) = runtime.upgrade()
         {
-            crate::runtime::with_status(value, inbox, |room| {
+            crate::runtime::with_status(value, point, |take| {
                 let mut guard = runtime
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let cells = guard.take_status(&device, &pane, room)?;
+                let cells = guard.take_status(&device, &pane, take)?;
                 let text = if cells.is_empty() {
                     String::new()
                 } else {

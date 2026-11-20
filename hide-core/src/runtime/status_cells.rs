@@ -98,6 +98,11 @@ pub struct Cell {
     /// A receiver that saw or was rung for an earlier episode is rung again.
     #[serde(skip)]
     pub episode: u64,
+    /// Reaches its receiver while it works, at the point a `--now` letter
+    /// does: a mission's cell for a node's worker or checker
+    /// (`PendingWake::mid_turn`). Any other waits for the receiver's turn.
+    #[serde(skip)]
+    pub mid_turn: bool,
 }
 
 /// A new cell refused because every cell held in memory is live
@@ -128,6 +133,28 @@ pub(crate) struct StatusRing {
     /// The newest new cell, which the bell line names.
     pub(crate) line: String,
     pub(crate) others: usize,
+    /// A cell of the ring reaches its receiver while it works
+    /// (`Cell::mid_turn`), so the bell does not wait for its rest.
+    pub(crate) mid_turn: bool,
+}
+
+/// Where a receiver is given its changed cells: its turn's prompt, its
+/// tool use mid-turn, which gives only the cells that reach it there
+/// (`Cell::mid_turn`), or `hide inbox`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Take {
+    Prompt(usize),
+    Tool(usize),
+    Inbox,
+}
+
+impl Take {
+    fn room(self) -> Option<usize> {
+        match self {
+            Self::Prompt(room) | Self::Tool(room) => Some(room),
+            Self::Inbox => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -257,6 +284,7 @@ impl Runtime {
                     news,
                     revision,
                     episode: episode.unwrap_or(revision),
+                    mid_turn: false,
                 },
             },
         );
@@ -337,6 +365,7 @@ impl Runtime {
                         news: !wake.standing(),
                         revision: wake.seq,
                         episode: wake.opened_seq.unwrap_or(wake.seq),
+                        mid_turn: wake.mid_turn(),
                     },
                 });
             }
@@ -357,15 +386,16 @@ impl Runtime {
     }
 
     /// The cells of the agent in `caller`'s pane on `device` that changed
-    /// since it last looked, marked seen now: for a turn's prompt as many as
-    /// `room` bytes of text hold, at most `SHOWN_BYTES`; for `hide inbox`
-    /// (`room` none) at most `INBOX_CELLS`. A news cell seen is gone. None
-    /// for a caller in no pane Hide observes.
+    /// since it last looked, marked seen now: for a turn's prompt or a tool
+    /// use as many as the room's bytes of text hold, at most `SHOWN_BYTES`,
+    /// and at a tool use only the cells that reach it mid-turn; for `hide
+    /// inbox` at most `INBOX_CELLS`. A news cell seen is gone. None for a
+    /// caller in no pane Hide observes.
     pub(crate) fn take_status(
         &mut self,
         device: &str,
         caller: &str,
-        room: Option<usize>,
+        take: Take,
     ) -> Option<Vec<Cell>> {
         let crate::workspace_control::Caller::Pane(pane) =
             crate::workspace_control::Caller::parse(caller)
@@ -376,25 +406,71 @@ impl Runtime {
         let actor = self.delivery_observations.get(&pane)?.actor.clone();
         // A prompt hook that cannot hand the agent context (Grok) takes
         // nothing: the agent reads its cells with `hide inbox` (B11, B12).
-        if room.is_some() && !crate::delivery::mailbox::prompt_hook(&actor.kind) {
+        // A tool's ask comes only from a kind that takes letters there.
+        let hands_over = match take {
+            Take::Prompt(_) => crate::delivery::mailbox::prompt_hook(&actor.kind),
+            Take::Tool(_) => hide_agent_adapter::adapter(&actor.kind)
+                .is_some_and(|row| row.tool_letters.is_some()),
+            Take::Inbox => true,
+        };
+        if !hands_over {
             return None;
         }
         let ledger = self.delivery_ledger.clone().ok();
         let recipient = recipient_key(ledger.as_deref(), &actor);
-        Some(self.take_status_of(&recipient, ledger.as_deref(), room))
+        // Asked at every tool use: no cell is built unless a mid-turn one
+        // waits unread for this receiver (`docs/PERFORMANCE_TESTING.md`,
+        // Letters at a tool event).
+        if matches!(take, Take::Tool(_)) && !self.mid_turn_waits(&recipient) {
+            return Some(Vec::new());
+        }
+        Some(self.take_status_of(&recipient, ledger.as_deref(), take))
+    }
+
+    /// Whether a mission wake for `recipient` that reaches it mid-turn is
+    /// newer than what it saw of its node: a scan of the open missions'
+    /// recorded wakes, which builds no cell.
+    fn mid_turn_waits(&mut self, recipient: &str) -> bool {
+        let candidates: Vec<(String, u64)> = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status != MissionStatus::Cancelled)
+            .flat_map(|mission| {
+                mission
+                    .wakes
+                    .iter()
+                    .filter(|wake| wake.mid_turn() && wake.to.as_deref() == Some(recipient))
+                    .map(|wake| (node_subject(&mission.id, &wake.node), wake.seq))
+            })
+            .collect();
+        if candidates.is_empty() {
+            return false;
+        }
+        let Some(seen) = self.status_seen() else {
+            return false;
+        };
+        let seen = seen.get(recipient);
+        candidates.iter().any(|(subject, seq)| {
+            seen.and_then(|seen| seen.get(subject))
+                .is_none_or(|looked| looked < seq)
+        })
     }
 
     pub(crate) fn take_status_of(
         &mut self,
         recipient: &str,
         ledger: Option<&Ledger>,
-        room: Option<usize>,
+        take: Take,
     ) -> Vec<Cell> {
+        let room = take.room();
         let mut mine: Vec<Cell> = self
             .status_cells(ledger)
             .into_iter()
             .filter(|addressed| addressed.recipient == recipient)
             .map(|addressed| addressed.cell)
+            .filter(|cell| cell.mid_turn || !matches!(take, Take::Tool(_)))
             .collect();
         // Newest first: what moved last is read first.
         mine.sort_by_key(|cell| std::cmp::Reverse(cell.revision));
@@ -570,6 +646,7 @@ impl Runtime {
                 StatusRing {
                     recipient,
                     actor,
+                    mid_turn: cells.iter().any(|cell| cell.mid_turn),
                     line: cells[0].line.clone(),
                     others: cells.len() - 1,
                     episodes: cells.iter().map(|cell| cell.episode).collect(),
@@ -714,7 +791,7 @@ impl Runtime {
             .agent_id
             .clone()
             .unwrap_or_else(|| recipient_key(ledger.as_deref(), &conductor.actor));
-        self.take_status_of(&recipient, ledger.as_deref(), Some(usize::MAX))
+        self.take_status_of(&recipient, ledger.as_deref(), Take::Prompt(usize::MAX))
     }
 
     /// Every cell standing now for `recipient`, seen or not.
@@ -741,15 +818,23 @@ fn wake_recipient(
         .unwrap_or_else(|| recipient_key(ledger, &mission.conductor.actor))
 }
 
+/// Where a delivery answer gives the caller's changed cells.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Point {
+    Prompt,
+    Tool,
+    Inbox,
+}
+
 /// Adds the caller's changed status cells to a delivery answer: for a
-/// prompt, after the letters in its context, in the room the hook's limit
-/// leaves (`take` answers none for an agent whose prompt hook carries no
-/// context, which then reads them with `hide inbox`); for `hide inbox`, as
-/// its `status` list.
+/// prompt or a tool use, after the letters in its context, in the room the
+/// hook's limit leaves (`take` answers none for an agent whose hook there
+/// carries no context, which then reads them with `hide inbox`); for `hide
+/// inbox`, as its `status` list.
 pub(crate) fn with_status(
     result: &mut Value,
-    inbox: bool,
-    take: impl FnOnce(Option<usize>) -> Option<(String, Value)>,
+    point: Point,
+    take: impl FnOnce(Take) -> Option<(String, Value)>,
 ) {
     let Value::Object(fields) = result else {
         return;
@@ -760,8 +845,13 @@ pub(crate) fn with_status(
         Some(Value::String(context)) => context.len() + 1,
         _ => 0,
     };
-    let room = (!inbox).then(|| crate::delivery::HOOK_LIMIT.saturating_sub(used));
-    let Some((text, cells)) = take(room) else {
+    let room = crate::delivery::HOOK_LIMIT.saturating_sub(used);
+    let inbox = point == Point::Inbox;
+    let Some((text, cells)) = take(match point {
+        Point::Prompt => Take::Prompt(room),
+        Point::Tool => Take::Tool(room),
+        Point::Inbox => Take::Inbox,
+    }) else {
         return;
     };
     if inbox {
@@ -830,6 +920,7 @@ fn watch_cells(ledger: &Ledger) -> Vec<Addressed> {
                     news: false,
                     revision,
                     episode: first,
+                    mid_turn: false,
                 },
             })
         })
