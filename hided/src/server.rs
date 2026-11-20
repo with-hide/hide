@@ -2833,6 +2833,11 @@ fn handle_client_text(
             if !renderer {
                 return Err("A guest's pane is closed in an operator window".to_owned());
             }
+            // A build that offers no connection between two Hides hosts no
+            // guest (`Guests::serve` is not called), and says so.
+            if !state.peers.device_connect() {
+                return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
+            }
             state
                 .guests
                 .close_pane(&payload_str(&event, "pane_id"))
