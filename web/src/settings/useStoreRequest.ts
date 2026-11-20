@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import type { Actions } from "../actions";
 import type { StoreAnswer, StoreChange } from "../snapshot";
 import { useShellStore } from "../store";
-import { answerPending, refusalOf, storeRequestId } from "./skillsMcp";
+import { answerPending, madeBy, refusalOf, storeRequestId } from "./skillsMcp";
 
 /**
  * One press's store request on one machine (`kit_store`) and what it came to,
@@ -22,5 +22,6 @@ export function useStoreRequest(deviceId: string, actions: Pick<Actions, "change
     [actions, deviceId],
   );
   const reset = useCallback(() => setSent(null), []);
-  return { send, reset, sent, answer, pending: answerPending(sent, answer), refusal: refusalOf(answer), done: answer?.state === "done" && refusalOf(answer) === null };
+  const done = answer?.state === "done" && refusalOf(answer) === null;
+  return { send, reset, sent, answer, pending: answerPending(sent, answer), refusal: refusalOf(answer), done, made: done ? madeBy(answer) : null };
 }

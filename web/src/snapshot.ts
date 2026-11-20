@@ -2567,7 +2567,8 @@ export type StoreChange =
   | { op: "set_mcp"; item: string; server: McpServer; keys?: Record<string, string> }
   | { op: "receive"; item: unknown };
 
-export type StoreChangeOutcome = { change: StoreChange; refused?: { cause: StoreRefusalCause; reason: string } | null };
+/** How one change of a pass ended; `made` names what it made for its asker to show (an inspect's preview, a paste's MCP preview, an update preview's diff). */
+export type StoreChangeOutcome = { change: StoreChange; refused?: { cause: StoreRefusalCause; reason: string } | null; made?: string | null };
 
 /** What one store request came to (`status.store_answers`), found by its request id. */
 export type StoreAnswer = { request_id: string; device_id: string; state: "pending" | "done" | "refused"; outcomes: StoreChangeOutcome[] };

@@ -299,13 +299,13 @@ export function addInput(text: string): { kind: "git"; url: string } | { kind: "
 }
 
 /** The ids a report holds now, so the one a request adds can be told from the rest. */
-export function previewIds(report: StoreReport | null | undefined): Set<string> {
-  return new Set([...(report?.previews ?? []).map((preview) => preview.id), ...(report?.mcp_previews ?? []).map((preview) => preview.id), ...(report?.diffs ?? []).map((diff) => diff.id)]);
-}
-
-/** The newest entry whose id was not there before the request. */
-export function newest<T extends { id: string; at_unix_ms: number }>(rows: readonly T[] | undefined, before: ReadonlySet<string>): T | null {
-  return [...(rows ?? [])].filter((row) => !before.has(row.id)).sort((a, b) => b.at_unix_ms - a.at_unix_ms)[0] ?? null;
+/**
+ * What a finished read made, as its own answer names it: never the newest
+ * row, which another pane's read of the same or another source can be.
+ */
+export function madeBy(answer: StoreAnswer | null | undefined): string | null {
+  if (answer?.state !== "done") return null;
+  return answer.outcomes.find((outcome) => outcome.made)?.made ?? null;
 }
 
 /** The files a set of found skills brings, and how many of them run. */

@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { Device, McpPastedServer, McpReach, McpServer, StoreAsk, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreUpdateDiff } from "../snapshot";
-import { agentShortName, addInput, filesOf, keyNames, newest, previewIds, previewSource, serverLine, versionValue } from "./skillsMcp";
+import { agentShortName, addInput, filesOf, keyNames, previewSource, serverLine, versionValue } from "./skillsMcp";
 import { useStoreRequest } from "./useStoreRequest";
 
 /** A refused store change in the operator's words; the kit's sentence stays in the log. */
@@ -90,25 +90,25 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
   const [stage, setStage] = useState<Stage>({ kind: "source" });
-  const [before, setBefore] = useState<Set<string>>(() => previewIds(report));
   const read = useStoreRequest(device.id, actions);
   const apply = useStoreRequest(device.id, actions);
-  const [unread, setUnread] = useState(false);
+  // The read's own answer names the preview it made; no other read stands in for it.
+  const readPreview = read.done ? (report.previews.find((row) => row.id === read.made) ?? null) : null;
+  const readPaste = read.done ? (report.mcp_previews?.find((row) => row.id === read.made) ?? null) : null;
+  const lost = read.done && !readPreview && !readPaste;
+  const unread = readPaste !== null && readPaste.servers.length === 0;
 
-  // A read that answered lands as a new preview: on to picking, or straight to the confirm for one skill.
+  // A read that answered: on to picking, or straight to the confirm for one skill, or to a pasted server's fields.
   useEffect(() => {
-    if (!read.done || stage.kind !== "source") return;
-    const preview = newest(report.previews, before);
-    if (preview) {
-      const [only, ...more] = preview.skills;
-      setStage(only && more.length === 0 && !only.taken ? { kind: "confirm", preview: preview.id, names: [only.name] } : { kind: "pick", preview: preview.id });
+    if (stage.kind !== "source") return;
+    if (readPreview) {
+      const [only, ...more] = readPreview.skills;
+      setStage(only && more.length === 0 && !only.taken ? { kind: "confirm", preview: readPreview.id, names: [only.name] } : { kind: "pick", preview: readPreview.id });
       return;
     }
-    const pasted = newest(report.mcp_previews, before);
-    const first = pasted?.servers.find((server) => !server.taken) ?? pasted?.servers[0] ?? null;
-    if (pasted && first) setStage({ kind: "mcp", preview: pasted.id, server: first.server, index: pasted.servers.indexOf(first) });
-    else setUnread(true);
-  }, [read.done, report, before, stage.kind]);
+    const first = readPaste?.servers.find((server) => !server.taken) ?? readPaste?.servers[0] ?? null;
+    if (readPaste && first) setStage({ kind: "mcp", preview: readPaste.id, server: first.server, index: readPaste.servers.indexOf(first) });
+  }, [readPreview, readPaste, stage.kind]);
   useEffect(() => {
     if (apply.done) onClose();
   }, [apply.done, onClose]);
@@ -116,8 +116,6 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
   const next = () => {
     const input = addInput(text);
     if (!input) return;
-    setUnread(false);
-    setBefore(previewIds(report));
     if (input.kind === "mcp") read.send([{ op: "read_mcp", text: input.text }]);
     else read.send([{ op: "inspect", source: input.kind === "git" ? { kind: "git", url: input.url } : { kind: "folder", path: input.path } }]);
   };
@@ -203,6 +201,7 @@ export function AddDialog({ device, name, report, shown, local, actions, onClose
       </span>
       {read.refusal ? <Note tone="error" data-store-add-refused={read.refusal}>{refusalText(read.refusal, t)}</Note> : null}
       {unread ? <Note tone="error">{t("store.mcp.nothing")}</Note> : null}
+      {lost ? <Note tone="error" data-store-add-refused="not_found">{refusalText("not_found", t)}</Note> : null}
     </StoreDialog>
   );
 }
@@ -296,7 +295,6 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
   const { t } = useInterfaceTranslation();
   const read = useStoreRequest(device.id, actions);
   const apply = useStoreRequest(device.id, actions);
-  const [before] = useState(() => previewIds(report));
   const asked = useRef(false);
   const reads = target.kind === "skill" && target.path !== null;
   useEffect(() => {
@@ -310,12 +308,14 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
   const adopt = () => apply.send([{ op: "adopt", kind: target.kind, name: target.name, ...(target.from ? { from: target.from } : {}) }]);
   const title = t("store.adopt.title", { name: target.name });
   const header = <p className="text-body text-muted-foreground">{t("store.adopt.line")}</p>;
-  const preview = reads && read.done ? newest(report.previews, before) : null;
+  // The preview this dialog's own read made, as its answer names it: another pane's read never replaces it.
+  const preview = reads && read.done ? (report.previews.find((row) => row.id === read.made) ?? null) : null;
+  const lost = reads && read.done && !preview;
   if (preview) {
     return <InstallConfirm title={title} data="adopt" preview={preview} skills={preview.skills} shown={shown} pending={apply.pending} refusal={apply.refusal} onClose={onClose} onInstall={adopt} confirmLabel={t("store.adopt.apply")} header={header} />;
   }
   const agents = (report.columns[target.kind] ?? []).flatMap((column) => column.agents).filter((agent, index, all) => shown.has(agent) && all.indexOf(agent) === index);
-  const reading = reads && !read.refusal;
+  const reading = reads && !read.refusal && !lost;
   return (
     <StoreDialog
       title={title}
@@ -339,7 +339,7 @@ export function AdoptDialog({ device, target, report, shown, actions, onClose }:
           <Fact label={t("store.detail.agents")}><AgentChips agents={agents} /></Fact>
         </Facts>
       )}
-      {read.refusal ? <Note tone="error" data-store-adopt-refused={read.refusal}>{refusalText(read.refusal, t)}</Note> : null}
+      {read.refusal || lost ? <Note tone="error" data-store-adopt-refused={read.refusal ?? "not_found"}>{refusalText(read.refusal ?? "not_found", t)}</Note> : null}
       {apply.refusal ? <Note tone="error" data-store-install-refused={apply.refusal}>{refusalText(apply.refusal, t)}</Note> : null}
     </StoreDialog>
   );
@@ -595,18 +595,18 @@ function DiffFacts({ diff }: { diff: StoreUpdateDiff }) {
 export function UpdateDialog({ device, queue, report, actions, onClose }: { device: Device; queue: string[]; report: StoreReport; actions: Actions; onClose: () => void }) {
   const { t } = useInterfaceTranslation();
   const [at, setAt] = useState(0);
-  const [before, setBefore] = useState<Set<string>>(() => previewIds(report));
   const read = useStoreRequest(device.id, actions);
   const apply = useStoreRequest(device.id, actions);
   const id = queue[at];
   const item = report.items.find((row) => row.id === id) ?? null;
-  const diff = read.done ? newest(report.diffs.filter((row) => row.item === id), before) : null;
+  // The diff this item's own read made, as its answer names it.
+  const diff = read.done ? (report.diffs.find((row) => row.id === read.made && row.item === id) ?? null) : null;
+  const lost = read.done && !diff;
   const { send: readSend } = read;
   useEffect(() => {
     if (!id) return;
-    setBefore(previewIds(report));
     readSend([{ op: "preview_update", item: id }]);
-    // Each item is read once when it comes up; the ids before it are taken then.
+    // Each item is read once when it comes up.
   }, [id, readSend]);
   const { done: applied, reset } = apply;
   useEffect(() => {
@@ -632,8 +632,8 @@ export function UpdateDialog({ device, queue, report, actions, onClose }: { devi
         </>
       }
     >
-      {diff ? <DiffFacts diff={diff} /> : read.refusal ? null : <p className="text-body text-muted-foreground">{t("store.reading")}</p>}
-      {read.refusal || apply.refusal ? <Note tone="error">{refusalText((read.refusal ?? apply.refusal)!, t)}</Note> : null}
+      {diff ? <DiffFacts diff={diff} /> : read.refusal || lost ? null : <p className="text-body text-muted-foreground">{t("store.reading")}</p>}
+      {read.refusal || apply.refusal || lost ? <Note tone="error">{refusalText(read.refusal ?? apply.refusal ?? "not_found", t)}</Note> : null}
     </StoreDialog>
   );
 }
