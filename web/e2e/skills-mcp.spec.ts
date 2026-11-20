@@ -5,7 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { withControl } from "./daemon-actions";
 import { writeSshHost } from "./hided-fixture";
 import { everyAgentOn, install, moveUpstream, openStore, seedStore, startStore, stopStore, store, storeWhen, type StoreFixture } from "./skills-mcp-fixture";
@@ -25,7 +25,11 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
 
     // Skills have a cell per folder, 공용 naming the installed agents that read it; MCP one per agent.
     await expect(machine.locator('[data-store-table="skill"] [data-store-column]')).toHaveCount(3);
-    await expect(machine.locator('[data-store-shared-hint="agents"]')).toContainText("Codex");
+    // 공용 names its readers in its hint, not in the head.
+    const shared = machine.locator('[data-store-shared-hint="agents"]');
+    await expect(shared).toHaveText("Shared");
+    await shared.hover();
+    await expect(page.getByRole("tooltip")).toContainText("Codex · Grok · OpenCode · Pi · omp read this one folder. Grok · omp also read the Claude folder.");
     await expect(machine.locator('[data-store-table="mcp"] [data-store-column]')).toHaveCount(7);
     // Hide's own skills never stand in the table (B35).
     await expect(machine.locator('[data-store-row="skill:hide"]')).toHaveCount(0);
@@ -48,7 +52,10 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     await expect(detail).toContainText("▲ 1 executable");
     await machine.locator('[data-store-row-toggle="mcp:github"]').click();
     const github = machine.locator('[data-store-detail="mcp:github"]');
+    // A failure is one line: the agent, a few words and its file under ~, with Retry; the kit's sentence stays in the log.
+    await expect(github.locator('[data-store-fix="mcp:github:grok"]')).toContainText("Grok · The config file is not valid, so Hide left it as it was~/.grok/config.toml");
     await expect(github.locator('[data-store-retry="mcp:github:grok"]')).toBeVisible();
+    await expect(github).not.toContainText("unexpected shape");
     await expect(github.locator('[data-store-keys="mcp:github"]')).toContainText("GITHUB_TOKEN ••••••");
     await expect(page.locator("body")).not.toContainText("e2e-fixture-value");
     await screenshot(page, "store-table-dark");
@@ -154,7 +161,7 @@ test("an update shows what changes before it is taken, a delete can be undone, a
 
     // A delete leaves the row's notice with Undo, which brings the row back whole.
     await machine.locator('[data-store-row-toggle="skill:archify"]').click();
-    await machine.locator('[data-store-delete="skill:archify"]').click();
+    await deleteRow(machine, "skill:archify");
     await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveCount(0, { timeout: 60_000 });
     const toast = machine.locator('[data-store-undo="skill:archify"]');
     await expect(toast).toContainText("Deleted archify");
@@ -164,10 +171,10 @@ test("an update shows what changes before it is taken, a delete can be undone, a
 
     // Deleted again and installed again under the same name, its undo entry cannot come back over it.
     await machine.locator('[data-store-row-toggle="skill:archify"]').click();
-    await machine.locator('[data-store-delete="skill:archify"]').click();
+    await deleteRow(machine, "skill:archify");
     await expect(machine.locator('[data-store-row="skill:archify"]')).toHaveCount(0, { timeout: 60_000 });
     await install(fixture.daemon, { kind: "git", url: fixture.repos.archify }, ["archify"]);
-    await machine.locator('[data-store-trash] summary').click();
+    await machine.locator("[data-store-trash-toggle]").click();
     const entry = machine.locator("[data-store-trash-entry]").first();
     await entry.locator("[data-store-restore]").click();
     await expect(entry.locator("[data-store-trash-taken]")).toContainText("archify cannot come back while an item of that name is in the list", { timeout: 60_000 });
@@ -234,3 +241,32 @@ async function check(fixture: StoreFixture) {
     await control.until((rest) => (rest.status as { store_answers?: { request_id: string; state: string }[] } | undefined)?.store_answers?.find((row) => row.request_id === id && row.state !== "pending"), "a pass", 90_000);
   });
 }
+
+/** Delete goes on a second press: the first turns it into its confirm word. */
+async function deleteRow(machine: Locator, id: string) {
+  const remove = machine.locator(`[data-store-delete="${id}"]`);
+  await remove.click();
+  await expect(remove).toHaveAttribute("data-store-delete-confirm", "true");
+  await remove.click();
+}
+
+test("with only Claude and Codex installed, the shared skill folder is Codex's column and each MCP row has two cells", async ({ page }) => {
+  const fixture = await startStore("store-two", { agents: ["claude-code", "codex"] });
+  try {
+    await everyAgentOn(fixture.daemon, ["claude-code", "codex"]);
+    await install(fixture.daemon, { kind: "git", url: fixture.repos.archify }, ["archify"]);
+    await store(fixture.daemon, [{ op: "add_mcp", server: { name: "context7", reach: { kind: "local", command: "npx", args: ["-y", "@upstash/context7-mcp"], env: [] } }, keys: {} }]);
+    await page.setViewportSize({ width: 1200, height: 1000 });
+    await page.goto(`${fixture.daemon.origin}/#token=${fixture.daemon.token}`);
+    await chooseTheme(page, "dark");
+    const machine = await openStore(page, fixture.daemon);
+    await expect(machine.locator('[data-store-table="skill"] [data-store-column]')).toHaveText(["Claude", "Codex"]);
+    await expect(machine.locator("[data-store-shared-hint]")).toHaveCount(0);
+    await expect(machine.locator('[data-store-table="mcp"] [data-store-column]')).toHaveText(["Claude", "Codex"]);
+    await expect(machine.locator('[data-store-cell="skill:archify:agents"]')).toHaveAttribute("data-store-cell-state", "on");
+    await machine.locator('[data-store-row-toggle="skill:archify"]').click();
+    await screenshot(page, "store-two-agents-dark");
+  } finally {
+    stopStore(fixture);
+  }
+});

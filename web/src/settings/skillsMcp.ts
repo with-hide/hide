@@ -4,7 +4,7 @@
 // the store report's; nothing here decides what an agent supports.
 
 import { agentAdapter } from "../agentAdapters";
-import type { KitAgent, McpServer, StoreAnswer, StoreCell, StoreCellState, StoreChange, StoreColumn, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreSource, StoreVersion } from "../snapshot";
+import type { KitAgent, McpServer, StoreAnswer, StoreCell, StoreCellFailure, StoreCellState, StoreChange, StoreColumn, StoreFoundSkill, StoreItem, StoreItemKind, StorePreview, StoreRefusalCause, StoreReport, StoreSource, StoreVersion } from "../snapshot";
 import { agentInstalled } from "./agentRows";
 
 /**
@@ -35,14 +35,15 @@ export type ShownColumn = {
 /**
  * A kind's columns as the page draws them: a skill folder whose agents are
  * all hidden, or an MCP agent that is, has no column. The shared skill folder
- * (`agents`) is one column for every agent that reads it.
+ * (`agents`) is one column for every agent that reads it, and the column of
+ * its one agent when only one of them is shown (layout C, 2026-11-20).
  */
 export function shownColumns(report: StoreReport, kind: StoreItemKind, shown: ReadonlySet<string>): ShownColumn[] {
   return (report.columns[kind] ?? []).flatMap((column: StoreColumn) => {
     const own = column.agents.filter((agent) => shown.has(agent));
     if (own.length === 0) return [];
     const also = (column.also ?? []).filter((agent) => shown.has(agent) && !own.includes(agent));
-    return [{ id: column.id, shared: column.agents.length > 1, agent: column.agents.length === 1 ? (column.agents[0] ?? null) : null, readers: [...own, ...also] }];
+    return [{ id: column.id, shared: own.length > 1, agent: own.length === 1 ? (own[0] ?? null) : null, readers: [...own, ...also] }];
   });
 }
 
@@ -122,6 +123,36 @@ export function versionText(version: StoreVersion, t: (key: "store.version.folde
       return t("store.version.npmLatest");
     case "unpinned":
       return null;
+  }
+}
+
+/** A path under the machine's home spelled with `~`; any other path as it is. */
+export function homePath(path: string, home: string | null | undefined): string {
+  if (!home) return path;
+  const root = home.replace(/\/+$/, "");
+  if (path === root) return "~";
+  return path.startsWith(`${root}/`) ? `~${path.slice(root.length)}` : path;
+}
+
+/** A path cut before its last name, so a line can shorten the front and keep the name (the middle ellipsis). */
+export function pathParts(path: string): { head: string; tail: string } {
+  const cut = path.replace(/\/+$/, "").lastIndexOf("/");
+  return cut > 0 ? { head: path.slice(0, cut), tail: path.slice(cut) } : { head: "", tail: path };
+}
+
+/** The words of a failed cell's one line, by the kind of its failure; an older kit that names none reads as the general word. */
+export function failureKey(failure: StoreCellFailure | null | undefined, kind: StoreItemKind): "store.failure.unreadableFile" | "store.failure.unreadableFolder" | "store.failure.unwritable" | "store.failure.keys" | "store.failure.pending" | "store.cell.failed" {
+  switch (failure) {
+    case "unreadable":
+      return kind === "mcp" ? "store.failure.unreadableFile" : "store.failure.unreadableFolder";
+    case "unwritable":
+      return "store.failure.unwritable";
+    case "keys":
+      return "store.failure.keys";
+    case "pending":
+      return "store.failure.pending";
+    default:
+      return "store.cell.failed";
   }
 }
 

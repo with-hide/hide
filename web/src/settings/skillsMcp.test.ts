@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addInput, answerPending, refusalOf } from "./skillsMcp";
-import type { StoreAnswer } from "../snapshot";
+import { addInput, answerPending, homePath, refusalOf, shownColumns } from "./skillsMcp";
+import type { StoreAnswer, StoreReport } from "../snapshot";
 
 // What the one add field reads a pasted line as decides which flow opens:
 // a skill source is read and picked from, a paste becomes an MCP server.
@@ -46,5 +46,35 @@ describe("a store request's answer", () => {
     expect(refusalOf(answer("done", false))).toBeNull();
     expect(refusalOf(answer("done", true))).toBe("not_found");
     expect(refusalOf(answer("refused", false))).toBe("unavailable");
+  });
+});
+
+// The shared skill folder is one column named 공용 while several shown
+// agents read it, and that agent's own column when only one does (layout C).
+describe("the shared skill folder's column", () => {
+  const report = { columns: { skill: [{ id: "claude", agents: ["claude-code"], also: ["grok"] }, { id: "agents", agents: ["codex", "grok", "opencode"] }] } } as unknown as StoreReport;
+
+  it("is shared while two of its agents are shown", () => {
+    expect(shownColumns(report, "skill", new Set(["claude-code", "codex", "grok"]))).toEqual([
+      { id: "claude", shared: false, agent: "claude-code", readers: ["claude-code", "grok"] },
+      { id: "agents", shared: true, agent: null, readers: ["codex", "grok"] },
+    ]);
+  });
+
+  it("is its one shown agent's column when only that agent reads it", () => {
+    expect(shownColumns(report, "skill", new Set(["claude-code", "codex"]))[1]).toEqual({ id: "agents", shared: false, agent: "codex", readers: ["codex"] });
+  });
+});
+
+// A path under the machine's home reads with ~; a sibling folder whose name
+// starts the same is not under it.
+describe("a path under home", () => {
+  it.each([
+    ["/Users/me/.grok/config.toml", "~/.grok/config.toml"],
+    ["/Users/me", "~"],
+    ["/Users/mel/.grok/config.toml", "/Users/mel/.grok/config.toml"],
+    ["/srv/skills/notes", "/srv/skills/notes"],
+  ])("%s reads as %s", (path, shown) => {
+    expect(homePath(path, "/Users/me/")).toBe(shown);
   });
 });

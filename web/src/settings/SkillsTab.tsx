@@ -1,9 +1,10 @@
 import type { TFunction } from "i18next";
-import { ChevronRightIcon, InfoIcon, PlusIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ChevronDownIcon, ChevronRightIcon, InfoIcon, PlusIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { useMinuteClock } from "../components/elapsed";
-import { Disclosure, Group, Note, Row } from "../components/settings-rows";
+import { Note } from "../components/settings-rows";
+import { StatusMark } from "../components/status-mark";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
@@ -29,9 +30,12 @@ import {
   cellOn,
   columnName,
   columnWants,
+  failureKey,
+  homePath,
   itemsOf,
   keyNames,
   openableSource,
+  pathParts,
   serverLine,
   shownAgents,
   shownColumns,
@@ -51,6 +55,8 @@ type Page = {
   /** This Mac, where a folder can be opened. */
   local: boolean;
   readOnly: boolean;
+  /** The machine is not connected: its last list shows dimmed. */
+  away: boolean;
   actions: Actions;
   newSession: ReadonlySet<string>;
   openFiles: (item: StoreItem) => void;
@@ -124,6 +130,7 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
     report: report ?? EMPTY_REPORT,
     local: device.id === own,
     readOnly,
+    away,
     actions,
     newSession,
     openFiles: setFiles,
@@ -141,51 +148,59 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
   const empty = report !== null && skills.length + mcps.length + report.unmanaged.length === 0;
   const newer = report ? updatable(report) : [];
   const ask = asks.find((row) => row.id === askRequested) ?? null;
-  return (
-    <div className="@container/store" data-store-machine={device.id}>
-      <div className="mb-lg flex flex-wrap items-center gap-sm" data-store-head="true">
-        {newer.length > 0 && !readOnly ? (
-          <UpdatesChip
-            count={newer.length}
-            checkedAt={report?.checked_at_unix_ms ?? null}
-            onOpen={() => {
-              // Opening the walk also checks again now (decision 2026-11-19).
-              check.send([{ op: "check_updates" }]);
-              page.openUpdate(newer);
-            }}
-          />
-        ) : null}
-        <span className="flex-1" />
-        {machines.length > 1 ? (
-          <Select value={device.id} onValueChange={onMachine}>
-            <SelectTrigger size="sm" variant="ghost" aria-label={t("store.machine")} data-store-machines="true">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {machines.map((row) => (
-                <SelectItem key={row.device.id} value={row.device.id} data-store-machine-choice={row.device.id}>
-                  {machineName(devices, row.device.id, t)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
-        {device.id !== own && !readOnly && !empty ? <CopyFromHere device={device} own={own} actions={actions} /> : null}
-        <Button size="sm" disabled={readOnly} onClick={() => setAdding(true)} data-store-add="true">
+  // The page's own controls sit at the right of the first section's title (layout C, decision 2026-11-20); with no section, on a line of their own.
+  const first: StoreItemKind | null = report && !empty ? (skills.length > 0 ? "skill" : mcps.length > 0 ? "mcp" : null) : null;
+  const head = (
+    <span className="flex flex-wrap items-center justify-end gap-sm" data-store-head="true">
+      {newer.length > 0 && !readOnly ? (
+        <UpdatesChip
+          count={newer.length}
+          checkedAt={report?.checked_at_unix_ms ?? null}
+          onOpen={() => {
+            // Opening the walk also checks again now (decision 2026-11-19).
+            check.send([{ op: "check_updates" }]);
+            page.openUpdate(newer);
+          }}
+        />
+      ) : null}
+      {machines.length > 1 ? (
+        <Select value={device.id} onValueChange={onMachine}>
+          <SelectTrigger size="sm" variant="ghost" aria-label={t("store.machine")} data-store-machines="true">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {machines.map((row) => (
+              <SelectItem key={row.device.id} value={row.device.id} data-store-machine-choice={row.device.id}>
+                {machineName(devices, row.device.id, t)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : null}
+      {device.id !== own && !readOnly && !empty ? <CopyFromHere device={device} own={own} actions={actions} /> : null}
+      {empty ? null : (
+        <Button variant="secondary" size="sm" disabled={readOnly} onClick={() => setAdding(true)} data-store-add="true">
           <PlusIcon aria-hidden="true" />
           {t("store.add")}
         </Button>
-      </div>
+      )}
+    </span>
+  );
+  return (
+    <div className="@container/store" data-store-machine={device.id}>
+      {first ? null : <div className="mb-lg flex justify-end">{head}</div>}
       {asks.length > 0 ? (
-        <Group data-store-asks="true">
+        <div className="mb-lg flex flex-col gap-xs" data-store-asks="true">
           {asks.map((row) => (
-            <Row key={row.id} label={<span className="text-warning" data-store-ask-line={row.id}>{askTitle(row, t)}</span>} controlsEnd>
+            <div key={row.id} className="flex items-center gap-sm">
+              <StatusMark mark="turn" />
+              <span className="min-w-0 flex-1 truncate text-body text-foreground" data-store-ask-line={row.id}>{askTitle(row, t)}</span>
               <Button size="sm" variant="secondary" onClick={() => actions.openStoreAsk(row.id)} data-store-ask-open={row.id}>
                 {t("agents.human.confirm")}
               </Button>
-            </Row>
+            </div>
           ))}
-        </Group>
+        </div>
       ) : null}
       <MachineState machine={machine} name={name} report={report} actions={actions} />
       {report === null && !away && machine.blocked !== "unavailable" ? <Loading /> : null}
@@ -204,10 +219,9 @@ function MachineStore({ machine, machines, own, onMachine, devices, actions }: {
         </div>
       ) : null}
       {report && !empty ? (
-        // A machine that is away shows its last list, dimmed and with no controls (scene 6).
-        <div className={cn(away && "opacity-(--opacity-disabled)")} inert={readOnly || undefined} data-store-lists={readOnly ? "read-only" : "live"}>
-          <Kind kind="skill" items={skills} shown={shown} page={page} />
-          <Kind kind="mcp" items={mcps} shown={shown} page={page} />
+        <div data-store-lists={readOnly ? "read-only" : "live"}>
+          <Kind kind="skill" items={skills} shown={shown} page={page} action={first === "skill" ? head : undefined} />
+          <Kind kind="mcp" items={mcps} shown={shown} page={page} action={first === "mcp" ? head : undefined} />
           {report.unmanaged.length > 0 ? <Unmanaged rows={report.unmanaged} report={report} shown={shown} page={page} /> : null}
           {report.trash.length > 0 ? <Trash report={report} page={page} /> : null}
         </div>
@@ -247,15 +261,16 @@ function MachineState({ machine, name, report, actions }: { machine: AgentMachin
   const { device } = machine;
   if (machine.blocked === "unreachable" || machine.blocked === "connecting" || machine.blocked === "disabled") {
     return (
-      <Group>
-        <Row label={<Note data-store-away={device.id} data-store-blocked={machine.blocked}>{t("store.disconnected", { device: name })}</Note>} controlsEnd>
-          {machine.blocked === "unreachable" ? (
-            <Button variant="secondary" size="sm" onClick={() => actions.retryDevice(device.id)} data-store-reconnect={device.id}>
-              {t("store.reconnect")}
-            </Button>
-          ) : null}
-        </Row>
-      </Group>
+      <div className="mb-lg flex flex-wrap items-center gap-sm">
+        <span className="min-w-0 flex-1">
+          <Note data-store-away={device.id} data-store-blocked={machine.blocked}>{t("store.disconnected", { device: name })}</Note>
+        </span>
+        {machine.blocked === "unreachable" ? (
+          <Button variant="secondary" size="sm" onClick={() => actions.retryDevice(device.id)} data-store-reconnect={device.id}>
+            {t("store.reconnect")}
+          </Button>
+        ) : null}
+      </div>
     );
   }
   if (machine.blocked === "unavailable") {
@@ -263,13 +278,15 @@ function MachineState({ machine, name, report, actions }: { machine: AgentMachin
   }
   if (report?.refusal === "keys_secret_gone") {
     return (
-      <Note tone="error" data-store-refusal="keys_secret_gone">
-        {t("store.keysGone", { device: name })}{" "}
-        <Button variant="link" size="sm" className="h-auto p-none" data-store-keys-help onClick={() => actions.openLink(KEYS_LOST_URL, true)}>{t("store.keysGoneHelp")}</Button>
-      </Note>
+      <div className="mb-lg">
+        <Note tone="error" data-store-refusal="keys_secret_gone">
+          {t("store.keysGone", { device: name })}{" "}
+          <Button variant="link" size="sm" className="h-auto p-none" data-store-keys-help onClick={() => actions.openLink(KEYS_LOST_URL, true)}>{t("store.keysGoneHelp")}</Button>
+        </Note>
+      </div>
     );
   }
-  if (report?.refusal === "unreadable") return <Note tone="error" data-store-refusal="unreadable">{t("store.unreadable", { device: name })}</Note>;
+  if (report?.refusal === "unreadable") return <div className="mb-lg"><Note tone="error" data-store-refusal="unreadable">{t("store.unreadable", { device: name })}</Note></div>;
   return null;
 }
 
@@ -277,16 +294,17 @@ function MachineState({ machine, name, report, actions }: { machine: AgentMachin
 function Loading() {
   const { t } = useInterfaceTranslation();
   return (
-    <Group title={t("store.section.skill")} caption={t("store.reading")} data-store-loading="true">
+    <section className="mb-xl" data-store-loading="true">
+      <SectionHead title={t("store.section.skill")} caption={t("store.reading")} />
       {[0, 1, 2].map((row) => (
-        <div key={row} className="flex items-center gap-md px-md py-sm" aria-hidden="true">
+        <div key={row} className="flex items-center gap-md border-t border-border py-sm" aria-hidden="true">
           <span className="h-(--size-badge-height) w-1/4 animate-pulse rounded-xs bg-muted" />
           <span className="flex-1" />
           <span className="h-(--size-badge-height) w-1/6 animate-pulse rounded-xs bg-muted" />
           <span className="h-(--size-checkbox) w-(--size-control) animate-pulse rounded-xl bg-muted" />
         </div>
       ))}
-    </Group>
+    </section>
   );
 }
 
@@ -298,7 +316,7 @@ function UpdatesChip({ count, checkedAt, onOpen }: { count: number; checkedAt: n
   const when = checkedAt ? t("store.updates.checked", { when: lastSeen(checkedAt, now, false, t, requireInterfaceLanguage(i18n.language)) }) : t("store.updates.never");
   return (
     <Hint label={`${words} · ${when}`}>
-      <Button variant="secondary" size="sm" onClick={onOpen} data-store-updates={count}>
+      <Button variant="ghost" size="sm" onClick={onOpen} data-store-updates={count}>
         <UpdateDot />
         {words}
       </Button>
@@ -336,34 +354,55 @@ function CopyFromHere({ device, own, actions }: { device: Device; own: string; a
   );
 }
 
+/** A section's title and count, with the page's controls at its right when it is the first. */
+function SectionHead({ title, count, caption, action }: { title: string; count?: number; caption?: string; action?: ReactNode }) {
+  return (
+    <div className="mb-xs flex min-h-(--size-control) items-center gap-sm">
+      <h3 className="shrink-0 text-body font-semibold text-subtle-foreground">{title}</h3>
+      {count !== undefined ? <span className="text-caption text-muted-foreground">{count}</span> : null}
+      {caption ? <span className="min-w-0 truncate text-caption text-muted-foreground">{caption}</span> : null}
+      <span className="flex-1" />
+      {action}
+    </div>
+  );
+}
+
 /**
  * One kind's table (layout C, decided 2026-11-20): a skill row has a cell per
  * skill folder (Claude, 공용, agy), an MCP row one per agent; cells show the
  * state only, the row's one switch turns the item on or off everywhere, and
- * a press on the row unfolds what can be done below it.
+ * a press on the row unfolds what can be done below it. Every cell column
+ * and the switch column have one width, so the marks stand on one line and
+ * both tables end at the same edge; only the name column takes the rest.
  */
-function Kind({ kind, items, shown, page }: { kind: StoreItemKind; items: StoreItem[]; shown: ReadonlySet<string>; page: Page }) {
+function Kind({ kind, items, shown, page, action }: { kind: StoreItemKind; items: StoreItem[]; shown: ReadonlySet<string>; page: Page; action?: ReactNode }) {
   const { t } = useInterfaceTranslation();
   const columns = shownColumns(page.report, kind, shown);
   if (items.length === 0) return null;
   const title = t(kind === "skill" ? "store.section.skill" : "store.section.mcp");
   return (
-    <section className="mb-lg" data-store-section={kind}>
-      <SectionTitle title={title} count={items.length} />
-      <div className="overflow-x-auto rounded-md border border-border bg-card">
-        <table className="w-full border-collapse text-body" data-store-table={kind}>
+    <section className="mb-xl" data-store-section={kind}>
+      <SectionHead title={title} count={items.length} action={action} />
+      {/* A machine that is away shows its last list, dimmed and with no controls (scene 6). */}
+      <div className={cn("overflow-x-auto", page.away && "opacity-(--opacity-disabled)")} inert={page.readOnly || undefined}>
+        <table className="w-full min-w-(--size-settings-control-w) table-fixed border-collapse text-body" data-store-table={kind}>
+          <colgroup>
+            <col />
+            {columns.map((column) => <col key={column.id} className="w-(--size-store-column)" />)}
+            <col className="w-(--spacing-xxxl)" />
+          </colgroup>
           <thead>
-            <tr className="text-caption text-muted-foreground">
-              <th className="px-md py-xs text-left font-normal"><span className="sr-only">{title}</span></th>
+            <tr className="text-micro text-muted-foreground">
+              <th className="py-xs text-left font-normal"><span className="sr-only">{title}</span></th>
               {columns.map((column) => (
-                <th key={column.id} className="px-xs py-xs text-center font-normal whitespace-nowrap" data-store-column={column.id}>
+                <th key={column.id} className="truncate py-xs text-center font-normal" data-store-column={column.id}>
                   <ColumnHead column={column} columns={columns} />
                 </th>
               ))}
-              <th className="px-md py-xs text-center font-normal whitespace-nowrap">{t("store.column.on")}</th>
+              <th className="py-xs font-normal"><span className="sr-only">{t("store.column.on")}</span></th>
             </tr>
           </thead>
-          <tbody className="border-t border-border">
+          <tbody>
             {items.map((item) => <ItemRow key={item.id} item={item} columns={columns} page={page} />)}
           </tbody>
         </table>
@@ -372,20 +411,10 @@ function Kind({ kind, items, shown, page }: { kind: StoreItemKind; items: StoreI
   );
 }
 
-function SectionTitle({ title, count, caption }: { title: string; count?: number; caption?: string }) {
-  return (
-    <div className="mb-sm flex items-baseline gap-sm">
-      <h3 className="text-body font-semibold text-subtle-foreground">{title}</h3>
-      {count !== undefined ? <span className="text-caption text-muted-foreground">{count}</span> : null}
-      {caption ? <span className="text-caption text-muted-foreground">{caption}</span> : null}
-    </div>
-  );
-}
-
 /**
- * A column's head: the agent's name, or for the shared skill folder 공용 with
- * the installed agents that read it, and a hint that says so and which of
- * them read another column's folder as well (Grok and omp read Claude's).
+ * A column's head: the agent's name, or 공용 for the shared skill folder with
+ * a hint that names the installed agents that read it and which of them read
+ * another column's folder as well (Grok and omp read Claude's).
  */
 function ColumnHead({ column, columns }: { column: ShownColumn; columns: readonly ShownColumn[] }) {
   const { t } = useInterfaceTranslation();
@@ -396,13 +425,12 @@ function ColumnHead({ column, columns }: { column: ShownColumn; columns: readonl
     .filter((other) => other.id !== column.id)
     .map((other) => ({ other, agents: other.readers.filter((agent) => agent !== other.agent && column.readers.includes(agent)) }))
     .filter(({ agents }) => agents.length > 0);
-  const hint = readers.length > 0 ? [t("store.column.sharedHint", { agents: readers.join(" · ") }), ...also.map(({ other, agents }) => t("store.column.sharedAlso", { agents: agents.map(agentShortName).join(" · "), column: columnName(other, name) }))].join(" ") : t("store.column.sharedNone");
+  const hint = [t("store.column.sharedHint", { agents: readers.join(" · ") }), ...also.map(({ other, agents }) => t("store.column.sharedAlso", { agents: agents.map(agentShortName).join(" · "), column: columnName(other, name) }))].join(" ");
   return (
     <Hint label={hint}>
-      <span className="inline-flex items-center gap-xxs text-subtle-foreground" tabIndex={0} data-store-shared-hint={column.id}>
+      <span className="inline-flex items-center gap-xxs" tabIndex={0} data-store-shared-hint={column.id}>
         {name}
-        {readers.length > 0 ? <span className="text-muted-foreground">· {readers.join(" ")}</span> : null}
-        <InfoIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
+        <InfoIcon aria-hidden="true" className="size-(--size-icon-sm)" />
       </span>
     </Hint>
   );
@@ -414,10 +442,10 @@ function Version({ item }: { item: StoreItem }) {
   const text = versionText(item.version, t);
   if (!text && !item.update) return null;
   return (
-    <span className="inline-flex shrink-0 items-center gap-xxs font-mono text-caption text-muted-foreground" data-store-version={item.id}>
-      {text}
+    <span className="inline-flex min-w-0 shrink-[3] items-center gap-xs font-mono text-caption text-muted-foreground" data-store-version={item.id}>
+      {text ? <span className="truncate">{text}</span> : null}
       {item.update ? (
-        <span title={t("store.version.update")} data-store-update-dot={item.id}>
+        <span className="inline-flex shrink-0" title={t("store.version.update")} data-store-update-dot={item.id}>
           <UpdateDot />
           <span className="sr-only">{t("store.version.update")}</span>
         </span>
@@ -432,36 +460,41 @@ function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColum
   const [open, setOpen] = useState(false);
   const request = useStoreRequest(page.device.id, page.actions);
   const all = allSwitch(item, columns);
+  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
     <>
-      <tr className={cn("cursor-pointer border-t border-border first:border-t-0 hover:bg-accent/40", open && "bg-accent/40")} onClick={() => setOpen((now) => !now)} data-store-row={item.id} data-store-open={open ? "true" : "false"}>
-        <td className="px-md py-sm">
-          <span className="flex min-w-0 items-center gap-sm">
-            <Button variant="row-action" size="icon-sm" aria-expanded={open} aria-label={t("store.expand", { name: item.name })} className="shrink-0" data-store-row-toggle={item.id}>
-              <ChevronRightIcon aria-hidden="true" className={cn("transition-transform", open && "rotate-90")} />
-            </Button>
-            <span className="truncate text-subhead font-medium text-foreground">{item.name}</span>
-            <Version item={item} />
-            {item.folder_missing ? <Badge variant="outline" className="border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
+      <tr className="cursor-pointer border-t border-border hover:bg-accent/40" onClick={() => setOpen((now) => !now)} data-store-row={item.id} data-store-open={open ? "true" : "false"}>
+        <td className="py-sm pr-sm">
+          <span className="flex min-w-0 items-center">
+            <span className="flex w-(--size-icon-lg) shrink-0">
+              <Button variant="row-action" size="icon-xs" aria-expanded={open} aria-label={t("store.expand", { name: item.name })} data-store-row-toggle={item.id}>
+                <Chevron aria-hidden="true" />
+              </Button>
+            </span>
+            <span className="flex min-w-0 items-center gap-sm">
+              <span className="min-w-0 truncate text-subhead text-foreground">{item.name}</span>
+              <Version item={item} />
+              {item.folder_missing ? <Badge variant="outline" className="shrink-0 border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
+            </span>
           </span>
         </td>
         {columns.map((column) => (
-          <td key={column.id} className="px-xs py-sm text-center">
+          <td key={column.id} className="py-sm text-center">
             <CellMark item={item} column={column} cell={cellOf(item, column)} page={page} />
           </td>
         ))}
-        <td className="px-md py-sm text-center" onClick={(event) => event.stopPropagation()}>
+        <td className="py-sm text-right" onClick={(event) => event.stopPropagation()}>
           <Switch checked={all.checked} disabled={request.pending} aria-busy={request.pending} onCheckedChange={() => request.send([all.change])} aria-label={t("store.switch.all", { name: item.name })} data-store-all={item.id} />
         </td>
       </tr>
       {request.refusal ? (
         <tr>
-          <td colSpan={columns.length + 2} className="px-md pb-sm"><Note tone="error">{refusalText(request.refusal, t)}</Note></td>
+          <td colSpan={columns.length + 2} className="pb-sm pl-(--size-icon-lg)"><Note tone="error">{refusalText(request.refusal, t)}</Note></td>
         </tr>
       ) : null}
       {open ? (
         <tr>
-          <td colSpan={columns.length + 2} className="border-t border-border bg-muted/30 p-none">
+          <td colSpan={columns.length + 2} className="p-none">
             <RowDetail item={item} columns={columns} page={page} />
           </td>
         </tr>
@@ -470,7 +503,12 @@ function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColum
   );
 }
 
-/** A cell's state, which it only shows (decision 2026-11-20): ● on, ○ off, — not supported, ! failed, 이미 있음 for a copy Hide did not write. */
+/**
+ * A cell's state, which it only shows (decision 2026-11-20), in the marks the
+ * product already draws, one size and centred: on is the filled dot, off the
+ * faint hollow ring, failed the small red mark, — not supported and
+ * 이미 있음 a copy Hide did not write.
+ */
 function CellMark({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
   const { t } = useInterfaceTranslation();
   const name = columnName(column, t("store.column.shared"));
@@ -480,15 +518,15 @@ function CellMark({ item, column, cell, page }: { item: StoreItem; column: Shown
     case "unsupported":
       return <span className="text-muted-foreground" title={t("store.cell.unsupported", { agent: name })} {...data}>—</span>;
     case "failed":
-      return <span className="font-semibold text-destructive" title={`${t("store.cell.failed")}${cell.reason ? ` · ${cell.reason}` : ""}`} {...data}>!</span>;
+      return <FailedMark label={t(failureKey(cell.failure, item.kind))} {...data} />;
     case "hand_written":
-      return <span className="text-caption whitespace-nowrap text-warning" {...data}>{t("store.cell.handWritten")}</span>;
+      return <span className="whitespace-nowrap text-micro text-warning" title={t("store.cell.handWritten")} {...data}>{t("store.cell.handWrittenShort")}</span>;
     default: {
       const on = cellOn(cell.state);
       const title = cell.state === "agent_off" ? t("store.cell.agentOff") : cell.state === "waiting" ? t("store.cell.waiting") : fresh ? t("store.cell.newSession") : t(on ? "store.cell.on" : "store.cell.off");
       return (
-        <span className={cn("inline-flex size-(--size-control-sm) items-center justify-center", cell.state === "agent_off" && "opacity-(--opacity-disabled)")} title={title} {...data} data-store-new-session={fresh ? "true" : undefined}>
-          <span aria-hidden="true" className={cn("size-(--size-status-mark) rounded-full", on ? "bg-primary" : "border border-muted-foreground")} />
+        <span className={cn("inline-flex align-middle", cell.state === "agent_off" && "opacity-(--opacity-disabled)")} title={title} {...data} data-store-new-session={fresh ? "true" : undefined}>
+          <StatusMark mark={on ? "done" : "quiet"} />
           <span className="sr-only">{title}</span>
         </span>
       );
@@ -496,26 +534,54 @@ function CellMark({ item, column, cell, page }: { item: StoreItem; column: Shown
   }
 }
 
-/** The unfolded row: where the item comes from, its files or keys, each cell that needs a press, and what can be done to it. */
+/** The small red mark of a failed cell, in the status marks' size. */
+function FailedMark({ label, ...data }: { label: string } & Record<`data-${string}`, string>) {
+  return (
+    <span className="inline-flex size-(--size-agent-mark) items-center justify-center align-middle" title={label} {...data}>
+      <svg viewBox="0 0 12 12" aria-hidden="true" className="size-full">
+        <circle cx="6" cy="6" r="6" className="fill-destructive" />
+        <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-destructive-foreground" />
+      </svg>
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
+/** A path as one line: home as `~`, the front shortened before the last name, the whole path on hover. */
+function PathText({ path, home }: { path: string; home: string | null | undefined }) {
+  const { head, tail } = pathParts(homePath(path, home));
+  return (
+    <Hint label={path}>
+      <span className="inline-flex min-w-0 max-w-full font-mono" tabIndex={0} data-store-path={path}>
+        {head ? <span className="min-w-0 truncate">{head}</span> : null}
+        <span className="shrink-0 whitespace-nowrap">{tail}</span>
+      </span>
+    </Hint>
+  );
+}
+
+/** The unfolded row, indented under the name: where the item comes from, its files or keys, each cell that needs a press, and what can be done to it. */
 function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
   const files = item.files ?? [];
   const executables = files.filter((file) => file.executable).length;
   const fixes = columns.map((column) => ({ column, cell: cellOf(item, column) })).filter(({ cell }) => cell.state === "failed" || cell.state === "hand_written");
+  const label = "text-muted-foreground";
+  const value = "flex min-w-0 items-center gap-sm text-subtle-foreground";
   return (
-    <div className="flex flex-col gap-sm px-md py-sm" data-store-detail={item.id}>
+    <div className="flex flex-col gap-sm pb-md pl-(--size-icon-lg) pt-xxs" data-store-detail={item.id}>
       {item.description ? <p className="break-words text-body text-subtle-foreground">{item.description}</p> : null}
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xs text-body">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] items-center gap-x-lg gap-y-xs text-body">
         {item.server ? (
           <>
-            <dt className="text-muted-foreground">{t(item.server.reach.kind === "local" ? "store.detail.command" : "store.detail.address")}</dt>
-            <dd className="break-all font-mono text-subtle-foreground">{serverLine(item.server)}</dd>
+            <dt className={label}>{t(item.server.reach.kind === "local" ? "store.detail.command" : "store.detail.address")}</dt>
+            <dd className={cn(value, "font-mono")}><span className="truncate" title={serverLine(item.server)}>{serverLine(item.server)}</span></dd>
             {keyNames(item.server).length > 0 ? (
               <>
-                <dt className="text-muted-foreground">{t("store.detail.keys")}</dt>
-                <dd className="flex flex-wrap items-center gap-sm" data-store-keys={item.id}>
+                <dt className={label}>{t("store.detail.keys")}</dt>
+                <dd className={cn(value, "flex-wrap")} data-store-keys={item.id}>
                   {keyNames(item.server).map((key) => (
-                    <span key={key} className="font-mono text-subtle-foreground">{key} ••••••</span>
+                    <span key={key} className="font-mono">{key} ••••••</span>
                   ))}
                   <Button variant="secondary" size="sm" disabled={page.readOnly} onClick={() => page.openKeys(item)} data-store-edit-keys={item.id}>
                     {t("store.detail.editKeys")}
@@ -526,17 +592,17 @@ function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownCol
           </>
         ) : (
           <>
-            <dt className="text-muted-foreground">{t("store.detail.source")}</dt>
-            <dd className="break-all font-mono text-subtle-foreground">
-              {sourceLine(item)}
-              {item.source.kind === "folder" ? <span className="font-sans text-muted-foreground"> · {item.folder_missing ? t("store.detail.lastCopy") : t("store.detail.follows")}</span> : null}
+            <dt className={label}>{t("store.detail.source")}</dt>
+            <dd className={value}>
+              {item.source.kind === "folder" ? <PathText path={item.source.path} home={page.report.home} /> : <span className="truncate font-mono" title={sourceLine(item)}>{sourceLine(item)}</span>}
+              {item.source.kind === "folder" ? <span className="shrink-0 text-muted-foreground">{item.folder_missing ? t("store.detail.lastCopy") : t("store.detail.follows")}</span> : null}
             </dd>
             {files.length > 0 ? (
               <>
-                <dt className="text-muted-foreground">{t("store.detail.files")}</dt>
-                <dd className="text-subtle-foreground">
+                <dt className={label}>{t("store.detail.files")}</dt>
+                <dd className={value}>
                   {t("store.detail.fileCount", { count: files.length })}
-                  {executables > 0 ? <span className="text-warning"> · {t("store.detail.executables", { count: executables })}</span> : null}
+                  {executables > 0 ? <span className="text-warning">{t("store.detail.executables", { count: executables })}</span> : null}
                 </dd>
               </>
             ) : null}
@@ -549,24 +615,29 @@ function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownCol
   );
 }
 
-/** A cell that needs a press: a failure with its reason and [다시 시도], or a copy Hide did not write with [가져오기]. */
+/**
+ * A cell that needs a press, in one line: a failure in a few words with its
+ * file and [다시 시도], or a copy Hide did not write with [가져오기]. The
+ * kit's own sentence is the log's (design principle 13).
+ */
 function CellFix({ item, column, cell, page }: { item: StoreItem; column: ShownColumn; cell: StoreCell; page: Page }) {
   const { t } = useInterfaceTranslation();
   const request = useStoreRequest(page.device.id, page.actions);
   const name = columnName(column, t("store.column.shared"));
   const failed = cell.state === "failed";
+  const words = failed ? t(failureKey(cell.failure, item.kind)) : t("store.cell.handWritten");
   return (
-    <div className={cn("flex flex-wrap items-center gap-sm text-body", failed ? "text-destructive" : "text-warning")} data-store-fix={`${item.id}:${column.id}`}>
-      <span className="min-w-0 flex-1 break-words">
-        {name}: {failed ? (cell.reason ?? t("store.cell.failed")) : t("store.cell.handWritten")}
-      </span>
-      {request.refusal ? <span className="text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
+    <div className="flex min-w-0 items-center gap-sm text-body" data-store-fix={`${item.id}:${column.id}`}>
+      <span className={cn("min-w-0 truncate", failed ? "text-destructive" : "text-warning")} title={`${name} · ${words}`}>{name} · {words}</span>
+      {cell.path ? <span className="flex min-w-0 shrink-[4] text-muted-foreground"><PathText path={cell.path} home={page.report.home} /></span> : null}
+      {request.refusal ? <span className="shrink-0 text-caption text-destructive">{refusalText(request.refusal, t)}</span> : null}
+      <span className="flex-1" />
       {failed ? (
-        <Button variant="secondary" size="sm" disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} data-store-retry={`${item.id}:${column.id}`}>
+        <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "set", item: item.id, column: column.id, on: columnWants(item, column.id) }])} data-store-retry={`${item.id}:${column.id}`}>
           {t("store.retry")}
         </Button>
       ) : (
-        <Button variant="secondary" size="sm" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
+        <Button variant="secondary" size="sm" className="shrink-0" disabled={request.pending} onClick={() => request.send([{ op: "adopt", kind: item.kind, name: item.name, from: cell.place ?? undefined }])} data-store-take-over={`${item.id}:${column.id}`}>
           {t("store.cell.takeOver")}
         </Button>
       )}
@@ -574,10 +645,15 @@ function CellFix({ item, column, cell, page }: { item: StoreItem; column: ShownC
   );
 }
 
-/** What can be done to an item: its update first when there is one, its files and source, and Delete at the end. */
+/**
+ * What can be done to an item, one row of quiet buttons: its update first
+ * when there is one, its files and source, then Delete, which goes on a
+ * second press (the first turns it into its confirm word) and leaves Undo.
+ */
 function RowActions({ item, page }: { item: StoreItem; page: Page }) {
   const { t } = useInterfaceTranslation();
   const source = openableSource(item, page.local);
+  const [confirming, setConfirming] = useState(false);
   return (
     <div className="flex flex-wrap items-center gap-sm">
       {item.update ? (
@@ -596,9 +672,16 @@ function RowActions({ item, page }: { item: StoreItem; page: Page }) {
           {t(source.kind === "url" ? "store.action.openSource" : "store.action.openFolder")}
         </Button>
       ) : null}
-      <span className="flex-1" />
-      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" disabled={page.removing === item.id} onClick={() => page.remove(item)} data-store-delete={item.id}>
-        {t("store.action.delete")}
+      <Button
+        variant={confirming ? "destructive" : "secondary"}
+        size="sm"
+        disabled={page.removing === item.id}
+        onClick={() => (confirming ? page.remove(item) : setConfirming(true))}
+        onBlur={() => setConfirming(false)}
+        data-store-delete={item.id}
+        data-store-delete-confirm={confirming ? "true" : undefined}
+      >
+        {t(confirming ? "store.action.deleteConfirm" : "store.action.delete")}
       </Button>
     </div>
   );
@@ -608,9 +691,9 @@ function RowActions({ item, page }: { item: StoreItem; page: Page }) {
 function Unmanaged({ rows, report, shown, page }: { rows: StoreUnmanaged[]; report: StoreReport; shown: ReadonlySet<string>; page: Page }) {
   const { t } = useInterfaceTranslation();
   return (
-    <section className="mb-lg" data-store-section="unmanaged">
-      <SectionTitle title={t("store.section.unmanaged")} count={rows.length} caption={t("store.section.unmanagedCaption")} />
-      <div className="divide-y divide-border rounded-md border border-border bg-card">
+    <section className="mb-xl" data-store-section="unmanaged">
+      <SectionHead title={t("store.section.unmanaged")} count={rows.length} caption={t("store.section.unmanagedCaption")} />
+      <div className={cn(page.away && "opacity-(--opacity-disabled)")} inert={page.readOnly || undefined}>
         {rows.map((row) => <UnmanagedRow key={`${row.kind}:${row.name}`} row={row} report={report} shown={shown} page={page} />)}
       </div>
     </section>
@@ -628,10 +711,10 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
   const kind = t(row.kind === "skill" ? "store.section.skill" : "store.section.mcp");
   const agents = [...new Set(row.copies.flatMap((copy) => copy.agents))];
   return (
-    <div className="flex flex-wrap items-center gap-x-md gap-y-xs px-md py-sm" data-store-unmanaged={`${row.kind}:${row.name}`}>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-subhead font-medium text-foreground">{row.name}</span>
-        <span className="text-caption text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs border-t border-border py-sm pl-(--size-icon-lg)" data-store-unmanaged={`${row.kind}:${row.name}`}>
+      <span className="flex min-w-0 flex-1 items-baseline gap-sm">
+        <span className="truncate text-subhead text-foreground">{row.name}</span>
+        <span className="truncate text-caption text-muted-foreground">
           {kind} · {where(agents)}
           {row.same ? null : <span className="text-warning"> · {t("store.unmanaged.differs")}</span>}
         </span>
@@ -661,15 +744,23 @@ function UnmanagedRow({ row, report, shown, page }: { row: StoreUnmanaged; repor
   );
 }
 
-/** 지운 항목 n개 (B18): the undo list, newest first, each to restore or remove for good. */
+/** 지운 항목 n개 (B18): the undo list, folded, newest first, each to restore or remove for good. */
 function Trash({ report, page }: { report: StoreReport; page: Page }) {
   const { t } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
   const rows = [...report.trash].sort((a, b) => b.at_unix_ms - a.at_unix_ms);
+  const Chevron = open ? ChevronDownIcon : ChevronRightIcon;
   return (
-    <section className="mb-lg rounded-md border border-border bg-card" data-store-trash="true">
-      <Disclosure title={t("store.trash.count", { count: rows.length })}>
-        {rows.map((entry) => <TrashRow key={entry.id} entry={entry} page={page} />)}
-      </Disclosure>
+    <section className="mb-xl" data-store-trash="true">
+      <Button variant="text" size="inline" className="text-body" aria-expanded={open} onClick={() => setOpen((now) => !now)} data-store-trash-toggle="true">
+        <Chevron aria-hidden="true" className="size-(--size-icon)" />
+        {t("store.trash.count", { count: rows.length })}
+      </Button>
+      {open ? (
+        <div className="mt-xs" inert={page.readOnly || undefined}>
+          {rows.map((entry) => <TrashRow key={entry.id} entry={entry} page={page} />)}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -680,10 +771,10 @@ function TrashRow({ entry, page }: { entry: StoreReport["trash"][number]; page: 
   const forget = useStoreRequest(page.device.id, page.actions);
   const kind = t(entry.kind === "skill" ? "store.section.skill" : "store.section.mcp");
   return (
-    <div className="flex flex-wrap items-center gap-x-md gap-y-xs px-md py-sm" data-store-trash-entry={entry.id}>
-      <span className="flex min-w-0 flex-1 flex-col">
+    <div className="flex flex-wrap items-center gap-x-md gap-y-xs border-t border-border py-sm pl-(--size-icon-lg)" data-store-trash-entry={entry.id}>
+      <span className="flex min-w-0 flex-1 items-baseline gap-sm">
         <span className="truncate text-subhead text-foreground">{entry.name}</span>
-        <span className="text-caption text-muted-foreground">
+        <span className="truncate text-caption text-muted-foreground">
           {kind}
           {entry.cause.kind === "replaced" ? ` · ${t("store.trash.replaced")}` : null}
         </span>
@@ -692,7 +783,7 @@ function TrashRow({ entry, page }: { entry: StoreReport["trash"][number]; page: 
       <Button variant="secondary" size="sm" disabled={restore.pending || forget.pending} onClick={() => restore.send([{ op: "restore", entry: entry.id }])} data-store-restore={entry.id}>
         {t("store.trash.restore")}
       </Button>
-      <Button variant="ghost" size="sm" disabled={restore.pending || forget.pending} onClick={() => forget.send([{ op: "forget", entry: entry.id }])} data-store-forget={entry.id}>
+      <Button variant="secondary" size="sm" disabled={restore.pending || forget.pending} onClick={() => forget.send([{ op: "forget", entry: entry.id }])} data-store-forget={entry.id}>
         {t("store.trash.forget")}
       </Button>
     </div>

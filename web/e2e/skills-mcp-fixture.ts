@@ -18,6 +18,9 @@ import { enterWorkspace } from "./wire";
 
 /** The seven agents the store reaches, by id. */
 export const AGENTS = ["claude-code", "codex", "grok", "opencode", "pi", "omp", "antigravity"] as const;
+type Agent = (typeof AGENTS)[number];
+/** The programs that make each agent installed (Claude Code's is the fixture's shim, always there). */
+const PROGRAMS: Record<Exclude<Agent, "claude-code">, string[]> = { codex: ["codex"], grok: ["grok"], opencode: ["opencode"], pi: ["pi"], omp: ["omp"], antigravity: ["agy", "antigravity", "gemini"] };
 
 /** A store change as the screen sends it (`web/src/snapshot.ts` `StoreChange`). */
 export type Change = Record<string, unknown> & { op: string };
@@ -64,7 +67,7 @@ function repository(root: string, name: string, files: Record<string, string>, t
  * script and a second skill to pick), pdf-tools (a bare commit, updated later)
  * and a folder skill to follow.
  */
-export async function startStore(label: string, { ssh = false, family = false }: { ssh?: boolean; family?: boolean } = {}): Promise<StoreFixture> {
+export async function startStore(label: string, { ssh = false, family = false, agents = AGENTS }: { ssh?: boolean; family?: boolean; agents?: readonly Agent[] } = {}): Promise<StoreFixture> {
   // A family fixture's child runs `hide` from its pane as an agent does, for the commands' journey.
   const engine = await startFixture({ family });
   // A device's ssh is the fixture's stand-in, so a registered host stays unreachable without a network call.
@@ -78,7 +81,8 @@ export async function startStore(label: string, { ssh = false, family = false }:
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(engine.root, "st-")));
   const home = path.join(root, "home");
   for (const folder of [".claude", ".agents", ".codex", ".grok", ".config/opencode", ".pi/agent", ".omp/agent", ".gemini/config", ".local/bin", ".hide/kit"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
-  for (const program of ["codex", "grok", "opencode", "pi", "omp", "agy", "antigravity", "gemini"]) write(path.join(home, ".local", "bin", program), "#!/bin/sh\n", 0o755);
+  // Only the agents asked for are installed: their programs are on the PATH.
+  for (const agent of agents.filter((id) => id !== "claude-code")) for (const program of PROGRAMS[agent]) write(path.join(home, ".local", "bin", program), "#!/bin/sh\n", 0o755);
   copyFixtureShim("claude-shim", path.join(home, ".local", "bin", "claude"));
   write(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [] }));
   const archify = repository(root, "archify", {
@@ -129,13 +133,13 @@ export async function store(daemon: Daemon, changes: Change[]): Promise<Report> 
   });
 }
 
-/** Every agent switched on in Settings › Agents, so each has its column. */
-export async function everyAgentOn(daemon: Daemon) {
+/** Every agent (or the ones named) switched on in Settings › Agents, so each has its column. */
+export async function everyAgentOn(daemon: Daemon, on: readonly Agent[] = AGENTS) {
   await withControl(daemon, async (control) => {
-    for (const agent of AGENTS) control.send("kit_agent_set", { device_id: daemon.node, agent, enabled: true });
+    for (const agent of on) control.send("kit_agent_set", { device_id: daemon.node, agent, enabled: true });
     await control.until((rest) => {
       const agents = deviceKit(rest, daemon.node)?.agents ?? [];
-      return AGENTS.every((id) => agents.find((agent) => agent.id === id)?.enabled) && deviceKit(rest, daemon.node)?.store;
+      return on.every((id) => agents.find((agent) => agent.id === id)?.enabled) && deviceKit(rest, daemon.node)?.store;
     }, "every agent on with a store report", 90_000);
   });
 }
