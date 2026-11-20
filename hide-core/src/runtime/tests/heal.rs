@@ -439,11 +439,12 @@ fn a_parent_hears_of_a_child_the_heal_could_not_bring_back() {
 }
 
 /// B17, B18: the resumed agent's reports can reach the core before its
-/// session pass reads the engine, whose read then names nothing healing:
-/// the resume said before it was typed is taken first, so the line and the
-/// parent's count are owed all the same, once.
+/// session pass does: whoever comes first takes the engine's resume and
+/// settles it in the same step, so the reports, the second of which says no
+/// heal is behind it, and the pass after them leave the line and the
+/// parent's count owed, once.
 #[test]
-fn a_resumed_agent_reporting_before_the_core_reads_its_engine_is_still_told() {
+fn a_resumed_agent_reporting_before_the_session_pass_is_still_told_once() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = runtime();
     let node = runtime.node().as_str().to_owned();
@@ -457,17 +458,17 @@ fn a_resumed_agent_reporting_before_the_core_reads_its_engine_is_still_told() {
         ],
     );
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
-    let resumed = [crate::engine::ResumedPane {
-        pane: "w1:p1".into(),
-        saved: "w1:p1".into(),
-    }];
-    // Its first report, then a second with no heal behind it.
-    runtime.heal_resumed(&node, &resumed, 1_000);
+    let fake = crate::engine::fake::FakeEngine::absent();
+    let engine = fake.engine();
+    fake.resumed("w1:p1");
+    // Its two reports, as the hook route runs them.
+    runtime.take_heal(&node, engine.as_ref(), 1_000);
     runtime.hook_after_heal(&node, "w1:p1", true);
+    runtime.take_heal(&node, engine.as_ref(), 2_000);
     runtime.hook_after_heal(&node, "w1:p1", false);
-    // The session pass reads the engine after both.
-    runtime.heal_resumed(&node, &[], 2_000);
-    runtime.note_healing(&node, &[], 2_000);
+    // The session pass, after both, reads nothing healing.
+    runtime.take_heal(&node, engine.as_ref(), 3_000);
+    runtime.note_healing(&node, &[], 3_000);
     observe(&mut runtime, &child);
     observe(&mut runtime, &parent);
     assert_eq!(
@@ -483,62 +484,50 @@ fn a_resumed_agent_reporting_before_the_core_reads_its_engine_is_still_told() {
     assert!(admit(&mut runtime).is_empty(), "owed once");
 }
 
-/// B17, B18: a machine whose owed lines are at their bound keeps a new
-/// heal's line and its parent's count waiting, not settled; once a line of
-/// that machine is admitted, they are owed and go.
+/// B17: a registration is owed one line to go on at a time. A second heal
+/// while the first heal's line is still owed stays pending, its cut kept
+/// even through a report with no heal behind it, and is owed, and goes,
+/// once the first line is admitted.
 #[test]
-fn a_heal_past_the_bound_waits_for_room_and_then_goes() {
+fn a_second_heal_waits_until_the_first_line_is_admitted() {
     let root = tempfile::tempdir().unwrap();
     let mut runtime = runtime();
     let node = runtime.node().as_str().to_owned();
     let parent = actor(&node, "w1:p9", "s-9");
     let child = actor(&node, "w1:p1", "s-1");
-    let bound = 3 * hide_kit::panes::HOLDER_CAP;
-    let lost: Vec<AgentRecord> = (0..bound)
-        .map(|n| {
-            let pane = format!("w2:p{n}");
-            record(
-                &format!("agent-{}", 100 + n),
-                &actor(&node, &pane, &format!("s-{pane}")),
-                Some("agent-9"),
-            )
-        })
-        .collect();
-    let lost_ids: Vec<String> = lost.iter().map(|record| record.id.clone()).collect();
-    let mut records = vec![
-        record("agent-9", &parent, None),
-        record("agent-1", &child, Some("agent-9")),
-    ];
-    records.extend(lost);
-    registered(&mut runtime, records);
-    // The parent, away, is owed as many lines as the machine may owe.
-    runtime.heal_not_woken(&lost_ids);
-    assert_eq!(runtime.heal_letters_owed().len(), bound);
-
+    let worker = record("agent-1", &child, Some("agent-9"));
+    registered(
+        &mut runtime,
+        vec![record("agent-9", &parent, None), worker.clone()],
+    );
     started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
     heal(&mut runtime, &node, &["w1:p1".to_owned()], 1_000);
-    assert_eq!(runtime.heal_letters_waiting(), ["go-on:agent-1:1000"]);
-    let worker = record("agent-1", &child, Some("agent-9"));
-    assert!(runtime.healing(&worker), "a waiting line is still owed");
-    observe(&mut runtime, &child);
-    runtime.note_healing(&node, &[], 2_000);
-    observe(&mut runtime, &parent);
-    let first = admit(&mut runtime);
-    assert_eq!(first.len(), bound, "the older lines go first");
-    assert!(!first.iter().any(|(pane, _)| pane == "w1:p1"));
+    assert_eq!(runtime.heal_letters_owed(), ["go-on:agent-1:1000"]);
 
-    assert_eq!(
-        admit(&mut runtime),
-        [
-            (
-                "w1:p1".to_owned(),
-                "Carry on with the work that was cut off.".to_owned()
-            ),
-            ("w1:p9".to_owned(), "Resumed: 1 · agent w1:p1".to_owned()),
-        ]
+    // Cut again before its line went.
+    started_with(&mut runtime, root.path(), &[("w1:p1", "s-1", true)]);
+    heal(&mut runtime, &node, &["w1:p1".to_owned()], 5_000);
+    runtime.hook_after_heal(&node, "w1:p1", false);
+    assert_eq!(runtime.heal_pending(), ["w1:p1"]);
+    assert_eq!(runtime.heal_letters_owed(), ["go-on:agent-1:1000"]);
+    assert!(
+        runtime.hook_facts.lock().unwrap().cut_pending("w1:p1"),
+        "the cut is kept for the pending heal"
     );
-    assert!(runtime.heal_letters_waiting().is_empty());
-    assert!(runtime.heal_letters_owed().is_empty());
+    assert!(runtime.healing(&worker));
+
+    observe(&mut runtime, &child);
+    runtime.note_healing(&node, &[], 6_000);
+    let line = (
+        "w1:p1".to_owned(),
+        "Carry on with the work that was cut off.".to_owned(),
+    );
+    assert_eq!(admit(&mut runtime), std::slice::from_ref(&line));
+    assert_eq!(admit(&mut runtime), [line]);
+    assert!(runtime.heal_pending().is_empty());
+    assert!(!runtime.hook_facts.lock().unwrap().cut_pending("w1:p1"));
+    // The parent, away, is still owed its count.
+    assert_eq!(runtime.heal_letters_owed(), ["resumed:agent-9:1000"]);
 }
 
 /// B19: a node's worker is healing while its engine names its pane so and

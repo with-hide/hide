@@ -944,11 +944,11 @@ impl Core {
                 // One the engine did not heal was never cut (PRD
                 // letters-missions-simplify D-19, B17).
                 Ok(healed) => {
-                    // A resume the engine said is taken first, so this
-                    // report never meets a heal the core has not read.
-                    let resumed = engine.take_resumed();
+                    // A resume the engine said is taken and settled first,
+                    // in the same step, so this report never meets one
+                    // taken and not settled.
                     let mut runtime = lock_recover(&self.runtime);
-                    runtime.heal_resumed(device, &resumed, crate::links::now_ms());
+                    runtime.take_heal(device, engine.as_ref(), crate::links::now_ms());
                     runtime.hook_after_heal(device, caller, healed);
                 }
                 Err(error) => crate::diagnostic!(serde_json::json!({

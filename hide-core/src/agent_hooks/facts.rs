@@ -603,8 +603,8 @@ impl HookFacts {
         }
     }
 
-    /// Whether `pane`'s agent was cut mid-turn and no heal has read it yet.
-    #[cfg(test)]
+    /// Whether `pane`'s agent was cut mid-turn and no heal has settled it
+    /// yet.
     pub(crate) fn cut_pending(&self, pane: &str) -> bool {
         self.cut.contains(pane)
     }
