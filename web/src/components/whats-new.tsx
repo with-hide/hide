@@ -134,9 +134,9 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
             const words = inLanguage(row.text, language);
             const tryable = chapterKnown(row.chapter);
             return (
-              <li key={`${row.version}-${at}`} className="relative">
+              <li key={`${row.version}-${at}`} className={cn("flex items-center gap-sm rounded-md pr-sm", at === chosen && "bg-accent")}>
                 <RowButton
-                  className={cn("grid grid-cols-[auto_1fr] items-start gap-sm rounded-md px-sm py-xs pr-xxxl", at === chosen && "bg-accent")}
+                  className="grid min-w-0 flex-1 grid-cols-[auto_1fr] items-start gap-sm rounded-md px-sm py-xs"
                   aria-current={at === chosen ? "true" : undefined}
                   onClick={() => { setAdvancing(false); setChosen(at); }}
                   data-whats-new-feature={at}
@@ -151,7 +151,7 @@ export function WhatsNewDialogBody({ offer, language, auto = true, open: openMor
                   </span>
                 </RowButton>
                 {tryable ? (
-                  <Button variant="practice" size="sm" className="absolute right-sm top-1/2 -translate-y-1/2" onClick={() => onTry(row.chapter!)} data-whats-new-try={row.chapter}>
+                  <Button variant="practice" size="sm" className="shrink-0" onClick={() => onTry(row.chapter!)} data-whats-new-try={row.chapter}>
                     {t("whatsNew.try")}
                   </Button>
                 ) : null}
@@ -251,7 +251,9 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
               data-update-history-version={row.version}
               data-major={major}
             >
-              <span className={cn("mt-xs rounded-full", major ? "size-sm" : "size-xs", row.isReady ? "border border-dashed border-primary" : index === at ? "bg-primary" : "bg-muted-foreground")} />
+              <span className="mt-xxs flex size-sm items-center justify-center">
+                <span className={cn("rounded-full", major ? "size-sm" : "size-xs", row.isReady ? "border border-dashed border-primary" : index === at ? "bg-primary" : "bg-muted-foreground")} />
+              </span>
               <span className="flex min-w-0 flex-col">
                 <span className="flex items-center gap-xs font-mono text-caption text-foreground">
                   {row.version}
@@ -281,7 +283,7 @@ export function UpdateHistoryBody({ rows, appVersion, chosen, language, state, o
                 const words = inLanguage(row.text, language);
                 return (
                   <li key={index} className="flex flex-col overflow-hidden rounded-lg border border-border" data-update-history-feature={index}>
-                    {isDrawing(row.drawing) ? <PracticePreview kind={row.drawing} playing /> : null}
+                    {isDrawing(row.drawing) ? <PracticePreview kind={row.drawing} playing large /> : null}
                     <div className="flex flex-1 flex-col gap-xxs p-sm">
                       <span className="text-body font-medium text-foreground">{words.title}</span>
                       <span className="flex-1 break-keep text-caption text-muted-foreground">{words.line}</span>
