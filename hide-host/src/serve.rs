@@ -1258,6 +1258,10 @@ pub fn handle_with_progress(
                 &parent, &name, kind, &home,
             )?)
         }
+        Call::AutomationFolder { name } => {
+            let home = env.home("HOME is not set, so no automation folder can be made under it")?;
+            to_value(crate::project::automation_folder(&home, &name)?)
+        }
         Call::ProjectCreate {
             path,
             new_folder,

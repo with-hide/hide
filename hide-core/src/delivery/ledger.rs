@@ -982,10 +982,22 @@ impl std::io::Write for Length {
     }
 }
 
+/// The ledger in `delivery-ledger.json` at `path`, where builds before the
+/// store kept it, as such a build loads it at its start: an absent file is
+/// an empty ledger. An older build started on a folder this build has used
+/// reads it so (B27), since this build only ever reads it.
 pub fn load(path: &Path) -> Result<Ledger, String> {
+    let mut ledger = read_file(path)?.unwrap_or_default();
+    ledger.end_stretches_at_start();
+    Ok(ledger)
+}
+
+/// The ledger `delivery-ledger.json` at `path` holds, as it holds it; `None`
+/// when there is no such file. What the store imports (`delivery::store`).
+pub(crate) fn read_file(path: &Path) -> Result<Option<Ledger>, String> {
     let file = match hide_platform::fs::private::open_own_file(path, false) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Ledger::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err("ledger_unavailable".into()),
     };
     if !hide_platform::fs::private::is_private(path).unwrap_or(false)
@@ -997,15 +1009,11 @@ pub fn load(path: &Path) -> Result<Ledger, String> {
     file.take(FILE_LIMIT as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "ledger_unavailable")?;
-    let mut ledger = from_bytes(&bytes)?;
-    ledger.end_stretches_at_start();
-    Ok(ledger)
+    from_bytes(&bytes).map(Some)
 }
 
-/// The ledger `bytes` hold, under the rules the core loads its file with:
-/// within the size limit, a ledger of this build's shape, and valid. A core
-/// move asks it of the copy it is about to place, so a copy the new core
-/// would refuse never leaves the machine that can still run (`node_migration::copy`).
+/// The ledger `bytes` hold, under the rules `delivery-ledger.json` was loaded
+/// with: within the size limit, a ledger of this build's shape, and valid.
 pub fn from_bytes(bytes: &[u8]) -> Result<Ledger, String> {
     if bytes.len() > FILE_LIMIT {
         return Err("ledger_unavailable".into());
@@ -1015,39 +1023,64 @@ pub fn from_bytes(bytes: &[u8]) -> Result<Ledger, String> {
     Ok(ledger)
 }
 
-/// Keep the persistence phase intact until the store has applied its
-/// admission policy. An uncertain replacement can never mean old bytes won.
+/// Why the store did not keep a ledger. A write the store refused left the
+/// file as it was; one whose commit failed may or may not have been kept, so
+/// the core stops answering from memory until a start reads the file again.
 #[derive(Debug)]
 pub enum SaveError {
+    /// Refused before anything was written: not a valid ledger, or past
+    /// its size limit.
     Validation(String),
-    Persistence(hide_platform::fs::atomic::DurableWriteError),
+    /// The store refused the write and rolled it back.
+    Refused(StoreFailure),
+    /// The commit failed: the rows may or may not be on the disk.
+    Uncertain(StoreFailure),
+    /// The state folder could not be made at the start.
     Bootstrap(hide_platform::fs::private::DirectoryDurabilityError),
+}
+
+/// What SQLite answered a failed write with: its kind and extended code,
+/// never a path or content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoreFailure {
+    pub kind: &'static str,
+    pub extended: Option<i32>,
+}
+
+impl StoreFailure {
+    pub(crate) fn of(error: &rusqlite::Error) -> Self {
+        Self {
+            kind: super::store::code(error),
+            extended: error.sqlite_error().map(|error| error.extended_code),
+        }
+    }
 }
 
 impl SaveError {
     pub fn code(&self) -> &str {
         match self {
             Self::Validation(code) => code,
-            Self::Persistence(_) | Self::Bootstrap(_) => "ledger_unavailable",
+            Self::Refused(_) | Self::Uncertain(_) | Self::Bootstrap(_) => "ledger_unavailable",
         }
     }
 
     pub fn uncertain(&self) -> bool {
         matches!(
             self,
-            Self::Persistence(
-                hide_platform::fs::atomic::DurableWriteError::ReplacementUncertain { .. }
-                    | hide_platform::fs::atomic::DurableWriteError::ReplacedNotDurable { .. }
-            ) | Self::Bootstrap(
-                hide_platform::fs::private::DirectoryDurabilityError::Uncertain { .. }
-            )
+            Self::Uncertain(_)
+                | Self::Bootstrap(
+                    hide_platform::fs::private::DirectoryDurabilityError::Uncertain { .. }
+                )
         )
     }
 
     pub fn diagnostic(&self) -> serde_json::Value {
-        use hide_platform::fs::atomic::DurableWriteError;
-        let (phase, source, cleanup) = match self {
-            Self::Validation(code) => return serde_json::json!({"phase":"validation","code":code}),
+        match self {
+            Self::Validation(code) => serde_json::json!({"phase":"validation","code":code}),
+            Self::Refused(failure) => serde_json::json!({"phase":"store_refused",
+                "sqlite":failure.kind,"extended":failure.extended}),
+            Self::Uncertain(failure) => serde_json::json!({"phase":"commit_uncertain",
+                "sqlite":failure.kind,"extended":failure.extended}),
             Self::Bootstrap(error) => {
                 use hide_platform::fs::private::DirectoryDurabilityError;
                 let (phase, source) = match error {
@@ -1058,20 +1091,10 @@ impl SaveError {
                         ("bootstrap_uncertain", source)
                     }
                 };
-                return serde_json::json!({"phase":phase,"io_kind":format!("{:?}",source.kind())});
+                // IO text can contain private directory names.
+                serde_json::json!({"phase":phase,"io_kind":format!("{:?}",source.kind())})
             }
-            Self::Persistence(DurableWriteError::BeforeReplace { source, cleanup }) => {
-                ("before_replace", source, cleanup.is_some())
-            }
-            Self::Persistence(DurableWriteError::ReplacementUncertain { source, cleanup }) => {
-                ("replacement_uncertain", source, cleanup.is_some())
-            }
-            Self::Persistence(DurableWriteError::ReplacedNotDurable { source, .. }) => {
-                ("replaced_not_durable", source, false)
-            }
-        };
-        // IO text and temporary paths can contain private directory names.
-        serde_json::json!({"phase":phase,"io_kind":format!("{:?}",source.kind()),"cleanup_failed":cleanup})
+        }
     }
 }
 
@@ -1084,35 +1107,18 @@ impl std::fmt::Display for SaveError {
 impl std::error::Error for SaveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Validation(_) => None,
-            Self::Persistence(source) => Some(source),
             Self::Bootstrap(source) => Some(source),
+            Self::Validation(_) | Self::Refused(_) | Self::Uncertain(_) => None,
         }
     }
 }
 
-pub fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
-    write(path, &ledger.bytes().map_err(SaveError::Validation)?)
-}
-
-/// Replaces the file with `bytes`, which [`Ledger::bytes`] made, so a store
-/// that already checked and encoded its ledger writes it without encoding it
-/// again.
-pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
-    // The parent and its durable ancestry are established by initialization,
-    // never opportunistically created by a transaction after admission.
-    hide_platform::fs::atomic::write_file_durable(
-        path,
-        bytes,
-        hide_platform::fs::atomic::DurableAccess::Private,
-    )
-    .map_err(SaveError::Persistence)?;
-    Ok(())
-}
-
-/// Startup runs before Runtime is placed behind its mutex. Re-read the
-/// actual installed version and establish a new barrier before any effect.
-/// Corrupt or inaccessible bytes are preserved and never repaired by guess.
+/// Startup runs before Runtime is placed behind its mutex: makes the state
+/// folder when it is missing, opens the store at `path` (importing
+/// `delivery-ledger.json` the first time, `delivery::store`) and keeps the
+/// ledger as this start begins it, so the file and the published ledger
+/// agree before any effect. A store the core cannot read is kept as it is,
+/// never repaired by guess.
 pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
     let refused = || SaveError::Validation("ledger_unavailable".into());
     let parent = path.parent().ok_or_else(refused)?;
@@ -1136,7 +1142,6 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(refused()),
     }
-    let ledger = load(path).map_err(SaveError::Validation)?;
     let mut ancestor = parent;
     let mut missing = Vec::new();
     loop {
@@ -1163,13 +1168,35 @@ pub fn recover(path: &Path) -> Result<Ledger, SaveError> {
     if !hide_platform::fs::private::is_private(&canonical_parent).map_err(|_| refused())? {
         return Err(refused());
     }
-    save(path, &ledger)?;
+    let (mut store, stored, _) =
+        super::store::LedgerStore::open(path).map_err(SaveError::Validation)?;
+    // The file is named in its folder on the disk before any letter is
+    // answered from it, whether this open made it or a migration earlier in
+    // this start did (`node_migration::read_store`).
+    hide_platform::fs::private::establish_dir_durability(&canonical_parent)
+        .map_err(SaveError::Bootstrap)?;
+    let mut ledger = stored.clone();
+    ledger.end_stretches_at_start();
+    store.write(&stored, &ledger)?;
     Ok(ledger)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keeps `ledger` in the store at `path`, as the store thread does.
+    fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
+        super::super::store::save(path, ledger)
+    }
+
+    /// The ledger a core starting on the store at `path` begins with
+    /// (`recover`, without its checks of the state folder).
+    fn load(path: &Path) -> Result<Ledger, String> {
+        let mut ledger = super::super::store::load(path)?;
+        ledger.end_stretches_at_start();
+        Ok(ledger)
+    }
 
     const MINUTE: u64 = 60_000;
 
@@ -1381,7 +1408,7 @@ mod tests {
     #[test]
     fn a_restart_counts_a_running_stretch_only_up_to_its_last_write() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         let mut ledger = letter_to("mini", 0);
         ledger.observe_reach(&reach("mini", true), 0);
         assert!(ledger.observe_reach(&reach("mini", true), 30 * MINUTE));
@@ -1429,7 +1456,7 @@ mod tests {
     fn total_doorbell_reservations_include_success_and_survive_restart_before_confirmation() {
         for sent in [true, false] {
             let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("ledger.json");
+            let path = root.path().join("delivery.sqlite3");
             let mut ledger = letter();
             for attempt in 1..=3 {
                 let line = format!("🦉 sender 보고: 시도 {attempt}");
@@ -1540,7 +1567,7 @@ mod tests {
     fn acknowledgement_receipt_survives_durable_reload_and_replay_without_closing_new_watch() {
         use super::super::{mailbox, watch};
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         let mut ledger = letter();
         ledger.letters[0].kind = "report".into();
         ledger.letters[0].waiting_answer = false;
@@ -1674,19 +1701,19 @@ mod tests {
         // stores its ledger inside a private state directory.
         let state = root.path().join("state");
         hide_platform::fs::private::create_dir(&state).unwrap();
-        let path = state.join("ledger.json");
+        let path = state.join("delivery.sqlite3");
         let ledger = letter();
         save(&path, &ledger).unwrap();
         assert_eq!(recover(&path).unwrap(), ledger);
         std::fs::write(&path, b"private damaged bytes").unwrap();
         assert_eq!(recover(&path).unwrap_err().code(), "ledger_unavailable");
         assert_eq!(std::fs::read(&path).unwrap(), b"private damaged bytes");
-        // A missing parent is not implicitly bootstrapped by a transaction.
-        let missing = root.path().join("absent/ledger.json");
+        // A missing parent is not implicitly bootstrapped by a write.
+        let missing = root.path().join("absent/delivery.sqlite3");
         let error = save(&missing, &Ledger::default()).unwrap_err();
         assert!(!error.uncertain());
         assert!(!missing.parent().unwrap().exists());
-        assert_eq!(error.diagnostic()["phase"], "before_replace");
+        assert_eq!(error.diagnostic()["phase"], "validation");
         assert!(
             !error
                 .diagnostic()
@@ -1701,7 +1728,7 @@ mod tests {
         let home = root.path().join("home");
         hide_platform::fs::private::create_dir(&home).unwrap();
         let state = root.path().join("new/state");
-        let path = state.join("ledger.json");
+        let path = state.join("delivery.sqlite3");
         assert_eq!(recover(&path).unwrap(), Ledger::default());
         assert!(hide_platform::fs::private::is_private(&state).unwrap());
         assert!(hide_platform::fs::private::is_private(&path).unwrap());
@@ -1714,7 +1741,7 @@ mod tests {
             let link = root.path().join("linked-state");
             std::os::unix::fs::symlink(&state, &link).unwrap();
             assert_eq!(
-                recover(&link.join("ledger.json")).unwrap_err().code(),
+                recover(&link.join("delivery.sqlite3")).unwrap_err().code(),
                 "ledger_unavailable"
             );
             assert_eq!(std::fs::read(&path).unwrap(), b"private corruption");
@@ -1730,7 +1757,7 @@ mod tests {
     #[test]
     fn durable_ledger_is_private_and_corruption_is_preserved() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("ledger.json");
+        let path = root.path().join("delivery.sqlite3");
         save(&path, &Ledger::default()).unwrap();
         assert!(hide_platform::fs::private::is_private(&path).unwrap());
         assert_eq!(load(&path).unwrap(), Ledger::default());

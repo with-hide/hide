@@ -8,6 +8,7 @@ import type { PrBoard, ToolCell } from "./agentScope";
 import { frontDeviceId, localDeviceId } from "./devices";
 import type { BoardProject } from "./projectBoard";
 import { missionAsks } from "./missions";
+import { missionOwnAsks } from "./ownAsks";
 import { catalogWorkspaces, type AgentRow, type Checkout, type CheckoutAgentSummary, type Mission, type SidebarProject, type SnapshotRest, type TaskView } from "./snapshot";
 import { taskList, type TaskList } from "./taskList";
 import { boardProjects } from "./navigation";
@@ -106,7 +107,7 @@ export function toolTaskList(rest: SnapshotRest | null, cell: ToolCell, rows: Re
   const away = devices.filter((device) => device.device_id !== local).flatMap((device) => device.tasks.cards.map((card) => ({ card, device: name(device.device_id), deviceId: device.device_id })));
   const missions = rest?.missions?.failed ? [] : (rest?.missions?.items ?? []);
   const asks = missionAsks(missions, cell.mission_asks ?? []);
-  return taskList(own, local, rows, catalogWorkspaces(rest), view, [], project ? asks.filter((ask) => ask.mission.workspace_id === project.workspace_id) : asks, away);
+  return taskList(own, local, rows, catalogWorkspaces(rest), view, [], missionOwnAsks(project ? asks.filter((ask) => ask.mission.workspace_id === project.workspace_id) : asks), away);
 }
 
 /**

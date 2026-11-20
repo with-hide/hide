@@ -2373,7 +2373,7 @@ impl SleepingChild {
     fn new() -> Self {
         use crate::coordination::AgentRecord;
         let root = tempfile::tempdir().unwrap();
-        let ledger_path = root.path().join("delivery-ledger.json");
+        let ledger_path = root.path().join("delivery.sqlite3");
         let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
         let node = runtime.node.as_str().to_owned();
         runtime.ingest_session(Ok(session(Some(4))));
@@ -2587,7 +2587,7 @@ impl SleepingChild {
         assert_eq!(letter.recipient.pane_id, WOKEN);
         assert_eq!(letter.state, crate::delivery::ledger::State::Pending);
         assert_eq!(
-            crate::delivery::ledger::load(&self.ledger_path).unwrap(),
+            crate::delivery::store::load(&self.ledger_path).unwrap(),
             *ledger
         );
         // The old pane stays closed: only the woken one is a live address now.

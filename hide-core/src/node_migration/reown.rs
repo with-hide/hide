@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use super::{
     CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
     MISSIONS, MISSIONS_DIR, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH,
-    WORKSPACE_VIEWS, mission_files, read_json, read_marker, write,
+    WORKSPACE_VIEWS, mission_files, read_marker, read_store, store_path, write, write_store,
 };
 use crate::node::NodeId;
 
@@ -234,14 +234,14 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
         MISSIONS,
     ]
     .into_iter()
-    .map(|file| (file, file.to_owned(), staging.join(file)));
+    .map(|file| (file, file.to_owned(), store_path(staging, file)));
     // Each mission's file is keyed as the book it is one mission of.
     let missions = mission_files(staging)
         .map_err(|reason| refuse(&staging.join(MISSIONS_DIR), reason))?
         .into_iter()
         .map(|(name, path)| (MISSIONS, name, path));
     for (file, name, path) in stores.chain(missions) {
-        let Some(mut value) = read_json(&path).map_err(|reason| refuse(&path, reason))? else {
+        let Some(mut value) = read_store(&path).map_err(|reason| refuse(&path, reason))? else {
             continue;
         };
         let before = value.clone();
@@ -263,9 +263,7 @@ pub fn reown(staging: &Path, change: &OwnerChange, ids: &IdTable) -> Result<Reow
             ));
         }
         if value != before {
-            let bytes =
-                serde_json::to_vec(&value).map_err(|error| refuse(&path, error.to_string()))?;
-            write(&path, &bytes).map_err(|reason| refuse(&path, reason))?;
+            write_store(&path, &value).map_err(|reason| refuse(&path, reason))?;
             outcome.files.push(name);
         }
     }
@@ -1479,7 +1477,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path();
         let write = |name: &str, value: Value| {
-            std::fs::write(state.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
+            super::super::write_store(&super::super::store_path(state, name), &value).unwrap();
         };
         let panes = before("pane");
         let devices = before("device");
@@ -1649,6 +1647,7 @@ mod tests {
         let mut ledger = json!({
                 "version": 1, "next_id": 9,
                 "letters": (0..3).map(|index| json!({
+                    "id": format!("letter-{}", index + 4),
                     "sender": actor(index), "recipient": actor((index + 1) % 3),
                     "watch_warning": {"target": actor(index)}, "body": "from mini to studio",
                 })).collect::<Vec<_>>(),
@@ -1659,9 +1658,9 @@ mod tests {
                     {"id": "agent-3", "machine": X, "native_machine": "studio-machine", "actor": actor(2), "pane": "w3:p1", "host_scope": X, "project": X_ROOT, "session": "s3", "instance": "t3"},
                 ],
                 "spawns": [
-                    {"parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2", "task": {"kind": "memory_promote", "target": "m1"}},
-                    {"parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
-                    {"parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
+                    {"id": "spawn-7", "parent": "agent-1", "repo": M_ROOT, "path": M_ROOT, "requested_path": M_ROOT, "pane": "w1:p2", "task": {"kind": "memory_promote", "target": "m1"}},
+                    {"id": "spawn-8", "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT, "pane": "w2:p2", "machine": ALIAS},
+                    {"id": "spawn-9", "parent": "agent-1", "repo": X_ROOT, "path": X_ROOT, "requested_path": X_ROOT, "pane": "w3:p2", "machine": X},
                 ],
                 "identity_waits": ([M, ALIAS, X].iter().enumerate().map(|(index, machine)| json!({
                     "id": format!("wait-{index}"), "machine": machine, "pane": format!("w{}:p3", index + 1),
@@ -1736,8 +1735,13 @@ mod tests {
         dir
     }
 
+    /// The store at `path` as its rewrites read it: `delivery-ledger.json`
+    /// names the delivery ledger, which its store holds.
     fn read(path: &Path) -> Value {
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        let name = path.file_name().unwrap().to_str().unwrap();
+        super::super::read_store(&super::super::store_path(path.parent().unwrap(), name))
+            .unwrap()
+            .unwrap()
     }
 
     fn rows(state: &Path, file: &str) -> Vec<(&'static str, Moves)> {
@@ -2329,9 +2333,9 @@ mod tests {
 
     /// A promotion task of a Project's card, as the ledger keeps it: the
     /// intent carries the digest of the Project's id.
-    fn promotion_spawn(project_id: &str, target: &str) -> Value {
+    fn promotion_spawn(id: &str, project_id: &str, target: &str) -> Value {
         json!({
-            "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT,
+            "id": id, "parent": "agent-1", "repo": C_ROOT, "path": C_ROOT, "requested_path": C_ROOT,
             "intent": format!(
                 "{}{target}-a1-x",
                 crate::runtime::memory_promotion::intent_prefix(project_id)
@@ -2354,14 +2358,11 @@ mod tests {
         let moving = device_digest(ALIAS, C_ROOT);
         let mut ledger = read(&state.join(DELIVERY_LEDGER));
         let spawns = ledger["spawns"].as_array_mut().unwrap();
-        spawns.push(promotion_spawn(&leftover, "m1"));
-        spawns.push(promotion_spawn(&moving, "m1"));
-        spawns.push(promotion_spawn(&leftover, "m9"));
-        std::fs::write(
-            state.join(DELIVERY_LEDGER),
-            serde_json::to_vec(&ledger).unwrap(),
-        )
-        .unwrap();
+        spawns.push(promotion_spawn("spawn-10", &leftover, "m1"));
+        spawns.push(promotion_spawn("spawn-11", &moving, "m1"));
+        spawns.push(promotion_spawn("spawn-12", &leftover, "m9"));
+        super::super::write_store(&super::super::store_path(state, DELIVERY_LEDGER), &ledger)
+            .unwrap();
 
         reown(state, &forward(), &forward_ids()).unwrap();
         let ledger = read(&state.join(DELIVERY_LEDGER));
@@ -2575,8 +2576,10 @@ mod tests {
                 crate::workspace_views::save(&written, &views).unwrap();
             }
             DELIVERY_LEDGER => {
-                let ledger = crate::delivery::ledger::load(&path).unwrap();
-                crate::delivery::ledger::save(&written, &ledger).unwrap();
+                let ledger =
+                    crate::delivery::store::load(&super::super::store_path(state, file)).unwrap();
+                crate::delivery::store::save(&super::super::store_path(out.path(), file), &ledger)
+                    .unwrap();
             }
             LOCAL_ISSUES => {
                 let store = crate::local_issues::load(&path).unwrap();
@@ -2622,8 +2625,15 @@ mod tests {
             )
             .unwrap(),
             DELIVERY_LEDGER => {
-                crate::delivery::ledger::save(path, &crate::delivery::ledger::Ledger::default())
-                    .unwrap()
+                // The ledger's own writer, then its fields in its store.
+                let mut value =
+                    serde_json::to_value(crate::delivery::ledger::Ledger::default()).unwrap();
+                for (key, field) in fields.as_object().unwrap() {
+                    value[key] = field.clone();
+                }
+                let store = super::super::store_path(path.parent().unwrap(), file);
+                super::super::write_store(&store, &value).unwrap();
+                return;
             }
             LOCAL_ISSUES => {
                 crate::local_issues::save(path, &crate::local_issues::LocalIssueStore::default())
@@ -2925,7 +2935,8 @@ mod tests {
         )
         .unwrap();
         // The fixture is a ledger the MacBook's core loads.
-        crate::delivery::ledger::load(&path).unwrap();
+        crate::delivery::store::load(&super::super::store_path(dir.path(), DELIVERY_LEDGER))
+            .unwrap();
         dir
     }
 
@@ -2968,10 +2979,11 @@ mod tests {
         let dir = ledger_folder();
         let state = dir.path();
         let path = state.join(DELIVERY_LEDGER);
-        let original = crate::delivery::ledger::load(&path).unwrap();
+        let store = super::super::store_path(state, DELIVERY_LEDGER);
+        let original = crate::delivery::store::load(&store).unwrap();
 
         reown(state, &forward(), &IdTable::default()).unwrap();
-        crate::delivery::ledger::load(&path).expect("the mini's core loads the moved ledger");
+        crate::delivery::store::load(&store).expect("the mini's core loads the moved ledger");
         let moved = read(&path);
         // Children that were on the mini are on the core's own machine now,
         // those on the MacBook are on a device under its node id.
@@ -3009,7 +3021,7 @@ mod tests {
         assert_eq!(devices("watches", "target"), [json!(C)]);
 
         reown(state, &back(), &IdTable::default()).unwrap();
-        assert_eq!(crate::delivery::ledger::load(&path).unwrap(), original);
+        assert_eq!(crate::delivery::store::load(&store).unwrap(), original);
     }
 
     /// The machine taking the core keeps the name the operator registered it

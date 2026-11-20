@@ -28,6 +28,8 @@ pub enum CommandKind {
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
     Mission(crate::mission_cli::MissionCli),
     Plan(crate::plan_cli::PlanCli),
+    /// `hide automation …` (PRD automations B9, B10).
+    Automation(crate::automation_cli::AutomationCli),
     /// `hide agent profile …` (PRD agent-profiles D-33).
     AgentProfile(hide_core::agent_profiles::ProfileCommand),
     /// `hide agent catalog [--machine <id>]`.
@@ -210,6 +212,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
+        "automation" => usage(crate::automation_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
         "session" => usage(crate::session_cli::USAGE),
         "memory" => MEMORY_USAGE.to_owned(),
@@ -251,6 +254,7 @@ fn help_text() -> String {
         crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
+        crate::automation_cli::USAGE,
         crate::pane_cli::USAGE,
         "hide workspace info",
         FILE_USAGE.trim_start_matches("usage: "),
@@ -327,7 +331,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         args.get(1).map(String::as_str),
         args.last().filter(|_| args.len() > 2).map(String::as_str),
     ) && !(args[2..] == ["spawn", "--help"]
-        || (matches!(topic, "mission" | "task") && args.len() == 3))
+        || (matches!(topic, "mission" | "task" | "automation") && args.len() == 3))
         && let Some(text) = topic_usage(topic)
     {
         return Ok(CommandKind::Usage(text));
@@ -464,6 +468,19 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             crate::plan_cli::parse(iter)
                 .map(CommandKind::Plan)
                 .map_err(|reason| wrong(reason, crate::plan_cli::USAGE))
+        }
+        Some("automation")
+            if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) =>
+        {
+            crate::automation_cli::parse(&args[2..]).map(CommandKind::Automation)
+        }
+        Some("automation") => {
+            crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
+                format!("{refusal}\n{}", usage(crate::automation_cli::USAGE))
+            })?;
+            crate::automation_cli::parse(&args[2..])
+                .map(CommandKind::Automation)
+                .map_err(|reason| wrong(reason, crate::automation_cli::USAGE))
         }
         Some("agent") => {
             crate::cli_contract::admit(&args[1..])
@@ -921,6 +938,10 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         print!("{}", crate::plan_cli::HELP);
         return Ok(());
     }
+    if kind == CommandKind::Automation(crate::automation_cli::AutomationCli::Help) {
+        print!("{}", crate::automation_cli::HELP);
+        return Ok(());
+    }
     if kind == CommandKind::BrowserHelp {
         print!("{}", crate::browser_page::HELP);
         return Ok(());
@@ -944,6 +965,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::AgentSpawnBriefFile { .. }
                     | CommandKind::Mission(_)
                     | CommandKind::Plan(_)
+                    | CommandKind::Automation(_)
                     | CommandKind::AgentCatalog { .. }
                     | CommandKind::AgentProfile(_)
                     | CommandKind::Ps(_)
@@ -984,6 +1006,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
     match kind {
         CommandKind::Mission(command) => crate::mission_cli::run(&env, command),
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
+        CommandKind::Automation(cli) => crate::automation_cli::run(&env, cli),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
         CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
@@ -1614,6 +1637,25 @@ pub(crate) fn bootstrap_refused(reason: &str) -> bool {
                 | hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED
                 | hide_agent_hooks::hook_request::install::OTHER_INSTALL
         )
+}
+
+/// Why a folder a command was given cannot be spelled as the core spells it.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WireFolder {
+    /// It cannot be made absolute from the working directory.
+    Unresolved,
+    /// Its path has no wire spelling.
+    Unspelled,
+}
+
+/// A folder a command was given on this machine, absolute and spelled as
+/// the core spells paths: its real path when it exists, so a link, `.` or
+/// `/tmp` names the folder Hide registered, and the absolute path when it
+/// is gone.
+pub(crate) fn wire_folder(raw: &str) -> Result<String, WireFolder> {
+    let absolute = std::path::absolute(raw).map_err(|_| WireFolder::Unresolved)?;
+    let path = hide_platform::fs::identity::canonical(&absolute).unwrap_or(absolute);
+    hide_platform::path::to_wire(&path).map_err(|_| WireFolder::Unspelled)
 }
 
 /// One refused command's line, `{"ok":false,"error":{"code","message"}}`,
@@ -2709,7 +2751,15 @@ fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
 
 fn status_json(state_dir: &Path) -> Result<(), String> {
     let line = match healthy_daemon_in(state_dir) {
-        Some((state, health)) => attached_json(&state, &health, "running")?,
+        Some((state, health)) => {
+            let mut line = attached_json(&state, &health, "running")?;
+            // The process answers, so a host attaches to it; whether it
+            // takes pane commands is its listeners' answer.
+            if let Some(listeners) = health.get("listeners") {
+                line["listeners"] = listeners.clone();
+            }
+            line
+        }
         None => serde_json::json!({ "running": false }),
     };
     println!("{line}");
@@ -2859,27 +2909,50 @@ fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
 }
 
 fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
-    match healthy_daemon_in(state_dir).map(|(state, _)| state) {
-        Some(state) => {
-            let health = health_json(state.port, HEALTH_REQUEST)?;
-            let clients = health
-                .get("clients")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0);
-            let idle = health
-                .get("idle_remaining_secs")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(idle_secs);
-            println!(
-                "Hide is running  pid {}  port {}  clients {}  idle {}s remaining",
-                state.pid, state.port, clients, idle
-            );
-            Ok(())
-        }
-        None => {
-            println!("Hide is not running");
-            Ok(())
-        }
+    match healthy_daemon_in(state_dir) {
+        Some((state, health)) => println!("{}", status_text(&state, &health, idle_secs)),
+        None => println!("Hide is not running"),
+    }
+    Ok(())
+}
+
+/// What `hide status` says of the daemon `state` names, from its `/health`:
+/// running, or, while a listener it serves takes no connection, what that
+/// refuses. A daemon of a build before `listeners` reports none.
+fn status_text(state: &DaemonState, health: &serde_json::Value, idle_secs: u64) -> String {
+    let clients = health
+        .get("clients")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let idle = health
+        .get("idle_remaining_secs")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(idle_secs);
+    let problems: Vec<String> = [
+        (
+            "pane_bootstrap",
+            "pane commands and agent hooks are refused",
+        ),
+        ("node_attach", "other machines' nodes cannot connect"),
+    ]
+    .into_iter()
+    .filter_map(|(listener, refused)| {
+        let advice = match health["listeners"][listener].as_str()? {
+            "failing" => "Hide tries again; restart Hide if it stays",
+            "stopped" => "restart Hide",
+            _ => return None,
+        };
+        Some(format!("  {refused}: {advice}"))
+    })
+    .collect();
+    let facts = format!(
+        "pid {}  port {}  clients {clients}  idle {idle}s remaining",
+        state.pid, state.port
+    );
+    if problems.is_empty() {
+        format!("Hide is running  {facts}")
+    } else {
+        format!("Hide is not working  {facts}\n{}", problems.join("\n"))
     }
 }
 
@@ -4104,6 +4177,46 @@ mod tests {
         ] {
             assert!(parse(&args).is_err());
         }
+    }
+
+    /// `hide status` says Hide runs only while its listeners take
+    /// connections; a stopped or failing pane bootstrap is named with what
+    /// it refuses and what to do.
+    #[test]
+    fn status_says_what_a_listener_that_takes_no_connection_refuses() {
+        let state = DaemonState {
+            pid: 42,
+            port: 7001,
+            token: "abc".into(),
+            started_at: "now".into(),
+            pid_started: None,
+        };
+        let health = |pane: &str| {
+            serde_json::json!({
+                "clients": 1,
+                "idle_remaining_secs": 30,
+                "listeners": {"pane_bootstrap": pane, "node_attach": "accepting"},
+            })
+        };
+        assert_eq!(
+            status_text(&state, &health("accepting"), 0),
+            "Hide is running  pid 42  port 7001  clients 1  idle 30s remaining"
+        );
+        assert_eq!(
+            status_text(&state, &health("stopped"), 0),
+            "Hide is not working  pid 42  port 7001  clients 1  idle 30s remaining\n  \
+             pane commands and agent hooks are refused: restart Hide"
+        );
+        assert_eq!(
+            status_text(&state, &health("failing"), 0),
+            "Hide is not working  pid 42  port 7001  clients 1  idle 30s remaining\n  \
+             pane commands and agent hooks are refused: Hide tries again; restart Hide if it stays"
+        );
+        // A daemon of a build before `listeners` is read as before.
+        assert_eq!(
+            status_text(&state, &serde_json::json!({}), 9),
+            "Hide is running  pid 42  port 7001  clients 0  idle 9s remaining"
+        );
     }
 
     #[test]

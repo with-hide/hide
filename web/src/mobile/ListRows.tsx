@@ -6,7 +6,7 @@
 import { useMemo } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
-import { chipWords, missionToneOf } from "../missions";
+import { chipWords, missionStalled, missionToneOf } from "../missions";
 import { CLOSED_DIM, PR_LOOK, prMarkParts } from "../prMark";
 import { cn } from "../lib/utils";
 import { agentLinks, type AgentLinks } from "./missionModel";
@@ -182,7 +182,7 @@ function RowMarks({ links }: { links: AgentLinks }) {
         return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />#{parts.number}</span>;
       })() : null}
       {links.missions.map(({ mission, turn }) => (
-        <span key={mission.id} className={cn("flex items-center gap-xxs rounded-xs bg-secondary px-xs", TONE_TEXT[missionToneOf(mission.status, turn)])} data-phone-row-mission={mission.id}>
+        <span key={mission.id} className={cn("flex items-center gap-xxs rounded-xs bg-secondary px-xs", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} data-phone-row-mission={mission.id}>
           <MissionChipFace turn={turn} delay={false} status={mission.status} counts={chipWords(mission).counts} icon="size-(--size-icon)" />
         </span>
       ))}

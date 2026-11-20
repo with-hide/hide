@@ -1327,6 +1327,16 @@ pub struct MissionNode {
     /// from before it has none, and `started_at_unix_ms` stands in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worked_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers (`CriterionKind::worker_answers`)
+    /// first all stood passed or skipped: where its own work ended and the
+    /// review, CI and fix rounds began, the split of the node's time
+    /// (`hide mission show`, the map's panel), counted from
+    /// `worked_at_unix_ms`. Set once a run of its work, on the record or
+    /// skip that met the last of them; going back to work from a finish
+    /// starts the next run (`back_to_work`). A book from before it has none,
+    /// and a node whose lines were already met then never gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_met_at_unix_ms: Option<u64>,
     /// The warnings the node carries now, at most one of each kind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<NodeWarning>,
@@ -1580,6 +1590,9 @@ impl MissionNode {
     pub(crate) fn back_to_work(&mut self, now: u64) {
         self.round = self.round.saturating_add(1);
         self.worked_at_unix_ms = Some(now);
+        // Its time splits again from here: work until its lines stand met
+        // again, now when nothing of its own is left open.
+        self.own_met_at_unix_ms = self.own_lines_met().then_some(now);
         self.done_head = None;
         for line in &mut self.criteria {
             line.shown.clear();
@@ -1605,17 +1618,55 @@ impl MissionNode {
         }
     }
 
-    /// The failures in a row of the node's review or verification line, the
-    /// more of the two (`CriterionKind::checker_judges`); 0 with neither. The
-    /// name and the wire field `review_fails` predate the verification
-    /// counting too.
-    pub fn review_fails(&self) -> u32 {
-        self.criteria
+    /// Whether every line its worker answers stands passed or skipped, with
+    /// at least one such line.
+    pub(crate) fn own_lines_met(&self) -> bool {
+        let mut own = self
+            .criteria
             .iter()
-            .filter(|line| line.kind.checker_judges())
-            .map(|line| line.fails_in_a_row)
-            .max()
-            .unwrap_or(0)
+            .filter(|line| line.kind.worker_answers())
+            .peekable();
+        own.peek().is_some()
+            && own.all(|line| {
+                matches!(
+                    line.state,
+                    crate::mission_criteria::CriterionState::Pass
+                        | crate::mission_criteria::CriterionState::Skipped
+                )
+            })
+    }
+
+    /// Stamps `own_met_at_unix_ms` at `now` when a record or skip met the
+    /// last of its worker's lines, which were not all met before it
+    /// (`was_met`): a node whose lines a book from before it already held
+    /// met gets no stamp, rather than one at a later record's time.
+    pub(crate) fn note_own_met(&mut self, was_met: bool, now: u64) {
+        if self.own_met_at_unix_ms.is_none() && !was_met && self.own_lines_met() {
+            self.own_met_at_unix_ms = Some(now);
+        }
+    }
+
+    /// The node's review rounds line (`Criterion::rounds`): the review or
+    /// verification line past `limit` (`Criterion::past_limit`), a failed
+    /// one first and then the one with more rounds, else the one with the
+    /// most rounds; none
+    /// before any checker answered. The one rule the limit's warning, its
+    /// letter and the screens that count rounds read.
+    pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        let lines = || {
+            self.criteria
+                .iter()
+                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
+        };
+        lines()
+            .filter(|line| line.past_limit(limit))
+            .max_by_key(|line| {
+                (
+                    line.state == crate::mission_criteria::CriterionState::Fail,
+                    line.rounds,
+                )
+            })
+            .or_else(|| lines().max_by_key(|line| line.rounds))
     }
 }
 
@@ -1765,6 +1816,12 @@ pub struct Mission {
     /// (`Runtime::warn_missions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delay_until_unix_ms: Option<u64>,
+    /// When the operator put the mission's 내 차례 row away
+    /// (`mission_put_away`): the mission stays out of its device's Needs You
+    /// until something asks them that was raised after this, so a put-away
+    /// row never hides a newer turn (operator decision 2026-11-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put_away_unix_ms: Option<u64>,
     #[serde(default)]
     pub report: Option<String>,
     /// The line about the operator's checkout Hide added to `report` when
@@ -1917,7 +1974,8 @@ impl Mission {
     /// while it is not, else when, which is none when the record cannot say
     /// (a key naming no node holds nothing back, and a book may keep no
     /// finish time). A plain key is met when its node is done, at its
-    /// finish; `<node>:<line>` also when that line is met now as its owner
+    /// finish, and `<node>:<line>` then at the line's record if it came
+    /// first; `<node>:<line>` also when that line is met now as its owner
     /// shows it (`Criterion::met` against the node's heads, read into
     /// `lines` by `Runtime::lines_now`), at the line's record, so a check
     /// line passed on an older commit is open again. A dropped node meets
@@ -1933,8 +1991,20 @@ impl Mission {
             return Some(None);
         };
         let before = &self.nodes[at];
+        let recorded = |line: &str| {
+            let known = before.criteria.iter().find(|known| known.key == line)?;
+            known.by.as_ref().map(|by| by.at_unix_ms)
+        };
         match before.status {
-            NodeStatus::Done => return Some(before.finished_at_unix_ms),
+            // A line of a node done stays met when it was recorded, so the
+            // wait of the node behind it does not move to the finish.
+            NodeStatus::Done => {
+                let line = key.line.as_deref().and_then(recorded);
+                return Some(match (line, before.finished_at_unix_ms) {
+                    (Some(line), Some(finished)) => Some(line.min(finished)),
+                    (line, finished) => line.or(finished),
+                });
+            }
             NodeStatus::Dropped => return None,
             NodeStatus::Planned | NodeStatus::Working => {}
         }
@@ -2130,8 +2200,10 @@ impl Default for ConductorSettings {
 }
 
 /// How strongly the Conductor has a mission's nodes checked: which nodes
-/// get a review or a run-it check, and how many review rounds. The Conductor
-/// follows it by `hide mission help`; the gate does not read it.
+/// get a review or a run-it check, which the Conductor follows by `hide
+/// mission help`, and how many review rounds a node gets
+/// (`Strength::review_rounds`), which Hide counts. A mission from before it
+/// counts as `Normal`.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strength {
@@ -2139,6 +2211,31 @@ pub enum Strength {
     #[default]
     Normal,
     Thorough,
+}
+
+impl Strength {
+    /// Its stored spelling, which the Conductor's plan names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Normal => "normal",
+            Self::Thorough => "thorough",
+        }
+    }
+
+    /// The review rounds a node's review or verification gets at this
+    /// strength (`Criterion::rounds`): a review and its re-reviews. When the
+    /// round at the limit fails, its Conductor is told once to move the
+    /// ordinary and minor findings to follow-up issues and skip the line
+    /// (`mission_health::warn_acts`). The one place these numbers live;
+    /// `hide mission help` (Verification strength) says the same.
+    pub fn review_rounds(self) -> u32 {
+        match self {
+            Self::Fast => 1,
+            Self::Normal => 3,
+            Self::Thorough => 4,
+        }
+    }
 }
 
 fn default_clean_merged() -> bool {
@@ -3408,6 +3505,7 @@ pub(crate) fn apply_plan(
                 launched: None,
                 pushed_at_unix_ms: None,
                 worked_at_unix_ms: None,
+                own_met_at_unix_ms: None,
                 warnings: Vec::new(),
                 hold: None,
                 operator_merge: None,
@@ -4670,6 +4768,7 @@ pub(crate) mod tests {
             answer_failed: None,
             delay: None,
             delay_until_unix_ms: None,
+            put_away_unix_ms: None,
             report: None,
             folder_line: None,
             created_at_unix_ms: 1,
@@ -4882,6 +4981,23 @@ pub(crate) mod tests {
         };
         assert!(planned.dependency_met(&key, &shown(&[])).is_some());
         assert_eq!(planned.dependency_met(&key, &shown(&["c1"])), None);
+        // Met at the line's record, and still then once its node is done.
+        planned.nodes[0].criteria[0].by = Some(crate::mission_criteria::Recorded {
+            role: crate::mission_criteria::Role::Worker,
+            name: "core".into(),
+            agent_id: None,
+            at_unix_ms: 40,
+        });
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), Some(Some(40)));
+        planned.nodes[0].status = NodeStatus::Done;
+        planned.nodes[0].finished_at_unix_ms = Some(90);
+        assert_eq!(planned.dependency_met(&key, &[]), Some(Some(40)));
+        assert_eq!(
+            planned.dependency_met(&Dependency::from("core"), &[]),
+            Some(Some(90))
+        );
+        planned.nodes[0].finished_at_unix_ms = None;
+        planned.nodes[0].status = NodeStatus::Working;
         assert_eq!(planned.dependency_met(&key, &[]), None, "a node not read");
         planned.nodes[0].status = NodeStatus::Dropped;
         assert_eq!(planned.dependency_met(&key, &shown(&[])), None);
@@ -6091,6 +6207,42 @@ pub(crate) mod tests {
         let mut node = one("b");
         node.back_to_work(5);
         assert_eq!(node.round, 1);
+    }
+
+    /// mission-82 review O5: a node back at work from a finish splits its
+    /// time again from then, so the time it stood done is neither work nor
+    /// review: its own lines all met, its work is already done; a defect
+    /// left open, its work runs until that line is met.
+    #[test]
+    fn a_node_back_at_work_from_a_finish_splits_its_time_again_from_then() {
+        use crate::mission_criteria::{Criterion, CriterionKind, CriterionState};
+        let mut node = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2)
+            .unwrap()
+            .nodes[0]
+            .clone();
+        for line in node
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.worker_answers())
+        {
+            line.state = CriterionState::Pass;
+        }
+        node.own_met_at_unix_ms = Some(3);
+        node.back_to_work(50);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(50), Some(50))
+        );
+        node.criteria
+            .push(Criterion::new("d1", CriterionKind::Defect));
+        node.back_to_work(90);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(90), None)
+        );
+        node.criteria.last_mut().unwrap().state = CriterionState::Pass;
+        node.note_own_met(false, 120);
+        assert_eq!(node.own_met_at_unix_ms, Some(120));
     }
 
     /// A mission created before verification strength keeps the checkers

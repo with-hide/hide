@@ -608,6 +608,28 @@ pub fn request_plan(
     })
 }
 
+/// `hide automation`: a call on the operator's automations, answered by the
+/// core. A change is never sent again on its own: a lost answer is read
+/// back with `list`.
+pub fn request_automation(
+    credential: &mut Credential,
+    call: &Value,
+    action: bool,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"automation","request_id":request_id,"call":call}),
+            &request_id,
+            action,
+            after,
+        )
+    })
+}
+
 /// `hide session fold-ask`: folds one of the caller's session's open questions
 /// with its reason. Running it again converges: a folded question answers
 /// that it is already closed.

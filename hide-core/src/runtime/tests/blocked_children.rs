@@ -170,7 +170,7 @@ fn a_blocked_childs_note_lands_in_its_parents_mailbox_once_per_block() {
     let (worker, client) = crate::delivery::worker::Worker::store(
         Arc::downgrade(&runtime),
         ChangeNotifier::noop(),
-        hide_kit::layout::delivery_ledger(&state),
+        hide_kit::layout::delivery_store(&state),
     )
     .unwrap();
     // The parent is observed in its pane, running the session the child's

@@ -6,7 +6,7 @@
 
 import type { ProjectTasksScope, TaskCardScope, TaskState } from "./agentScope";
 import { archivedProject } from "./archive";
-import type { MissionAsk } from "./missions";
+import { ownAskDevice, ownAskProject, ownAskSince, type OwnAsk } from "./ownAsks";
 import type { AgentRow, ArchivedSession, Device, TaskView, Workspace } from "./snapshot";
 
 /**
@@ -40,10 +40,10 @@ export type TaskGroup = {
   entries: TaskEntry[];
   /**
    * The open rows cut by state in `TASK_GROUPS` order; a 상태별 group has one band, a 프로젝트별 group labels each (B32).
-   * The 내 차례 band's `missions` are the missions that are their own Needs You item, drawn among its rows (`rows`).
+   * The 내 차례 band's `asks` are the missions and automations that are their own Needs You item, drawn among its rows (`rows`).
    */
   bands: TaskBand[];
-  /** Per state, the open rows and mission rows a project's head counts (B6). */
+  /** Per state, the open rows and own-ask rows a project's head counts (B6). */
   counts: Partial<Record<TaskGroupState, number>>;
   resting: TaskEntry[];
   cleanup: TaskEntry[];
@@ -51,14 +51,14 @@ export type TaskGroup = {
   archived: ArchivedEntry[];
 };
 
-/** One row of a band in the order drawn: a task, or a mission that is its own Needs You item. */
-export type BandRow = { kind: "task"; entry: TaskEntry } | { kind: "mission"; ask: MissionAsk };
+/** One row of a band in the order drawn: a task, or a mission or an automation that is its own Needs You item. */
+export type BandRow = { kind: "task"; entry: TaskEntry } | { kind: "ask"; own: OwnAsk };
 
-export type TaskBand = { state: TaskGroupState; entries: TaskEntry[]; missions: MissionAsk[]; rows: BandRow[] };
+export type TaskBand = { state: TaskGroupState; entries: TaskEntry[]; asks: OwnAsk[]; rows: BandRow[] };
 
-/** The rows a band or a group draws: its tasks and its mission rows. */
+/** The rows a band or a group draws: its tasks and its own-ask rows. */
 export function rowCount(bands: readonly TaskBand[]): number {
-  return bands.reduce((sum, band) => sum + band.entries.length + band.missions.length, 0);
+  return bands.reduce((sum, band) => sum + band.entries.length + band.asks.length, 0);
 }
 
 export type TaskList = {
@@ -82,48 +82,49 @@ function inGroup(open: readonly TaskEntry[], state: TaskGroupState): TaskEntry[]
   return state === "working" ? [...entries.filter(({ card }) => card.state !== "waiting"), ...entries.filter(({ card }) => card.state === "waiting")] : entries;
 }
 
-/** A band of `state`, holding `missions` only in 내 차례. */
-function band(state: TaskGroupState, entries: TaskEntry[], missions: readonly MissionAsk[], deviceId: string): TaskBand {
-  const held = state === "needs_you" ? [...missions] : [];
-  return { state, entries, missions: held, rows: bandRows(entries, held, deviceId) };
+/** A band of `state`, holding `asks` only in 내 차례. */
+function band(state: TaskGroupState, entries: TaskEntry[], asks: readonly OwnAsk[], deviceId: string): TaskBand {
+  const held = state === "needs_you" ? [...asks] : [];
+  return { state, entries, asks: held, rows: bandRows(entries, held, deviceId) };
 }
 
 /**
  * A band's rows in the order drawn (operator decision 2026-11-08): device by
  * device, `deviceId`'s first, as its tasks already stand; inside a device a
- * mission stands among the unread asks by when its node began to wait, newest
- * first (operator decision 2026-11-14), and before every read ask and block.
+ * mission or an automation stands among the unread asks by when it began to
+ * wait, newest first (operator decision 2026-11-14), and before every read ask
+ * and block.
  * The tasks keep the core's order (unread asks before read ones, each newest
  * first).
  */
-function bandRows(entries: readonly TaskEntry[], missions: readonly MissionAsk[], deviceId: string): BandRow[] {
+function bandRows(entries: readonly TaskEntry[], asks: readonly OwnAsk[], deviceId: string): BandRow[] {
   const deviceOf = (entry: TaskEntry) => entry.deviceId ?? deviceId;
-  const devices = [...new Set([deviceId, ...entries.map(deviceOf), ...missions.map((ask) => ask.mission.device_id)])];
+  const devices = [...new Set([deviceId, ...entries.map(deviceOf), ...asks.map(ownAskDevice)])];
   return devices.flatMap((device) => {
-    const waiting = missions.filter((ask) => ask.mission.device_id === device).sort((a, b) => b.since_unix_ms - a.since_unix_ms);
+    const waiting = asks.filter((own) => ownAskDevice(own) === device).sort((a, b) => ownAskSince(b) - ownAskSince(a));
     const rows: BandRow[] = [];
     let next = 0;
     for (const entry of entries.filter((entry) => deviceOf(entry) === device)) {
-      // An unread ask waits since its request, the core's own key, and one with no time stands last as the core puts it; a read ask or a block lets every mission stand first.
+      // An unread ask waits since its request, the core's own key, and one with no time stands last as the core puts it; a read ask or a block lets every own ask stand first.
       const unread = entry.card.state === "needs_you" && !entry.card.read;
-      while (next < waiting.length && (!unread || waiting[next]!.since_unix_ms > (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "mission", ask: waiting[next++]! });
+      while (next < waiting.length && (!unread || ownAskSince(waiting[next]!) > (entry.agent.state.request_since ?? -Infinity))) rows.push({ kind: "ask", own: waiting[next++]! });
       rows.push({ kind: "task", entry });
     }
-    for (const ask of waiting.slice(next)) rows.push({ kind: "mission", ask });
+    for (const own of waiting.slice(next)) rows.push({ kind: "ask", own });
     return rows;
   });
 }
 
 /**
  * The list for one view. A card whose root row the snapshot no longer holds
- * is left out until it does, rather than drawn without a title. `missions`
- * are the device's missions that are their own Needs You item
- * (`useMissionAsks`), counted and drawn in 내 차례 with the tasks, under
- * their project in 프로젝트별. `elsewhere` are other devices' 내 차례 tasks,
+ * is left out until it does, rather than drawn without a title. `asks`
+ * are the device's missions and automations that are their own Needs You
+ * item (`ownAsks.ts`), counted and drawn in 내 차례 with the tasks, under
+ * their project in 프로젝트별 (an automation under none). `elsewhere` are other devices' 내 차례 tasks,
  * after the device's own in 내 차례 and under their own projects in 프로젝트별
  * (operator decision 2026-11-08); the total leaves them out.
  */
-export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: string, rows: ReadonlyMap<string, AgentRow>, projects: readonly Workspace[], view: TaskView, archivedRows: readonly ArchivedSession[] = [], missions: readonly MissionAsk[] = [], elsewhere: readonly ElsewhereTask[] = []): TaskList {
+export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: string, rows: ReadonlyMap<string, AgentRow>, projects: readonly Workspace[], view: TaskView, archivedRows: readonly ArchivedSession[] = [], asks: readonly OwnAsk[] = [], elsewhere: readonly ElsewhereTask[] = []): TaskList {
   const byCheckout = new Map(projects.flatMap((project) => project.checkouts.map((checkout) => [checkout.id, project] as const)));
   const entries: TaskEntry[] = [];
   const cards = [...(tasks?.cards ?? []).map((card) => ({ card, device: null, deviceId: null })), ...elsewhere];
@@ -146,23 +147,23 @@ export function taskList(tasks: ProjectTasksScope | null | undefined, deviceId: 
   if (view === "status") {
     const groups = TASK_GROUPS.map((state) => {
       const entries = inGroup(open, state);
-      return { key: `state:${state}`, state, project: null, entries, bands: [band(state, entries, missions, deviceId)], counts: {}, resting: [], cleanup: [], archived: [] };
+      return { key: `state:${state}`, state, project: null, entries, bands: [band(state, entries, asks, deviceId)], counts: {}, resting: [], cleanup: [], archived: [] };
     }).filter((group) => rowCount(group.bands) > 0);
     return { total: open.filter((entry) => entry.device === null).length, groups, resting, cleanup, archived };
   }
   // One group per project, the projects that ask first, then in the order their first task stands (B6).
   const order: (Workspace | null)[] = [];
-  const missionProject = (ask: MissionAsk) => projects.find((project) => project.id === ask.mission.workspace_id) ?? null;
+  const askProject = (own: OwnAsk) => projects.find((project) => project.id === ownAskProject(own)) ?? null;
   for (const { project } of entries) if (!order.includes(project)) order.push(project);
-  for (const ask of missions) if (!order.includes(missionProject(ask))) order.push(missionProject(ask));
+  for (const own of asks) if (!order.includes(askProject(own))) order.push(askProject(own));
   // A project whose sessions are all archived still stands, after the ones with work.
   for (const { project } of archived) if (!order.includes(project)) order.push(project);
-  const asks = (project: Workspace | null) => missions.some((ask) => missionProject(ask) === project) || open.some((entry) => entry.project === project && groupOf(entry.card.state) === "needs_you");
-  const sorted = [...order.filter(asks), ...order.filter((project) => !asks(project))];
+  const asking = (project: Workspace | null) => asks.some((own) => askProject(own) === project) || open.some((entry) => entry.project === project && groupOf(entry.card.state) === "needs_you");
+  const sorted = [...order.filter(asking), ...order.filter((project) => !asking(project))];
   const groups = sorted.map((project) => {
     const mine = (list: TaskEntry[]) => list.filter((entry) => entry.project === project);
     const shown = mine(open);
-    const asked = missions.filter((ask) => missionProject(ask) === project);
+    const asked = asks.filter((own) => askProject(own) === project);
     const bands = TASK_GROUPS.map((state) => band(state, inGroup(shown, state), asked, deviceId)).filter((band) => rowCount([band]) > 0);
     const counts: Partial<Record<TaskGroupState, number>> = Object.fromEntries(bands.map((band) => [band.state, rowCount([band])]));
     return { key: `project:${project?.id ?? ""}`, state: null, project, entries: bands.flatMap((band) => band.entries), bands, counts, resting: mine(resting), cleanup: mine(cleanup), archived: archived.filter((entry) => entry.project === project) };
