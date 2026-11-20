@@ -178,7 +178,10 @@ struct Out {
     /// A peer connection's stream frames by their stream's priority; the
     /// largest is written first.
     classes: BTreeMap<i32, Class>,
+    /// Nothing more is written: the connection ended, or its writing did.
     ended: bool,
+    /// The connection ended, not its writing alone.
+    over: bool,
 }
 
 /// The frames of one priority that wait, and the room its writers take a
@@ -318,9 +321,22 @@ impl Outbox {
         }
     }
 
-    /// Drops what waits and wakes every waiter.
+    /// Drops what waits and wakes every waiter: the connection ended.
     fn end(&self) {
         let mut out = lock(&self.state);
+        Self::refuse(&mut out);
+        out.over = true;
+        self.changed.notify_all();
+    }
+
+    /// Drops what waits and takes nothing more: the carrier takes no more
+    /// writes, and the connection itself has not ended yet.
+    fn stop(&self) {
+        Self::refuse(&mut lock(&self.state));
+        self.changed.notify_all();
+    }
+
+    fn refuse(out: &mut Out) {
         out.ended = true;
         out.control.clear();
         out.data.clear();
@@ -329,7 +345,15 @@ impl Outbox {
             // Wakes every writer that waits for a place.
             class.room.close();
         }
-        self.changed.notify_all();
+    }
+
+    /// Waits until the connection ended, for at most `within`.
+    fn over_within(&self, within: Duration) {
+        let out = lock(&self.state);
+        drop(
+            self.changed
+                .wait_timeout_while(out, within, |out| !out.over),
+        );
     }
 }
 
@@ -426,6 +450,10 @@ impl Shared {
 
     /// Ends the connection and aborts every stream on it.
     fn end(&self, reason: &str) {
+        // A peer connection that ends without a word closed as lost, said
+        // before it reads as ended: no end is read without its code, and a
+        // code either end closed with stands.
+        self.peer.close_with(streams::lost());
         if self.ended.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -685,6 +713,19 @@ fn start_with(
                 let mut reason = "connection_failed";
                 while let Some(frame) = shared.outbox.next() {
                     if out.write_all(&frame).and_then(|()| out.flush()).is_err() {
+                        if matches!(shared.side, Side::Peer { .. }) {
+                            // The other end may have closed: its last frame
+                            // says why, and can sit unread when a write into
+                            // the carrier it ended fails. Why a peer
+                            // connection ended is its reader's to say, so
+                            // this thread gives up writing and leaves the
+                            // end to it, for as long as a close waits for
+                            // its word; a carrier that fails only one way
+                            // is ended after that.
+                            shared.outbox.stop();
+                            drop(out);
+                            shared.outbox.over_within(streams::BYE_WITHIN);
+                        }
                         break;
                     }
                     // A peer connection's last word: the other end reads

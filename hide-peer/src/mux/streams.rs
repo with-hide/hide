@@ -92,12 +92,13 @@ pub(super) const CLASS_ROOM: usize = 16;
 const BACKLOG: usize = 16;
 
 /// How long a close waits for its last frame to be written before the
-/// carrier is ended without it.
-const BYE_WITHIN: Duration = Duration::from_secs(2);
+/// carrier is ended without it, and how long an end whose write failed
+/// waits to read the other end's.
+pub(super) const BYE_WITHIN: Duration = Duration::from_secs(2);
 
 /// What a connection closed with when its carrier ended without a word:
 /// `CloseCode::Lost`.
-fn lost() -> u32 {
+pub(super) fn lost() -> u32 {
     hide_peer_protocol::CloseCode::Lost.number()
 }
 
@@ -160,15 +161,9 @@ impl Entry {
 
 impl State {
     /// The connection ended: every writer fails, every reader that was not
-    /// finished reads a loss, and nothing more is accepted.
+    /// finished reads a loss, and nothing more is accepted. Its code was
+    /// recorded before it ended ([`State::close_with`]).
     pub(super) fn end(&self) {
-        self.closed.send_if_modified(|closed| {
-            if closed.is_some() {
-                return false;
-            }
-            *closed = Some(lost());
-            true
-        });
         lock(&self.incoming).take();
         for (_, entry) in lock(&self.streams).drain() {
             entry.stopped.store(true, Ordering::SeqCst);
@@ -177,7 +172,7 @@ impl State {
     }
 
     /// Records the code the connection closes with; the first one stands.
-    fn close_with(&self, code: u32) {
+    pub(super) fn close_with(&self, code: u32) {
         self.closed.send_if_modified(|closed| {
             if closed.is_some() {
                 return false;
@@ -394,7 +389,10 @@ impl Pipe {
     /// the other end would refuse.
     pub fn open(&self, priority: i32) -> io::Result<(PipeSend, PipeRecv)> {
         let shared = &self.shared;
-        if shared.ended.load(Ordering::SeqCst) {
+        // Closed is the one word for it: a connection has its code from
+        // the moment either end closes it, before its last frame is written
+        // or its carrier ended, and it opens nothing from then on.
+        if shared.peer.closed.borrow().is_some() {
             return Err(super::ended_error());
         }
         if !carried(priority) {
@@ -1018,6 +1016,123 @@ mod tests {
         assert_eq!(send.id, 1);
         assert_eq!(acceptor.streams(), 1);
         acceptor.close(lost());
+    }
+
+    /// The other end's close says why in its last frame, and this end's
+    /// writer can fail on the carrier that end already ended before its
+    /// reader reads the frame. The connection still closes with the code:
+    /// a failed write gives up writing and leaves the end to the reader.
+    /// The reader here gets the frames only once the writer is done with
+    /// the carrier, the order that read a close as a lost connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_close_is_read_with_its_code_though_a_write_failed_first() {
+        /// A carrier's writing direction after the other end ended it;
+        /// dropping it lets the reader on.
+        struct Broken {
+            _done: std::sync::mpsc::Sender<()>,
+        }
+
+        impl io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        /// What the other end wrote before it ended the carrier, read once
+        /// the writer is done.
+        struct Held {
+            done: Option<std::sync::mpsc::Receiver<()>>,
+            said: io::Cursor<Vec<u8>>,
+        }
+
+        impl io::Read for Held {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if let Some(done) = self.done.take() {
+                    // Ends when the writer is dropped.
+                    let _ = done.recv();
+                }
+                io::Read::read(&mut self.said, buffer)
+            }
+        }
+
+        let code = hide_peer_protocol::CloseCode::Replaced.number();
+        let mut said = frame(HELLO, 0, &[VERSION]);
+        said.extend(frame(BYE, 0, &code.to_be_bytes()));
+        let (done, writer_done) = std::sync::mpsc::channel();
+        let carrier = Carrier::new(
+            Held {
+                done: Some(writer_done),
+                said: io::Cursor::new(said),
+            },
+            Broken { _done: done },
+            || {},
+        );
+        let (acceptor, _accepts) = Pipe::start(carrier, false).unwrap();
+        let mut closed = acceptor.closed();
+        let read = within("the close", closed.wait_for(Option::is_some))
+            .await
+            .map(|code| *code)
+            .unwrap();
+        assert_eq!(read, Some(code));
+    }
+
+    /// A connection that closed opens no stream from the moment it has its
+    /// code, though its last frame still waits to be written and nothing
+    /// ended yet: the writer here is held at its first frame, the state in
+    /// which an open once went through on a closed connection.
+    #[tokio::test]
+    async fn a_closed_connection_opens_no_stream_before_it_ended() {
+        /// A carrier's writing direction that takes nothing until released,
+        /// and fails then.
+        struct Stuck {
+            released: std::sync::mpsc::Receiver<()>,
+        }
+
+        impl io::Write for Stuck {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                // Ends when the test drops the sender.
+                let _ = self.released.recv();
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        /// Nothing to read until the carrier is ended.
+        struct Silent {
+            ended: std::sync::mpsc::Receiver<()>,
+        }
+
+        impl io::Read for Silent {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                let _ = self.ended.recv();
+                Ok(0)
+            }
+        }
+
+        let (release, released) = std::sync::mpsc::channel();
+        let (end, ended) = std::sync::mpsc::channel();
+        let end = Mutex::new(Some(end));
+        let carrier = Carrier::new(Silent { ended }, Stuck { released }, move || {
+            drop(lock(&end).take());
+        });
+        let (acceptor, _accepts) = Pipe::start(carrier, false).unwrap();
+        let code = hide_peer_protocol::CloseCode::Replaced.number();
+        acceptor.close(code);
+        assert_eq!(acceptor.ended(), Some(code));
+        assert!(
+            !acceptor.shared.ended.load(Ordering::SeqCst),
+            "nothing ended yet"
+        );
+        assert!(acceptor.open(0).is_err());
+        assert_eq!(acceptor.streams(), 0);
+        drop(release);
     }
 
     /// The other end names each stream's priority, and each priority keeps

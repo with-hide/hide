@@ -3288,6 +3288,8 @@ A sender may have 16 frames of a stream unread by the other end and gets credit 
 A class lives as long as its connection and the other end names a stream's priority, so a stream is opened only at a priority a stream kind has, or the proof's: an open at any other number is answered `STOP` like one past the cap, and this end's own is refused before it is told.
 Each end opens at most `limits::MAX_STREAMS` (72) streams of its own and takes at most twice that from the other end, 16 of them unaccepted; a frame for a stream past that is answered `STOP`, never queued.
 A close is one `BYE` frame with its code, written before the carrier ends and waited for at most 2 s; a carrier that ends without one reads as a lost connection on every stream.
+Why a peer connection ended is its reader's to say: a write that fails, as one into a carrier the other end just closed does, stops the writing and leaves the end to the reader for those 2 s, so the other end's `BYE` is read with its code and not as a loss.
+The code is the one word for a closed connection: it is recorded before the connection ends, a loss included, and no stream is opened from then on.
 
 **A WSL distribution and its PC.**
 A distribution with a Hide of its own is a paired machine like any other, and what differs is only the carrier (D-27, D-62; `hided/src/pairing_wsl.rs`).
