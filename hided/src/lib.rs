@@ -468,7 +468,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .display()
                 .to_string(),
         ),
-        effects_held: false,
         machine_name: host_name(),
         windows_drives: hide_host::serve::windows_drives(),
         account_state_folder: env.account_state_folder,

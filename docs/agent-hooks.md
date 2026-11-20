@@ -390,7 +390,6 @@ OpenCode, Pi and omp take the same refusal through the plugin helper: their plug
 It reads a shell call in the [syntax of the shell that runs it](#which-shell-reads-a-call), so in a PowerShell call `state\global-instruction.md` run in `~/.hide` names the file, as PowerShell runs it, where Git Bash would run `stateglobal-instruction.md`.
 Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
 The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
-A move of the core carries the text the core reads through such a link as a regular file, since the link would point nowhere on the receiving machine, and leaves a link whose file the core reads as too large or unreadable behind with a `global_instruction.link_left` diagnostic and its reason.
 
 ### Where the hooks keep their records
 

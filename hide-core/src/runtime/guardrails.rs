@@ -191,9 +191,6 @@ impl Runtime {
     /// each connection, when the file may have changed or never been
     /// written (D-28).
     pub(super) fn publish_guardrail_policy(&mut self, device: &str) {
-        if self.effects_held() {
-            return;
-        }
         self.guardrails.published.remove(device);
         self.guardrails.queued.insert(device.to_owned());
         self.start_guardrails_worker(device);
@@ -217,9 +214,6 @@ impl Runtime {
     /// so a registration removed or a base branch chosen elsewhere reaches
     /// the hooks too (B11).
     pub(super) fn refresh_guardrail_policies(&mut self) {
-        if self.effects_held() {
-            return;
-        }
         let mut devices: BTreeSet<String> = self.guardrails.published.keys().cloned().collect();
         devices.extend(
             self.snapshot
@@ -359,9 +353,7 @@ impl Runtime {
             return None;
         }
         let (policy, saves) = self.guardrail_policy(device);
-        let link = if self.effects_held() {
-            Err("effects_held")
-        } else if device == self.node.as_str() && !self.guardrails.own_file {
+        let link = if device == self.node.as_str() && !self.guardrails.own_file {
             Ok(None)
         } else {
             self.linked_node(device).map(|(_, link)| Some(link))

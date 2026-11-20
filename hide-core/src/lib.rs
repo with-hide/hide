@@ -29,7 +29,6 @@ pub mod diagnostics;
 mod disk;
 mod display_text;
 pub mod domain;
-mod effects;
 pub mod engine;
 mod environment;
 mod fetch;

@@ -69,9 +69,6 @@ impl Runtime {
     /// sender whose letter the store ended undelivered. Run by the
     /// coordinator's tick; memory only.
     pub(crate) fn drive_spent_bells(&mut self, now: u64) {
-        if self.effects_held() {
-            return;
-        }
         let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {
             return;
         };

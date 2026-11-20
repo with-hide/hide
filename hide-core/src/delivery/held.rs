@@ -53,7 +53,6 @@ pub(crate) fn held_for(hold: Hold) -> Option<HeldFor> {
         | Hold::Moved
         | Hold::Input
         | Hold::Letter
-        | Hold::CorePending
         | Hold::ComposerUnread => None,
     }
 }

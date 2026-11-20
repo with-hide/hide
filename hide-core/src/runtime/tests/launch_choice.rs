@@ -655,7 +655,6 @@ fn a_launch_record_survives_a_restart() {
             workspace_views_path: None,
             shortcut_import_path: None,
             local_issues_path: None,
-            effects_held: false,
             machine_name: None,
             windows_drives: None,
             account_state_folder: false,

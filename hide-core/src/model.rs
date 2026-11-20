@@ -51,11 +51,6 @@ pub struct CoreOptions {
     /// Absent keeps them in memory for the session only, as a test core does.
     #[serde(default)]
     pub local_issues_path: Option<String>,
-    /// The core starts on a move's copy whose link has not committed it:
-    /// it acts on nothing outside the machine until the embedder calls
-    /// `Core::release_effects` (`effects.rs`).
-    #[serde(default)]
-    pub effects_held: bool,
     /// What the machine this core runs on calls itself, which a window on
     /// another machine shows for the core's row (PRD core-host-node-move
     /// B2); absent where the system names none.
@@ -11851,7 +11846,6 @@ mod release_1_2_1_wire_tests {
             workspace_views_path: None,
             shortcut_import_path: None,
             local_issues_path: None,
-            effects_held: false,
             machine_name: None,
             windows_drives: None,
             account_state_folder: false,

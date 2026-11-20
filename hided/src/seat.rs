@@ -2,12 +2,11 @@
 //! its token, its instance lock and one HTTP server (PRD core-host-node-move
 //! Q12).
 //!
-//! A process starts in one role, and a core move changes it in place: the
-//! core stops, a move screen answers while the brain state crosses, and the
-//! node role (or, on a rollback, the core again) takes over. Each role mounts
-//! its router here instead of binding its own, so the window's address and
-//! token never change, `/health` never stops answering, and the desktop host
-//! never reads the daemon as lost. A request is served by the role mounted
+//! A process starts in one role, and a node that splits from its core is
+//! followed by the core role in the same process (`supervisor`). Each role
+//! mounts its router here instead of binding its own, so the window's address
+//! and token never change, `/health` never stops answering, and the desktop
+//! host never reads the daemon as lost. A request is served by the role mounted
 //! when it arrives; a connection open across a change (a screen's
 //! WebSocket) stays with the role that accepted it until that role ends it.
 //!

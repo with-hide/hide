@@ -125,7 +125,6 @@ The workspace-view snapshot carries `feedback` only while there are comments or 
 Finding a comment's lines again after a save is the shell's work on the text it already holds, reported once per change as a `relocate` event, so nothing reads a file for it under the lock or on a keystroke.
 A Send runs on one feedback worker off the lock with at most 64 jobs: it reads the screenshots from the node that staged them, places them on the recipient's node, then stores the letter as the operator ([delivery.md](delivery.md#the-operators-view-feedback)); no screenshot byte passes through an event, the lock or a snapshot.
 Before the core, hided keeps each operator window's comments and Sends on one queue per window, at most 256 waiting and four of them with a screenshot: it stages a comment's screenshot off the socket loop and hands the events to the core in the order the window made them, so a Send never overtakes the comment before it, and a full queue is refused to that window as an error.
-The worker waits on a moving core's effect hold, and the comments, openers and waiting Sends travel with the move like the rest of `workspace-views.json`.
 
 ## The core, the shell and Herdr
 

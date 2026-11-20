@@ -1189,27 +1189,6 @@ impl Core {
         lock_recover(&self.runtime).prepare_delivery_human()
     }
 
-    /// The move's link committed this core: what it held while pending
-    /// runs now (`effects.rs`). Returns whether this released the hold.
-    pub fn release_effects(&self) -> bool {
-        if !check_owner_thread(self, "effects.release") {
-            return false;
-        }
-        let released = {
-            let mut runtime = lock_recover(&self.runtime);
-            let released = runtime.release_effects();
-            if released {
-                // A held core wrote no policy at its start.
-                runtime.publish_own_guardrail_policy();
-            }
-            released
-        };
-        if released {
-            notify_change(self);
-        }
-        released
-    }
-
     /// What moves this machine's Herdr save into the core's own engine
     /// (PRD engine-bundle-4-herdr-removal D-6 to D-8); `hided` installs one
     /// only on a core that runs its own engine. Looks at the save at once.
@@ -1752,7 +1731,6 @@ mod tests {
                     workspace_views_path: None,
                     shortcut_import_path: None,
                     local_issues_path: None,
-                    effects_held: false,
                     machine_name: None,
                     windows_drives: None,
                     account_state_folder: false,

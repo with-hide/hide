@@ -175,7 +175,7 @@ fn every_agent_past_the_limit_pauses_and_a_higher_limit_resumes() {
     ]);
     assert!(runtime.usage_paused());
     assert!(
-        !runtime.agent_summary() && !runtime.labels_asked(),
+        !runtime.agent_summary(),
         "labels fall back to the session's own text"
     );
     let refusal = runtime.snapshot.status.background_ai.refusal.clone();

@@ -60,10 +60,7 @@ impl Runtime {
     /// Sends each owed letter whose agent is observed in its pane. Run by
     /// the coordinator's tick; a tick with nothing owed is one test.
     pub(crate) fn drive_transition_letters(&mut self, now_unix_ms: u64) {
-        if self.transition_letters.owed.is_empty()
-            || self.transition_letters.sending
-            || self.effects_held()
-        {
+        if self.transition_letters.owed.is_empty() || self.transition_letters.sending {
             return;
         }
         let mut notes = Vec::new();

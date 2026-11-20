@@ -85,9 +85,8 @@ pub(super) struct SleepingSessionPayload {
 impl Runtime {
     /// The minute decision (B4-B6) for this core's machine, run by the local
     /// coordinator's tick. A tick inside the minute is one integer comparison.
-    /// A core waiting for its move's link puts nothing to sleep.
     pub(crate) fn tick_agent_sleep(&mut self, now_unix_ms: u64) -> bool {
-        if self.live.is_none() || self.effects_held() {
+        if self.live.is_none() {
             return false;
         }
         // Letter wakes move with the ledger and the records, not the minute.
@@ -176,7 +175,6 @@ impl Runtime {
             .get(device)
             .is_some_and(|next| now_unix_ms < *next)
             || self.device_engine(device).is_none()
-            || self.effects_held()
         {
             return false;
         }

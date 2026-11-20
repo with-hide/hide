@@ -315,7 +315,6 @@ fn runtime_reading(
         workspace_views_path: None,
         shortcut_import_path: None,
         local_issues_path: None,
-        effects_held: false,
         machine_name: None,
         windows_drives: windows_drives.map(str::to_owned),
         account_state_folder: false,
@@ -372,30 +371,6 @@ fn remote_runtime_with_unreadable_config() -> SharedRuntime {
     });
     drop(runtime);
     shared
-}
-
-/// PRD core-host-node-move amendment 3: a core waiting for its move's link
-/// keeps the registration it is given but dials nobody; releasing the hold
-/// dials every registration.
-#[test]
-fn a_pending_core_dials_no_device_until_its_link_commits() {
-    let shared = remote_runtime_with_unreadable_config();
-    let mut runtime = shared.lock().unwrap();
-    runtime.hold_effects();
-    assert!(register_allowed_device(&mut runtime, "studio"));
-    assert_eq!(runtime.snapshot().ui_state.device_registrations.len(), 1);
-    assert!(
-        runtime.snapshot().status.remote.is_empty(),
-        "no connection is attempted"
-    );
-    assert!(runtime.release_effects());
-    drop(runtime);
-    wait(&shared, "released device connection attempt", |runtime| {
-        device(runtime, "studio").problem.is_some()
-    });
-    let runtime = shared.lock().unwrap();
-    let attempt = device(&runtime, "studio").message.clone().expect("reason");
-    assert!(attempt.contains("bad configuration option"), "{attempt}");
 }
 
 /// Retry resolves configuration again instead of replaying the cached
@@ -1178,7 +1153,6 @@ fn a_machine_paired_over_a_released_state_folder_is_the_same_device_at_the_next_
                     workspace_views_path: None,
                     shortcut_import_path: None,
                     local_issues_path: None,
-                    effects_held: false,
                     machine_name: None,
                     windows_drives: None,
                     account_state_folder: false,

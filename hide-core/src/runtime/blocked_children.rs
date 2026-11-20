@@ -126,10 +126,7 @@ impl Runtime {
     /// Tells each blocked child's parent once per block. Run by the
     /// coordinator's tick; a tick with nothing owed is one test.
     pub(crate) fn drive_blocked_notes(&mut self) {
-        if self.blocked_children.owed.is_empty()
-            || self.blocked_children.sending
-            || self.effects_held()
-        {
+        if self.blocked_children.owed.is_empty() || self.blocked_children.sending {
             return;
         }
         let owed = std::mem::take(&mut self.blocked_children.owed);
