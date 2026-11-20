@@ -784,20 +784,14 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
         Mechanism::Rewritten,
         Moves::Whole,
     ),
-    // Each Agent tab's desk: its tab, its pair view's pane, and its Views,
-    // whose openers and cards name machines at any depth; and the Views on no
-    // desk (PRD lane-desk-pair-view D-06, D-15, D-19).
+    // Each Agent tab's desk: its tab and its Views, whose openers and cards
+    // name machines at any depth; and the Views on no desk (PRD
+    // lane-desk-pair-view D-06, D-19).
     (
         WORKSPACE_VIEWS,
         "/workspaces/*/trays/*/tab",
         Mechanism::Owned,
         Moves::Tab,
-    ),
-    (
-        WORKSPACE_VIEWS,
-        "/workspaces/*/trays/*/pair/pane",
-        Mechanism::Owned,
-        Moves::Pane,
     ),
     (
         WORKSPACE_VIEWS,
@@ -2111,7 +2105,7 @@ mod tests {
                     "terminal_id": "term_1", "workspace_id": "w1", "phase": "completed", "started_at": 1,
                     "result_pane": "w1:p1", "result_tab": "w1:t3"}},
                  "tab_views": {"w1:t1": "d1"}, "view_layout": {"root": {"area": {"displays": [{"id": "d1", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}},
-                 "trays": [{"tab": "w1:t1", "shown": true, "pair": {"pane": "w1:p1"}, "layout": {"root": {"area": {"displays": [{"id": "d4", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}}}],
+                 "trays": [{"tab": "w1:t1", "shown": true, "layout": {"root": {"area": {"displays": [{"id": "d4", "opener": {"device_id": "local", "terminal_id": "t1"}}]}}}}],
                  "shelf": {"root": {"area": {"displays": [{"id": "d5", "openers": [{"device_id": "local", "terminal_id": "t1"}]}]}}},
                  "feedback": {"comments": [{"id": "c2", "recipient": {"device_id": "local"}, "shot": {"node": "local", "name": "shot.png"}}], "waiting": [{"to": {"device_id": "local"}}]}},
                 {"device_id": "mini", "path": "/srv/p"},

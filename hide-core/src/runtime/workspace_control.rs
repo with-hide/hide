@@ -880,7 +880,7 @@ impl Runtime {
                         .view_layout_at(key, &Place::Tray(tab.clone()))
                         .is_some_and(|layout| layout.display_count() == 0)
                 {
-                    self.end_pair_view(key, &tab, super::pair_view::PairEnd::Emptied);
+                    self.end_pair_view_of_emptied(key, &tab);
                 }
                 (view_id.clone(), true, area)
             }
@@ -936,7 +936,7 @@ impl Runtime {
         self.workspace_views
             .as_ref()
             .and_then(|store| store.views.get(&key.0, &key.1))
-            .is_some_and(|view| view.open || view.tray(tab).is_some_and(|tray| tray.pair.is_some()))
+            .is_some_and(|view| view.open || self.pair_left_of(key, tab).is_some())
     }
 
     /// Resolves the caller to its checkout among the connected workspaces of

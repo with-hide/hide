@@ -1,14 +1,16 @@
-//! Pair view (PRD lane-desk-pair-view D-08, D-09, D-15, D-16, D-22): an
-//! Agent tab drawn as one of its panes beside its tray. It is the tab's
-//! state, kept with the tray in `workspace-views.json` (B27); the engine's
-//! layout, zoom and focus are not touched, and the shell draws the pane's
-//! terminal over them (D-26). Entering puts on the tray, in front, what the
-//! pane's agent opened: the View named, else its unseen View, else its last
-//! View, else its session record (B17, B18); a pane with none of these has
-//! nothing to pair with and nothing changes (B19). It ends on the event, when
-//! the left pane leaves the tab (B28, `end_pairs_of_gone_panes`) or when the
-//! tray's last tab closes (B26, `close_emptied_lane`); the tray then stays in
-//! the lane, which entering opened.
+//! Pair view (PRD lane-desk-pair-view D-08, D-09, D-16, D-22, D-45..D-47):
+//! one mode for the window, kept in `workspace-views.json` with its divider's
+//! ratio (`PairMode`). While it is on, the pane the operator is on is drawn
+//! beside its tab's desk, with the View its agent opened in front: the View
+//! named, else its unseen View, else its last View, else its session record
+//! (B17, B18). Going to another pane by any way (a pane chord, the sidebar, a
+//! tab switch) takes the mode with it (`follow_pair_focus`,
+//! `follow_pair_look`); a pane with nothing to show draws its tab's own layout
+//! and the mode stays on (B19). The engine's layout, zoom and focus are not
+//! touched, and the shell draws the pane's terminal over them (D-26). It ends
+//! only on ⌘., the pressed ◧ or the strip's way back (`PairEnd::Left`), when
+//! the drawn pane closes (`end_pairs_of_gone_panes`) or when the drawn desk's
+//! last View closes or moves away (D-46); ending folds that desk (D-44).
 
 use serde::Deserialize;
 
@@ -16,7 +18,21 @@ use super::workspace_view::WorkspaceKey;
 use super::*;
 use crate::links::ledger::SessionIdentity;
 use crate::model::DetailItem;
-use crate::workspace_views::{PairView, Place};
+use crate::workspace_views::Place;
+
+/// The pane pair view draws on the left, with its Workspace and tab.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PairLeft {
+    pub(super) key: WorkspaceKey,
+    pub(super) tab: String,
+    pub(super) pane: String,
+}
+
+impl PairLeft {
+    fn is_in(&self, key: &WorkspaceKey, tab: &str) -> bool {
+        self.key == *key && self.tab == tab
+    }
+}
 
 /// Why a pair view ended, which the diagnostic names and which decides
 /// whether the keyboard goes back to the pane that held it before (B26).
@@ -24,12 +40,10 @@ use crate::workspace_views::{PairView, Place};
 pub(super) enum PairEnd {
     /// The operator left: the strip's way back, ⌘., the pressed ◧.
     Left,
-    /// The desk's last tab closed or moved away.
+    /// The drawn desk's last View closed or moved away.
     Emptied,
-    /// The left pane closed or left the tab (B28).
+    /// The drawn pane closed or left its tab (B28).
     PaneGone,
-    /// The operator chose a pane of the tab with nothing to show (B25).
-    ChoseUnpaired,
 }
 
 impl PairEnd {
@@ -38,12 +52,11 @@ impl PairEnd {
             Self::Left => "left",
             Self::Emptied => "emptied",
             Self::PaneGone => "pane_gone",
-            Self::ChoseUnpaired => "chose_unpaired_pane",
         }
     }
 
-    /// The operator leaving, or closing the desk's last tab, returns the
-    /// keyboard; a pane that went, or another chosen, leaves it.
+    /// The operator leaving, or closing the desk's last View, returns the
+    /// keyboard; a pane that went leaves it.
     fn returns_keyboard(self) -> bool {
         matches!(self, Self::Left | Self::Emptied)
     }
@@ -57,40 +70,38 @@ enum PairContent {
     Record(SessionIdentity),
 }
 
-/// `pair_view`: the pane drawn on the left of its tab's tray, or none to
-/// end the pair view of the tab in front.
+/// `pair_view`: the pane to draw on the left, which turns the mode on, or
+/// none to turn it off.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PairViewPayload {
     #[serde(default)]
     pub(super) pane_id: Option<String>,
-    /// The tray tab whose pin was pressed, which comes in front (B17).
+    /// The desk tab whose pin was pressed, which comes in front (B17).
     #[serde(default)]
     pub(super) display_id: Option<String>,
 }
 
 impl Runtime {
-    pub(super) fn set_pair_view(&mut self, payload: PairViewPayload) -> bool {
-        self.set_pair_view_with(payload, true)
+    /// Whether the window is in pair view mode.
+    pub(super) fn pair_mode_on(&self) -> bool {
+        self.workspace_views
+            .as_ref()
+            .is_some_and(|store| store.views.pair.on)
     }
 
-    /// `set_pair_view`, giving the left pane the keyboard when `focus`: the
-    /// pane on screen is the one the keys, ⇧⌘W and the text scale reach.
-    /// The operator's own focus of that pane (`follow_pair_focus`) passes
-    /// false, since the keyboard is already there.
-    fn set_pair_view_with(&mut self, payload: PairViewPayload, focus: bool) -> bool {
+    pub(super) fn set_pair_view(&mut self, payload: PairViewPayload) -> bool {
+        let Some(pane) = payload.pane_id else {
+            return self.end_pair_view(PairEnd::Left);
+        };
         let Some(key) = self.front_workspace_key() else {
             crate::diagnostic!(serde_json::json!({
                 "component": "pair_view", "kind": "pair_view.no_workspace",
             }));
             return false;
         };
-        let Some(pane) = payload.pane_id else {
-            let tab = self.front_tab(&key);
-            return self.end_pair_view(&key, &tab, PairEnd::Left);
-        };
         // A terminal outside every Agent tab, such as an automation run's
-        // chat, has no tray to pair with (inventory X02); a pane of another
+        // chat, has no desk to pair with (inventory X02); a pane of another
         // Workspace pairs only once that Workspace is in front.
         let Some(tab) = self.pane_tab(&key, &pane) else {
             if self.pane_workspace_of(&pane).is_some() {
@@ -108,90 +119,93 @@ impl Runtime {
             }
             return true;
         };
-        let place = Place::Tray(tab.clone());
-        let mut record = None;
-        let shown = match payload.display_id {
-            Some(id) if self.view_display(&key, &id).is_some() => Some(id),
+        let content = match payload.display_id {
+            Some(id) if self.view_display(&key, &id).is_some() => PairContent::View(id),
             Some(id) => {
                 let error = crate::view_layout::LayoutError::UnknownDisplay(id);
                 self.set_error(error.kind(), error.message(), false);
                 return true;
             }
             None => match self.pair_content(&key, &pane, &self.live_sessions()) {
-                Some(PairContent::View(id)) => Some(id),
-                Some(PairContent::Record(session)) => {
-                    record = Some(session);
-                    None
-                }
-                None => None,
-            },
-        };
-        // The same pane again, with its View already in front of the drawn
-        // desk, changes nothing and publishes nothing.
-        let view = self
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1));
-        let unchanged = view.is_some_and(|view| {
-            view.draws_tray(&tab)
-                && view.tray(&tab).is_some_and(|tray| {
-                    tray.pair.as_ref().is_some_and(|pair| pair.pane == pane)
-                        && shown.is_some()
-                        && tray.layout.active_area().active == shown
-                })
-        });
-        if unchanged {
-            return false;
-        }
-        match shown {
-            Some(id) => {
-                if self.view_place(&key, &id).as_ref() != Some(&place)
-                    && !self.bring_view_to(&key, &id, &place)
-                {
-                    let error = crate::view_layout::LayoutError::DisplayLimit;
-                    self.set_error(error.kind(), error.message(), false);
-                    return true;
-                }
-                let _ = self.change_view_layout(&key, &place, |layout, stamp| {
-                    layout.focus(&id, stamp).map(|changed| ((), changed))
-                });
-            }
-            None => {
-                let Some(session) = record else {
+                Some(content) => content,
+                None => {
                     crate::diagnostic!(serde_json::json!({
                         "component": "pair_view", "kind": "pair_view.nothing_to_show",
                         "device": key.0, "pane": pane,
                     }));
                     return false;
-                };
-                self.open_card_on(&key, &place, DetailItem::Record { session });
-            }
+                }
+            },
+        };
+        let on = self.pair_mode_on();
+        let left = PairLeft {
+            key: key.clone(),
+            tab: tab.clone(),
+            pane: pane.clone(),
+        };
+        // The same pane again, with its View already in front of its desk,
+        // changes nothing and publishes nothing.
+        let store = self.workspace_views.as_ref();
+        let unchanged = on
+            && store.is_some_and(|store| store.pair_left.as_ref() == Some(&left))
+            && match &content {
+                PairContent::View(id) => self
+                    .view_layout_at(&key, &Place::Tray(tab.clone()))
+                    .is_some_and(|layout| layout.active_area().active.as_ref() == Some(id)),
+                PairContent::Record(_) => false,
+            };
+        if unchanged {
+            return false;
         }
-        self.open_tray_for(&key, &place);
         // A pair view already on keeps the pane it returns the keyboard to;
         // a new one takes the pane that holds it now.
-        let before = match self
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1))
-            .and_then(|view| view.tray(&tab))
-            .and_then(|tray| tray.pair.as_ref())
-        {
-            Some(pair) => pair.before.clone(),
-            None => self.tab_keyboard_pane(&key, &tab),
+        let before = if on {
+            None
+        } else {
+            self.tab_keyboard_pane(&key, &tab)
         };
         if let Some(store) = self.workspace_views.as_mut() {
-            store.views.entry(&key.0, &key.1).tray_entry(&tab).pair = Some(PairView {
-                pane: pane.clone(),
-                before,
-            });
+            if !on {
+                store.views.pair.on = true;
+                store.pair_before = before.map(|pane| (key.clone(), pane));
+            }
             store.generation += 1;
         }
-        self.persist_workspace_views();
-        if focus {
-            self.focus_tab_pane(&key, &pane);
+        if !on {
+            self.persist_workspace_views();
         }
+        self.show_pair(left, Some(content));
+        self.focus_tab_pane(&key, &pane);
         true
+    }
+
+    /// Draws `left` beside its tab's desk, with `content` in front of the
+    /// desk; none leaves the desk as it is (a pane with nothing to show).
+    fn show_pair(&mut self, left: PairLeft, content: Option<PairContent>) {
+        let key = left.key.clone();
+        let place = Place::Tray(left.tab.clone());
+        if let Some(store) = self.workspace_views.as_mut() {
+            store.pair_left = Some(left);
+            store.generation += 1;
+        }
+        match content {
+            Some(PairContent::View(id)) => {
+                if self.view_place(&key, &id).as_ref() != Some(&place)
+                    && !self.bring_view_to(&key, &id, &place)
+                {
+                    let error = crate::view_layout::LayoutError::DisplayLimit;
+                    self.set_error(error.kind(), error.message(), false);
+                    return;
+                }
+                let _ = self.change_view_layout(&key, &place, |layout, stamp| {
+                    layout.focus(&id, stamp).map(|changed| ((), changed))
+                });
+            }
+            Some(PairContent::Record(session)) => {
+                self.open_card_on(&key, &place, DetailItem::Record { session });
+            }
+            None => {}
+        }
     }
 
     /// Gives the keyboard to `pane`, on this machine or on its device,
@@ -215,50 +229,96 @@ impl Runtime {
         });
     }
 
-    /// Ends `tab`'s pair view; whether it was in one.
-    pub(super) fn end_pair_view(&mut self, key: &WorkspaceKey, tab: &str, cause: PairEnd) -> bool {
-        let Some(pair) = self
-            .workspace_views
-            .as_mut()
-            .and_then(|store| store.views.get_mut(&key.0, &key.1))
-            .and_then(|view| view.tray_mut(tab))
-            .and_then(|tray| tray.pair.take())
-        else {
+    /// Turns the mode off, everywhere (D-45); whether it was on. The desk it
+    /// drew folds, and the lane closes when nothing else is in it, so the
+    /// screen it leaves shows no View on the right (D-44).
+    pub(super) fn end_pair_view(&mut self, cause: PairEnd) -> bool {
+        let Some(store) = self.workspace_views.as_mut() else {
             return false;
         };
+        if !store.views.pair.on {
+            return false;
+        }
+        store.views.pair.on = false;
+        let left = store.pair_left.take();
+        let before = store.pair_before.take();
+        store.generation += 1;
+        if let Some(left) = &left
+            && let Some(view) = store.views.get_mut(&left.key.0, &left.key.1)
+        {
+            if let Some(tray) = view.tray_mut(&left.tab) {
+                tray.shown = false;
+            }
+            if !view.has_column(Some(&left.tab)) {
+                view.open = false;
+            }
+        }
         crate::diagnostic!(serde_json::json!({
             "component": "pair_view", "kind": "pair_view.ended",
-            "device": key.0, "tab": tab, "pane": pair.pane, "cause": cause.as_str(),
+            "device": left.as_ref().map(|left| left.key.0.clone()),
+            "tab": left.as_ref().map(|left| left.tab.clone()),
+            "pane": left.as_ref().map(|left| left.pane.clone()),
+            "cause": cause.as_str(),
         }));
-        if let Some(store) = self.workspace_views.as_mut() {
-            store.generation += 1;
-        }
         self.persist_workspace_views();
         if cause.returns_keyboard()
-            && let Some(before) = pair.before.filter(|before| {
-                *before != pair.pane && self.pane_tab(key, before).as_deref() == Some(tab)
+            && let Some(left) = left
+            && let Some((key, before)) = before.filter(|(key, before)| {
+                *key == left.key
+                    && *before != left.pane
+                    && self.pane_tab(key, before).as_deref() == Some(left.tab.as_str())
             })
         {
-            self.focus_tab_pane(key, &before);
+            self.focus_tab_pane(&key, &before);
         }
         true
     }
 
+    /// Ends pair view when it draws `tab` of `key`, whose desk just lost its
+    /// last View (D-46); a desk pair view does not draw changes nothing.
+    pub(super) fn end_pair_view_of_emptied(&mut self, key: &WorkspaceKey, tab: &str) -> bool {
+        if self.pair_left_of(key, tab).is_none() {
+            return false;
+        }
+        self.end_pair_view(PairEnd::Emptied)
+    }
+
+    /// The pane pair view draws on the left of `tab` while the mode is on:
+    /// the pane the operator last went to there, else, as after a restart,
+    /// the tab's keyboard pane. Whether it has something to show is the
+    /// caller's to ask (`pairable_panes`).
+    pub(super) fn pair_left_of(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
+        let store = self.workspace_views.as_ref()?;
+        if !store.views.pair.on {
+            return None;
+        }
+        match store.pair_left.as_ref() {
+            Some(left) if left.is_in(key, tab) => Some(left.pane.clone()),
+            _ => self.tab_keyboard_pane(key, tab),
+        }
+    }
+
     /// The pane of `tab` that holds the keyboard now, on this machine or
-    /// its device.
+    /// its device: the pane the operator chose, else the one the engine
+    /// focuses.
     fn tab_keyboard_pane(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
-        let focused = if key.0 == self.node.as_str() {
-            self.snapshot.focused.pane_id.clone()
-        } else {
-            self.snapshot
-                .status
-                .remote
-                .iter()
-                .find(|remote| remote.target_id == key.0)
-                .and_then(|remote| remote.session.as_ref())
-                .and_then(|session| session.focused_pane_id.clone())
-        };
-        focused.filter(|pane| self.pane_tab(key, pane).as_deref() == Some(tab))
+        let in_tab = |pane: &String| self.pane_tab(key, pane).as_deref() == Some(tab);
+        if key.0 == self.node.as_str() {
+            return self
+                .look
+                .focus()
+                .map(str::to_owned)
+                .filter(in_tab)
+                .or_else(|| self.snapshot.focused.pane_id.clone().filter(in_tab));
+        }
+        self.snapshot
+            .status
+            .remote
+            .iter()
+            .find(|remote| remote.target_id == key.0)
+            .and_then(|remote| remote.session.as_ref())
+            .and_then(|session| session.focused_pane_id.clone())
+            .filter(in_tab)
     }
 
     /// The View of `pane`'s agent that pairs with it: the newest it opened
@@ -276,21 +336,14 @@ impl Runtime {
             .map(|display| display.id.clone())
     }
 
-    /// In pair view, a tray tab the operator brought in front that another
-    /// agent of the tab opened takes that agent's pane to the left; a tab
-    /// nobody's agent opened leaves the left pane (B24, D-21).
+    /// In pair view, a desk tab the operator brought in front that another
+    /// agent of the drawn tab opened takes that agent's pane to the left; a
+    /// tab nobody's agent opened leaves the left pane (B24, D-21).
     pub(super) fn follow_pair_front(&mut self, key: &WorkspaceKey, display_id: &str) {
         let Some(Place::Tray(tab)) = self.view_place(key, display_id) else {
             return;
         };
-        let paired = self
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1))
-            .and_then(|view| view.tray(&tab))
-            .and_then(|tray| tray.pair.as_ref())
-            .map(|pair| pair.pane.clone());
-        let Some(left) = paired else {
+        let Some(left) = self.pair_left_of(key, &tab) else {
             return;
         };
         let sessions = self.live_sessions();
@@ -303,22 +356,14 @@ impl Runtime {
         else {
             return;
         };
-        if let Some(tray) = self
-            .workspace_views
-            .as_mut()
-            .and_then(|store| store.views.get_mut(&key.0, &key.1))
-            .and_then(|view| view.tray_mut(&tab))
-        {
-            let before = tray.pair.take().and_then(|pair| pair.before);
-            tray.pair = Some(PairView {
+        self.show_pair(
+            PairLeft {
+                key: key.clone(),
+                tab,
                 pane: pane.clone(),
-                before,
-            });
-        }
-        if let Some(store) = self.workspace_views.as_mut() {
-            store.generation += 1;
-        }
-        self.persist_workspace_views();
+            },
+            None,
+        );
         // The pane on screen is the tab's keyboard pane, so ⇧⌘W, a split and
         // the sidebar reach it; the shell leaves the keys on the desk tab the
         // operator chose (`PaneView`).
@@ -416,41 +461,69 @@ impl Runtime {
             .collect()
     }
 
-    /// The operator choosing another pane of a tab in pair view, from the
-    /// sidebar or a pane chord, takes it to the left with its own View on
-    /// the right, so the two sides keep one owner (B25, D-09). A pane with
-    /// nothing to show ends the pair view, so the pane chosen is on screen
-    /// in the tab's own layout.
+    /// The operator chose `pane`, from the sidebar, a pane chord or a
+    /// click, on this machine or a device: while the mode is on it is drawn
+    /// on the left with its own View on the right, so the two sides keep one
+    /// owner (B25, D-09, D-45). A pane with nothing to show draws its tab's
+    /// own layout, and the mode stays on.
     pub(super) fn follow_pair_focus(&mut self, pane: &str) {
-        let Some(key) = self.front_workspace_key() else {
+        if !self.pair_mode_on() {
+            return;
+        }
+        let Some(key) = self
+            .front_workspace_key()
+            .filter(|key| self.pane_tab(key, pane).is_some())
+            .or_else(|| self.pane_workspace_of(pane))
+        else {
             return;
         };
         let Some(tab) = self.pane_tab(&key, pane) else {
             return;
         };
-        let left = self
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(&key.0, &key.1))
-            .and_then(|view| view.tray(&tab))
-            .and_then(|tray| tray.pair.as_ref())
-            .map(|pair| pair.pane.clone());
-        if left.is_none_or(|left| left == pane) {
+        self.follow_pair_to(key, tab, pane.to_owned());
+    }
+
+    /// After a selection moved the operator's look (`change_look`): while
+    /// the mode is on and the tab in front is not the one pair view last
+    /// drew, as after a tab switch, ⌃⇥ or a Workspace chosen in the sidebar,
+    /// its keyboard pane goes to the left (D-45). A pane chosen inside the
+    /// drawn tab is `follow_pair_focus`'s, and the engine's own focus moves
+    /// nothing.
+    pub(super) fn follow_pair_look(&mut self) {
+        if !self.pair_mode_on() {
             return;
         }
-        if self
-            .pair_content(&key, pane, &self.live_sessions())
-            .is_some()
+        let Some(key) = self.front_workspace_key() else {
+            return;
+        };
+        let tab = self.front_tab(&key);
+        if tab == crate::workspace_views::PENDING_TRAY
+            || self.workspace_views.as_ref().is_some_and(|store| {
+                store
+                    .pair_left
+                    .as_ref()
+                    .is_some_and(|left| left.is_in(&key, &tab))
+            })
         {
-            self.set_pair_view_with(
-                PairViewPayload {
-                    pane_id: Some(pane.to_owned()),
-                    display_id: None,
-                },
-                false,
-            );
-        } else {
-            self.end_pair_view(&key, &tab, PairEnd::ChoseUnpaired);
+            return;
         }
+        let Some(pane) = self.tab_keyboard_pane(&key, &tab) else {
+            return;
+        };
+        self.follow_pair_to(key, tab, pane);
+    }
+
+    /// `pane` of `tab` goes to the left, its View in front of the desk.
+    fn follow_pair_to(&mut self, key: WorkspaceKey, tab: String, pane: String) {
+        let left = PairLeft { key, tab, pane };
+        if self
+            .workspace_views
+            .as_ref()
+            .is_some_and(|store| store.pair_left.as_ref() == Some(&left))
+        {
+            return;
+        }
+        let content = self.pair_content(&left.key, &left.pane, &self.live_sessions());
+        self.show_pair(left, content);
     }
 }

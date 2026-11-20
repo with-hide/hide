@@ -1774,8 +1774,8 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     );
 }
 
-// Pair view (PRD lane-desk-pair-view D-08, D-15, D-22): an Agent tab drawn as
-// one of its panes beside its desk, kept as that tab's state.
+// Pair view (PRD lane-desk-pair-view D-08, D-22, D-44..D-47): one mode for
+// the window that draws the pane the operator is on beside its tab's desk.
 
 fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
     runtime.dispatch_json(&explorer_event(
@@ -1787,38 +1787,46 @@ fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
 /// One pair view as (tab, left pane).
 type Pair = (String, String);
 
-/// The pair view of the desk on screen, and every tab the wire marks.
-fn pairs(runtime: &Runtime) -> (Option<Pair>, Vec<Pair>) {
+/// The pair view drawn now, as the wire publishes it.
+fn drawn_pair(runtime: &Runtime) -> Option<Pair> {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
-    let pair = |pair: &crate::model::PairViewSnapshot| (pair.tab_id.clone(), pair.pane_id.clone());
-    (
-        view.tray.pair.as_ref().map(pair),
-        view.pairs.iter().map(pair).collect(),
-    )
+    view.tray
+        .pair
+        .as_ref()
+        .map(|pair| (pair.tab_id.clone(), pair.pane_id.clone()))
+}
+
+/// Whether the window's mode is on, as the wire publishes it.
+fn mode_on(runtime: &Runtime) -> bool {
+    runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .unwrap()
+        .pair_mode
+        .on
 }
 
 fn paired(tab: &str, pane: &str) -> Pair {
     (tab.to_owned(), pane.to_owned())
 }
 
-/// B18, B27: entering pair view puts the pane's agent's View in front of its
-/// tab's desk; the tab keeps its pair view while the operator is on another
-/// tab, which shows its own state, and after a restart.
+/// D-45, B18: entering puts the pane's agent's View in front of its tab's
+/// desk; a tab switch keeps the mode, drawing the new tab's pane beside its
+/// own desk, and so does a restart. D-44: leaving folds the desk and closes
+/// the lane, and D-45: off stays off everywhere.
 #[test]
-fn a_pair_view_is_its_tabs_and_survives_a_tab_switch_and_a_restart() {
-    let (mut runtime, checkout, directory) = setup("pair-keeps");
+fn pair_view_is_one_mode_that_follows_a_tab_switch_and_leaving_folds_the_desk() {
+    let (mut runtime, checkout, directory) = setup("pair-mode");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     open(&mut runtime, &checkout, &directory, "b.md");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "c.md", "c");
+    assert_eq!(shelf(&runtime, &directory), ["c.md"]);
     pair_event(&mut runtime, Some("w-order:t1:p"));
     assert_eq!(runtime.snapshot.status.last_error, None);
-    let on = paired(TABS[0], "w-order:t1:p");
-    assert_eq!(pairs(&runtime), (Some(on.clone()), vec![on.clone()]));
-    assert_eq!(
-        fronts(&runtime, &directory),
-        ["a.md"],
-        "B18: its agent's View"
-    );
-    assert!(lane_documents(&runtime));
+    let first = paired(TABS[0], "w-order:t1:p");
+    assert_eq!(drawn_pair(&runtime), Some(first.clone()));
+    assert_eq!(fronts(&runtime, &directory), ["a.md"], "B18: its agent's View");
     assert!(
         !runtime.dispatch_json(&explorer_event(
             "pair_view",
@@ -1829,62 +1837,122 @@ fn a_pair_view_is_its_tabs_and_survives_a_tab_switch_and_a_restart() {
 
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     assert_eq!(
-        pairs(&runtime),
-        (None, vec![on.clone()]),
-        "another tab shows its own state; the strip still marks the first"
+        drawn_pair(&runtime),
+        Some(paired(TABS[1], "w-order:t2:p")),
+        "the mode goes with the operator"
+    );
+    assert_eq!(
+        desk(&runtime, &directory, TABS[1]),
+        ["c.md"],
+        "the pane's own View, off the shelf onto its tab's desk"
     );
     focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
-    assert_eq!(pairs(&runtime).0, Some(on.clone()));
+    assert_eq!(drawn_pair(&runtime), Some(first.clone()));
 
     let path = runtime.workspace_views.as_ref().unwrap().path.clone();
     runtime.workspace_views =
         Some(WorkspaceViewStore::open(path, (false, RightPanelSection::default())).0);
     runtime.sync_workspace_view();
-    assert_eq!(pairs(&runtime), (Some(on.clone()), vec![on]));
-    assert_eq!(fronts(&runtime, &directory), ["a.md"]);
+    assert!(mode_on(&runtime), "the mode is saved");
+    assert_eq!(drawn_pair(&runtime), Some(first));
 
     pair_event(&mut runtime, None);
-    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(drawn_pair(&runtime), None);
+    assert!(!mode_on(&runtime));
+    assert!(!lane_documents(&runtime), "D-44: no View on the right");
+    assert!(!runtime.snapshot.workspace_view.as_ref().unwrap().open);
     assert_eq!(
-        strip(&runtime, &directory),
+        desk(&runtime, &directory, TABS[0]),
         ["a.md", "b.md"],
-        "the desk stays"
+        "the desk keeps its Views"
+    );
+    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    focus_tab(&mut runtime, &checkout, &directory, TABS[0]);
+    assert_eq!(drawn_pair(&runtime), None, "D-45: nothing turns it back on");
+}
+
+/// D-47: the divider's ratio is one value for the mode, kept while it is
+/// off, clamped to what the core accepts, and saved.
+#[test]
+fn the_dividers_ratio_is_the_modes_and_survives_leaving_and_a_restart() {
+    let (mut runtime, _checkout, directory) = setup("pair-ratio");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    let ratio = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .workspace_view
+            .as_ref()
+            .unwrap()
+            .pair_mode
+            .ratio
+    };
+    assert_eq!(ratio(&runtime), None, "half until dragged");
+    runtime.dispatch_json(&explorer_event(
+        "workspace_view",
+        serde_json::json!({"pair_ratio": 640, "width_request_id": "drag-1"}),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(ratio(&runtime), Some(640));
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    assert_eq!(view.width_request_id.as_deref(), Some("drag-1"));
+
+    pair_event(&mut runtime, None);
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(ratio(&runtime), Some(640));
+    runtime.dispatch_json(&explorer_event(
+        "workspace_view",
+        serde_json::json!({"pair_ratio": 5}),
+    ));
+    assert_eq!(
+        ratio(&runtime),
+        Some(crate::workspace_views::PAIR_RATIO_MIN)
+    );
+
+    let path = runtime.workspace_views.as_ref().unwrap().path.clone();
+    runtime.workspace_views =
+        Some(WorkspaceViewStore::open(path, (false, RightPanelSection::default())).0);
+    runtime.sync_workspace_view();
+    assert_eq!(
+        ratio(&runtime),
+        Some(crate::workspace_views::PAIR_RATIO_MIN)
     );
 }
 
-/// B28: the left pane leaving its tab ends the pair view, with no notice,
-/// and the desk stays as it was.
+/// B28, D-46: the drawn pane leaving its tab ends pair view, with no notice.
 #[test]
-fn a_pair_view_ends_when_its_left_pane_leaves_the_tab() {
+fn pair_view_ends_when_its_left_pane_leaves_the_tab() {
     let (mut runtime, _checkout, directory) = setup("pair-left-gone");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "beside");
     assert_eq!(shelf(&runtime, &directory), ["b.md"]);
     pair_event(&mut runtime, Some("w-order:t1:q"));
     assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     assert_eq!(strip(&runtime, &directory), ["b.md"], "B18: off the shelf");
 
     engine_focuses(&mut runtime, &directory, TABS[0]);
-    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(drawn_pair(&runtime), None);
+    assert!(!mode_on(&runtime));
     assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
-    assert_eq!(strip(&runtime, &directory), ["b.md"]);
+    assert_eq!(desk(&runtime, &directory, TABS[0]), ["b.md"]);
 }
 
-/// D-20, B26: the last View of a paired desk brought onto another desk ends
-/// that pair view, as the desk's last tab closing does.
+/// D-46, B26: the drawn desk's last View closing ends pair view.
 #[test]
-fn a_pair_view_ends_when_its_desks_last_view_moves_to_another_desk() {
-    let (mut runtime, checkout, directory) = setup("pair-emptied");
+fn pair_view_ends_when_the_drawn_desks_last_view_closes() {
+    let (mut runtime, _checkout, directory) = setup("pair-emptied");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     pair_event(&mut runtime, Some("w-order:t1:p"));
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
-
-    focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
-    open(&mut runtime, &checkout, &directory, "a.md");
-    assert_eq!(desk(&runtime, &directory, TABS[1]), ["a.md"]);
-    assert!(desk(&runtime, &directory, TABS[0]).is_empty());
-    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": a}),
+    );
+    assert_eq!(drawn_pair(&runtime), None);
+    assert!(!mode_on(&runtime));
 }
 
 /// Inventory X02: a pane in no Agent tab has no desk to pair with, and the
@@ -1895,7 +1963,8 @@ fn a_pane_in_no_agent_tab_is_refused_pair_view() {
     pair_event(&mut runtime, Some("w-order:automation:p"));
     let refused = runtime.snapshot.status.last_error.clone().expect("refused");
     assert_eq!(refused.kind, "pair_view.no_agent_tab");
-    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(drawn_pair(&runtime), None);
+    assert!(!mode_on(&runtime));
 }
 
 /// The desk tab the published snapshot shows in front, as (name, owner pane).
@@ -1944,7 +2013,7 @@ fn a_desk_tab_names_its_agents_pane_and_takes_it_to_the_left_in_pair_view() {
     // q has opened nothing: pair view puts its session's record card on the desk.
     pair_event(&mut runtime, Some("w-order:t1:q"));
     assert_eq!(runtime.snapshot.status.last_error, None);
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     assert_eq!(
         front_owner(&runtime),
         ("card".into(), Some("w-order:t1:q".into())),
@@ -1962,7 +2031,7 @@ fn a_desk_tab_names_its_agents_pane_and_takes_it_to_the_left_in_pair_view() {
         ("a.md".into(), Some("w-order:t1:p".into()))
     );
     assert_eq!(
-        pairs(&runtime).0,
+        drawn_pair(&runtime),
         Some(paired(TABS[0], "w-order:t1:p")),
         "B24"
     );
@@ -1975,15 +2044,14 @@ fn a_desk_tab_names_its_agents_pane_and_takes_it_to_the_left_in_pair_view() {
     );
     assert_eq!(front_owner(&runtime), ("c.md".into(), None));
     assert_eq!(
-        pairs(&runtime).0,
+        drawn_pair(&runtime),
         Some(paired(TABS[0], "w-order:t1:p")),
         "D-21: the operator's tab leaves the left pane"
     );
 }
 
-/// B25, D-09: choosing another agent of the paired tab takes its pane to the
-/// left with its own View on the right; choosing a pane with nothing to show
-/// ends the pair view, so the pane chosen is on screen (B19).
+/// B25, D-09: choosing another agent of the drawn tab takes its pane to the
+/// left with its own View on the right.
 #[test]
 fn choosing_another_pane_of_a_paired_tab_keeps_one_owner_on_both_sides() {
     let (mut runtime, _checkout, directory) = setup("pair-follow");
@@ -1995,19 +2063,11 @@ fn choosing_another_pane_of_a_paired_tab_keeps_one_owner_on_both_sides() {
 
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
     runtime.sync_workspace_view();
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     assert_eq!(
         fronts(&runtime, &directory),
         ["b.md"],
         "its own View, brought onto the desk"
-    );
-
-    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
-    runtime.sync_workspace_view();
-    assert_eq!(
-        pairs(&runtime).0,
-        Some(paired(TABS[0], "w-order:t1:q")),
-        "the same pane again changes nothing"
     );
 }
 
@@ -2038,7 +2098,7 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     );
 
     pair_event(&mut runtime, Some("w-order:t1:q"));
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
         Some("w-order:t1:q")
@@ -2050,7 +2110,7 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
         &directory,
         serde_json::json!({"action": "focus", "display_id": a}),
     );
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
         Some("w-order:t1:p"),
@@ -2059,9 +2119,9 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
 
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
     runtime.sync_workspace_view();
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     pair_event(&mut runtime, None);
-    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(drawn_pair(&runtime), None);
     assert_eq!(
         runtime.snapshot.focused.pane_id.as_deref(),
         Some("w-order:t1:p"),
@@ -2069,11 +2129,11 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     );
 }
 
-/// B25 on a device: the operator choosing another pane of a device tab in
-/// pair view goes through the device's focus request, and the pair view
-/// follows it as it does on this machine; a pane with nothing to show ends it.
+/// B25, D-45 on a device: the operator choosing another pane of a device tab
+/// goes through the device's focus request, and the mode follows it as it
+/// does on this machine; a pane with nothing to show keeps the mode on.
 #[test]
-fn choosing_a_device_pane_moves_its_tabs_pair_view() {
+fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
     let (mut runtime, _checkout_id, _directory) = setup("pair-device");
     let device = "studio";
     let tab = crate::address::scoped_id(device, crate::address::Kind::Tab, "t1");
@@ -2134,26 +2194,15 @@ fn choosing_a_device_pane_moves_its_tabs_pair_view() {
     runtime
         .reconcile_agent_topology(&key, &[(tab.clone(), false)])
         .unwrap();
-    let tray_pair = |runtime: &Runtime| {
-        runtime
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.views.get(device, "/srv/remote"))
-            .and_then(|view| view.tray(&tab))
-            .and_then(|tray| tray.pair.as_ref())
-            .map(|pair| pair.pane.clone())
-    };
-    let view = runtime
-        .workspace_views
-        .as_mut()
-        .unwrap()
-        .views
-        .entry(device, "/srv/remote");
-    view.tray_entry(&tab).pair = Some(crate::workspace_views::PairView {
+    let left_of = |runtime: &Runtime| runtime.pair_left_of(&key, &tab);
+    let store = runtime.workspace_views.as_mut().unwrap();
+    store.views.pair.on = true;
+    store.pair_left = Some(super::pair_view::PairLeft {
+        key: key.clone(),
+        tab: tab.clone(),
         pane: left.clone(),
-        before: None,
     });
-    assert_eq!(tray_pair(&runtime), Some(left.clone()));
+    assert_eq!(left_of(&runtime), Some(left.clone()));
 
     super::device_catalog::dispatch(
         &mut runtime,
@@ -2165,10 +2214,11 @@ fn choosing_a_device_pane_moves_its_tabs_pair_view() {
     );
     assert_eq!(runtime.snapshot.status.last_error, None);
     assert_eq!(
-        tray_pair(&runtime),
-        None,
-        "the chosen pane has nothing to show, so the tab's own layout comes back"
+        left_of(&runtime),
+        Some(other),
+        "the chosen pane is the one on screen, before the device answers"
     );
+    assert!(runtime.pair_mode_on(), "D-45: the mode stays on");
 }
 
 /// D-41: a desk tab whose agent is in another Agent tab stays on the strip
@@ -2195,7 +2245,7 @@ fn a_desk_tab_of_an_agent_in_another_tab_stays_on_the_strip() {
         front_owner(&runtime),
         ("card".into(), Some("w-order:t2:p".into()))
     );
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
     assert!(front_pair(&runtime).folded.is_empty(), "nothing folds");
 }
 
@@ -2218,11 +2268,12 @@ fn the_drawn_desk_folds_only_another_agent_of_the_paired_tab() {
     );
 }
 
-/// B19: the snapshot lists the panes with something to show beside the
-/// desk; a plain shell is not among them, and choosing it in pair view
-/// ends the pair view rather than hiding the pane chosen.
+/// B19, D-45: the snapshot lists the panes with something to show beside
+/// the desk; a plain shell is not among them. Choosing it while the mode is
+/// on draws the tab's own layout and keeps the mode, and choosing the agent
+/// again draws pair view again.
 #[test]
-fn a_shell_with_nothing_to_show_is_not_pairable_and_choosing_it_ends_pair_view() {
+fn a_shell_with_nothing_to_show_draws_its_tab_and_keeps_the_mode_on() {
     let (mut runtime, _checkout, directory) = setup("pair-shell");
     engine_splits_first_tab_with(&mut runtime, &directory, false);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2231,15 +2282,19 @@ fn a_shell_with_nothing_to_show_is_not_pairable_and_choosing_it_ends_pair_view()
     assert!(!listed.contains(&"w-order:t1:q".to_owned()), "{listed:?}");
 
     pair_event(&mut runtime, Some("w-order:t1:q"));
-    assert_eq!(pairs(&runtime), (None, vec![]), "nothing to pair with");
+    assert_eq!(drawn_pair(&runtime), None, "nothing to pair with");
+    assert!(!mode_on(&runtime));
 
     pair_event(&mut runtime, Some("w-order:t1:p"));
-    assert_eq!(pairs(&runtime).0, Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
     runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
     runtime.sync_workspace_view();
-    assert_eq!(pairs(&runtime), (None, vec![]));
+    assert_eq!(drawn_pair(&runtime), None);
+    assert!(mode_on(&runtime));
     assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
-    assert_eq!(strip(&runtime, &directory), ["a.md"], "the desk stays");
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
 }
 
 /// B33, D-36: `hide view split` and `move` arrange a View on a desk; one

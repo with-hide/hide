@@ -8,8 +8,9 @@
 //! and one checkout can hold tabs from several engine workspaces. The
 //! state is Hide's own presentation - the right lane (whether it is open,
 //! the tool column beside the rail, the three widths), each Agent tab's tray
-//! (its View areas with their displays, [`crate::view_layout`], and its pair
-//! view), the shelf of the checkout's Views on no desk - and never a
+//! (its View areas with their displays, [`crate::view_layout`]), the shelf of
+//! the checkout's Views on no desk, and the window's pair view mode
+//! ([`PairMode`], D-45, D-47) - and never a
 //! terminal layout: the engine keeps panes, splits and zoom. Whether an open
 //! lane is floating over the agents right now, and an expanded lane, are the
 //! shell's own moment and are never stored (D-11).
@@ -128,8 +129,8 @@ pub struct WorkspaceView {
     /// added, is not the first one forgotten (`WorkspaceViews::entry`).
     pub made_unix_ms: u64,
     /// Each Agent tab's desk (PRD lane-desk-pair-view D-06): the Views the
-    /// operator put in front of that tab, with their View areas, and its
-    /// pair view. One per tab, at most [`MAX_TRAYS`].
+    /// operator put in front of that tab, with their View areas. One per tab,
+    /// at most [`MAX_TRAYS`].
     pub trays: Vec<Tray>,
     /// The checkout's Views on no desk (D-19): what an agent the operator
     /// was not watching opened, kept in its pane's list until the operator
@@ -174,20 +175,34 @@ pub struct Tray {
     /// folding it hides it (D-07, B11).
     #[serde(default)]
     pub shown: bool,
-    /// Pair view (D-08, D-15): the pane drawn beside the desk, filling the
-    /// body; absent while the tab shows its own pane layout.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pair: Option<PairView>,
 }
 
-/// The left side of a pair view: one pane of the desk's own Agent tab.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PairView {
-    pub pane: String,
-    /// The pane of the tab that held the keyboard before pair view, which
-    /// gets it back when the operator leaves (B26).
+/// Pair view (PRD lane-desk-pair-view D-08, D-45, D-47): one mode for the
+/// window, not a tab's. While it is on, the pane the operator is on is drawn
+/// beside its tab's desk wherever they go; a pane with nothing to show draws
+/// its tab's own layout and the mode stays on. The left pane is never saved:
+/// it is the pane the operator is on (`runtime::pair_view`). A file an
+/// earlier build wrote with a pair view on a tray (D-15) loads with the mode
+/// off, the tray's `pair` ignored.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PairMode {
+    #[serde(default)]
+    pub on: bool,
+    /// The left pane's share of the body, in thousandths, once the operator
+    /// dragged the divider (D-47); half until then. Kept while the mode is
+    /// off, so entering again draws the same split.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before: Option<String>,
+    pub ratio: Option<u16>,
+}
+
+/// The narrowest and widest share of the body the left pane may have, in
+/// thousandths; the shell keeps each side above its own minimum width.
+pub const PAIR_RATIO_MIN: u16 = 100;
+pub const PAIR_RATIO_MAX: u16 = 900;
+
+/// A stored or sent ratio inside what the core accepts.
+pub fn clamp_pair_ratio(value: u16) -> u16 {
+    value.clamp(PAIR_RATIO_MIN, PAIR_RATIO_MAX)
 }
 
 /// Where one of a checkout's Views sits: on one Agent tab's desk, or on the
@@ -206,7 +221,6 @@ impl Tray {
             tab: tab.to_owned(),
             layout: fresh_layout(next_id),
             shown: false,
-            pair: None,
         }
     }
 }
@@ -480,7 +494,6 @@ impl WorkspaceView {
             tab,
             layout,
             shown,
-            pair: None,
         });
         // The shelf numbers after the documents, so no id repeats.
         self.shelf = shelf_layout(next_id);
@@ -788,6 +801,8 @@ pub fn clamp_width(value: u32) -> u32 {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorkspaceViews {
     pub workspaces: Vec<WorkspaceView>,
+    /// The window's pair view mode (D-45).
+    pub pair: PairMode,
 }
 
 impl WorkspaceViews {
@@ -847,12 +862,20 @@ impl WorkspaceViews {
 struct StoredWorkspaceViews<'a> {
     schema_version: u32,
     workspaces: &'a [WorkspaceView],
+    #[serde(skip_serializing_if = "pair_mode_unset")]
+    pair_view: PairMode,
+}
+
+fn pair_mode_unset(mode: &PairMode) -> bool {
+    *mode == PairMode::default()
 }
 
 #[derive(Deserialize)]
 struct StoredWorkspaces {
     #[serde(default)]
     workspaces: Vec<StoredTrays>,
+    #[serde(default)]
+    pair_view: PairMode,
 }
 
 /// Schemas 4 and 5: one lane and one View list per checkout. Read only to
@@ -995,7 +1018,12 @@ pub fn load(path: &Path, now_unix_ms: u64) -> (WorkspaceViews, LoadOutcome) {
                         .into_iter()
                         .map(StoredTrays::into_view)
                         .collect();
-                    return settle(views, None);
+                    let (mut loaded, outcome) = settle(views, None);
+                    loaded.pair = PairMode {
+                        on: stored.pair_view.on,
+                        ratio: stored.pair_view.ratio.map(clamp_pair_ratio),
+                    };
+                    return (loaded, outcome);
                 }
                 Err(error) => format!("the file is not valid: {error}"),
             }
@@ -1150,7 +1178,10 @@ fn settle(
     }
     workspaces.truncate(MAX_WORKSPACES);
     (
-        WorkspaceViews { workspaces },
+        WorkspaceViews {
+            workspaces,
+            pair: PairMode::default(),
+        },
         LoadOutcome::Loaded {
             migrated_from,
             repairs,
@@ -1289,6 +1320,7 @@ pub fn save(path: &Path, views: &WorkspaceViews) -> Result<(), String> {
     let stored = StoredWorkspaceViews {
         schema_version: SCHEMA_VERSION,
         workspaces,
+        pair_view: views.pair,
     };
     let bytes = serde_json::to_vec_pretty(&stored)
         .map_err(|_| "Workspace view state could not be encoded".to_owned())?;
@@ -1385,12 +1417,37 @@ mod tests {
         id
     }
 
-    /// PRD lane-desk-pair-view D-06, D-15, B27: each Agent tab's tray (its
-    /// nested tree, shown flag and pair view), the Views on no tray, the
-    /// tool column and three widths come back as they were; runtime
-    /// bindings are never written.
+    /// D-45: a desk an earlier build saved in its tab's own pair view loads
+    /// as a desk, with the window's mode off; nothing turns it back on.
     #[test]
-    fn saved_trays_pair_views_and_the_views_on_no_tray_load_back_as_they_were() {
+    fn a_tabs_saved_pair_view_loads_as_its_desk_with_the_mode_off() {
+        let folder = scratch("tab-pair");
+        let path = folder.path().join("workspace-views.json");
+        fs::write(
+            &path,
+            serde_json::json!({"schema_version": 6, "workspaces": [
+                {"device_id": "local", "path": "/repo",
+                 "trays": [{"tab": "w1:t1", "shown": true, "pair": {"pane": "w1:p1", "before": "w1:p2"},
+                            "layout": {"root": {"area": {"id": "a1", "displays": []}}, "active_area": "a1", "next_id": 2}}]}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let (loaded, outcome) = load(&path, 1);
+        assert_eq!(outcome, current());
+        assert_eq!(loaded.pair, PairMode::default());
+        assert!(loaded.workspaces[0].tray("w1:t1").unwrap().shown);
+        save(&path, &loaded).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("\"pair"), "{written}");
+    }
+
+    /// PRD lane-desk-pair-view D-06, D-45, D-47: each Agent tab's tray (its
+    /// nested tree and shown flag), the Views on no tray, the tool column,
+    /// three widths and the window's pair view mode with its ratio come back
+    /// as they were; runtime bindings are never written.
+    #[test]
+    fn saved_trays_the_pair_mode_and_the_views_on_no_tray_load_back_as_they_were() {
         let folder = scratch("roundtrip");
         let path = folder.path().join("workspace-views.json");
         let mut views = WorkspaceViews::default();
@@ -1422,10 +1479,12 @@ mod tests {
         if let Node::Split(split) = &mut layout.root {
             split.ratio = 0.7;
         }
-        entry.tray_entry("w1:t2").pair = Some(PairView {
-            pane: "w1:p3".into(),
-            before: None,
-        });
+        entry.tray_entry("w1:t2");
+        views.pair = PairMode {
+            on: true,
+            ratio: Some(620),
+        };
+        let entry = views.entry("local", "/repo");
         entry.align_ids(&Place::Tray("w1:t2".into()));
         let card = entry.tray_mut("w1:t2").unwrap().layout.new_card_display(
             crate::model::DetailItem::Mission {
@@ -1462,8 +1521,15 @@ mod tests {
         };
         assert_eq!(root_split.axis, SplitAxis::Row);
         assert_eq!(root_split.ratio, 0.7);
+        assert_eq!(
+            loaded.pair,
+            PairMode {
+                on: true,
+                ratio: Some(620)
+            },
+            "D-45, D-47: one mode and its ratio for the window"
+        );
         let paired = view.tray("w1:t2").unwrap();
-        assert_eq!(paired.pair.as_ref().unwrap().pane, "w1:p3");
         assert_eq!(
             paired.layout.displays().next().unwrap().kind,
             DisplayKind::Card

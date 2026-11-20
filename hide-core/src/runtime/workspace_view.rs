@@ -147,6 +147,14 @@ pub(super) struct WorkspaceViewStore {
     /// Runtime only.
     pub(super) card_read: Option<crate::model::DetailItem>,
     pub(super) card_read_again: bool,
+    /// Pair view's left pane while the mode is on (PRD lane-desk-pair-view
+    /// D-45): the pane the operator last went to, whose View an event put on
+    /// its tab's desk. Runtime only: after a restart the front tab's
+    /// keyboard pane stands for it (`Runtime::pair_left_of`).
+    pub(super) pair_left: Option<super::pair_view::PairLeft>,
+    /// The pane that held the keyboard when pair view was entered, which
+    /// gets it back on leaving (B26). Runtime only.
+    pub(super) pair_before: Option<(WorkspaceKey, String)>,
 }
 
 /// What an event asks of a Workspace's lane once it has moved the screen
@@ -212,6 +220,10 @@ pub(super) struct WorkspaceViewPayload {
     /// An optional opaque identity for a width intent, at most 128 bytes.
     #[serde(default)]
     pub(super) width_request_id: Option<String>,
+    /// Pair view's divider landing (D-47): the left pane's share of the
+    /// body in thousandths, one value for the window's mode.
+    #[serde(default)]
+    pub(super) pair_ratio: Option<u16>,
     /// A file of the front Workspace to reveal: the tool column shows the
     /// Explorer with the file's folders unfolded, in the same event, and
     /// nothing is opened (B8); the viewing column stays.
@@ -356,6 +368,8 @@ impl WorkspaceViewStore {
                 save_worker: None,
                 card_read: None,
                 card_read_again: false,
+                pair_left: None,
+                pair_before: None,
             },
             diagnostics,
         )
@@ -418,17 +432,13 @@ impl Runtime {
         else {
             return;
         };
-        if tray.layout.display_count() > 0 || (!tray.shown && tray.pair.is_none()) {
+        if tray.layout.display_count() > 0 {
             return;
         }
-        tray.shown = false;
-        if let Some(pair) = tray.pair.take() {
-            crate::diagnostic!(serde_json::json!({
-                "component": "pair_view", "kind": "pair_view.ended",
-                "device": key.0, "tab": tab, "pane": pair.pane, "cause": "tray_emptied",
-            }));
+        let shown = std::mem::take(&mut tray.shown);
+        if !self.end_pair_view_of_emptied(key, &tab) && shown {
+            self.persist_workspace_views();
         }
-        self.persist_workspace_views();
     }
 
     /// Gives the tray a migration or a launch could not yet name to the
@@ -928,7 +938,13 @@ impl Runtime {
         if let Some(width) = payload.panel_width {
             entry.panel_width = Some(workspace_views::clamp_width(width));
         }
-        let entry_changed = *entry != before;
+        let mut entry_changed = *entry != before;
+        if let Some(ratio) = payload.pair_ratio.map(workspace_views::clamp_pair_ratio)
+            && store.views.pair.ratio != Some(ratio)
+        {
+            store.views.pair.ratio = Some(ratio);
+            entry_changed = true;
+        }
         // Every open is a call, so a page shows a lane it had hidden even
         // when the lane already held that column.
         let called = matches!(tool, Some(Some(_)))
@@ -946,6 +962,7 @@ impl Runtime {
         let width_request_changed = if payload.document_width.is_some()
             || payload.explorer_width.is_some()
             || payload.panel_width.is_some()
+            || payload.pair_ratio.is_some()
         {
             let next = payload.width_request_id.map(|id| (key.clone(), id));
             let changed = store.width_request != next;
@@ -1365,15 +1382,22 @@ impl Runtime {
             let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
             let layout = self.view_layout_snapshot(key, tray_layout);
             let every = self.every_view_snapshot(key);
-            let pair_of = |tray: &crate::workspace_views::Tray| {
-                tray.pair
-                    .as_ref()
-                    .map(|pair| crate::model::PairViewSnapshot {
-                        tab_id: tray.tab.clone(),
-                        pane_id: pair.pane.clone(),
+            let pairable = self.pairable_panes(key);
+            // Pair view is drawn while the mode is on and the pane the
+            // operator is on here has something to show beside a desk that
+            // has a View (D-45, B19).
+            let pair = self
+                .pair_left_of(key, tab)
+                .filter(|pane| pairable.contains(pane) && tray_layout.display_count() > 0)
+                .map(|pane| {
+                    let mut pair = crate::model::PairViewSnapshot {
+                        tab_id: tab.clone(),
+                        pane_id: pane,
                         folded: Vec::new(),
-                    })
-            };
+                    };
+                    pair.folded = self.pair_folded(key, &pair, &layout.root);
+                    pair
+                });
             WorkspaceViewSnapshot {
                 device_id: view.device_id.clone(),
                 path: view.path.clone(),
@@ -1403,13 +1427,13 @@ impl Runtime {
                     },
                     shown: tray.is_some_and(|tray| tray.shown),
                     count: tray_layout.display_count(),
-                    pair: tray.and_then(pair_of).map(|mut pair| {
-                        pair.folded = self.pair_folded(key, &pair, &layout.root);
-                        pair
-                    }),
+                    pair,
                 },
-                pairs: view.trays.iter().filter_map(pair_of).collect(),
-                pairable: self.pairable_panes(key),
+                pair_mode: crate::model::PairModeSnapshot {
+                    on: store.views.pair.on,
+                    ratio: store.views.pair.ratio,
+                },
+                pairable,
                 // A pane's `N views` lists what its session opened, on a
                 // tray or not (PRD lane-desk-pair-view D-04, D-19).
                 feedback: self.view_feedback_snapshot(key, &every),

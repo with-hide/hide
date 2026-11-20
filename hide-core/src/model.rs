@@ -365,10 +365,9 @@ pub struct WorkspaceViewSnapshot {
     /// pair view. `layout` is its View areas.
     pub tray: TraySnapshot,
     pub layout: ViewLayoutSnapshot,
-    /// Every Agent tab of the checkout in pair view, with its left pane, so
-    /// the tab strip and the sidebar mark them (D-17); absent while none is.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub pairs: Vec<PairViewSnapshot>,
+    /// The window's pair view mode (D-45, D-47): whether it is on, and the
+    /// left pane's share of the body.
+    pub pair_mode: PairModeSnapshot,
     /// The panes of this Workspace's Agent tabs that have something to show
     /// beside the desk, a View their agent opened or a live session's record
     /// (B19): ◧ is on for these and off, with why, for every other.
@@ -402,9 +401,21 @@ pub struct TraySnapshot {
     /// The Views on it: the rail's number (D-29). An agent's View on no
     /// tray is not counted.
     pub count: usize,
-    /// Its pair view, while it is in one (D-08, D-15).
+    /// The pair view drawn now (D-08, D-45): while the mode is on and the
+    /// pane the operator is on in this tab has something to show; the strip,
+    /// the tab row and the sidebar mark only it (D-17).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair: Option<PairViewSnapshot>,
+}
+
+/// The window's pair view mode (PRD lane-desk-pair-view D-45, D-47).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PairModeSnapshot {
+    pub on: bool,
+    /// The left pane's share of the body in thousandths, the divider's
+    /// landing (D-47); half while absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<u16>,
 }
 
 /// An Agent tab in pair view: the pane drawn beside its tray.
