@@ -1180,7 +1180,7 @@ pub async fn serve(
         pairing,
         health,
     } = answering;
-    let closing = CloseOnDrop::new(listener.closer());
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_BOOTSTRAPS);
     let accepting = {
         let closed = closing.closed();
@@ -1197,10 +1197,13 @@ pub async fn serve(
                 );
             })
     };
-    if let Err(error) = accepting {
-        health.stopped();
-        note_bootstrap_stopped(&error.to_string());
-        return;
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            note_bootstrap_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(Semaphore::new(MAX_BOOTSTRAPS));
     let mut sweep = tokio::time::interval(Duration::from_secs(5));

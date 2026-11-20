@@ -387,7 +387,7 @@ pub async fn serve(
     health: Arc<ListenerHealth>,
     shutdown: crate::ending::Ending,
 ) {
-    let closing = CloseOnDrop::new(listener.closer());
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_ATTACHING);
     let accepting = {
         let closed = closing.closed();
@@ -404,10 +404,13 @@ pub async fn serve(
                 );
             })
     };
-    if let Err(error) = accepting {
-        health.stopped();
-        attach_stopped(&error.to_string());
-        return;
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            attach_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(tokio::sync::Semaphore::new(MAX_ATTACHING));
     loop {

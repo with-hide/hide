@@ -14,7 +14,7 @@
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -94,6 +94,8 @@ pub struct CloseOnDrop {
     /// Set before the close, so the accept thread tells its own stop from an
     /// accept that failed.
     closed: Arc<AtomicBool>,
+    /// The accept thread, woken from its wait between tries at the close.
+    accepting: Option<std::thread::Thread>,
 }
 
 impl CloseOnDrop {
@@ -101,11 +103,18 @@ impl CloseOnDrop {
         Self {
             closer,
             closed: Arc::new(AtomicBool::new(false)),
+            accepting: None,
         }
     }
 
     pub fn closed(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.closed)
+    }
+
+    /// The close wakes `thread` from a wait between tries, so it ends at
+    /// once rather than after the wait.
+    pub fn wakes(&mut self, thread: std::thread::Thread) {
+        self.accepting = Some(thread);
     }
 }
 
@@ -113,13 +122,15 @@ impl Drop for CloseOnDrop {
     fn drop(&mut self) {
         self.closed.store(true, Ordering::SeqCst);
         self.closer.close();
+        if let Some(thread) = &self.accepting {
+            thread.unpark();
+        }
     }
 }
 
 /// Hands each connection `accept` takes to `accepted` until the listener is
 /// closed or nothing receives any more. A failed accept is recorded as
 /// `<component>`'s `kind`, with its message and the wait before the next try.
-#[allow(clippy::disallowed_methods)] // a production wait between accepts, not test code
 pub fn accept_until_closed<S>(
     mut accept: impl FnMut() -> io::Result<S>,
     accepted: &tokio::sync::mpsc::Sender<S>,
@@ -146,7 +157,16 @@ pub fn accept_until_closed<S>(
                     "message": error.to_string(),
                     "retry_ms": wait.as_millis() as u64,
                 }));
-                std::thread::sleep(wait);
+                // A park the close ends early (`CloseOnDrop::wakes`); a
+                // spurious wake only shortens one wait.
+                let until = Instant::now() + wait;
+                while !closed.load(Ordering::SeqCst) {
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    std::thread::park_timeout(left);
+                }
                 wait = (wait * 2).min(RETRY_MAX);
             }
         }
