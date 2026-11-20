@@ -288,28 +288,6 @@ pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
     Ok(running)
 }
 
-/// Raises this process's open-file limit as far as the system lets it and
-/// records what it got through `emit`, the log the role installed. A daemon
-/// or a node holds a connection, a watch and files for each pane, and at the
-/// 256 a macOS app starts with the core ran out on 2026-11-20. Windows has
-/// no such limit and records nothing.
-pub(crate) fn raise_open_files(emit: fn(serde_json::Value)) {
-    emit(match hide_platform::process::raise_open_file_limit() {
-        Ok(Some(limit)) => serde_json::json!({
-            "component": "daemon",
-            "kind": "open_files.limit",
-            "before": limit.before,
-            "after": limit.after,
-        }),
-        Ok(None) => return,
-        Err(error) => serde_json::json!({
-            "component": "daemon",
-            "kind": "open_files.raise_failed",
-            "message": error.to_string(),
-        }),
-    });
-}
-
 /// Records the process holding `seat` in `state_dir` (`hided.json`), which
 /// `hide connect` and the desktop host find it by, whichever role it runs.
 pub(crate) fn record_daemon(
