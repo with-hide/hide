@@ -70,7 +70,8 @@ export type WorkspaceView = {
 };
 
 /** One Agent tab's desk as the screen draws it. */
-export type TraySnapshot = { tab_id: string; shown: boolean; count: number; pair?: PairView | null };
+/** `floats`: the desk floats with the tool beside it over the agents, since a View came onto it while that tool floated (D-50); a shown desk that does not float stands. */
+export type TraySnapshot = { tab_id: string; shown: boolean; count: number; floats?: boolean; pair?: PairView | null };
 export type PairMode = { on: boolean; ratio?: number | null };
 /** An Agent tab in pair view: the pane drawn beside its desk. */
 /** An Agent tab in pair view: the pane drawn beside its desk, and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
@@ -142,14 +143,19 @@ export type LaneSizes = {
 
 /**
  * How the lane is drawn now, a fact of this page alone and never sent (PRD
- * right-lane D-02..D-04, D-07, D-11):
+ * right-lane D-02..D-04, D-07, D-11; lane-desk-pair-view D-50):
  *
  * - `closed`: no column; Agent Views has the body.
- * - `overlay`: drawn over Agent Views, which keeps its width.
+ * - `docked`: the desk stands at the body's right and Agent Views narrows
+ *   beside it; a tool floats over the desk's right edge.
+ * - `overlay`: a tool, or the desk floating with it, drawn over Agent Views,
+ *   which keeps its width; in a body too narrow for the desk to stand, the
+ *   desk floats here too.
  * - `expanded`: over the whole body; Agent Views keeps the width it had.
+ * - `pair`: the lane is the right half of the body beside the paired pane
+ *   (PRD lane-desk-pair-view B17, D-16).
  */
-/** `pair`: the lane is the right half of the body beside the paired pane (PRD lane-desk-pair-view B17, D-16). */
-export type LaneMode = "closed" | "overlay" | "expanded" | "pair";
+export type LaneMode = "closed" | "docked" | "overlay" | "expanded" | "pair";
 
 /** The Workspace widths the columns draw from (D-09). */
 export type LaneWidthField = "document_width" | "explorer_width" | "panel_width";
@@ -162,7 +168,7 @@ export type LaneColumn = { field: LaneWidthField; width: number; min: number };
 
 export type LaneFrame = {
   mode: LaneMode;
-  /** Agent Views' width; 0 before the body is measured, so no terminal fits to a guess. */
+  /** Agent Views' width: the body, less a standing desk and its divider; 0 before the body is measured, so no terminal fits to a guess. */
   agents: number;
   /** The lane's drawn width, both columns and their divider included. */
   width: number;
@@ -172,6 +178,8 @@ export type LaneFrame = {
   tool: LaneColumn | null;
   /** Both columns exist but the body holds only one at a time, the front one drawn (B19). */
   stacked: boolean;
+  /** The tool floats over the standing desk's right edge rather than beside it (`docked`, D-50). */
+  toolOver?: boolean;
   /** In pair view, the paired pane's width left of the divider (D-47). */
   pane?: number;
 };
@@ -185,6 +193,8 @@ export type LaneInput = {
   explorerWidth: number | null;
   panelWidth: number | null;
   expanded: boolean;
+  /** The desk floats with the tool (`tray.floats`, D-50); else a drawn desk stands where it fits. */
+  floats?: boolean;
   /** Pair view is drawn (`drawnPair`): the lane is the desk beside the paired pane, whatever the lane's own open state. */
   pair?: boolean;
   /** Pair view's divider landing, the left pane's share in thousandths (D-47); half while null. */
@@ -227,9 +237,34 @@ function fitColumns(view: Want, tool: Want, room: number, divider: number): { vi
 }
 
 /**
+ * The standing desk (D-50): the desk at its stored width at the body's right,
+ * giving way down to its minimum so Agent Views keeps `agentMin` beside it,
+ * and the tool, if any, over its right edge at the tool's width. Null when
+ * the desk floats with the tool, or when even its minimum would leave Agent
+ * Views under `agentMin`: the desk then floats as it did before.
+ */
+function standing(input: LaneInput, view: Want | null, tool: Want | null): LaneFrame | null {
+  const { body, sizes } = input;
+  if (!view || input.floats === true || body <= 0) return null;
+  const room = body - sizes.divider - sizes.agentMin;
+  if (room < view.min) return null;
+  const width = Math.min(view.want, room);
+  return {
+    mode: "docked",
+    agents: body - width - sizes.divider,
+    width,
+    view: { field: view.field, width, min: view.min },
+    tool: tool ? { field: tool.field, width: Math.min(tool.want, body), min: tool.min } : null,
+    stacked: false,
+    ...(tool ? { toolOver: true } : {}),
+  };
+}
+
+/**
  * The body as it is drawn (PRD lane-two-columns B1, B15, B17, B19, B20;
- * lane-desk-pair-view B35): the lane is drawn over Agent Views, which keeps
- * its width. Each column draws at its own stored width, so a wide document
+ * lane-desk-pair-view B35, D-50): a shown desk stands at the body's right and
+ * Agent Views narrows beside it (`standing`); a tool, and a desk floating
+ * with it, are drawn over Agent Views, which keeps its width. Each column draws at its own stored width, so a wide document
  * leaves the tool column as it was; a body narrower than both gives way
  * inside the lane, the viewing column first, and when even their minimums
  * do not fit the front one covers the other; a body narrower than one
@@ -260,15 +295,19 @@ export function laneFrame(input: LaneInput): LaneFrame {
     const toolWidth = Math.min(tool.want, Math.max(0, width - sizes.divider - view.min));
     return { mode, agents: body, width, view: column(view, width - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
   }
+  const stands = pairing ? null : standing(input, view, tool);
   if (mode === "expanded") {
-    // The tool column keeps its width and the viewing column takes the rest (B15).
+    // The tool column keeps its width and the viewing column takes the rest
+    // (B15); Agent Views under it keeps the width a standing desk left it.
+    const agents = stands?.agents ?? body;
     if (view && tool) {
       const toolWidth = Math.min(tool.want, Math.max(0, body - sizes.divider - view.min));
-      return { mode, agents: body, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
+      return { mode, agents, width: body, view: column(view, body - sizes.divider - toolWidth), tool: column(tool, toolWidth), stacked: false, ...pane };
     }
     const one = (view ?? tool)!;
-    return { mode, agents: body, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, ...pane };
+    return { mode, agents, width: body, view: view ? column(one, body) : null, tool: tool ? column(one, body) : null, stacked: false, ...pane };
   }
+  if (stands) return stands;
   if (view && tool) {
     const fit = fitColumns(view, tool, body, sizes.divider);
     if (fit) return { mode, agents: body, width: fit.view + sizes.divider + fit.tool, view: column(view, fit.view), tool: column(tool, fit.tool), stacked: false };
@@ -305,6 +344,9 @@ export function laneLanding(input: { x: number; body: number; frame: LaneFrame; 
   const { x, body, frame, sizes } = input;
   const edge = edgeColumn(frame);
   if (!edge) return {};
+  // A standing desk's tool floats over it, so only the desk is beside Agent
+  // Views, which keeps its minimum (D-50).
+  if (frame.mode === "docked") return { [edge.field]: clamp(body - x - sizes.divider, edge.min, body - sizes.divider - sizes.agentMin) };
   const other = frame.view && frame.tool ? frame.tool.width + sizes.divider : 0;
   const width = body - x - sizes.divider - other;
   return { [edge.field]: clamp(width, edge.min, body - sizes.divider - other) };

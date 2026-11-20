@@ -1,4 +1,4 @@
-import { ChevronDownIcon, PinIcon } from "lucide-react";
+import { ChevronDownIcon, Columns2Icon } from "lucide-react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { Button } from "./components/ui/button";
@@ -11,11 +11,11 @@ import type { ViewDisplaySnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 
 // The desk's own pair view controls (PRD lane-desk-pair-view B17, B24, D-08,
-// D-41, D-42): the pin beside the desk's ✕, and in pair view the one menu
+// D-41, D-42, D-50): ◧ beside the desk's ✕, and in pair view the one menu
 // the other agents' tabs fold into.
 
-/** The desk's pin, a way into pair view only (D-42): the tab in front beside its agent's pane. The desk draws none in pair view, whose ways out are the strip's, ⌘., the pressed ◧ and closing the desk. */
-export function DeskPin({ displayId, actions }: { displayId: string | null; actions: Actions }) {
+/** The desk's ◧, a way into pair view only (D-42), drawn as the pane head's ◧ so one mark means one thing (D-50): the tab in front beside its agent's pane. The desk draws none in pair view, whose ways out are the strip's, ⌘., the pressed ◧ and closing the desk. */
+export function DeskPairButton({ displayId, actions }: { displayId: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const label = t("panes.menu.pair");
   return (
@@ -26,10 +26,10 @@ export function DeskPin({ displayId, actions }: { displayId: string | null; acti
         className="text-muted-foreground"
         aria-label={label}
         disabled={displayId === null}
-        data-desk-pin="off"
+        data-desk-pair="off"
         onClick={() => displayId !== null && actions.pinPairView(displayId)}
       >
-        <PinIcon />
+        <Columns2Icon />
       </Button>
     </Hint>
   );

@@ -11,7 +11,8 @@ const DIVIDER_STEP = 32;
  * A divider of the lane (PRD right-lane B6, B10; lane-two-columns B17;
  * `Component / Side panel grip`): `lane`, at the lane's left edge, sets the
  * width of the column at that edge, over Agent Views (`edge`, hung outside
- * the lane's box); `column`,
+ * the lane's box), narrowing Agent Views once it lands while the desk stands
+ * (PRD lane-desk-pair-view D-50); `column`,
  * between the viewing column and the tool column, trades width between the
  * two; `pair`, between pair view's pane and its desk (PRD lane-desk-pair-view
  * D-47), lands the mode's one ratio, so the pane's grid follows once on
@@ -52,7 +53,8 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     }
     const view = basis.view ? { ...basis.view, width: patch[basis.view.field] ?? basis.view.width } : null;
     const tool = basis.tool ? { ...basis.tool, width: patch[basis.tool.field] ?? basis.tool.width } : null;
-    const width = kind === "lane" ? (view?.width ?? 0) + (tool?.width ?? 0) + (view && tool ? sizes.divider : 0) : basis.width;
+    // A standing desk's tool floats over it, so the lane's width is the desk's (D-50).
+    const width = kind === "lane" ? (basis.mode === "docked" ? view?.width ?? 0 : (view?.width ?? 0) + (tool?.width ?? 0) + (view && tool ? sizes.divider : 0)) : basis.width;
     return { ...basis, view, tool, width };
   };
   // Where the divider's left edge stands, from its origin's left edge.
@@ -109,9 +111,10 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   // Pair view's divider says the pane's width, between its minimum and what the desk's minimum leaves.
   const value = kind === "pair" ? frame.pane ?? 0 : moved?.width ?? 0;
   const min = kind === "pair" ? sizes.agentMin : moved?.min ?? 0;
-  // Over the agents the lane grows to the body's edge; between the columns,
-  // into what the tool column can spare; in pair view, into the desk down to its minimum.
-  const spare = kind === "pair" ? (frame.view?.width ?? 0) - sizes.viewMin : kind === "lane" ? frame.agents - frame.width - sizes.divider : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
+  // Over the agents the lane grows to the body's edge; a standing desk, into
+  // Agent Views down to its minimum; between the columns, into what the tool
+  // column can spare; in pair view, into the desk down to its minimum.
+  const spare = kind === "pair" ? (frame.view?.width ?? 0) - sizes.viewMin : kind === "lane" ? (frame.mode === "docked" ? frame.agents - sizes.agentMin : frame.agents - frame.width - sizes.divider) : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
   return (
     <div
       role="separator"
@@ -122,7 +125,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
       aria-valuemax={value + Math.max(0, spare)}
       tabIndex={0}
       data-lane-divider={kind}
-      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? `absolute inset-y-0 border-r border-border${kind === "pair" ? " bg-background" : ""}` : kind === "lane" ? "relative border-l border-border bg-card" : "relative border-l border-border bg-background"}`}
+      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? `absolute inset-y-0 border-r border-border${kind === "pair" || frame.mode === "docked" ? " bg-background" : ""}` : kind === "lane" ? "relative border-l border-border bg-card" : "relative border-l border-border bg-background"}`}
       style={edge ? { left: -sizes.divider } : undefined}
       onPointerDown={drag}
       onBlur={() => { keyIntent.current = null; }}

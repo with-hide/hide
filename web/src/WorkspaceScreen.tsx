@@ -40,12 +40,15 @@ import { CheckoutCommit, CheckoutFileCount, CheckoutUpstream } from "./CheckoutG
 // three widths are the core's, per Workspace; this draws them and
 // sends one event per operator choice.
 //
-// The lane is drawn over Agent Views, which keeps its width, so opening and
-// closing it resizes no terminal (B20; PRD lane-desk-pair-view B16); a
-// terminal click or an agent chosen leaves it up, and ⌘E or Escape closes it
-// (PRD right-lane B4; operator decision 2026-10-23); a drag moves only a
-// guide until it lands. The rail is always there, so nothing the lane does
-// changes Agent Views' width.
+// A shown desk stands at the body's right and Agent Views narrows beside it,
+// every pane kept, so each terminal resizes once as it opens, closes or its
+// divider lands (PRD lane-desk-pair-view D-50); a tool floats over the
+// agents, or over a standing desk's right edge, and resizes nothing, and a
+// View opened from a floating tool floats with it until the tool closes
+// (`tray.floats`). A terminal click or an agent chosen leaves the desk up, a
+// press outside a floating tool closes the tool, and ⌘E or Escape closes the
+// lane (PRD right-lane B4; operator decision 2026-10-23); a drag moves only a
+// guide until it lands.
 
 export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -84,6 +87,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     explorerWidth: view?.explorer_width ?? null,
     panelWidth: view?.panel_width ?? null,
     expanded,
+    floats: view?.tray.floats === true,
     pair: pair !== null,
     pairRatio: view?.pair_mode?.ratio ?? null,
     front: stackFront,
@@ -108,7 +112,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   // at, with only the log saying so.
   const pageWiden = useUiStore((s) => s.pageWiden);
   const front = view ? workspaceKey(view) : null;
-  const beside = frame.view && frame.tool ? frame.tool.width : null;
+  const beside = frame.view && frame.tool && !frame.toolOver ? frame.tool.width : null;
   useLayoutEffect(() => {
     if (pageWiden === null || width <= 0) return;
     useUiStore.getState().setPageWiden(null);
@@ -174,7 +178,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-shows={drawnTool ?? "none"}
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} frame={frame} documents={documents} body={body} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair?.pane_id ?? null} />
+      <LaneRow view={view} frame={frame} documents={documents} body={body} width={width} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair?.pane_id ?? null} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, actions)}>
         <ToolRail actions={actions} />
       </div>
@@ -184,8 +188,9 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
 
 /**
  * Escape in the lane or on its rail, once nothing inside answered (a menu, a
- * filter, a document's find), returns an expanded lane, or closes it as
- * ⌘E does and gives the keyboard to the focused pane, so a
+ * filter, a document's find), returns an expanded lane; closes a floating
+ * tool beside or over the desk, which then stands (D-50); or closes the lane
+ * as ⌘E does. Either gives the keyboard to the focused pane, so a
  * tool or an open afterwards brings its own column alone (B4, B8, B15;
  * operator decision 2026-10-23); Escape in a terminal stays the program's.
  * Escape in a document's editor stays the editor's too: it lets the next Tab
@@ -197,9 +202,10 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
 function laneEscape(event: React.KeyboardEvent<HTMLElement>, frame: LaneFrame, actions: Actions): void {
   if (event.key !== "Escape" || escapeConsumed(event)) return;
   if (frame.mode === "expanded") useUiStore.getState().setLaneExpanded(false);
-  else if (frame.mode === "overlay") {
+  else if (frame.mode === "overlay" || frame.mode === "docked") {
     if (event.target instanceof Element && event.target.closest("[data-editor-body]")) return;
-    actions.closeLane();
+    if (frame.view !== null && frame.tool !== null) actions.closeTool();
+    else actions.closeLane();
     const paneId = useShellStore.getState().focusedPaneId;
     if (paneId) focusTerminal(paneId);
   } else return;
@@ -226,11 +232,12 @@ function useWidth(element: HTMLElement | null): number {
 
 /**
  * The body left of the rail: Agent Views, and the lane. The lane is always
- * placed over the body's right edge, so moving between over and expanded
- * never mounts it again, and Agent Views keeps the width it has (B8;
- * lane-desk-pair-view B35).
+ * placed at the body's right edge, so moving between standing, floating and
+ * expanded never mounts it again (B8; lane-desk-pair-view B35); a standing
+ * desk keeps its width free at Agent Views' right, so the panes narrow
+ * beside it rather than under it (D-50).
  */
-function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: string | null }) {
+function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; width: number; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: string | null }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // A terminal click leaves the lane where it is: only the operator closes
@@ -240,13 +247,18 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
   // row and the strip (PRD lane-desk-pair-view B17, D-16); it is the same
   // element in every mode, so entering pair view mounts no desk again.
   const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-[calc(var(--size-tab-strip)*2)] z-20" : "inset-y-0 right-0 z-20";
+  // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
+  const reserve = frame.agents > 0 && width > frame.agents ? width - frame.agents : 0;
+  // A press outside a floating tool closes it, and a desk floating with it stands (D-50); the press still lands.
+  const toolFloats = frame.tool !== null && (frame.mode === "overlay" || frame.mode === "docked");
+  const pressOutside = toolFloats ? () => actions.closeTool() : undefined;
 
   return (
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane
           divider) draws over the lane; out of reach of the pointer and the
           keyboard while an expanded lane covers it. */}
-      <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" inert={frame.mode === "expanded"} data-agent-area="true">
+      <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" style={reserve > 0 ? { marginRight: reserve } : undefined} inert={frame.mode === "expanded"} onPointerDownCapture={pressOutside} data-agent-area="true">
         <AgentArea checkout={checkout} actions={actions} />
       </div>
       {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
@@ -254,19 +266,20 @@ function LaneRow({ view, frame, documents, body, setBody, sizes, actions, checko
         <div
           // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its
           // outer edge, so the divider is where the landing math puts it; elsewhere the frame draws the line itself.
-          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode !== "overlay" && frame.mode !== "pair" && "border-l border-border", frame.mode !== "pair" && "shadow-overlay", placed)}
+          // A standing desk is part of the body, so it casts no shadow; what floats does.
+          className={cn("absolute flex min-h-0 min-w-0 flex-col bg-card", frame.mode === "expanded" && "border-l border-border", (frame.mode === "overlay" || frame.mode === "expanded") && "shadow-overlay", placed)}
           style={frame.mode === "expanded" ? undefined : { width: frame.width }}
           onKeyDown={escape}
           data-lane-frame={frame.mode}
         >
-          {/* A lane over the agents is sized from its own left edge; nothing beside it moves (B6). */}
-          {frame.mode === "overlay" ? (
+          {/* A lane over the agents is sized from its own left edge, nothing beside it moving (B6); a standing desk's divider narrows Agent Views once it lands (D-50). */}
+          {frame.mode === "overlay" || frame.mode === "docked" ? (
             <LaneDivider kind="lane" edge label={t("panes.workspace.resize", { name: t("panes.lane.aria") })} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : frame.mode === "pair" ? (
             // Pair view's divider between the paired pane and the desk (D-47): it lands the mode's one ratio.
             <LaneDivider kind="pair" edge label={t("panes.pair.resize")} workspace={workspaceKey(view)} acknowledged={view.width_request_id ?? null} frame={frame} origin={body} sizes={sizes} setGuide={setGuide} actions={actions} />
           ) : null}
-          <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} />
+          <Lane view={view} frame={frame} documents={documents} sizes={sizes} checkout={checkout} actions={actions} pressOutside={pressOutside} />
         </div>
       ) : null}
       {guide !== null ? <DividerGuide left={guide} pair={frame.mode === "pair"} /> : null}

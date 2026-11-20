@@ -198,12 +198,12 @@ test("pair view is the window's mode: a tab switch, ⌃⇥ and the sidebar keep 
     await page.getByRole("menuitem", { name: /a\.md/ }).click();
     await expect(front(page)).toHaveAttribute("aria-label", /\/a\.md/);
 
-    // B17: the pin puts the tab in front beside the pane of the agent it belongs to, not the focused one.
-    await page.locator('[data-desk-pin="off"]').click();
+    // B17: the desk's ◧ puts the tab in front beside the pane of the agent it belongs to, not the focused one.
+    await page.locator('[data-desk-pair="off"]').click();
     await expect(page.locator(`[data-pair-pane="${left}"]`)).toBeVisible();
     await expect(paneView(page, left!), "the pane on screen takes the keyboard").toHaveAttribute("data-focused", "true");
-    // D-42: the pin is a way in only; pair view draws none, nor the desk's ✕ (D-46).
-    await expect(page.locator("[data-desk-pin]")).toHaveCount(0);
+    // D-42: the desk's ◧ is a way in only; pair view draws none, nor the desk's ✕ (D-46).
+    await expect(page.locator("[data-desk-pair]")).toHaveCount(0);
     await expect(page.locator("[data-lane-documents-close]")).toHaveCount(0);
     await expect(strip(page)).toBeVisible();
 
