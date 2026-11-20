@@ -555,3 +555,50 @@ fn a_cell_refused_for_room_lands_once_there_is_room() {
     runtime.drive_blocked_notes();
     assert!(child_cell(&runtime), "still owed, it lands");
 }
+
+/// A standing cell an agent read stays read however many news cells it reads
+/// after it: news it was given leaves no seen record, so the cap never pushes
+/// out a cell that still stands (B12).
+#[test]
+fn a_standing_cell_read_once_stays_read_past_any_number_of_news() {
+    let mut runtime = blocked_lineage();
+    with_ledger(&mut runtime);
+    let parent_session = agent_row(&runtime, "w1:p1").lineage_session.clone();
+    let observed: crate::sidebar::SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"parent-agent","pane_id":"w1:p1","agent":"claude","agent_status":"idle","state_change_seq":1,"lineage_session":parent_session},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &observed, None, None);
+    let actor = runtime.delivery_observations["w1:p1"].actor.clone();
+    let ledger = runtime.delivery_state().ok();
+    let recipient = crate::runtime::status_recipient(ledger.as_deref(), &actor);
+    runtime
+        .post_status(&actor, "letter:standing".into(), "CI failed".into(), false)
+        .unwrap();
+    let ledger = runtime.delivery_state().ok();
+    let given = runtime.take_status_of(&recipient, ledger.as_deref(), None);
+    assert_eq!(
+        given
+            .iter()
+            .map(|cell| cell.subject.as_str())
+            .collect::<Vec<_>>(),
+        ["letter:standing"]
+    );
+    for index in 0..300 {
+        runtime
+            .post_status(&actor, format!("letter:news-{index}"), "ended".into(), true)
+            .unwrap();
+        let ledger = runtime.delivery_state().ok();
+        let given = runtime.take_status_of(&recipient, ledger.as_deref(), None);
+        assert_eq!(given.len(), 1, "only the news, at {index}");
+    }
+    for _ in 0..2 {
+        let ledger = runtime.delivery_state().ok();
+        assert!(
+            runtime
+                .take_status_of(&recipient, ledger.as_deref(), None)
+                .is_empty(),
+            "the standing cell is not handed again"
+        );
+    }
+}

@@ -30,7 +30,7 @@
 //! recurrence), so a recurrence rings and is given again whatever was seen
 //! of the episode before, with no pass between the two needed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -53,24 +53,27 @@ const INBOX_CELLS: usize = 64;
 /// The most cells posted by memory-only passes; the oldest goes first
 /// (engineering #15). Bounded in practice by the panes and open letters.
 const POSTED_LIMIT: usize = 1_024;
-/// The subjects a receiver's seen and rung memory keeps, newest first.
+/// The subjects a receiver's seen and rung memory keeps.
 const SEEN_LIMIT: usize = 256;
 
-/// Keeps the newest `SEEN_LIMIT` of `subjects` by revision; whether any
-/// went.
-fn newest(subjects: &mut BTreeMap<String, u64>) -> bool {
+/// Keeps `subjects` within `SEEN_LIMIT` by dropping the records of cells
+/// that no longer stand (`live` names those that do), oldest revision
+/// first; a record of a live cell is never dropped, so it is never handed
+/// again for room. Whether any went.
+fn bound(subjects: &mut BTreeMap<String, u64>, live: &BTreeSet<String>) -> bool {
     if subjects.len() <= SEEN_LIMIT {
         return false;
     }
-    let mut revisions: Vec<u64> = subjects.values().copied().collect();
-    revisions.sort_unstable_by(|a, b| b.cmp(a));
-    let floor = revisions[SEEN_LIMIT - 1];
-    let mut kept = 0;
-    subjects.retain(|_, revision| {
-        let keep = *revision >= floor && kept < SEEN_LIMIT;
-        kept += usize::from(keep);
-        keep
-    });
+    let mut finished: Vec<(u64, String)> = subjects
+        .iter()
+        .filter(|(subject, _)| !live.contains(*subject))
+        .map(|(subject, revision)| (*revision, subject.clone()))
+        .collect();
+    finished.sort_unstable();
+    let over = subjects.len() - SEEN_LIMIT;
+    for (_, subject) in finished.into_iter().take(over) {
+        subjects.remove(&subject);
+    }
     true
 }
 
@@ -420,13 +423,6 @@ impl Runtime {
         for cell in &given {
             seen.insert(cell.subject.clone(), cell.revision);
         }
-        newest(seen);
-        let kept = seen.clone();
-        if kept.is_empty()
-            && let Some(seen) = self.status_seen()
-        {
-            seen.remove(recipient);
-        }
         if !given.is_empty() {
             crate::diagnostic!(json!({
                 "component": "status", "kind": "status.taken", "recipient": recipient,
@@ -434,6 +430,38 @@ impl Runtime {
             }));
         }
         self.drop_seen_news(recipient, &given);
+        // A news cell seen is gone, so its subject's record goes with it,
+        // unless a standing cell of the subject still stands: what is kept
+        // is bounded by the standing cells, never pushed out by news (B12).
+        let live: BTreeSet<String> = self
+            .status_cells(ledger)
+            .into_iter()
+            .filter(|addressed| addressed.recipient == recipient)
+            .map(|addressed| addressed.cell.subject)
+            .collect();
+        let gone: Vec<&str> = given
+            .iter()
+            .filter(|cell| cell.news && !live.contains(&cell.subject))
+            .map(|cell| cell.subject.as_str())
+            .collect();
+        if let Some(rung) = self.status_cells.rung.get_mut(recipient) {
+            for subject in &gone {
+                rung.remove(*subject);
+            }
+            bound(rung, &live);
+        }
+        let Some(all) = self.status_seen() else {
+            return given;
+        };
+        let seen = all.entry(recipient.to_owned()).or_default();
+        for subject in &gone {
+            seen.remove(*subject);
+        }
+        bound(seen, &live);
+        let kept = seen.clone();
+        if kept.is_empty() {
+            all.remove(recipient);
+        }
         // Only a registration's seen cells outlast the core.
         self.save_seen(recipient, kept);
         given
@@ -495,6 +523,16 @@ impl Runtime {
         let Some(seen) = self.status_seen().cloned() else {
             return Vec::new();
         };
+        let mut live: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for addressed in &cells {
+            live.entry(addressed.recipient.as_str())
+                .or_default()
+                .insert(addressed.cell.subject.clone());
+        }
+        let empty = BTreeSet::new();
+        for (to, subjects) in self.status_cells.rung.iter_mut() {
+            bound(subjects, live.get(to.as_str()).unwrap_or(&empty));
+        }
         let rung = &self.status_cells.rung;
         for addressed in cells {
             let Some(actor) = addressed.actor else {
@@ -610,22 +648,17 @@ impl Runtime {
             })
     }
 
-    /// Bounds what was seen and rung: a receiver that ended keeps nothing,
-    /// and a live one keeps its newest `SEEN_LIMIT` subjects. A subject whose
-    /// cell went may stay: a cell that comes back is a later episode, which
-    /// rings and is given again however old the entry (B10, B12), so nothing
-    /// here reads which cells stand now, which a pass before the book is read
-    /// would see as none. What a registration saw is written behind to the
-    /// ledger when it changed.
+    /// Forgets the receivers that ended: what they saw and were rung for.
+    /// A live receiver's records are bounded where they are written, against
+    /// the cells that stand then ([`bound`]), never here: a pass before the
+    /// book is read would see no cell standing (B10, B12). What a
+    /// registration saw is written behind to the ledger when it changed.
     fn prune_status(&mut self) {
         let ledger = self.delivery_ledger.clone().ok();
         let observations = &self.delivery_observations;
         let live = |to: &str| receiver_live(ledger.as_deref(), observations, to);
         let rung = &mut self.status_cells.rung;
         rung.retain(|to, subjects| live(to) && !subjects.is_empty());
-        for subjects in rung.values_mut() {
-            newest(subjects);
-        }
         if ledger.is_none() {
             return;
         }
@@ -640,11 +673,6 @@ impl Runtime {
             }
             keep
         });
-        for (to, subjects) in seen.iter_mut() {
-            if newest(subjects) {
-                changed.push((to.clone(), subjects.clone()));
-            }
-        }
         for (recipient, kept) in changed {
             self.save_seen(&recipient, kept);
         }
