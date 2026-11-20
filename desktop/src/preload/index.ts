@@ -11,8 +11,8 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { BrowserCommand, BrowserHostEvent, BrowserSync } from "../../../web/src/host";
-import type { ExternalGrant, ExternalKind, ExternalRead, FirewallAnswer, FirewallState, NotificationPermission, ProbedPath, UpdateStatus, WindowChrome } from "../../../web/src/host";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import type { ExternalGrant, ExternalKind, ExternalRead, FirewallAnswer, FirewallState, NotificationPermission, ProbedPath, UpdateStatus, WhatsNewState, WindowChrome } from "../../../web/src/host";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_REFRESH_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 
 contextBridge.exposeInMainWorld("hideHost", {
   kind: "electron",
@@ -125,8 +125,8 @@ contextBridge.exposeInMainWorld("hideHost", {
   openInEditor(path: string): void {
     ipcRenderer.send(EDITOR_OPEN_CHANNEL, path);
   },
-  openPractice(language: string, chapter?: string): void {
-    ipcRenderer.send(PRACTICE_OPEN_CHANNEL, language, chapter);
+  openPractice(language: string, chapter?: string, show?: boolean): void {
+    ipcRenderer.send(PRACTICE_OPEN_CHANNEL, language, chapter, show === true);
   },
   updates: {
     onStatus(listener: (status: UpdateStatus) => void): () => void {
@@ -155,6 +155,29 @@ contextBridge.exposeInMainWorld("hideHost", {
     },
     dismiss(version: string): void {
       ipcRenderer.send(UPDATE_DISMISS_CHANNEL, version);
+    },
+  },
+  whatsNew: {
+    onState(listener: (state: WhatsNewState) => void): () => void {
+      // As onWindowChrome: the asked state is dropped if a change already arrived.
+      let heard = false;
+      const handler = (_event: IpcRendererEvent, state: WhatsNewState) => {
+        heard = true;
+        listener(state);
+      };
+      ipcRenderer.on(WHATS_NEW_STATE_CHANNEL, handler);
+      void (ipcRenderer.invoke(WHATS_NEW_STATE_GET_CHANNEL) as Promise<WhatsNewState | null>).then((state) => {
+        if (state !== null && !heard) listener(state);
+      });
+      return () => {
+        ipcRenderer.removeListener(WHATS_NEW_STATE_CHANNEL, handler);
+      };
+    },
+    refresh(): void {
+      ipcRenderer.send(WHATS_NEW_REFRESH_CHANNEL);
+    },
+    save(update: { shown?: string; seen?: string }): void {
+      ipcRenderer.send(WHATS_NEW_SAVE_CHANNEL, update);
     },
   },
   browser: {

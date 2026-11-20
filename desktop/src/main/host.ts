@@ -17,7 +17,7 @@ import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-update
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WHATS_NEW_REFRESH_CHANNEL, WHATS_NEW_SAVE_CHANNEL, WHATS_NEW_STATE_CHANNEL, WHATS_NEW_STATE_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
@@ -64,6 +64,7 @@ import type { FirewallAnswer, FirewallState } from "../../../web/src/host";
 import { allowFirewall, firewallState } from "./firewall";
 import { NOTIFICATION_SETTINGS_URL, NotificationPermissionReader } from "./notificationPermission";
 import { fromPage, toPage, WirePathError } from "./wirePath";
+import { fetchReleasesFile, RELEASES_URL, WhatsNew, whatsNewIo } from "./whatsNew";
 import { AppUpdates, fetchReleases, macosLocation, readPackageType, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
 
 declare const __HIDE_BACKGROUND__: string;
@@ -252,6 +253,11 @@ export class DesktopHost {
       this.startUpdates();
     } catch (error) {
       this.log.event("update.start_failed", { detail: error instanceof Error ? error.message : String(error) });
+    }
+    try {
+      this.startWhatsNew();
+    } catch (error) {
+      this.log.event("whats_new.start_failed", { detail: error instanceof Error ? error.message : String(error) });
     }
     this.openWindow();
     if (process.platform === "win32") this.listenToastActivation();
@@ -619,6 +625,32 @@ export class DesktopHost {
     // Coming back to the app looks again when the last look is an hour old.
     app.on("browser-window-focus", () => updates.returned());
     updates.start();
+  }
+
+  /**
+   * What each released version brought (docs/UI_BEHAVIOR.md, What's new and
+   * Update history): fetched at launch, kept in the profile, and the record of
+   * which version's window closed and which one the history opened. Only this
+   * window's page on the daemon origin is heard or told.
+   */
+  private startWhatsNew(): void {
+    const url = this.env.releasesFeedUrl ?? RELEASES_URL;
+    if (this.env.releasesFeedUrl) this.log.event("whats_new.feed_override", { url });
+    const whatsNew = new WhatsNew(app.getVersion(), whatsNewIo(app.getPath("userData"), () => fetchReleasesFile(url, (target, init) => net.fetch(target, init))), this.log);
+    whatsNew.onChange((state) => {
+      const window = this.window;
+      if (window && !window.isDestroyed() && this.isDaemonUrl(window.webContents.getURL())) window.webContents.send(WHATS_NEW_STATE_CHANNEL, state);
+    });
+    ipcMain.handle(WHATS_NEW_STATE_GET_CHANNEL, (event: IpcMainInvokeEvent) => (this.fromShell(event) ? whatsNew.state() : null));
+    ipcMain.on(WHATS_NEW_REFRESH_CHANNEL, (event: IpcMainEvent) => {
+      if (this.fromShell(event)) void whatsNew.refresh();
+    });
+    ipcMain.on(WHATS_NEW_SAVE_CHANNEL, (event: IpcMainEvent, update: unknown) => {
+      if (!this.fromShell(event) || typeof update !== "object" || update === null) return;
+      const { shown, seen } = update as { shown?: unknown; seen?: unknown };
+      whatsNew.save({ shown, seen });
+    });
+    whatsNew.start();
   }
 
   /** The last window closed: true when a ready macOS update should be installed by quitting now. */
@@ -1528,7 +1560,7 @@ export class DesktopHost {
    * one is asked for; an open one is told to play it by the shell itself (web `practice/channel.ts`).
    */
   private listenPractice(): void {
-    ipcMain.on(PRACTICE_OPEN_CHANNEL, (event: IpcMainEvent, language: unknown, chapter: unknown) => {
+    ipcMain.on(PRACTICE_OPEN_CHANNEL, (event: IpcMainEvent, language: unknown, chapter: unknown, show: unknown) => {
       const origin = this.daemonOrigin();
       if (!this.fromShell(event) || !origin) {
         this.log.event("practice.refused", { reason: "sender" });
@@ -1538,7 +1570,7 @@ export class DesktopHost {
         this.present(this.practice, true);
         return;
       }
-      const url = practiceUrl(origin, language, process.platform, chapter ?? undefined);
+      const url = practiceUrl(origin, language, process.platform, chapter ?? undefined, show === true);
       if (typeof url !== "string") {
         this.log.event("practice.refused", { reason: url.refused });
         return;

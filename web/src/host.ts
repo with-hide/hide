@@ -7,6 +7,7 @@
 // Factory's notifications with their clicks back; the shell
 // never reaches the host any other way (desktop PRD B11).
 
+import type { ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
 
@@ -216,11 +217,16 @@ export type HostBridge = {
    * window; the host logs the outcome without the path and shows nothing (B16).
    */
   openInEditor(path: string): void;
-  /** Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`). */
-  openPractice(language: string, chapter?: string): void;
+  /**
+   * Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`).
+   * `show` opens that chapter's card on the list instead of playing it (the window after an update's 체험하기).
+   */
+  openPractice(language: string, chapter?: string, show?: boolean): void;
   browser: BrowserBridge;
   /** This app's own updates (PRD auto-update), which only the desktop host has. */
   updates: UpdatesBridge;
+  /** What each released version brought, as the host fetched and keeps it (`desktop/src/main/whatsNew.ts`). */
+  whatsNew: WhatsNewBridge;
 };
 
 /**
@@ -266,6 +272,32 @@ export type UpdatesBridge = {
   setPrerelease(on: boolean): void;
   /** Closes the ready card for `version`; Help's dot and line and About keep the update. */
   dismiss(version: string): void;
+};
+
+/**
+ * The releases file as the desktop host holds it (`desktop/src/main/whatsNew.ts`):
+ * the parsed copy, kept or fetched (null before any fetch landed), when it was
+ * fetched, whether a fetch is running or the last one failed, and the record
+ * of the last version whose window closed and the newest version opened in
+ * the history. `launchedAt` is when this app process started, in ms.
+ */
+export type WhatsNewState = {
+  appVersion: string;
+  launchedAt: number;
+  feed: ReleaseFeed | null;
+  fetchedAt: number | null;
+  fetching: boolean;
+  failed: boolean;
+  record: WhatsNewRecord | null;
+};
+
+export type WhatsNewBridge = {
+  /** Delivers the state at once and on every change; returns the unsubscribe. */
+  onState(listener: (state: WhatsNewState) => void): () => void;
+  /** Fetches again when the kept copy is an hour old (the history opening). */
+  refresh(): void;
+  /** Moves the record forward: a version's window closed (`shown`), a version opened in the history (`seen`). */
+  save(update: { shown?: string; seen?: string }): void;
 };
 
 /**

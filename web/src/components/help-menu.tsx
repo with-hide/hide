@@ -15,7 +15,8 @@ import { openPractice } from "../practice/channel";
 import { diagnosticsInputOf, diagnosticsText } from "../settings";
 import { commandLabel } from "../shortcutLabels";
 import { useShellStore } from "../store";
-import { readyVersion, releaseNotesUrl, restartIntoUpdate, useUpdateStatus } from "../updates";
+import { readyVersion, restartIntoUpdate, useUpdateStatus } from "../updates";
+import { openUpdateHistory, updateHistoryAvailable, useReleaseNotes } from "../whatsNew";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Hint } from "./ui/tooltip";
@@ -31,6 +32,7 @@ export function HelpMenu({ actions, place = "footer" }: { actions: Actions; plac
   const { t } = useInterfaceTranslation();
   const version = useShellStore((s) => s.daemon?.version ?? null);
   const ready = readyVersion(useUpdateStatus());
+  const releaseNotes = useReleaseNotes(actions.openLink.bind(actions));
   const label = ready ? `${t("sidebar.help")} · ${t("sidebar.help.updateReady")}` : t("sidebar.help");
   const chord = useShellStore((s) => commandLabel("shortcuts", s.rest?.ui_state));
   const [copy, setCopy] = useState<"idle" | "copied" | "failed">("idle");
@@ -66,7 +68,7 @@ export function HelpMenu({ actions, place = "footer" }: { actions: Actions; plac
               <div className="flex flex-wrap items-center gap-xxs text-caption text-subtle-foreground">
                 <span>{t("sidebar.help.updateKeep")}</span>
                 <span aria-hidden="true">·</span>
-                <DropdownMenuItem className="p-0 text-caption text-subtle-foreground underline focus:bg-transparent focus:text-foreground" onSelect={() => actions.openLink(releaseNotesUrl(ready), true)} data-help-update-notes="true">
+                <DropdownMenuItem className="p-0 text-caption text-subtle-foreground underline focus:bg-transparent focus:text-foreground" onSelect={() => releaseNotes(ready)} data-help-update-notes="true">
                   {t("sidebar.updateCard.releaseNotes")}
                 </DropdownMenuItem>
               </div>
@@ -83,6 +85,11 @@ export function HelpMenu({ actions, place = "footer" }: { actions: Actions; plac
         <DropdownMenuItem data-help-item="practice" onSelect={() => openPractice()}>
           {t("sidebar.help.practice")}
         </DropdownMenuItem>
+        {updateHistoryAvailable() ? (
+          <DropdownMenuItem data-help-item="update_history" onSelect={() => openUpdateHistory()}>
+            {t("whatsNew.history")}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem data-help-item="copy_diagnostics" onSelect={copyDiagnostics}>
           {t("settings.copyDiagnostics")}
           {copy === "copied" ? (
