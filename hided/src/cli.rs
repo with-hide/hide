@@ -208,6 +208,8 @@ fn topic_usage(topic: &str) -> Option<String> {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
+        "skill" => usage(crate::store_cli::SKILL_USAGE),
+        "mcp" => usage(crate::store_cli::MCP_USAGE),
         "device" => usage(crate::device_cli::usage_here()),
         "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
@@ -250,6 +252,8 @@ fn help_text() -> String {
         crate::delivery_cli::USAGE,
         crate::agent_cli::USAGE,
         crate::ps_cli::USAGE,
+        crate::store_cli::SKILL_USAGE,
+        crate::store_cli::MCP_USAGE,
         crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
@@ -452,6 +456,8 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 println!("{usage_text}");
                 std::process::exit(0);
             }
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(usage_text)))?;
             crate::store_cli::parse(kind, &args[2..])
                 .map(CommandKind::Store)
                 .map_err(|reason| wrong(reason, usage_text))

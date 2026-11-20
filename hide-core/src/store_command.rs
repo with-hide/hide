@@ -14,9 +14,14 @@ use std::sync::{Mutex, Weak};
 use std::time::Duration;
 
 use hide_agent_hooks::mcp::Reach;
-use hide_kit::store::{ItemKind, SourceSpec};
+use hide_kit::store::{
+    CellState, ChangeOutcome, Column, ItemKind, ItemReport, SourceSpec, Version,
+};
+use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::Schema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The store refused the change; the detail is the store's cause and its
 /// sentence.
@@ -47,6 +52,202 @@ pub const CONFIRM_WAIT: Duration = Duration::from_secs(30 * 60);
 
 /// The longest word a command carries.
 const WORD_LIMIT: usize = 4096;
+
+/// The most skills one `hide skill add` names (`--name`).
+pub const NAMES_LIMIT: usize = 64;
+
+/// `hide skill list` / `hide mcp list`: the machine's items of one kind,
+/// each with its version and one cell per column.
+#[derive(Serialize, JsonSchema)]
+pub struct StoreList {
+    pub machine: String,
+    #[schemars(schema_with = "item_kind_schema")]
+    pub kind: ItemKind,
+    /// The kind's columns, each with the agents its switch reaches.
+    #[schemars(schema_with = "columns_schema")]
+    pub columns: Vec<Column>,
+    pub items: Vec<StoreLine>,
+}
+
+/// One item as `list` answers it: no file list, the cells by column.
+#[derive(Serialize, JsonSchema)]
+pub struct StoreLine {
+    pub id: String,
+    pub name: String,
+    #[schemars(schema_with = "version_schema")]
+    pub version: Version,
+    /// The newer version a check found, null with none.
+    #[schemars(schema_with = "update_schema")]
+    pub update: Option<Version>,
+    pub on: bool,
+    pub cells: Vec<StoreLineCell>,
+}
+
+#[derive(Serialize, JsonSchema)]
+pub struct StoreLineCell {
+    pub column: String,
+    #[schemars(schema_with = "cell_state_schema")]
+    pub state: CellState,
+}
+
+/// `hide skill show` / `hide mcp show`: the item as the machine's store
+/// reports it.
+#[derive(Serialize, JsonSchema)]
+pub struct StoreShown {
+    pub machine: String,
+    #[schemars(schema_with = "item_schema")]
+    pub item: ItemReport,
+}
+
+/// A change that ran (`add`, `update`, `on`, `off`, `remove`): the item it
+/// was about, null for an install of a source's skills, and each change's
+/// outcome, a refused one with its cause.
+#[derive(Serialize, JsonSchema)]
+pub struct StoreChanged {
+    pub machine: String,
+    pub item: Option<String>,
+    #[schemars(schema_with = "outcomes_schema")]
+    pub outcomes: Vec<ChangeOutcome>,
+}
+
+impl From<&ItemReport> for StoreLine {
+    fn from(item: &ItemReport) -> Self {
+        Self {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            version: item.version.clone(),
+            update: item.update.clone(),
+            on: item.on,
+            cells: item
+                .cells
+                .iter()
+                .map(|cell| StoreLineCell {
+                    column: cell.column.clone(),
+                    state: cell.state,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The schemas of the store's answers, for the CLI contract.
+pub fn answer_schemas() -> Vec<(&'static str, Value)> {
+    let schema = |root: schemars::schema::RootSchema| {
+        serde_json::to_value(root).expect("a schema serializes")
+    };
+    vec![
+        ("store_list", schema(schemars::schema_for!(StoreList))),
+        ("store_item", schema(schemars::schema_for!(StoreShown))),
+        ("store_changed", schema(schemars::schema_for!(StoreChanged))),
+    ]
+}
+
+// The kit's store types carry no schema of their own: these describe what
+// they serialize to, their string values named by the wire enum list that
+// holds them (`contracts/snapshot-wire-enums.json`).
+
+fn described(schema: Value) -> Schema {
+    serde_json::from_value(schema).expect("a schema literal")
+}
+
+fn wire_enum(name: &str) -> Value {
+    json!({"type": "string", "description": format!("one of {name} in contracts/snapshot-wire-enums.json")})
+}
+
+fn version() -> Value {
+    json!({
+        "type": "object",
+        "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+        "properties": {"kind": {"type": "string"}, "value": {"type": "string"}},
+        "required": ["kind"],
+    })
+}
+
+fn item_kind_schema(_: &mut SchemaGenerator) -> Schema {
+    described(wire_enum("store_item_kind"))
+}
+
+fn cell_state_schema(_: &mut SchemaGenerator) -> Schema {
+    described(wire_enum("store_cell_state"))
+}
+
+fn version_schema(_: &mut SchemaGenerator) -> Schema {
+    described(version())
+}
+
+fn update_schema(_: &mut SchemaGenerator) -> Schema {
+    described(json!({"anyOf": [version(), {"type": "null"}]}))
+}
+
+fn columns_schema(_: &mut SchemaGenerator) -> Schema {
+    described(json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "agents": {"type": "array", "items": {"type": "string"}},
+                "also": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["id", "agents"],
+        },
+    }))
+}
+
+fn item_schema(_: &mut SchemaGenerator) -> Schema {
+    described(json!({
+        "type": "object",
+        "description": "the item as KitSnapshot.store reports it",
+        "properties": {
+            "id": {"type": "string"},
+            "kind": wire_enum("store_item_kind"),
+            "name": {"type": "string"},
+            "source": {"type": "object"},
+            "version": version(),
+            "update": version(),
+            "on": {"type": "boolean"},
+            "off_for": {"type": "array", "items": {"type": "string"}},
+            "folder_missing": {"type": "boolean"},
+            "description": {"type": "string"},
+            "files": {"type": "array", "items": {"type": "object"}},
+            "server": {"type": "object", "description": "an MCP server: its name and reach, with the names of its keys and never a value"},
+            "cells": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "column": {"type": "string"},
+                    "state": wire_enum("store_cell_state"),
+                    "reason": {"type": "string"},
+                    "changed_at_unix_ms": {"type": "integer"},
+                },
+                "required": ["column", "state"],
+            }},
+        },
+        "required": ["id", "kind", "name", "source", "version", "on", "cells"],
+    }))
+}
+
+fn outcomes_schema(_: &mut SchemaGenerator) -> Schema {
+    described(json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "change": {
+                    "type": "object",
+                    "description": "the change as it ran, a key's value emptied",
+                    "properties": {"op": {"type": "string"}},
+                    "required": ["op"],
+                },
+                "refused": {
+                    "type": "object",
+                    "properties": {"cause": wire_enum("store_refusal_cause"), "reason": {"type": "string"}},
+                    "required": ["cause", "reason"],
+                },
+            },
+            "required": ["change"],
+        },
+    }))
+}
 
 /// One `hide skill` / `hide mcp` command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -156,7 +357,9 @@ impl StoreCommand {
                         SourceSpec::Git { url } => url,
                         SourceSpec::Folder { path } => path,
                     };
-                    word(source) && names.len() <= 64 && names.iter().all(|name| word(name))
+                    word(source)
+                        && names.len() <= NAMES_LIMIT
+                        && names.iter().all(|name| word(name))
                 }
                 Self::AddMcp {
                     name, reach: how, ..

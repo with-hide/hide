@@ -4907,6 +4907,7 @@ The store's string enums (`store_item_kind`, `store_cell_state`, `store_refusal_
 A key's value is never an argument: `--env NAME` and `--header NAME` name a key, `NAME=value` is refused, and the operator types the value on the confirm, so it travels only as the screen's `Sealed` value.
 The command waits off the lock (`hided` scoped request `store`, `Core::prepare_store`, `store_command::Prepared::run`) for at most 30 minutes, after which it ends `store_unanswered` and its confirm comes down; the same command again from the same pane while the first still waits joins that one's confirm and lets the first waiter go, so an agent whose tool gave up does not raise a second confirm (engineering rule 11); at most 16 commands wait at once (`RUN_LIMIT`), and a machine that goes ends those waiting on it.
 Refusals carry their code (`store_refused` with the store's cause, `store_not_found`, `store_busy`, `store_invalid`, `store_unavailable`) and a next action, and `--machine <device>` runs the command on a connected device's store.
+Both topics are in the CLI contract (`hided/src/cli_contract.rs`, [delivery.md: The contract a calling tool checks](delivery.md#the-contract-a-calling-tool-checks)), which admits only the flags it names, and their answers are the core's types `StoreList`, `StoreShown` and `StoreChanged` (`hide_core::store_command::answer_schemas`, exported as `store_list`, `store_item` and `store_changed`).
 
 ### Device catalogs
 

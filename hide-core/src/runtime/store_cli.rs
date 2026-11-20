@@ -24,8 +24,8 @@ use crate::agent_profiles::AnswerState;
 use crate::coordination::human_turn::HumanKind;
 use crate::model::{DeclaredHumanTurn, StoreAnswer};
 use crate::store_command::{
-    BUSY, CONFIRM_WAIT, DECLINED, INVALID, NOT_FOUND, PASS_WAIT, Prepared, REFUSED, StoreCommand,
-    UNANSWERED, UNAVAILABLE, Waiting,
+    BUSY, CONFIRM_WAIT, DECLINED, INVALID, NOT_FOUND, PASS_WAIT, Prepared, REFUSED, StoreChanged,
+    StoreCommand, StoreLine, StoreList, StoreShown, UNANSWERED, UNAVAILABLE, Waiting,
 };
 
 /// The most commands waiting at once; past it a command is refused, since
@@ -127,6 +127,10 @@ pub(super) struct StoreRuns {
     seq: u64,
 }
 
+fn answer_value(answer: &impl Serialize) -> Value {
+    serde_json::to_value(answer).expect("a store answer serializes")
+}
+
 fn refused(code: &str, detail: impl AsRef<str>) -> String {
     crate::coordination::refusal(code, detail.as_ref())
 }
@@ -137,18 +141,6 @@ fn store_refused(refusal: &StoreRefusal) -> String {
         .and_then(|cause| cause.as_str().map(str::to_owned))
         .unwrap_or_default();
     refused(REFUSED, format!("{cause}: {}", refusal.reason))
-}
-
-/// The CLI's view of a row: no file list, the cells by column.
-fn item_line(item: &ItemReport) -> Value {
-    json!({
-        "id": item.id,
-        "name": item.name,
-        "version": item.version,
-        "update": item.update,
-        "on": item.on,
-        "cells": item.cells.iter().map(|cell| json!({"column": cell.column, "state": cell.state})).collect::<Vec<_>>(),
-    })
 }
 
 impl Runtime {
@@ -191,24 +183,26 @@ impl Runtime {
         };
         let (plan, changes) = match command {
             StoreCommand::List { kind, .. } => {
-                let items = report
-                    .items
-                    .iter()
-                    .filter(|item| item.kind == kind)
-                    .map(item_line)
-                    .collect::<Vec<_>>();
-                return Ok(ready(Ok(json!({
-                    "machine": machine,
-                    "kind": kind,
-                    "columns": report.columns.get(&kind),
-                    "items": items,
+                return Ok(ready(Ok(answer_value(&StoreList {
+                    columns: report.columns.get(&kind).cloned().unwrap_or_default(),
+                    items: report
+                        .items
+                        .iter()
+                        .filter(|item| item.kind == kind)
+                        .map(StoreLine::from)
+                        .collect(),
+                    machine,
+                    kind,
                 }))));
             }
             StoreCommand::Show { kind, name, .. } => {
                 let item = item_of(kind, &name);
-                return Ok(ready(
-                    item.map(|item| json!({"machine": machine, "item": item})),
-                ));
+                return Ok(ready(item.map(|item| {
+                    answer_value(&StoreShown {
+                        machine: machine.clone(),
+                        item: item.clone(),
+                    })
+                })));
             }
             StoreCommand::Set {
                 kind,
@@ -448,10 +442,10 @@ impl Runtime {
                     Plan::Update { item } | Plan::SetMcp { item, .. } => Some(item.clone()),
                     Plan::AddMcp { server } => Some(StoreItem::id_of(ItemKind::Mcp, &server.name)),
                 };
-                let value = json!({
-                    "machine": run.device_id,
-                    "item": item,
-                    "outcomes": answer.outcomes,
+                let value = answer_value(&StoreChanged {
+                    machine: run.device_id.clone(),
+                    item,
+                    outcomes: answer.outcomes,
                 });
                 self.finish_store_run(&run_id, Ok(value));
             }
