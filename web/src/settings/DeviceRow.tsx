@@ -12,7 +12,7 @@ import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
 import { switchOffered } from "../deviceSwitch";
-import { ownWindow } from "../pairing";
+import { deviceConnectOffered, ownWindow } from "../pairing";
 import { splitFailureLine } from "../coreLink";
 import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
@@ -56,7 +56,8 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
   // A helper device says it is on the old connection and offers the switch
   // (B35), from this computer's own window only (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
-  const switchable = ownScreen && switchOffered(device);
+  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
+  const switchable = ownScreen && switchOffered(device, deviceConnect);
   return (
     <Row
       data-device-row={device.id}

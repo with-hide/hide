@@ -144,6 +144,8 @@ export type DaemonInfo = {
   core_state_path: string;
   keep_alive: boolean;
   idle_secs: number;
+  /** Whether this build offers connections between two Hides (hided's `HIDE_DEVICE_CONNECT`); read through `deviceConnectOffered`. */
+  device_connect?: boolean;
 };
 
 type Store = {

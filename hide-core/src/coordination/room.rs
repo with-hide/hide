@@ -5,6 +5,14 @@
 //! and that nothing still names, and is refused with `capacity` only when
 //! every record is live or named.
 //!
+//! The file holds at most [`FILE_LIMIT`] bytes, which finished spawn records
+//! reach long before their count does, since each keeps its brief. Any change
+//! that would take the file past it, whatever it adds, drops the oldest
+//! finished spawn records nothing keeps and then the oldest ended
+//! registrations nothing names, by the same rule, until the file fits; it is
+//! refused with `capacity` only when what is left still does not
+//! ([`for_size`]).
+//!
 //! A registration is named, and kept, by:
 //! - another registration, as its `parent` or `origin`;
 //! - a spawn record that stays, as its `parent` or `child`;
@@ -34,8 +42,8 @@ use serde_json::json;
 
 use super::identity_wait::Owed;
 use super::{AGENT_LIMIT, AgentRecord, SPAWN_LIMIT, SpawnRecord};
-use crate::delivery::Actor;
-use crate::delivery::ledger::Ledger;
+use crate::delivery::ledger::{Ledger, encoded_len};
+use crate::delivery::{Actor, FILE_LIMIT};
 
 /// The registrations and spawn records the core's books outside the ledger
 /// still need (`Runtime::delivery_held`).
@@ -158,6 +166,85 @@ pub(super) fn for_spawn(ledger: &mut Ledger, holds: &dyn Holds) -> Result<(), St
     Ok(())
 }
 
+/// Keeps `ledger` within [`FILE_LIMIT`] after a change: a ledger past it
+/// drops its oldest finished spawn records nothing keeps, then its oldest
+/// ended registrations nothing names, until it fits. It is refused with
+/// `capacity`, unchanged, only when dropping all of them would not be
+/// enough. The core's books are read only once the ledger is past the
+/// limit, and a ledger within it is left as it is.
+pub(crate) fn for_size(ledger: &mut Ledger, holds: &dyn Holds) -> Result<(), String> {
+    let size = ledger.size()?;
+    let over = size.saturating_sub(FILE_LIMIT);
+    if over == 0 {
+        return Ok(());
+    }
+    let held = holds.held()?;
+    let named = Named::of(ledger, held);
+    let mut spawns = Room::of(ledger.spawns.len());
+    for spawn in &ledger.spawns {
+        if spawns.freed >= over {
+            break;
+        }
+        if !named.spawns.contains(spawn.id.as_str()) {
+            spawns.take(&spawn.id, spawn)?;
+        }
+    }
+    // A registration goes only once every spawn record that can has gone:
+    // one naming it is either kept, and so names it, or gone above.
+    let mut agents = Room::of(ledger.agents.len());
+    for agent in &ledger.agents {
+        if spawns.freed + agents.freed >= over {
+            break;
+        }
+        if agent.ended && !named.agents.contains(agent.id.as_str()) {
+            agents.take(&agent.id, agent)?;
+        }
+    }
+    if spawns.freed + agents.freed < over {
+        crate::diagnostic!(json!({
+            "component": "coordination", "kind": "ledger.full",
+            "bytes": size, "agents": ledger.agents.len(),
+            "ended": ledger.agents.iter().filter(|agent| agent.ended).count(),
+            "spawns": ledger.spawns.len(), "letters": ledger.letters.len(),
+        }));
+        return Err("capacity".into());
+    }
+    ledger
+        .spawns
+        .retain(|spawn| !spawns.gone.contains(&spawn.id));
+    ledger
+        .agents
+        .retain(|agent| !agents.gone.contains(&agent.id));
+    // The count above is exact; this raises if it ever is not.
+    ledger.check()
+}
+
+/// What dropping records from one of the ledger's lists takes off the file.
+struct Room {
+    /// How many records the list holds.
+    len: usize,
+    gone: HashSet<String>,
+    freed: usize,
+}
+
+impl Room {
+    fn of(len: usize) -> Self {
+        Self {
+            len,
+            gone: HashSet::new(),
+            freed: 0,
+        }
+    }
+
+    /// Drops `record`: its encoding and the comma beside it, which the
+    /// list's last record has none of.
+    fn take(&mut self, id: &str, record: &impl serde::Serialize) -> Result<(), String> {
+        self.gone.insert(id.to_owned());
+        self.freed += encoded_len(record)? + usize::from(self.gone.len() < self.len);
+        Ok(())
+    }
+}
+
 /// The records that stay because something names them, read in one pass.
 struct Named<'a> {
     agents: HashSet<&'a str>,
@@ -275,12 +362,13 @@ pub(crate) fn dropped<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::coordination::human_turn::{HumanKind, HumanTurn};
     use crate::coordination::identity_wait::IdentityWait;
     use crate::coordination::tests::command;
     use crate::coordination::{Mutation, apply_with};
+    use crate::delivery::BODY_LIMIT;
     use crate::delivery::ledger::{State, from_bytes};
     use serde_json::Value;
 
@@ -407,6 +495,49 @@ mod tests {
     fn holds_spawn(ledger: &Ledger, n: u64) -> bool {
         let id = format!("spawn-{n}");
         ledger.spawns.iter().any(|spawn| spawn.id == id)
+    }
+
+    /// A start whose brief is as long as a brief may be.
+    pub(crate) fn briefed(intent: &str) -> crate::coordination::Command {
+        let mut command = command(intent);
+        if let crate::coordination::Command::Spawn { brief, .. } = &mut command {
+            *brief = Some("n".repeat(BODY_LIMIT));
+        }
+        command
+    }
+
+    /// Adds spawn records of `parent`, `spawn-3000` on, each keeping a
+    /// brief, until the file is `room` bytes short of its limit.
+    pub(crate) fn fill_with_briefs(ledger: &mut Ledger, parent: &str, room: usize) {
+        let mut size = ledger.size().unwrap();
+        let target = FILE_LIMIT - room;
+        for n in 3000.. {
+            let mut record: SpawnRecord = serde_json::from_value(json!({
+                "id": format!("spawn-{n}"), "parent": parent,
+                "intent": format!("intent-{n}"), "name": "worker", "kind": "codex",
+                "repo": "/repo", "branch": "topic", "requested_path": null, "args": [],
+                "path": null, "pane": null, "child": null,
+            }))
+            .unwrap();
+            record.brief = Some("b".repeat(BODY_LIMIT / 2));
+            let grown =
+                size + encoded_len(&record).unwrap() + usize::from(!ledger.spawns.is_empty());
+            if grown > target {
+                break;
+            }
+            size = grown;
+            ledger.spawns.push(record);
+        }
+        // A brief's `b` is one byte in the file too.
+        let mut need = target - size;
+        for spawn in ledger.spawns.iter_mut().rev() {
+            let brief = spawn.brief.as_mut().unwrap();
+            let add = need.min(BODY_LIMIT - brief.len());
+            brief.push_str(&"b".repeat(add));
+            need -= add;
+        }
+        assert_eq!(need, 0);
+        assert_eq!(ledger.size().unwrap(), target);
     }
 
     /// The ledger a core would load from what this one saves.
@@ -689,6 +820,94 @@ mod tests {
             &held,
         );
         assert_eq!(refused.unwrap_err(), "capacity");
+        assert_eq!(ledger, before);
+    }
+
+    #[test]
+    fn a_ledger_past_its_file_limit_drops_its_oldest_finished_spawn_records_first() {
+        // agent-2 made every spawn record and ended; agent-3 ended too.
+        let mut ledger = Ledger {
+            agents: vec![agent(1, false), agent(2, true), agent(3, true)],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        let spawns = ledger.spawns.len();
+        let answer = apply_with(
+            &mut ledger,
+            &actor(1),
+            &Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: briefed("new-start"),
+            },
+            NOW,
+            &Held::default(),
+        )
+        .unwrap();
+        assert!(ledger.size().unwrap() > FILE_LIMIT);
+        for_size(&mut ledger, &Held::default()).unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
+        assert!(!holds_spawn(&ledger, 3000) && !holds_spawn(&ledger, 3001));
+        assert!(holds_spawn(&ledger, 3002));
+        assert_eq!(ledger.spawns.len(), spawns + 1 - 2);
+        assert!(ledger.spawns.iter().any(|spawn| spawn.id == answer["id"]));
+        // A registration goes only once no spawn record can.
+        assert!((1..=3).all(|n| holds_agent(&ledger, n)));
+        assert_eq!(reloaded(&ledger), ledger);
+    }
+
+    #[test]
+    fn a_ledger_past_its_file_limit_of_kept_spawn_records_drops_ended_registrations_or_refuses() {
+        // agent-2 runs, so none of its spawn records has finished.
+        let mut ledger = Ledger {
+            agents: (1..=8).map(|n| agent(n, n > 2)).collect(),
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 0);
+        let spawns = ledger.spawns.len();
+        // A new root registers itself in a file already at its limit.
+        let mut record = agent(90_000, false);
+        record.id = String::new();
+        let mutation = Mutation::Register {
+            record,
+            check: false,
+        };
+        let answer = apply_with(
+            &mut ledger,
+            &actor(90_000),
+            &mutation,
+            NOW,
+            &Held::default(),
+        );
+        for_size(&mut ledger, &Held::default()).unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
+        assert!(holds_agent(&ledger, 100_000) && answer.unwrap()["id"] == "agent-100000");
+        assert!(!holds_agent(&ledger, 3) && holds_agent(&ledger, 8));
+        assert_eq!(ledger.spawns.len(), spawns);
+
+        let mut ledger = Ledger {
+            agents: vec![agent(1, false), agent(2, false)],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        apply_with(
+            &mut ledger,
+            &actor(1),
+            &Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: briefed("new-start"),
+            },
+            NOW,
+            &Held::default(),
+        )
+        .unwrap();
+        let before = ledger.clone();
+        assert_eq!(
+            for_size(&mut ledger, &Held::default()).unwrap_err(),
+            "capacity"
+        );
         assert_eq!(ledger, before);
     }
 

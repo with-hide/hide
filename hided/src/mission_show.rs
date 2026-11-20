@@ -253,10 +253,24 @@ fn waits_on(node: &Value) -> Result<Option<String>, String> {
             let reason = serde_json::to_value(reason).unwrap_or(Value::Null);
             format!("! {who}: {}", reason_word(&reason))
         }
-        WaitingOn::Nodes { keys } => format!("기다림 {}", keys.join(", ")),
+        WaitingOn::Nodes { keys } => format!(
+            "기다림 {}",
+            keys.iter()
+                .map(|key| match &key.line {
+                    Some(line) => format!("{} 줄 {line}", key.node),
+                    None => key.node.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        // A node that starts on a line of another stacks on that one's branch.
+        WaitingOn::Start => match node["stack"]["on"].as_str() {
+            Some(on) => format!("출발 가능 · {on} 위에 쌓기"),
+            None => "시작 전".to_owned(),
+        },
+        WaitingOn::Below { node: below } => format!("기다림 {below} 머지 먼저"),
         WaitingOn::Decision => "기다림 운영자 결정".to_owned(),
         WaitingOn::Blocked => "막힘 앞 노드 빠짐".to_owned(),
-        WaitingOn::Start => "시작 전".to_owned(),
         WaitingOn::Worker => "기다림 작업자".to_owned(),
         WaitingOn::Review => "기다림 리뷰".to_owned(),
         WaitingOn::Verify => "기다림 검증".to_owned(),
@@ -496,6 +510,26 @@ fn draw_node(result: &Value, now: u64) -> Result<String, String> {
     if let (Some(destination), "change") = (result["destination"].as_str(), text(node, "kind")) {
         let _ = writeln!(out, "도착 {destination}");
     }
+    // A node started on a line of another stacks on that one's branch until
+    // its work reaches the destination.
+    if let Some(on) = node["stack"]["on"].as_str() {
+        let mut words = format!("쌓기 {on} 위");
+        if let Some(pr) = node["stack"]["pr"].as_u64() {
+            let _ = write!(words, " · PR #{pr}");
+        }
+        match node["stack"]["branch"].as_str() {
+            Some(branch) => {
+                let _ = write!(
+                    words,
+                    " · 브랜치 {branch}에서 시작 · gh pr create --base {branch} · {on} 다음에 머지"
+                );
+            }
+            None => {
+                let _ = write!(words, " · {on} 브랜치 아직 없음 · {on} 다음에 머지");
+            }
+        }
+        let _ = writeln!(out, "{words}");
+    }
     // Its merge is the operator's: never the Conductor's to make.
     if let (Some(words), Some(why)) = (merge_words(node), node["merge"]["why"].as_str()) {
         let _ = writeln!(out, "{words} · {why}");
@@ -729,8 +763,12 @@ mod tests {
             (json!({"kind": "decision"}), "기다림 운영자 결정"),
             (json!({"kind": "blocked"}), "막힘 앞 노드 빠짐"),
             (
-                json!({"kind": "nodes", "keys": ["show", "docs"]}),
-                "기다림 show, docs",
+                json!({"kind": "nodes", "keys": ["show", "docs:c1"]}),
+                "기다림 show, docs 줄 c1",
+            ),
+            (
+                json!({"kind": "below", "node": "show"}),
+                "기다림 show 머지 먼저",
             ),
             (json!({"kind": "start"}), "시작 전"),
             (json!({"kind": "worker"}), "기다림 작업자"),
@@ -745,6 +783,15 @@ mod tests {
             let text = draw(&value, NOW).unwrap();
             assert!(text.contains(&format!(" · CI 통과 · {words}\n")), "{text}");
         }
+        // A node that could start on a line of another says where it stacks.
+        let mut value = mission();
+        value["mission"]["nodes"][1]["waiting_on"] = json!({"kind": "start"});
+        value["mission"]["nodes"][1]["stack"] = json!({"on": "show", "branch": "m1/show", "pr": 7});
+        let text = draw(&value, NOW).unwrap();
+        assert!(
+            text.contains(" · CI 통과 · 출발 가능 · show 위에 쌓기\n"),
+            "{text}"
+        );
         let mut value = mission();
         let node = &mut value["mission"]["nodes"][1];
         node["pushed_at_unix_ms"] = Value::Null;
@@ -1036,6 +1083,22 @@ mod tests {
         assert!(
             text.contains("· feat/login에 바로 ·") && text.contains("\n도착 feat/login\n"),
             "{text}"
+        );
+        // A node stacked on another starts from that one's branch and bases
+        // its pull request there, and merges after it.
+        let mut stacked = mission()["mission"]["nodes"][1].clone();
+        stacked["stack"] = json!({"on": "core", "branch": "m82/core", "pr": 12});
+        let text = alone(&stacked, Some("main"));
+        assert!(
+            text.contains(
+                "\n도착 main\n쌓기 core 위 · PR #12 · 브랜치 m82/core에서 시작 · gh pr create --base m82/core · core 다음에 머지\n"
+            ),
+            "{text}"
+        );
+        stacked["stack"] = json!({"on": "core", "branch": null, "pr": null});
+        assert!(
+            alone(&stacked, Some("main"))
+                .contains("\n쌓기 core 위 · core 브랜치 아직 없음 · core 다음에 머지\n")
         );
         // A node that changes no code goes to no branch.
         let research = mission()["mission"]["nodes"][3].clone();
