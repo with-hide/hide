@@ -85,6 +85,14 @@ fn put_in(
     if crate::core_move::handover::read(state_dir)?.is_some() {
         environment.push(("HIDE_KEEP_ALIVE".to_owned(), "1".to_owned()));
     }
+    // A core adopts an item only for a pairing, which only a build that
+    // offers connections between two Hides keeps (`always_on`): the item's
+    // core has to offer them too, or its start would take the item out. A
+    // Task Scheduler task carries no environment; there the switch is the
+    // account's own (`env::Env::device_connect`).
+    if put == Put::Adopt && !cfg!(windows) {
+        environment.push((crate::env::HIDE_DEVICE_CONNECT.to_owned(), "1".to_owned()));
+    }
     let environment: Vec<(&str, &str)> = environment
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))

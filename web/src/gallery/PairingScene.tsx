@@ -11,7 +11,9 @@
 // stopped, with the strip of the one in front (`front=`) over the list, and
 // `view=held` the question a later computer is asked first (B69), and
 // `view=install` what a machine with no Hide of its own would get (B36,
-// D-45). It proves the rendered parts; the pairing is the daemon's.
+// D-45). `connect=off` is a build that does not offer connections between
+// two Hides, which shows none of it for the same records. It proves the
+// rendered parts; the pairing is the daemon's.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -96,6 +98,8 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   // `firewall=missing`: a Windows PC whose firewall rules are not in place
   // (B32), drawn through a stand-in of the desktop host's two firewall calls.
   const firewall = params.get("firewall") === "missing";
+  const connect = params.get("connect") ?? "on";
+  if (connect !== "on" && connect !== "off") throw new Error(`Unknown pairing connect ${connect}`);
   useLayoutEffect(() => {
     if (!firewall) return;
     const before = window.hideHost;
@@ -113,6 +117,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",
+      daemon: { device_connect: connect === "on" },
       pairing: pairingOf(view, lang),
       pairingResult:
         view === "held"
@@ -129,7 +134,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
     useUiStore.setState({ switchedDevices: landed ? ["build-box"] : [] });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view, switching, landed, front]);
+  }, [theme, lang, view, switching, landed, front, connect]);
   return (
     <>
       <InterfaceLanguageBoundary />

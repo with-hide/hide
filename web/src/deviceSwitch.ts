@@ -13,10 +13,12 @@ import { catalogWorkspaces, type Device, type DeviceSwitch, type SnapshotRest } 
  * (`Device.switchable`), a helper device it dials over SSH that has
  * connected (B35). A paired machine's device is switched already, a node
  * that dials in was never a helper, a WSL distribution is reached another
- * way, and a device that never connected is switched once it has.
+ * way, and a device that never connected is switched once it has. A build
+ * that does not offer connections between two Hides (`deviceConnect`, the
+ * daemon's hello) offers it on no device.
  */
-export function switchOffered(device: Device): boolean {
-  return device.switchable === true;
+export function switchOffered(device: Device, deviceConnect: boolean): boolean {
+  return deviceConnect && device.switchable === true;
 }
 
 /** The steps a switch shows, in order; the last is where the device's row becomes its machine's. */

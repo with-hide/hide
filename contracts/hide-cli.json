@@ -2143,13 +2143,6 @@
                         "body": {
                             "type": "string"
                         },
-                        "core_id": {
-                            "description": "The id the sending core's ledger gives this letter, on a letter an agent of another core sent (PRD device-connect-iroh D-72): on the link a letter is named by its sender's machine and that id, so a reply to this one names it. Absent on every other letter; an older build drops the field at its next save.",
-                            "type": [
-                                "string",
-                                "null"
-                            ]
-                        },
                         "created_at_unix_ms": {
                             "format": "uint64",
                             "minimum": 0.0,
@@ -2300,8 +2293,7 @@
                         "bell_route",
                         "input_noticed",
                         "input_noticed_at_unix_ms",
-                        "bell_ended",
-                        "core_id"
+                        "bell_ended"
                     ],
                     "type": "object"
                 },
@@ -2700,13 +2692,6 @@
                 "body": {
                     "type": "string"
                 },
-                "core_id": {
-                    "description": "The id the sending core's ledger gives this letter, on a letter an agent of another core sent (PRD device-connect-iroh D-72): on the link a letter is named by its sender's machine and that id, so a reply to this one names it. Absent on every other letter; an older build drops the field at its next save.",
-                    "type": [
-                        "string",
-                        "null"
-                    ]
-                },
                 "created_at_unix_ms": {
                     "format": "uint64",
                     "minimum": 0.0,
@@ -2857,8 +2842,7 @@
                 "bell_route",
                 "input_noticed",
                 "input_noticed_at_unix_ms",
-                "bell_ended",
-                "core_id"
+                "bell_ended"
             ],
             "title": "Letter",
             "type": "object"
@@ -4465,24 +4449,11 @@
                     "value": null
                 },
                 {
-                    "name": "--machine",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
                     "value": null
                 }
-            ],
-            "refusals": [
-                "machine_unknown",
-                "machine_not_permitted",
-                "machine_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4511,9 +4482,7 @@
             ],
             "refusals": [
                 "agent_unavailable",
-                "target_ambiguous",
-                "machine_not_permitted",
-                "machine_unavailable"
+                "target_ambiguous"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5184,6 +5153,7 @@
             ],
             "arguments": [],
             "command": "device share",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5266,6 +5236,7 @@
             ],
             "arguments": [],
             "command": "device allow",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5293,6 +5264,7 @@
                 }
             ],
             "command": "device pause",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5352,6 +5324,7 @@
                 }
             ],
             "command": "device resume",
+            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -5475,6 +5448,7 @@
                 }
             ],
             "command": "device request",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5513,6 +5487,7 @@
                 }
             ],
             "command": "device address",
+            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -5580,6 +5555,7 @@
                 }
             ],
             "command": "device switch",
+            "hidden": true,
             "options": [
                 {
                     "name": "--install",
@@ -5624,6 +5600,7 @@
             ],
             "arguments": [],
             "command": "device look-ssh",
+            "hidden": true,
             "options": [],
             "refusals": [
                 "hide_unavailable",
@@ -5638,6 +5615,7 @@
             ],
             "arguments": [],
             "command": "device accept-ssh",
+            "hidden": true,
             "options": [
                 {
                     "name": "--request",
@@ -5701,6 +5679,7 @@
             ],
             "arguments": [],
             "command": "device projects-ssh",
+            "hidden": true,
             "needs_one_of": [
                 "--project"
             ],
@@ -5787,9 +5766,7 @@
                 "pane_required",
                 "lines_out_of_range",
                 "pane_unavailable",
-                "guest_pane_read",
-                "machine_not_permitted",
-                "machine_unavailable"
+                "guest_pane_read"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5873,8 +5850,7 @@
                 "keys_not_sent",
                 "send_unconfirmed",
                 "operator_typing",
-                "guest_pane_keys",
-                "machine_not_permitted"
+                "guest_pane_keys"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5943,9 +5919,7 @@
                 "pane_required",
                 "lines_out_of_range",
                 "agent_unavailable",
-                "target_ambiguous",
-                "machine_not_permitted",
-                "machine_unavailable"
+                "target_ambiguous"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -6092,7 +6066,6 @@
                 "composer_unconfirmed",
                 "force_target_asleep",
                 "intent_conflict",
-                "machine_not_permitted",
                 "no_parent",
                 "outbox_full",
                 "outbox_unavailable",
@@ -7644,7 +7617,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:cd3d7502a46aa30077179b444ce7544a03fd154a5741538537762bd5141cbddf",
+    "digest": "sha256:69e1b985f345317196e1b08d44134bbffc67cfbaa607a2ba52706d050dbc2712",
     "envelopes": {
         "access": {
             "answer": "value",
