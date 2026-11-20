@@ -745,7 +745,9 @@ fn apply_steps(
             continue;
         }
         // The original is kept under the name of the file that held it.
-        let kept_as = path.file_name().map(|name| name.to_string_lossy().into_owned());
+        let kept_as = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
         backup
             .copy(&path, kept_as.as_deref().unwrap_or(file))
             .map_err(|reason| refuse(&path, reason))?;
@@ -1432,11 +1434,7 @@ mod tests {
                 .starts_with("device-ids-")
         );
         for (file, bytes) in &originals {
-            assert_eq!(
-                &held(&backups[0], file),
-                bytes,
-                "{file}"
-            );
+            assert_eq!(&held(&backups[0], file), bytes, "{file}");
         }
         assert!(backups[0].join(PROJECT_MEMORY).is_file());
         assert!(backups[0].join(LINKS).is_file());

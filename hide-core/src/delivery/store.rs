@@ -178,8 +178,10 @@ fn import(connection: &mut Connection, path: &Path) -> Result<Opened, String> {
     let imported = match super::ledger::read_file(&legacy) {
         Ok(ledger) => ledger,
         Err(code) => {
-            crate::diagnostic!(json!({"component":"delivery","kind":"ledger.import_refused",
-                "code":code}));
+            crate::diagnostic!(
+                json!({"component":"delivery","kind":"ledger.import_refused",
+                "code":code})
+            );
             return Err(code);
         }
     };
@@ -248,11 +250,7 @@ pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
         })
         .map_err(unavailable)?;
     let rest: Rest = serde_json::from_str(&rest).map_err(|_| "ledger_unavailable")?;
-    let ledger = rest.with(
-        rows(connection)?,
-        rows(connection)?,
-        rows(connection)?,
-    );
+    let ledger = rest.with(rows(connection)?, rows(connection)?, rows(connection)?);
     ledger.validate().map_err(|_| "ledger_unavailable")?;
     Ok(ledger)
 }
@@ -261,7 +259,10 @@ pub fn read_from(connection: &Connection) -> Result<Ledger, String> {
 fn rows<T: Row>(connection: &Connection) -> Result<Vec<T>, String> {
     let unavailable = |_| "ledger_unavailable".to_owned();
     let mut statement = connection
-        .prepare(&format!("SELECT seq, id, body FROM {} ORDER BY seq", T::TABLE))
+        .prepare(&format!(
+            "SELECT seq, id, body FROM {} ORDER BY seq",
+            T::TABLE
+        ))
         .map_err(unavailable)?;
     let mut read = statement.query([]).map_err(unavailable)?;
     let mut records = Vec::new();
@@ -345,7 +346,10 @@ pub fn write_value(path: &Path, value: &Value) -> Result<(), String> {
                 .execute(&format!("DELETE FROM {table} WHERE seq = ?1"), [seq])
                 .map_err(unavailable)?;
         }
-        for (seq, record) in keyed.iter().filter(|(seq, record)| held.get(seq) != Some(record)) {
+        for (seq, record) in keyed
+            .iter()
+            .filter(|(seq, record)| held.get(seq) != Some(record))
+        {
             let id = record["id"].as_str().ok_or("ledger_unavailable")?;
             transaction
                 .execute(
@@ -462,7 +466,12 @@ struct Rest {
 impl Rest {
     /// The ledger of this row and these records. Every field is named, so a
     /// field added to the ledger is not left out of the file unnoticed.
-    fn with(self, letters: Vec<Letter>, agents: Vec<AgentRecord>, spawns: Vec<SpawnRecord>) -> Ledger {
+    fn with(
+        self,
+        letters: Vec<Letter>,
+        agents: Vec<AgentRecord>,
+        spawns: Vec<SpawnRecord>,
+    ) -> Ledger {
         let Self {
             version,
             next_id,
@@ -671,9 +680,7 @@ impl<'a> Changes<'a> {
     /// [`NAMED`] of each table, and how many of each there were.
     pub fn diagnostic(&self) -> Value {
         const NAMED: usize = 16;
-        let table = |ids: Vec<&str>| {
-            json!({"count": ids.len(), "ids": ids.iter().take(NAMED).collect::<Vec<_>>()})
-        };
+        let table = |ids: Vec<&str>| json!({"count": ids.len(), "ids": ids.iter().take(NAMED).collect::<Vec<_>>()});
         json!({
             "letters": table(self.letters.ids().collect()),
             "agents": table(self.agents.ids().collect()),
@@ -969,8 +976,14 @@ mod tests {
         assert_eq!(diagnostic["agents"]["count"], 0);
         assert_eq!(diagnostic["ledger_row"], true);
         assert!(!diagnostic.to_string().contains("secret body"));
-        let only_gone = Changes::between(&before, &Ledger { letters: Vec::new(), ..before.clone() })
-            .diagnostic();
+        let only_gone = Changes::between(
+            &before,
+            &Ledger {
+                letters: Vec::new(),
+                ..before.clone()
+            },
+        )
+        .diagnostic();
         assert_eq!(only_gone["letters"]["ids"], json!([gone]));
     }
 
@@ -988,7 +1001,10 @@ mod tests {
         let mut old = Ledger::default();
         send(&mut old, "old", "body", 1);
         old_file(&state, &old.bytes().unwrap());
-        assert_eq!(LedgerStore::open(&path).err().unwrap(), "ledger_unavailable");
+        assert_eq!(
+            LedgerStore::open(&path).err().unwrap(),
+            "ledger_unavailable"
+        );
         let version: i64 = Connection::open(&path)
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get(0))

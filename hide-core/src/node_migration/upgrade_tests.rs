@@ -173,7 +173,8 @@ fn load_every_store(state: &Path, node: &NodeId) -> Vec<String> {
         if !matches!(outcome, crate::workspace_views::LoadOutcome::Loaded { .. }) {
             refused.push(format!("{WORKSPACE_VIEWS}: {outcome:?}"));
         }
-        if let Err(reason) = crate::delivery::store::load(&hide_kit::layout::delivery_store(state)) {
+        if let Err(reason) = crate::delivery::store::load(&hide_kit::layout::delivery_store(state))
+        {
             refused.push(format!("{}: {reason}", hide_kit::layout::DELIVERY_STORE));
         }
         if let crate::mission_store::Restored::Unreadable(reason) =
@@ -290,7 +291,10 @@ fn upgrade(fixture: &Path) -> Vec<String> {
         if old != machine {
             // The old ledger file is only read: its store holds the ledger.
             let old_ledger = state.join(DELIVERY_LEDGER);
-            for path in json_stores(state).into_iter().filter(|path| *path != old_ledger) {
+            for path in json_stores(state)
+                .into_iter()
+                .filter(|path| *path != old_ledger)
+            {
                 if std::fs::read_to_string(&path).unwrap().contains(&scoped) {
                     let store = path.strip_prefix(state).unwrap().display().to_string();
                     failures.push(format!("{store} still names {scoped}"));

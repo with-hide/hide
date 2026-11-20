@@ -1031,8 +1031,10 @@ fn run(
     // open leaves every change refused, as an unwritable one did.
     let mut store = LedgerStore::open(&path).map(|(store, ledger, _)| (store, Arc::new(ledger)));
     if let Err(code) = &store {
-        crate::diagnostic!(json!({"component":"delivery","kind":"ledger.store_unavailable",
-            "code":code}));
+        crate::diagnostic!(
+            json!({"component":"delivery","kind":"ledger.store_unavailable",
+            "code":code})
+        );
     }
     let mut maintenance_at = 0;
     // The recipients asleep at the last saved pass, so the pass after one
@@ -2884,8 +2886,17 @@ mod tests {
         published
     }
 
-    fn submit_send(client: &Client, actor: &Actor, target: &Observation, intent: &str, body: &str) -> Result<Value, String> {
-        client.submit(send(actor, target, intent, body).effect, Duration::from_secs(10))
+    fn submit_send(
+        client: &Client,
+        actor: &Actor,
+        target: &Observation,
+        intent: &str,
+        body: &str,
+    ) -> Result<Value, String> {
+        client.submit(
+            send(actor, target, intent, body).effect,
+            Duration::from_secs(10),
+        )
     }
 
     /// B26: a full ledger takes a new letter by letting the finished letters
@@ -2899,16 +2910,30 @@ mod tests {
         let installed = keep_published(&runtime, &path);
         let first_finished = installed.letters[10].id.clone();
         let last_finished = installed.letters.last().unwrap().id.clone();
-        let (worker, client) =
-            Worker::store(Arc::downgrade(&runtime), ChangeNotifier::noop(), path.clone()).unwrap();
-        let sent = submit_send(&client, &actor, &target, "too-big", &"y".repeat(super::super::BODY_LIMIT))
-            .unwrap();
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let sent = submit_send(
+            &client,
+            &actor,
+            &target,
+            "too-big",
+            &"y".repeat(super::super::BODY_LIMIT),
+        )
+        .unwrap();
         drop(worker);
         let kept = store::load(&path).unwrap();
         assert_eq!(kept, *runtime.lock().unwrap().delivery_state().unwrap());
         let held = |id: &str| kept.letters.iter().any(|letter| letter.id == id);
         assert!(held(sent["id"].as_str().unwrap()));
-        assert!(installed.letters[..10].iter().all(|letter| held(&letter.id)));
+        assert!(
+            installed.letters[..10]
+                .iter()
+                .all(|letter| held(&letter.id))
+        );
         assert!(!held(&first_finished));
         assert!(held(&last_finished));
         assert!(kept.size().unwrap() <= super::super::FILE_LIMIT);
@@ -2922,15 +2947,28 @@ mod tests {
         let (runtime, actor, target, path) = fixture(root.path());
         near_limit(&runtime, &actor, &target, 1_000, 0);
         let installed = keep_published(&runtime, &path);
-        let (worker, client) =
-            Worker::store(Arc::downgrade(&runtime), ChangeNotifier::noop(), path.clone()).unwrap();
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
         assert_eq!(
-            submit_send(&client, &actor, &target, "too-big", &"y".repeat(super::super::BODY_LIMIT)),
+            submit_send(
+                &client,
+                &actor,
+                &target,
+                "too-big",
+                &"y".repeat(super::super::BODY_LIMIT)
+            ),
             Err("capacity".into())
         );
         drop(worker);
         assert_eq!(store::load(&path).unwrap(), *installed);
-        assert_eq!(*runtime.lock().unwrap().delivery_state().unwrap(), *installed);
+        assert_eq!(
+            *runtime.lock().unwrap().delivery_state().unwrap(),
+            *installed
+        );
     }
 
     /// B29: a write that fails is logged with the ids of what it was to
@@ -2944,11 +2982,23 @@ mod tests {
         let held = Arc::new(held);
         let mut kept = Arc::clone(&held);
         let mut candidate = (*held).clone();
-        let letter = mailbox::send(&mut candidate, &actor, &target.actor, "lost", "private", "request", None, now())
-            .unwrap();
+        let letter = mailbox::send(
+            &mut candidate,
+            &actor,
+            &target.actor,
+            "lost",
+            "private",
+            "request",
+            None,
+            now(),
+        )
+        .unwrap();
         let candidate = Arc::new(candidate);
         let mut refuse = |_: &mut LedgerStore, _: &Changes<'_>| {
-            Err(ledger::SaveError::Refused(ledger::StoreFailure { kind: "io", extended: Some(10) }))
+            Err(ledger::SaveError::Refused(ledger::StoreFailure {
+                kind: "io",
+                extended: Some(10),
+            }))
         };
         let (written, records) =
             crate::diagnostics::capture(|| keep(&mut file, &mut kept, &candidate, &mut refuse));
@@ -2962,7 +3012,10 @@ mod tests {
         assert_eq!(logged["persistence"]["sqlite"], "io");
         assert!(!logged.to_string().contains("private"));
         // The next write keeps the letter through the real file.
-        keep(&mut file, &mut kept, &candidate, &mut |file, changes| file.apply(changes)).unwrap();
+        keep(&mut file, &mut kept, &candidate, &mut |file, changes| {
+            file.apply(changes)
+        })
+        .unwrap();
         drop(file);
         assert_eq!(store::load(&path).unwrap(), *candidate);
     }
@@ -2975,7 +3028,10 @@ mod tests {
         for uncertain in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let (runtime, actor, target, path) = fixture(root.path());
-            let failure = ledger::StoreFailure { kind: "io", extended: Some(10) };
+            let failure = ledger::StoreFailure {
+                kind: "io",
+                extended: Some(10),
+            };
             let (worker, answer) = Worker::store_queued(
                 Arc::downgrade(&runtime),
                 path.clone(),

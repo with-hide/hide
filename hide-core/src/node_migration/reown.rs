@@ -23,8 +23,7 @@ use serde_json::{Map, Value};
 use super::{
     CORE_STATE, DELIVERY_LEDGER, KEYS, LABELS, LINKS, LOCAL_ISSUES, MARKER_FILE, MARKER_VERSION,
     MISSIONS, MISSIONS_DIR, Marker, Moves, PROJECT_MEMORY, Refusal, SESSION_SEARCH,
-    WORKSPACE_VIEWS, mission_files, read_marker, read_store, store_path, write,
-    write_store,
+    WORKSPACE_VIEWS, mission_files, read_marker, read_store, store_path, write, write_store,
 };
 use crate::node::NodeId;
 
@@ -2362,11 +2361,8 @@ mod tests {
         spawns.push(promotion_spawn("spawn-10", &leftover, "m1"));
         spawns.push(promotion_spawn("spawn-11", &moving, "m1"));
         spawns.push(promotion_spawn("spawn-12", &leftover, "m9"));
-        super::super::write_store(
-            &super::super::store_path(state, DELIVERY_LEDGER),
-            &ledger,
-        )
-        .unwrap();
+        super::super::write_store(&super::super::store_path(state, DELIVERY_LEDGER), &ledger)
+            .unwrap();
 
         reown(state, &forward(), &forward_ids()).unwrap();
         let ledger = read(&state.join(DELIVERY_LEDGER));
@@ -2582,11 +2578,8 @@ mod tests {
             DELIVERY_LEDGER => {
                 let ledger =
                     crate::delivery::store::load(&super::super::store_path(state, file)).unwrap();
-                crate::delivery::store::save(
-                    &super::super::store_path(out.path(), file),
-                    &ledger,
-                )
-                .unwrap();
+                crate::delivery::store::save(&super::super::store_path(out.path(), file), &ledger)
+                    .unwrap();
             }
             LOCAL_ISSUES => {
                 let store = crate::local_issues::load(&path).unwrap();
