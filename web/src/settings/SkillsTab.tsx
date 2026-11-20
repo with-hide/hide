@@ -346,21 +346,30 @@ function CopyFromHere({ device, own, actions }: { device: Device; own: string; a
   const [sent, setSent] = useState<string | null>(null);
   const answer = useShellStore((s) => (sent ? s.rest?.status?.store_answers?.find((row) => row.request_id === sent) : undefined));
   const pending = sent !== null && (!answer || answer.state === "pending");
+  const refusal = answer?.outcomes.find((outcome) => outcome.refused)?.refused;
+  const failed = answer?.state === "refused" || !!refusal;
   return (
-    <Button
-      variant="secondary"
-      size="sm"
-      disabled={pending}
-      aria-busy={pending}
-      onClick={() => {
-        const id = `store-copy-${Date.now().toString(36)}`;
-        setSent(id);
-        actions.copyStore(device.id, id);
-      }}
-      data-store-copy={device.id}
-    >
-      {t("store.copyFrom", { device: machineName(devices, own, t) })}
-    </Button>
+    <span className="inline-flex items-center gap-xs">
+      {failed ? (
+        <span role="img" aria-label={refusalText(refusal?.cause ?? "failed", t)} title={refusalText(refusal?.cause ?? "failed", t)} data-store-copy-failed={device.id}>
+          <FailedMark />
+        </span>
+      ) : null}
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={pending}
+        aria-busy={pending}
+        onClick={() => {
+          const id = `store-copy-${Date.now().toString(36)}`;
+          setSent(id);
+          actions.copyStore(device.id, id);
+        }}
+        data-store-copy={device.id}
+      >
+        {t("store.copyFrom", { device: machineName(devices, own, t) })}
+      </Button>
+    </span>
   );
 }
 

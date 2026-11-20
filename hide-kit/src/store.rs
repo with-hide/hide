@@ -53,6 +53,8 @@ pub const PREVIEW_LIMIT: usize = 4;
 /// How many folder sources the store follows (D-20): an item past it is
 /// refused at install, so the follow pass stays bounded.
 pub const FOLLOWED_LIMIT: usize = 64;
+/// Live items are never evicted. Refuse a new item once this many are kept.
+pub const ITEM_LIMIT: usize = 256;
 /// How many files and bytes one skill may hold, so a repository that is not
 /// a skill does not fill the account.
 pub const SKILL_FILE_LIMIT: usize = 1000;
@@ -605,7 +607,7 @@ pub enum StoreRefusalCause {
     NameTaken,
     /// The agents hold different copies; the operator picks one (B21).
     Differs,
-    /// The store follows [`FOLLOWED_LIMIT`] folders already.
+    /// The store has [`ITEM_LIMIT`] items or follows [`FOLLOWED_LIMIT`] folders already.
     TooMany,
     /// The kind cannot do this (an MCP has no update).
     Unsupported,
@@ -1758,6 +1760,16 @@ fn set(item: &mut StoreItem, columns: &[Column], column: Option<&str>, on: bool)
     }
 }
 
+fn room_for(store: &StoreRecord, additional: usize) -> Result<(), StoreRefusal> {
+    if additional > 0 && store.items.len().saturating_add(additional) > ITEM_LIMIT {
+        return Err(StoreRefusal::new(
+            StoreRefusalCause::TooMany,
+            format!("the store holds {ITEM_LIMIT} items already; delete one before adding another"),
+        ));
+    }
+    Ok(())
+}
+
 fn name_free(store: &StoreRecord, kind: ItemKind, name: &str) -> Result<(), StoreRefusal> {
     if hides_own(name) || store.item(&StoreItem::id_of(kind, name)).is_some() {
         return Err(StoreRefusal::new(
@@ -1792,6 +1804,7 @@ fn install(
         name_free(store, ItemKind::Skill, name)?;
         chosen.push(skill.clone());
     }
+    room_for(store, chosen.len())?;
     let followed = store
         .items
         .iter()
@@ -1865,15 +1878,42 @@ fn update(
     Ok(())
 }
 
-/// Takes the item out of every agent now (B18): the reconcile that follows
-/// takes out the copies Hide wrote, and the item with its files goes to the
-/// undo list.
+/// Takes out the copies before retiring the item (B18). A failed cleanup
+/// keeps the row and its files, switched off so later passes cannot put
+/// removed copies back; another delete can finish the remaining cleanup.
 fn delete(ctx: &Ctx<'_>, store: &mut StoreRecord, id: &str) -> Result<(), StoreRefusal> {
     let index = store
         .items
         .iter()
         .position(|item| item.id == id)
         .ok_or_else(|| not_found(format!("no item {id}")))?;
+    let kind = store.items[index].kind;
+    let mut refusal = None;
+    let kept = store.written.clone();
+    for (key, place) in &kept {
+        for (name, written) in &place.entries {
+            if written.item != id {
+                continue;
+            }
+            match take_out_if_ours(
+                applier(kind),
+                &recorded_place(key, place),
+                name,
+                written,
+                ctx.secret.as_ref(),
+            ) {
+                Ok(_) => forget_written(store, key, name),
+                Err(reason) => {
+                    log("store.release_failed", Some(id), &reason);
+                    refusal.get_or_insert_with(|| failed(reason));
+                }
+            }
+        }
+    }
+    if let Some(refusal) = refusal {
+        store.items[index].on = false;
+        return Err(refusal);
+    }
     let entry_id = format!("{}-{}", folder_name(id), now_unix_ms());
     let files = ctx.item_files(id);
     if files.exists() {
@@ -1912,6 +1952,7 @@ fn receive(
         ));
     }
     let id = StoreItem::id_of(carried.kind, &carried.name);
+    room_for(store, usize::from(store.item(&id).is_none()))?;
     let staged = ctx.staging().join(source::fresh_id("received-"));
     let body = applier(carried.kind)
         .import(ctx, &carried.name, &carried.content, &staged)
@@ -2062,6 +2103,7 @@ fn restore(ctx: &Ctx<'_>, store: &mut StoreRecord, entry: &str) -> Result<(), St
         .ok_or_else(|| not_found(format!("no undo entry {entry}")))?;
     let kept = store.trash[index].clone();
     name_free(store, kept.item.kind, &kept.item.name)?;
+    room_for(store, 1)?;
     let files = ctx.trash_files(&kept.id);
     if files.exists() {
         move_folder(&files, &ctx.item_files(&kept.item.id)).map_err(failed)?;
@@ -2133,6 +2175,7 @@ fn adopt(
     let id = StoreItem::id_of(kind, name);
     let copies = copies_of(store, applier, &places, name, ctx.secret.as_ref())?;
     let existing = store.item(&id).is_some();
+    room_for(store, usize::from(!existing))?;
     let chosen = match from {
         Some(key) => Some(
             copies

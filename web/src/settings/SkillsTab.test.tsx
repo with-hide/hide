@@ -19,10 +19,10 @@ afterEach(() => {
 
 const agents = [{ id: "claude-code", label: "Claude Code", availability: "available", enabled: true, chosen: false, skill: { state: "installed", why: null, location: null }, hook: null, doc_url: "https://example.test" }];
 
-async function render(store: StoreReport | undefined, send: (event: unknown) => void = () => {}) {
+async function render(store: StoreReport | undefined, send: (event: unknown) => void = () => {}, remote = false) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage("en");
-  const rest = { status: { remote: [] }, navigator: { devices: [{ id: "mac", kind: "local", kit: { agents, components: [], store } }] } } as unknown as SnapshotRest;
+  const rest = { status: { remote: [] }, navigator: { devices: [{ id: "mac", kind: remote ? "remote" : "local", state: "ready", kit: { agents, components: [], store } }] } } as unknown as SnapshotRest;
   useShellStore.setState({ rest, connection: "live" });
   const container = document.createElement("div");
   document.body.append(container);
@@ -32,6 +32,28 @@ async function render(store: StoreReport | undefined, send: (event: unknown) => 
 }
 
 const report = (items: StoreReport["items"]): StoreReport => ({ columns: { skill: [{ id: "claude", agents: ["claude-code"] }] }, items, unmanaged: [], trash: [], previews: [], diffs: [] }) as StoreReport;
+
+it.each(["refused", "done"] as const)("shows a device copy failure when the answer is %s, and lets the operator retry", async (state) => {
+  const events: unknown[] = [];
+  const { container, unmount } = await render(report([]), (event) => events.push(event), true);
+  try {
+    const button = () => container.querySelector<HTMLButtonElement>("[data-store-copy]")!;
+    await act(async () => button().click());
+    expect(button().disabled).toBe(true);
+    const request = events.map((event) => event as { kind: string; payload: { request_id: string } }).find((event) => event.kind === "kit_store_copy")!;
+    await act(async () => {
+      const rest = useShellStore.getState().rest!;
+      useShellStore.setState({ rest: { ...rest, status: { ...rest.status, store_answers: [{ request_id: request.payload.request_id, device_id: "mac", state, outcomes: state === "done" ? [{ change: { op: "check_updates" }, refused: { cause: "failed", reason: "the device could not receive it" } }] : [] }] } } });
+    });
+    expect(container.querySelector("[data-store-copy-failed]")?.getAttribute("aria-label")).toBe("Could not be done");
+    expect(button().disabled).toBe(false);
+    await act(async () => button().click());
+    expect(container.querySelector("[data-store-copy-failed]")).toBeNull();
+    expect(button().disabled).toBe(true);
+  } finally {
+    await unmount();
+  }
+});
 
 it("reads as three quiet rows until the machine's first report, then as empty when it holds nothing", async () => {
   const reading = await render(undefined);

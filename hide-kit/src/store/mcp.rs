@@ -701,6 +701,7 @@ pub(super) fn add(
     from: Option<&PastedPick>,
 ) -> Result<(), StoreRefusal> {
     name_free(store, ItemKind::Mcp, &server.name)?;
+    super::room_for(store, 1)?;
     let before = match from {
         Some(pick) => {
             let preview = store

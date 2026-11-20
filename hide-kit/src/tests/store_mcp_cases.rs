@@ -524,6 +524,119 @@ fn a_key_edit_rewrites_every_file_the_server_is_in_and_a_file_that_failed_gets_i
 }
 
 #[test]
+fn a_failed_delete_keeps_the_row_reports_failure_and_can_be_retried() {
+    let fixture = mcp_agents();
+    add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+    let path = path_of(&fixture, "claude-code");
+    let original = std::fs::read(&path).unwrap();
+    std::fs::write(&path, "{ not readable JSON").unwrap();
+
+    let report = crate::apply_store(
+        &fixture.target,
+        vec![StoreChange::Delete {
+            item: "mcp:github".to_owned(),
+        }],
+    );
+    assert_eq!(
+        report.outcomes[0].refused.as_ref().unwrap().cause,
+        StoreRefusalCause::Failed
+    );
+    assert_eq!(report.items.len(), 1, "the failed delete remains retryable");
+    assert!(!report.items[0].on);
+    assert_eq!(
+        cells(&report, "mcp:github")["claude-code"],
+        CellState::Failed
+    );
+    assert!(
+        report.trash.is_empty(),
+        "the only original has not been retired"
+    );
+    assert!(held(&fixture, "codex", "github").is_none());
+
+    std::fs::write(&path, original).unwrap();
+    let report = store(
+        &fixture,
+        vec![StoreChange::Delete {
+            item: "mcp:github".to_owned(),
+        }],
+    );
+    assert!(report.items.is_empty());
+    assert_eq!(report.trash.len(), 1);
+    for (agent, _) in FILES {
+        assert!(held(&fixture, agent, "github").is_none(), "{agent}");
+    }
+}
+
+#[test]
+fn a_full_store_refuses_new_items_without_evicting_live_items() {
+    let fixture = mcp_agents();
+    add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
+    let carried = crate::export_store(&fixture.target).items.remove(0);
+    let path = crate::layout::store_dir(fixture.home()).join("store.json");
+    let mut record: crate::store::StoreRecord =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let template = record.items[0].clone();
+    for index in 1..crate::store::ITEM_LIMIT - 1 {
+        let mut item = template.clone();
+        item.name = format!("kept-{index}");
+        item.id = format!("mcp:{}", item.name);
+        item.on = false;
+        record.items.push(item);
+    }
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let mut last = github();
+    last.name = "last-slot".to_owned();
+    assert_eq!(
+        add(&fixture, last, &[("GITHUB_TOKEN", KEY)]).items.len(),
+        crate::store::ITEM_LIMIT
+    );
+    let mut next = github();
+    next.name = "one-too-many".to_owned();
+    let report = crate::apply_store(
+        &fixture.target,
+        vec![StoreChange::AddMcp {
+            server: next,
+            keys: sent(&[("GITHUB_TOKEN", KEY)]),
+            from: None,
+        }],
+    );
+    assert_eq!(
+        report.outcomes[0].refused.as_ref().unwrap().cause,
+        StoreRefusalCause::TooMany
+    );
+    assert_eq!(report.items.len(), crate::store::ITEM_LIMIT);
+    assert!(!report.items.iter().any(|item| item.name == "one-too-many"));
+    assert!(!store_bytes(&fixture).contains("one-too-many"));
+    assert_eq!(
+        key_of(
+            &held(&fixture, "claude-code", "github").unwrap(),
+            "GITHUB_TOKEN"
+        ),
+        KEY
+    );
+
+    // Updating or receiving an existing item still works at the cap.
+    store(
+        &fixture,
+        vec![StoreChange::Receive {
+            item: Box::new(carried),
+        }],
+    );
+    store(
+        &fixture,
+        vec![StoreChange::Delete {
+            item: "mcp:github".to_owned(),
+        }],
+    );
+    let mut next = github();
+    next.name = "room-now".to_owned();
+    assert_eq!(
+        add(&fixture, next, &[("GITHUB_TOKEN", KEY)]).items.len(),
+        crate::store::ITEM_LIMIT
+    );
+}
+
+#[test]
 fn a_delete_takes_the_server_out_at_once_and_its_key_stays_only_while_it_can_be_undone() {
     let fixture = mcp_agents();
     add(&fixture, github(), &[("GITHUB_TOKEN", KEY)]);
