@@ -38,11 +38,11 @@ import {
   keyNames,
   openableSource,
   pathParts,
+  rowLine,
   serverLine,
   shownAgents,
   shownColumns,
   sourceLine,
-  sourceText,
   trashFor,
   updatable,
   versionText,
@@ -505,24 +505,6 @@ function Version({ item }: { item: StoreItem }) {
   );
 }
 
-/** The muted line under a name: a skill's description and where it comes from, a server's command or address. */
-function itemLine(item: StoreItem, home: string | null | undefined): string {
-  if (item.server) {
-    const reach = item.server.reach;
-    return reach.kind === "remote" ? `${hostOf(reach.url)} · ${reach.transport.toUpperCase()}` : serverLine(item.server);
-  }
-  const source = item.source.kind === "folder" ? homePath(item.source.path, home) : item.source.kind === "git" ? sourceText(item.source).replace(/^github\.com\//, "") : sourceText(item.source);
-  return [item.description, source].filter(Boolean).join(" · ");
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
-
 /** A row: its tile, name, version and line, one state cell per column and its one switch; a press anywhere but the switch unfolds it. */
 function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColumn[]; page: Page }) {
   const { t } = useInterfaceTranslation();
@@ -552,7 +534,7 @@ function ItemRow({ item, columns, page }: { item: StoreItem; columns: ShownColum
                 <Version item={item} />
                 {item.folder_missing ? <Badge variant="outline" className="shrink-0 border-warning text-warning">{t("store.detail.folderMissing")}</Badge> : null}
               </span>
-              <span className="truncate text-caption text-muted-foreground" data-store-line={item.id}>{itemLine(item, page.report.home)}</span>
+              <span className="truncate text-caption text-muted-foreground" data-store-line={item.id}>{rowLine(item)}</span>
             </span>
           </span>
         </td>
@@ -716,7 +698,7 @@ function RowDetail({ item, columns, page }: { item: StoreItem; columns: ShownCol
           <span className={label}>{t("store.detail.source")}</span>
           <span className={value}>
             {item.source.kind === "folder" ? <PathText path={item.source.path} home={page.report.home} /> : <span className="truncate font-mono" title={sourceLine(item)}>{sourceLine(item)}</span>}
-            {item.source.kind === "folder" ? <span className="shrink-0 text-muted-foreground">· {item.folder_missing ? t("store.detail.lastCopy") : t("store.detail.follows")}</span> : null}
+            {item.folder_missing ? <span className="shrink-0 text-muted-foreground">· {t("store.detail.lastCopy")}</span> : null}
           </span>
           {files.length > 0 ? (
             <>

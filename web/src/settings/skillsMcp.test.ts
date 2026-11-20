@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addInput, answerPending, homePath, refusalOf, shownColumns } from "./skillsMcp";
+import { addInput, answerPending, homePath, refusalOf, rowLine, shownColumns } from "./skillsMcp";
 import type { StoreAnswer, StoreReport } from "../snapshot";
 
 // What the one add field reads a pasted line as decides which flow opens:
@@ -76,5 +76,25 @@ describe("a path under home", () => {
     ["/srv/skills/notes", "/srv/skills/notes"],
   ])("%s reads as %s", (path, shown) => {
     expect(homePath(path, "/Users/me/")).toBe(shown);
+  });
+});
+
+describe("the line under a row's name", () => {
+  const local = (command: string, args: string[]) => ({ source: { kind: "pasted" }, server: { reach: { kind: "local", command, args } } }) as Parameters<typeof rowLine>[0];
+
+  it("is the description when there is one, never where the item comes from", () => {
+    expect(rowLine({ description: "Draws architecture diagrams", source: { kind: "folder", path: "/Users/me/skills/archify" } } as Parameters<typeof rowLine>[0])).toBe("Draws architecture diagrams");
+  });
+
+  it("names a server by its package, image or host, and a skill by its repository or folder, never by a path", () => {
+    expect(rowLine(local("npx", ["-y", "@upstash/context7-mcp"]))).toBe("@upstash/context7-mcp");
+    expect(rowLine(local("pnpm", ["dlx", "@scope/server"]))).toBe("@scope/server");
+    expect(rowLine(local("docker", ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]))).toBe("ghcr.io/github/github-mcp-server");
+    expect(rowLine(local("node", ["/Users/me/servers/files/index.js"]))).toBe("index.js");
+    expect(rowLine(local("/usr/local/bin/my-server", []))).toBe("my-server");
+    expect(rowLine(local("C:\\Tools\\server.exe", ["--stdio"]))).toBe("server.exe");
+    expect(rowLine({ source: { kind: "pasted" }, server: { reach: { kind: "remote", url: "https://mcp.linear.app/sse", transport: "sse" } } } as Parameters<typeof rowLine>[0])).toBe("mcp.linear.app");
+    expect(rowLine({ description: " ", source: { kind: "git", url: "https://github.com/acme/kit.git", path: "archify" } } as Parameters<typeof rowLine>[0])).toBe("acme/kit");
+    expect(rowLine({ source: { kind: "folder", path: "/Users/me/skills/archify/" } } as Parameters<typeof rowLine>[0])).toBe("archify");
   });
 });

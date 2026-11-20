@@ -180,6 +180,55 @@ export function sourceText(source: StoreSource): string {
   }
 }
 
+/**
+ * The muted line under a row's name (operator, 2026-11-20): the item's
+ * description, else what names it without a path: a server's package or
+ * image (`@upstash/context7-mcp`), a remote server's host, a skill's
+ * repository or folder name.
+ */
+export function rowLine(item: Pick<StoreItem, "description" | "source" | "server">): string {
+  const description = item.description?.trim();
+  if (description) return description;
+  if (item.server) return item.server.reach.kind === "remote" ? hostOf(item.server.reach.url) : packageOf(item.server.reach.command, item.server.reach.args ?? []);
+  switch (item.source.kind) {
+    case "git":
+      return shortUrl(item.source.url).replace(/^github\.com\//, "");
+    case "folder":
+      return baseName(item.source.path);
+    case "copy":
+      return baseName(item.source.from);
+    case "pasted":
+      return "";
+  }
+}
+
+/** The words a runner takes before the package it runs (`pnpm dlx`, `pipx run`, `docker run`). */
+const RUNNER_WORDS = new Set(["dlx", "run", "exec", "x"]);
+
+/** A local server's package or image: its first argument that is neither a flag, a runner's word nor a path; else the last name of its program or script. */
+function packageOf(command: string, args: readonly string[]): string {
+  const named = args.find((arg) => !arg.startsWith("-") && !RUNNER_WORDS.has(arg) && !isPath(arg));
+  if (named) return named;
+  const script = args.find(isPath);
+  return baseName(script ?? command);
+}
+
+function isPath(text: string): boolean {
+  return /^(?:[/~.]|[A-Za-z]:[\\/])/.test(text) || text.includes("\\");
+}
+
+function baseName(path: string): string {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
+}
+
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
 /** An MCP server as one line: its command with its arguments, or its address. */
 export function serverLine(server: McpServer): string {
   return server.reach.kind === "local" ? [server.reach.command, ...(server.reach.args ?? [])].join(" ") : server.reach.url;

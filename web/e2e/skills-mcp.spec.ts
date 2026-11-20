@@ -45,10 +45,15 @@ test("each kind is one table whose cells show state, a row unfolds below itself,
     await expect(machine.locator("[data-store-updates]")).toHaveText(/1 update/);
     await expect(machine.locator('[data-store-unmanaged="skill:ast-grep"]')).toBeVisible();
 
+    // The line under a name is the description, or a server's package or host; where an item comes from waits in the unfold.
+    await expect(machine.locator('[data-store-line="skill:aside-browser"]')).toHaveText("Does web work in the Aside browser");
+    await expect(machine.locator('[data-store-line="mcp:context7"]')).toHaveText("@upstash/context7-mcp");
+    await expect(machine.locator('[data-store-line="mcp:linear"]')).toHaveText("mcp.linear.app");
+
     // A press on the row unfolds it below: source and files, a failure with Retry, a hidden key.
     await machine.locator('[data-store-row="skill:aside-browser"] td').first().click();
     const detail = machine.locator('[data-store-detail="skill:aside-browser"]');
-    await expect(detail).toContainText("follows the folder");
+    await expect(detail.locator("[data-store-path]")).toHaveAttribute("data-store-path", /\/aside-browser$/);
     await expect(detail).toContainText("▲ 1 executable");
     await machine.locator('[data-store-row-toggle="mcp:github"]').click();
     const github = machine.locator('[data-store-detail="mcp:github"]');
